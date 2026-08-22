@@ -22,34 +22,63 @@ import LogoutButton from "@/components/layout/LogoutButton";
 import type { ChatMessage, Conversation } from "@/types/lbv";
 
 const capabilities = [
-  { label: "Fichier", icon: FileText, accept: ".pdf,.doc,.docx,.txt,.csv,.xlsx" },
-  { label: "Image", icon: ImageIcon, accept: "image/*" },
-  { label: "Recherche Web", icon: Globe, accept: null },
-  { label: "Vidéo", icon: Video, accept: "video/*" },
+  {
+    label: "Fichier",
+    icon: FileText,
+    accept: ".pdf,.doc,.docx,.txt,.csv,.xlsx",
+  },
+  {
+    label: "Image",
+    icon: ImageIcon,
+    accept: "image/*",
+  },
+  {
+    label: "Recherche Web",
+    icon: Globe,
+    accept: null,
+  },
+  {
+    label: "Vidéo",
+    icon: Video,
+    accept: "video/*",
+  },
 ];
 
 export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("Standard");
+  const [selectedModel, setSelectedModel] =
+    useState("Standard");
 
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] =
+    useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
 
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversationId, setActiveConversationId] =
-    useState<string | null>(null);
+  const [conversations, setConversations] =
+    useState<Conversation[]>([]);
 
-  const [activeCapability, setActiveCapability] = useState<string | null>(
-    null,
-  );
+  const [
+    activeConversationId,
+    setActiveConversationId,
+  ] = useState<string | null>(null);
 
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [
+    activeCapability,
+    setActiveCapability,
+  ] = useState<string | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const videoInputRef = useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] =
+    useState<File | null>(null);
+
+  const fileInputRef =
+    useRef<HTMLInputElement>(null);
+
+  const imageInputRef =
+    useRef<HTMLInputElement>(null);
+
+  const videoInputRef =
+    useRef<HTMLInputElement>(null);
 
   function createConversation() {
     const now = new Date().toISOString();
@@ -61,8 +90,15 @@ export default function ChatPage() {
       updatedAt: now,
     };
 
-    setConversations((current) => [conversation, ...current]);
-    setActiveConversationId(conversation.id);
+    setConversations((current) => [
+      conversation,
+      ...current,
+    ]);
+
+    setActiveConversationId(
+      conversation.id,
+    );
+
     setMessages([]);
     setMessage("");
     setSelectedFile(null);
@@ -70,23 +106,31 @@ export default function ChatPage() {
     setSidebarOpen(false);
   }
 
-  function selectConversation(conversationId: string) {
-    setActiveConversationId(conversationId);
+  function selectConversation(
+    conversationId: string,
+  ) {
+    setActiveConversationId(
+      conversationId,
+    );
+
     setSidebarOpen(false);
 
     /*
-     * Les conversations et messages sont encore conservés
-     * côté frontend.
+     * Les conversations et messages sont
+     * encore conservés côté frontend.
      *
      * La persistance Supabase viendra ensuite.
      */
   }
 
-  function handleCapabilityClick(label: string) {
+  function handleCapabilityClick(
+    label: string,
+  ) {
     if (label === "Recherche Web") {
       setActiveCapability((current) =>
         current === label ? null : label,
       );
+
       return;
     }
 
@@ -127,13 +171,17 @@ export default function ChatPage() {
   function handleSendMessage() {
     const content = message.trim();
 
-    if ((!content && !selectedFile) || isThinking) {
+    if (
+      (!content && !selectedFile) ||
+      isThinking
+    ) {
       return;
     }
 
     const now = new Date().toISOString();
 
-    let conversationId = activeConversationId;
+    let conversationId =
+      activeConversationId;
 
     if (!conversationId) {
       const titleSource =
@@ -151,19 +199,24 @@ export default function ChatPage() {
         updatedAt: now,
       };
 
-      conversationId = newConversation.id;
+      conversationId =
+        newConversation.id;
 
       setConversations((current) => [
         newConversation,
         ...current,
       ]);
 
-      setActiveConversationId(conversationId);
+      setActiveConversationId(
+        conversationId,
+      );
     } else {
       setConversations((current) =>
         current.map((conversation) =>
-          conversation.id === conversationId &&
-          conversation.title === "Nouvelle conversation"
+          conversation.id ===
+            conversationId &&
+          conversation.title ===
+            "Nouvelle conversation"
             ? {
                 ...conversation,
                 title:
@@ -216,7 +269,8 @@ export default function ChatPage() {
         role: "assistant",
         content:
           "Votre message a bien été reçu. Le moteur IA de LBV-Connect.ia sera connecté prochainement.",
-        createdAt: new Date().toISOString(),
+        createdAt:
+          new Date().toISOString(),
       };
 
       setMessages((current) => [
@@ -226,10 +280,12 @@ export default function ChatPage() {
 
       setConversations((current) =>
         current.map((conversation) =>
-          conversation.id === conversationId
+          conversation.id ===
+            conversationId
             ? {
                 ...conversation,
-                updatedAt: new Date().toISOString(),
+                updatedAt:
+                  new Date().toISOString(),
               }
             : conversation,
         ),
@@ -240,8 +296,9 @@ export default function ChatPage() {
   }
 
   return (
-    <main className="min-h-dvh overflow-hidden bg-[#f7f7f5] text-neutral-950">
+    <main className="min-h-dvh overflow-hidden bg-background text-foreground">
       {/* Inputs fichiers invisibles */}
+
       <input
         ref={fileInputRef}
         type="file"
@@ -267,31 +324,36 @@ export default function ChatPage() {
       />
 
       {/* Overlay mobile */}
+
       {sidebarOpen && (
         <button
           type="button"
           aria-label="Fermer le menu"
           className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px] md:hidden"
-          onClick={() => setSidebarOpen(false)}
+          onClick={() =>
+            setSidebarOpen(false)
+          }
         />
       )}
 
       {/* Sidebar */}
+
       <aside
-        className={`fixed bottom-4 left-4 top-4 z-50 flex w-[260px] flex-col rounded-3xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/10 backdrop-blur-xl transition-transform duration-300 md:translate-x-0 ${
+        className={`fixed bottom-4 left-4 top-4 z-50 flex w-[260px] flex-col rounded-3xl border border-border bg-surface/95 shadow-2xl backdrop-blur-xl transition-transform duration-300 md:translate-x-0 ${
           sidebarOpen
             ? "translate-x-0"
             : "-translate-x-[120%]"
         }`}
       >
         {/* Brand */}
+
         <div className="flex h-16 items-center justify-between px-5">
           <div>
             <div className="font-semibold tracking-tight">
               LBV-Connect.ia
             </div>
 
-            <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-neutral-400">
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-muted">
               Intelligence workspace
             </div>
           </div>
@@ -299,75 +361,85 @@ export default function ChatPage() {
           <button
             type="button"
             aria-label="Fermer le menu"
-            className="rounded-xl p-2 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-950 md:hidden"
-            onClick={() => setSidebarOpen(false)}
+            className="rounded-xl p-2 text-muted transition hover:bg-surface-tertiary hover:text-foreground md:hidden"
+            onClick={() =>
+              setSidebarOpen(false)
+            }
           >
             ×
           </button>
         </div>
 
         {/* Nouvelle conversation */}
+
         <div className="px-4 pt-2">
           <button
             type="button"
             onClick={createConversation}
-            className="flex w-full items-center justify-between rounded-2xl bg-neutral-950 px-4 py-3.5 text-sm font-medium text-white transition hover:bg-neutral-800"
+            className="flex w-full items-center justify-between rounded-2xl bg-accent px-4 py-3.5 text-sm font-medium text-accent-foreground transition hover:opacity-85"
           >
             <span className="flex items-center gap-3">
               <Plus size={17} />
               Nouvelle conversation
             </span>
 
-            <span className="text-xs text-neutral-400">
+            <span className="text-xs opacity-50">
               +
             </span>
           </button>
         </div>
 
         {/* Historique */}
+
         <div className="mt-6 flex-1 overflow-y-auto px-4">
-          <div className="mb-3 px-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+          <div className="mb-3 px-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
             Historique
           </div>
 
           {conversations.length === 0 ? (
-            <p className="px-2 py-3 text-xs leading-5 text-neutral-400">
-              Aucune conversation pour le moment.
+            <p className="px-2 py-3 text-xs leading-5 text-muted">
+              Aucune conversation pour le
+              moment.
             </p>
           ) : (
             <div className="space-y-1">
-              {conversations.map((conversation) => (
-                <button
-                  key={conversation.id}
-                  type="button"
-                  onClick={() =>
-                    selectConversation(conversation.id)
-                  }
-                  className={`w-full truncate rounded-xl px-3 py-2.5 text-left text-sm transition ${
-                    activeConversationId ===
-                    conversation.id
-                      ? "bg-neutral-100 font-medium text-neutral-950"
-                      : "text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950"
-                  }`}
-                >
-                  {conversation.title}
-                </button>
-              ))}
+              {conversations.map(
+                (conversation) => (
+                  <button
+                    key={conversation.id}
+                    type="button"
+                    onClick={() =>
+                      selectConversation(
+                        conversation.id,
+                      )
+                    }
+                    className={`w-full truncate rounded-xl px-3 py-2.5 text-left text-sm transition ${
+                      activeConversationId ===
+                      conversation.id
+                        ? "bg-surface-tertiary font-medium text-foreground"
+                        : "text-muted-strong hover:bg-surface-tertiary hover:text-foreground"
+                    }`}
+                  >
+                    {conversation.title}
+                  </button>
+                ),
+              )}
             </div>
           )}
         </div>
 
         {/* Crédits */}
+
         <div className="px-4 pb-3">
-          <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+          <div className="rounded-2xl border border-border bg-surface-secondary p-4">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-neutral-500">
+              <span className="text-xs text-muted">
                 Crédits disponibles
               </span>
 
               <Wallet
                 size={15}
-                className="text-neutral-400"
+                className="text-muted"
               />
             </div>
 
@@ -375,18 +447,21 @@ export default function ChatPage() {
               15 000
             </p>
 
-            <p className="mt-1 text-[11px] text-neutral-400">
+            <p className="mt-1 text-[11px] text-muted">
               35 jours restants
             </p>
           </div>
         </div>
 
         {/* Navigation basse */}
-        <div className="space-y-1 border-t border-neutral-200 px-4 py-3">
+
+        <div className="space-y-1 border-t border-border px-4 py-3">
           <Link
             href="/credits"
-            onClick={() => setSidebarOpen(false)}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+            onClick={() =>
+              setSidebarOpen(false)
+            }
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted-strong transition hover:bg-surface-tertiary hover:text-foreground"
           >
             <Wallet size={17} />
             Mes crédits
@@ -394,8 +469,10 @@ export default function ChatPage() {
 
           <Link
             href="/settings"
-            onClick={() => setSidebarOpen(false)}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+            onClick={() =>
+              setSidebarOpen(false)
+            }
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted-strong transition hover:bg-surface-tertiary hover:text-foreground"
           >
             <Settings size={17} />
             Paramètres
@@ -406,21 +483,25 @@ export default function ChatPage() {
       </aside>
 
       {/* Workspace principal */}
+
       <section className="flex min-h-dvh flex-col">
         {/* Header */}
+
         <header className="flex h-16 shrink-0 items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <button
               type="button"
               aria-label="Ouvrir le menu"
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-neutral-200 bg-white shadow-sm transition hover:bg-neutral-50"
-              onClick={() => setSidebarOpen(true)}
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-surface shadow-sm transition hover:bg-surface-secondary"
+              onClick={() =>
+                setSidebarOpen(true)
+              }
             >
               <Menu size={19} />
             </button>
 
             <div className="hidden sm:block">
-              <p className="text-xs text-neutral-400">
+              <p className="text-xs text-muted">
                 Workspace
               </p>
 
@@ -430,7 +511,8 @@ export default function ChatPage() {
                       (conversation) =>
                         conversation.id ===
                         activeConversationId,
-                    )?.title || "Conversation active"
+                    )?.title ||
+                    "Conversation active"
                   : "Nouvelle conversation"}
               </p>
             </div>
@@ -439,9 +521,9 @@ export default function ChatPage() {
           <div className="flex items-center gap-2">
             <Link
               href="/credits"
-              className="hidden rounded-full border border-neutral-200 bg-white px-3 py-1.5 transition hover:bg-neutral-50 sm:flex"
+              className="hidden rounded-full border border-border bg-surface px-3 py-1.5 transition hover:bg-surface-secondary sm:flex"
             >
-              <span className="text-xs text-neutral-500">
+              <span className="text-xs text-muted">
                 Crédits
               </span>
 
@@ -453,7 +535,7 @@ export default function ChatPage() {
             <Link
               href="/settings"
               aria-label="Profil"
-              className="flex h-10 w-10 items-center justify-center rounded-full border border-neutral-200 bg-white text-sm font-medium shadow-sm transition hover:bg-neutral-50"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface text-sm font-medium shadow-sm transition hover:bg-surface-secondary"
             >
               U
             </Link>
@@ -461,20 +543,21 @@ export default function ChatPage() {
         </header>
 
         {/* Workspace */}
+
         <div className="flex flex-1 flex-col px-4 pb-4 sm:px-8">
           <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col">
-
             {/* Empty state */}
+
             {messages.length === 0 && (
               <div className="flex flex-1 flex-col justify-center">
                 <div className="mx-auto w-full max-w-3xl">
                   <div className="mb-6 flex items-center gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-neutral-950 text-white shadow-sm">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground shadow-sm">
                       <Sparkles size={20} />
                     </div>
 
                     <div>
-                      <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                      <p className="text-xs uppercase tracking-[0.18em] text-muted">
                         LBV-Connect.ia
                       </p>
 
@@ -485,19 +568,22 @@ export default function ChatPage() {
                   </div>
 
                   <h1 className="max-w-2xl text-4xl font-semibold leading-[1.05] tracking-[-0.04em] sm:text-5xl">
-                    Comment puis-je vous aider ?
+                    Comment puis-je vous
+                    aider ?
                   </h1>
 
-                  <p className="mt-5 max-w-xl text-sm leading-6 text-neutral-500">
-                    Discutez avec les modèles disponibles,
-                    analysez vos fichiers, utilisez la
-                    recherche Web et bien plus.
+                  <p className="mt-5 max-w-xl text-sm leading-6 text-muted">
+                    Discutez avec les modèles
+                    disponibles, analysez vos
+                    fichiers, utilisez la recherche
+                    Web et bien plus.
                   </p>
                 </div>
               </div>
             )}
 
             {/* Messages */}
+
             {messages.length > 0 && (
               <div className="flex-1 overflow-y-auto py-8">
                 <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
@@ -513,8 +599,8 @@ export default function ChatPage() {
                       <div
                         className={
                           item.role === "user"
-                            ? "max-w-[85%] rounded-3xl rounded-br-lg bg-neutral-950 px-5 py-3.5 text-sm leading-6 text-white"
-                            : "max-w-[85%] rounded-3xl rounded-bl-lg border border-neutral-200 bg-white px-5 py-3.5 text-sm leading-6 text-neutral-800 shadow-sm"
+                            ? "max-w-[85%] rounded-3xl rounded-br-lg bg-accent px-5 py-3.5 text-sm leading-6 text-accent-foreground"
+                            : "max-w-[85%] rounded-3xl rounded-bl-lg border border-border bg-surface px-5 py-3.5 text-sm leading-6 text-foreground shadow-sm"
                         }
                       >
                         {item.content}
@@ -524,12 +610,12 @@ export default function ChatPage() {
 
                   {isThinking && (
                     <div className="flex justify-start">
-                      <div className="rounded-3xl rounded-bl-lg border border-neutral-200 bg-white px-5 py-3.5 text-sm text-neutral-400 shadow-sm">
+                      <div className="rounded-3xl rounded-bl-lg border border-border bg-surface px-5 py-3.5 text-sm text-muted shadow-sm">
                         <div className="flex items-center gap-2">
                           <span className="flex gap-1">
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400" />
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:150ms]" />
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400 [animation-delay:300ms]" />
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:150ms]" />
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:300ms]" />
                           </span>
 
                           LBV-Connect.ia réfléchit...
@@ -542,6 +628,7 @@ export default function ChatPage() {
             )}
 
             {/* Modèle */}
+
             <div
               className={`mx-auto w-full max-w-3xl ${
                 messages.length === 0
@@ -554,8 +641,8 @@ export default function ChatPage() {
                   type="button"
                   className={`flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium shadow-sm transition ${
                     modelMenuOpen
-                      ? "border-neutral-400 bg-neutral-100"
-                      : "border-neutral-200 bg-white hover:bg-neutral-50"
+                      ? "border-border-strong bg-surface-tertiary"
+                      : "border-border bg-surface hover:bg-surface-secondary"
                   }`}
                   onClick={() =>
                     setModelMenuOpen(
@@ -578,7 +665,7 @@ export default function ChatPage() {
                 </button>
 
                 {modelMenuOpen && (
-                  <div className="absolute bottom-12 left-0 z-30 w-64 rounded-2xl border border-neutral-200 bg-white p-2 shadow-xl">
+                  <div className="absolute bottom-12 left-0 z-30 w-64 rounded-2xl border border-border bg-surface p-2 shadow-xl">
                     <ModelOption
                       name="Standard"
                       description="Rapide et économique"
@@ -620,13 +707,14 @@ export default function ChatPage() {
             </div>
 
             {/* Fichier sélectionné */}
+
             {selectedFile && (
-              <div className="mx-auto mt-3 flex w-full max-w-3xl items-center justify-between rounded-2xl border border-neutral-200 bg-white px-4 py-3 shadow-sm">
+              <div className="mx-auto mt-3 flex w-full max-w-3xl items-center justify-between rounded-2xl border border-border bg-surface px-4 py-3 shadow-sm">
                 <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-neutral-100">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface-tertiary">
                     <FileText
                       size={17}
-                      className="text-neutral-600"
+                      className="text-muted-strong"
                     />
                   </div>
 
@@ -635,8 +723,11 @@ export default function ChatPage() {
                       {selectedFile.name}
                     </p>
 
-                    <p className="text-[11px] text-neutral-400">
-                      {(selectedFile.size / 1024).toFixed(1)} KB
+                    <p className="text-[11px] text-muted">
+                      {(
+                        selectedFile.size / 1024
+                      ).toFixed(1)}{" "}
+                      KB
                     </p>
                   </div>
                 </div>
@@ -645,7 +736,7 @@ export default function ChatPage() {
                   type="button"
                   aria-label="Supprimer le fichier"
                   onClick={removeSelectedFile}
-                  className="rounded-lg p-2 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-950"
+                  className="rounded-lg p-2 text-muted transition hover:bg-surface-tertiary hover:text-foreground"
                 >
                   <X size={16} />
                 </button>
@@ -653,10 +744,12 @@ export default function ChatPage() {
             )}
 
             {/* Mode Web */}
-            {activeCapability === "Recherche Web" && (
-              <div className="mx-auto mt-3 flex w-full max-w-3xl items-center justify-between rounded-2xl border border-neutral-200 bg-white px-4 py-3 shadow-sm">
+
+            {activeCapability ===
+              "Recherche Web" && (
+              <div className="mx-auto mt-3 flex w-full max-w-3xl items-center justify-between rounded-2xl border border-border bg-surface px-4 py-3 shadow-sm">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-neutral-100">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-surface-tertiary">
                     <Globe size={17} />
                   </div>
 
@@ -665,8 +758,9 @@ export default function ChatPage() {
                       Recherche Web activée
                     </p>
 
-                    <p className="text-[11px] text-neutral-400">
-                      Le moteur Web sera connecté au backend.
+                    <p className="text-[11px] text-muted">
+                      Le moteur Web sera connecté
+                      au backend.
                     </p>
                   </div>
                 </div>
@@ -676,7 +770,7 @@ export default function ChatPage() {
                   onClick={() =>
                     setActiveCapability(null)
                   }
-                  className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-950"
+                  className="rounded-lg p-2 text-muted hover:bg-surface-tertiary hover:text-foreground"
                   aria-label="Désactiver la recherche Web"
                 >
                   <X size={16} />
@@ -685,8 +779,9 @@ export default function ChatPage() {
             )}
 
             {/* Composer */}
+
             <div className="mx-auto mt-4 w-full max-w-3xl">
-              <div className="overflow-hidden rounded-[28px] border border-neutral-300 bg-white shadow-[0_12px_40px_rgba(0,0,0,0.06)] transition focus-within:border-neutral-500">
+              <div className="overflow-hidden rounded-[28px] border border-border-strong bg-surface shadow-[0_12px_40px_var(--shadow-color)] transition focus-within:border-muted-strong">
                 <textarea
                   rows={4}
                   value={message}
@@ -704,7 +799,7 @@ export default function ChatPage() {
                   }}
                   placeholder="Écrivez à LBV-Connect.ia..."
                   disabled={isThinking}
-                  className="w-full resize-none bg-transparent px-5 pt-5 text-sm leading-6 outline-none placeholder:text-neutral-400 disabled:opacity-60"
+                  className="w-full resize-none bg-transparent px-5 pt-5 text-sm leading-6 outline-none placeholder:text-muted disabled:opacity-60"
                 />
 
                 <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-2">
@@ -727,8 +822,8 @@ export default function ChatPage() {
                             }
                             className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-2 transition ${
                               isActive
-                                ? "bg-neutral-950 text-white"
-                                : "text-neutral-500 hover:bg-neutral-100 hover:text-neutral-950"
+                                ? "bg-accent text-accent-foreground"
+                                : "text-muted-strong hover:bg-surface-tertiary hover:text-foreground"
                             }`}
                           >
                             <Icon size={17} />
@@ -751,16 +846,16 @@ export default function ChatPage() {
                         !selectedFile) ||
                       isThinking
                     }
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-neutral-950 text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-30"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
                   >
                     <ArrowUp size={18} />
                   </button>
                 </div>
               </div>
 
-              <p className="mt-3 text-center text-[11px] text-neutral-400">
-                Les crédits consommés dépendent du
-                modèle et de l'opération.
+              <p className="mt-3 text-center text-[11px] text-muted">
+                Les crédits consommés dépendent
+                du modèle et de l'opération.
               </p>
             </div>
           </div>
@@ -792,8 +887,8 @@ function ModelOption({
         locked
           ? "cursor-not-allowed opacity-45"
           : active
-            ? "bg-neutral-100"
-            : "hover:bg-neutral-50"
+            ? "bg-surface-tertiary"
+            : "hover:bg-surface-secondary"
       }`}
     >
       <div className="flex items-center justify-between">
@@ -804,18 +899,18 @@ function ModelOption({
         {active && !locked && (
           <Check
             size={15}
-            className="text-neutral-700"
+            className="text-muted-strong"
           />
         )}
 
         {locked && (
-          <span className="text-[10px] uppercase tracking-wider text-neutral-400">
+          <span className="text-[10px] uppercase tracking-wider text-muted">
             Pro
           </span>
         )}
       </div>
 
-      <p className="mt-0.5 text-xs text-neutral-500">
+      <p className="mt-0.5 text-xs text-muted">
         {description}
       </p>
     </button>

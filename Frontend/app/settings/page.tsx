@@ -21,6 +21,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
+import { useTheme } from "@/components/providers/ThemeProvider";
 
 type Language = "fr" | "en";
 type Theme = "light" | "dark";
@@ -69,7 +70,7 @@ export default function SettingsPage() {
 
   const [language, setLanguage] = useState<Language>("fr");
   const [notifications, setNotifications] = useState(true);
-  const [theme, setTheme] = useState<Theme>("light");
+  const { theme, setTheme } = useTheme();
 
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -102,10 +103,7 @@ export default function SettingsPage() {
     loadSettings();
   }, []);
 
-  useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
-
+  
     async function loadSettings() {
   setLoading(true);
   setErrorMessage("");
@@ -219,10 +217,6 @@ export default function SettingsPage() {
 
     setNotifications(
       currentProfile.notifications_enabled,
-    );
-
-    setTheme(
-      currentProfile.theme,
     );
 
     // Synchronisation de la localisation
@@ -486,41 +480,12 @@ async function changeNotifications(
 }
 
 
-async function changeTheme(
-  value: Theme,
-) {
-  const previousTheme = theme;
-
-  setTheme(value);
-  applyTheme(value);
+async function changeTheme(value: Theme) {
   setSavingTheme(true);
   clearMessages();
 
   try {
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError) {
-      throw userError;
-    }
-
-    if (!user) {
-      window.location.href = "/login";
-      return;
-    }
-
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        theme: value,
-      })
-      .eq("id", user.id);
-
-    if (error) {
-      throw error;
-    }
+    await setTheme(value);
 
     setProfile((current) =>
       current
@@ -537,13 +502,7 @@ async function changeTheme(
         : "Mode clair activé.",
     );
   } catch (error) {
-    console.error(
-      "THEME UPDATE ERROR:",
-      error,
-    );
-
-    setTheme(previousTheme);
-    applyTheme(previousTheme);
+    console.error("THEME UPDATE ERROR:", error);
 
     setErrorMessage(
       "Impossible d'enregistrer le thème.",
@@ -895,14 +854,14 @@ async function reverseGeocode(
   profile?.longitude != null;
 
   return (
-    <main className="min-h-dvh bg-white text-neutral-950">
-      <header className="border-b border-neutral-200">
+    <main className="min-h-dvh bg-[var(--background)] text-[var(--foreground)]">
+      <header className="border-b border-[var(--border)]">
         <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <Link
               href="/chat"
               aria-label="Retour au chat"
-              className="rounded-xl p-2 text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+              className="rounded-xl p-2 text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--foreground)]"
             >
               <ArrowLeft size={19} />
             </Link>
@@ -918,7 +877,7 @@ async function reverseGeocode(
 
           <Link
             href="/credits"
-            className="text-sm font-medium text-neutral-600 transition hover:text-neutral-950"
+            className="text-sm font-medium text-[var(--muted)] transition hover:text-[var(--foreground)]"
           >
             Mes crédits
           </Link>
@@ -927,7 +886,7 @@ async function reverseGeocode(
 
       <section className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8 sm:py-12">
         <div>
-          <p className="text-sm font-medium text-neutral-500">
+          <p className="text-sm font-medium text-[var(--muted)]">
             Votre compte
           </p>
 
@@ -935,14 +894,14 @@ async function reverseGeocode(
             Paramètres
           </h1>
 
-          <p className="mt-2 text-sm leading-6 text-neutral-500">
+          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
             Gérez votre compte et vos préférences
             LBV-Connect.ia.
           </p>
         </div>
 
         {loading && (
-          <div className="mt-8 flex items-center justify-center rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
+          <div className="mt-8 flex items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-8">
             <Loader2
               size={20}
               className="animate-spin"
@@ -999,7 +958,7 @@ async function reverseGeocode(
                 onClick={() =>
                   setPersonalOpen(!personalOpen)
                 }
-                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-neutral-50"
+                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)]"
               >
                 <IconBox>
                   <UserRound size={17} />
@@ -1010,7 +969,7 @@ async function reverseGeocode(
                     Informations personnelles
                   </p>
 
-                  <p className="mt-0.5 truncate text-xs text-neutral-500">
+                  <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
                     {fullName} · {email}
                   </p>
                 </div>
@@ -1026,7 +985,7 @@ async function reverseGeocode(
               </button>
 
               {personalOpen && (
-                <div className="border-t border-neutral-200 bg-neutral-50 p-5">
+                <div className="border-t border-[var(--border)] bg-[var(--surface)] p-5">
                   <div className="grid gap-4 sm:grid-cols-2">
                     <InputField
                       label="Prénom"
@@ -1052,7 +1011,7 @@ async function reverseGeocode(
                     type="button"
                     disabled={savingProfile}
                     onClick={savePersonalInformation}
-                    className="mt-5 flex items-center gap-2 rounded-xl bg-neutral-950 px-4 py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 disabled:opacity-50"
+                    className="mt-5 flex items-center gap-2 rounded-xl bg-[var(--foreground)] px-4 py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 disabled:opacity-50"
                   >
                     {savingProfile && (
                       <Loader2
@@ -1071,7 +1030,7 @@ async function reverseGeocode(
                 onClick={() =>
                   setSecurityOpen(!securityOpen)
                 }
-                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-neutral-50"
+                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)]"
               >
                 <IconBox>
                   <Shield size={17} />
@@ -1082,7 +1041,7 @@ async function reverseGeocode(
                     Sécurité
                   </p>
 
-                  <p className="mt-0.5 text-xs text-neutral-500">
+                  <p className="mt-0.5 text-xs text-[var(--muted)]">
                     Mot de passe et sessions
                   </p>
                 </div>
@@ -1098,23 +1057,23 @@ async function reverseGeocode(
               </button>
 
               {securityOpen && (
-                <div className="border-t border-neutral-200 bg-neutral-50 p-5">
-                  <div className="rounded-2xl border border-neutral-200 bg-white p-4">
+                <div className="border-t border-[var(--border)] bg-[var(--surface)] p-5">
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
                     <p className="text-sm font-medium">
                       Adresse du compte
                     </p>
 
-                    <p className="mt-1 truncate text-sm text-neutral-500">
+                    <p className="mt-1 truncate text-sm text-[var(--muted)]">
                       {email}
                     </p>
                   </div>
 
-                  <div className="mt-4 rounded-2xl border border-neutral-200 bg-white p-4">
+                  <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
                     <p className="text-sm font-medium">
                       Mot de passe
                     </p>
 
-                    <p className="mt-1 text-xs leading-5 text-neutral-500">
+                    <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
                       Recevez un lien sécurisé pour
                       modifier votre mot de passe.
                     </p>
@@ -1125,7 +1084,7 @@ async function reverseGeocode(
                       onClick={
                         sendPasswordReset
                       }
-                      className="mt-4 rounded-xl bg-neutral-950 px-4 py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 disabled:opacity-50"
+                      className="mt-4 rounded-xl bg-[var(--foreground)] px-4 py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 disabled:opacity-50"
                     >
                       {resettingPassword
                         ? "Envoi..."
@@ -1133,12 +1092,12 @@ async function reverseGeocode(
                     </button>
                   </div>
 
-                  <div className="mt-4 rounded-2xl border border-neutral-200 bg-white p-4">
+                  <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
                     <p className="text-sm font-medium">
                       Sessions
                     </p>
 
-                    <p className="mt-1 text-xs leading-5 text-neutral-500">
+                    <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
                       Fermez les sessions ouvertes sur
                       vos autres appareils.
                     </p>
@@ -1149,7 +1108,7 @@ async function reverseGeocode(
                       onClick={
                         signOutOtherSessions
                       }
-                      className="mt-4 rounded-xl border border-neutral-200 px-4 py-2.5 text-xs font-medium transition hover:bg-neutral-50 disabled:opacity-50"
+                      className="mt-4 rounded-xl border border-[var(--border)] px-4 py-2.5 text-xs font-medium transition hover:bg-[var(--surface-2)] disabled:opacity-50"
                     >
                       {loggingOutOthers
                         ? "Déconnexion..."
@@ -1178,7 +1137,7 @@ async function reverseGeocode(
                   {savingLanguage && (
                     <Loader2
                       size={14}
-                      className="animate-spin text-neutral-400"
+                      className="animate-spin text-[var(--muted)]"
                     />
                   )}
 
@@ -1189,7 +1148,7 @@ async function reverseGeocode(
                         event.target.value as Language,
                       )
                     }
-                    className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-neutral-400"
+                    className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm outline-none focus:border-neutral-400"
                   >
                     <option value="fr">
                       Français
@@ -1211,7 +1170,7 @@ async function reverseGeocode(
                   type="button"
                   disabled={locating}
                   onClick={detectLocation}
-                  className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm transition hover:bg-neutral-50 disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm transition hover:bg-[var(--surface-2)] disabled:opacity-50"
                 >
                   {locating ? (
                     <Loader2
@@ -1231,16 +1190,27 @@ async function reverseGeocode(
               </SettingsRow>
 
               {hasLocation && (
-                <div className="border-t border-neutral-200 bg-neutral-50 px-5 py-3">
-                  <p className="text-xs text-neutral-500">
-                    Position enregistrée :
+                <div className="border-t border-[var(--border)] bg-[var(--surface)] px-5 py-3">
+                  <p className="text-xs text-[var(--muted)]">
+                    Localisation détectée
                   </p>
 
-                  <p className="mt-1 font-mono text-[11px] text-neutral-400">
-                    {profile?.latitude?.toFixed(6)}
-                    {" · "}
-                    {profile?.longitude?.toFixed(6)}
+                  <p className="mt-1 text-sm font-medium text-[var(--foreground)]">
+                    {countryName}
+                    {cityName ? ` · ${cityName}` : ""}
                   </p>
+
+                  {subdivisionName && (
+                    <p className="mt-0.5 text-xs text-[var(--muted)]">
+                      {subdivisionName}
+                    </p>
+                  )}
+
+                  {countryCode && (
+                    <p className="mt-1 text-[10px] uppercase tracking-wider text-[var(--muted)]">
+                      {countryCode}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -1253,7 +1223,7 @@ async function reverseGeocode(
                   {savingTheme && (
                     <Loader2
                       size={14}
-                      className="animate-spin text-neutral-400"
+                      className="animate-spin text-[var(--muted)]"
                     />
                   )}
 
@@ -1288,7 +1258,7 @@ async function reverseGeocode(
                   {savingNotifications && (
                     <Loader2
                       size={14}
-                      className="animate-spin text-neutral-400"
+                      className="animate-spin text-[var(--muted)]"
                     />
                   )}
 
@@ -1352,7 +1322,7 @@ async function reverseGeocode(
                 onClick={handleLogout}
                 className="flex w-full items-center gap-4 rounded-2xl border border-red-100 bg-red-50 p-4 text-left transition hover:bg-red-100 disabled:opacity-50"
               >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-red-600">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--background)] text-red-600">
                   {loggingOut ? (
                     <Loader2
                       size={17}
@@ -1379,26 +1349,11 @@ async function reverseGeocode(
           </>
         )}
 
-        <p className="mt-8 text-center text-xs text-neutral-400">
+        <p className="mt-8 text-center text-xs text-[var(--muted)]">
           LBV-Connect.ia · Version 1.0
         </p>
       </section>
     </main>
-  );
-}
-
-/* =========================================================
-   THEME
-========================================================= */
-
-function applyTheme(theme: Theme) {
-  if (typeof document === "undefined") {
-    return;
-  }
-
-  document.documentElement.classList.toggle(
-    "dark",
-    theme === "dark",
   );
 }
 
@@ -1418,8 +1373,8 @@ function SettingsSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="mt-8 overflow-hidden rounded-2xl border border-neutral-200">
-      <div className="border-b border-neutral-200 bg-neutral-50 p-5">
+    <section className="mt-8 overflow-hidden rounded-2xl border border-[var(--border)]">
+      <div className="border-b border-[var(--border)] bg-[var(--surface)] p-5">
         <div className="flex items-center gap-3">
           <IconBox>{icon}</IconBox>
 
@@ -1428,14 +1383,14 @@ function SettingsSection({
               {title}
             </h2>
 
-            <p className="mt-0.5 text-xs text-neutral-500">
+            <p className="mt-0.5 text-xs text-[var(--muted)]">
               {description}
             </p>
           </div>
         </div>
       </div>
 
-      <div className="divide-y divide-neutral-200 bg-white">
+      <div className="divide-y divide-neutral-200 bg-[var(--background)]">
         {children}
       </div>
     </section>
@@ -1466,7 +1421,7 @@ function SettingsRow({
           {title}
         </p>
 
-        <p className="mt-0.5 text-xs leading-5 text-neutral-500">
+        <p className="mt-0.5 text-xs leading-5 text-[var(--muted)]">
           {description}
         </p>
       </div>
@@ -1493,7 +1448,7 @@ function InputField({
 }) {
   return (
     <div>
-      <label className="mb-1.5 block text-xs font-medium text-neutral-500">
+      <label className="mb-1.5 block text-xs font-medium text-[var(--muted)]">
         {label}
       </label>
 
@@ -1502,7 +1457,7 @@ function InputField({
         onChange={(event) =>
           onChange(event.target.value)
         }
-        className="h-11 w-full rounded-xl border border-neutral-200 bg-white px-3 text-sm outline-none transition focus:border-neutral-400"
+        className="h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm outline-none transition focus:border-neutral-400"
       />
     </div>
   );
@@ -1521,11 +1476,11 @@ function InfoField({
 }) {
   return (
     <div>
-      <p className="mb-1.5 text-xs font-medium text-neutral-500">
+      <p className="mb-1.5 text-xs font-medium text-[var(--muted)]">
         {label}
       </p>
 
-      <div className="rounded-xl border border-neutral-200 bg-white px-3 py-3 text-sm text-neutral-700">
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 py-3 text-sm text-[var(--foreground)]">
         {value}
       </div>
     </div>
@@ -1542,7 +1497,7 @@ function IconBox({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-neutral-100 text-neutral-600">
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--muted)]">
       {children}
     </div>
   );
@@ -1570,12 +1525,12 @@ function Toggle({
       onClick={() => onChange(!checked)}
       className={`relative h-6 w-11 rounded-full transition ${
         checked
-          ? "bg-neutral-950"
+          ? "bg-[var(--foreground)]"
           : "bg-neutral-300"
       }`}
     >
       <span
-        className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${
+        className={`absolute top-1 h-4 w-4 rounded-full bg-[var(--background)] transition ${
           checked
             ? "left-6"
             : "left-1"

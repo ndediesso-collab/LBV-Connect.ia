@@ -29,6 +29,12 @@ type Pack = {
   }[];
 };
 
+/*
+ * Données temporaires.
+ *
+ * Elles seront remplacées plus tard par les données
+ * provenant du système de packs / abonnements.
+ */
 const packs: Pack[] = [
   {
     id: "light",
@@ -131,45 +137,53 @@ const packs: Pack[] = [
 
 const faqs = [
   {
-    question: "Combien de temps mes crédits sont-ils valables ?",
+    question:
+      "Combien de temps mes crédits sont-ils valables ?",
     answer:
       "Les crédits d'un pack sont valables pendant la durée indiquée sur celui-ci. Dans notre configuration actuelle, les packs sont valables 35 jours.",
   },
   {
-    question: "Que se passe-t-il si mes crédits sont épuisés avant la fin du pack ?",
+    question:
+      "Que se passe-t-il si mes crédits sont épuisés avant la fin du pack ?",
     answer:
       "Vous pouvez acheter des crédits complémentaires sans avoir besoin d'attendre la fin de votre période.",
   },
   {
-    question: "Puis-je utiliser plusieurs modèles avec un même pack ?",
+    question:
+      "Puis-je utiliser plusieurs modèles avec un même pack ?",
     answer:
       "Oui. Les modèles auxquels vous avez accès dépendent du niveau inclus dans votre pack.",
   },
   {
-    question: "Les crédits ont-ils tous la même valeur selon les modèles ?",
+    question:
+      "Les crédits ont-ils tous la même valeur selon les modèles ?",
     answer:
       "Non. La consommation dépend notamment du modèle et de l'opération effectuée. LBV-Connect.ia estime et réserve les crédits nécessaires avant l'opération.",
   },
 ];
 
 export default function PacksPage() {
-  const [openFaq, setOpenFaq] = useState<number | null>(null);
+  const [openFaq, setOpenFaq] =
+    useState<number | null>(null);
 
   return (
-    <main className="min-h-dvh bg-white text-neutral-950">
-      <header className="border-b border-neutral-200">
+    <main className="min-h-dvh bg-background text-foreground">
+      {/* Header */}
+
+      <header className="border-b border-border">
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <Link
               href="/chat"
               aria-label="Retour au chat"
-              className="rounded-xl p-2 text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+              className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
             >
               <ArrowLeft size={19} />
             </Link>
 
             <div className="flex items-center gap-2">
               <Sparkles size={18} />
+
               <span className="font-semibold tracking-tight">
                 LBV-Connect.ia
               </span>
@@ -178,18 +192,22 @@ export default function PacksPage() {
 
           <Link
             href="/credits"
-            className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm transition hover:bg-neutral-100"
+            className="flex items-center gap-2 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-sm transition hover:bg-surface-tertiary"
           >
             <CreditCard size={16} />
-            <span className="hidden sm:inline">Mes crédits</span>
+
+            <span className="hidden sm:inline">
+              Mes crédits
+            </span>
           </Link>
         </div>
       </header>
 
       <section className="mx-auto w-full max-w-6xl px-5 py-10 sm:px-8 sm:py-16">
         {/* Header */}
+
         <div className="mx-auto max-w-2xl text-center">
-          <p className="text-sm font-medium text-neutral-500">
+          <p className="text-sm font-medium text-muted">
             Packs LBV-Connect.ia
           </p>
 
@@ -197,39 +215,57 @@ export default function PacksPage() {
             Choisissez votre accès à l&apos;IA.
           </h1>
 
-          <p className="mt-4 text-sm leading-6 text-neutral-500 sm:text-base">
-            Un pack vous donne un volume de crédits utilisable pendant sa
-            période de validité. Le niveau de modèle accessible dépend du pack
-            choisi.
+          <p className="mt-4 text-sm leading-6 text-muted sm:text-base">
+            Un pack vous donne un volume de
+            crédits utilisable pendant sa période
+            de validité. Le niveau de modèle
+            accessible dépend du pack choisi.
           </p>
         </div>
 
         {/* Pack cards */}
+
         <div className="mt-10 grid gap-4 lg:grid-cols-3">
           {packs.map((pack) => (
-            <PackCard key={pack.id} pack={pack} />
+            <PackCard
+              key={pack.id}
+              pack={pack}
+            />
           ))}
         </div>
 
         {/* Complementary credits */}
-        <section className="mt-8 overflow-hidden rounded-3xl border border-neutral-200 bg-neutral-50">
+
+        <section className="mt-8 overflow-hidden rounded-3xl border border-border bg-surface-secondary">
           <div className="grid gap-6 p-6 sm:p-8 lg:grid-cols-[1fr_auto] lg:items-center">
             <div>
               <div className="flex items-center gap-2">
                 <Zap size={18} />
+
                 <h2 className="text-lg font-semibold">
                   Besoin de crédits supplémentaires ?
                 </h2>
               </div>
 
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-500">
-                Si votre solde arrive à zéro avant la fin de votre pack, vous
-                pourrez acheter des crédits complémentaires à partir de
-                500 XAF.
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+                Si votre solde arrive à zéro avant
+                la fin de votre pack, vous pourrez
+                acheter des crédits complémentaires
+                à partir de 500 XAF.
               </p>
             </div>
 
-            <button className="inline-flex items-center justify-center gap-2 rounded-xl bg-neutral-950 px-5 py-3 text-sm font-medium text-white transition hover:bg-neutral-800">
+            {/*
+             * Fonctionnalité d'achat à connecter
+             * lorsque le système de paiement sera
+             * implémenté.
+             */}
+
+            <button
+              type="button"
+              disabled
+              className="inline-flex cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-medium text-accent-foreground opacity-60"
+            >
               Acheter des crédits
               <Zap size={16} />
             </button>
@@ -237,9 +273,10 @@ export default function PacksPage() {
         </section>
 
         {/* How it works */}
+
         <section className="mt-12">
           <div className="text-center">
-            <p className="text-sm font-medium text-neutral-500">
+            <p className="text-sm font-medium text-muted">
               Fonctionnement
             </p>
 
@@ -270,27 +307,33 @@ export default function PacksPage() {
         </section>
 
         {/* FAQ */}
+
         <section className="mt-12">
           <div className="flex items-center justify-center gap-2">
             <HelpCircle size={18} />
+
             <h2 className="text-lg font-semibold">
               Questions sur les packs
             </h2>
           </div>
 
-          <div className="mx-auto mt-5 max-w-3xl overflow-hidden rounded-2xl border border-neutral-200">
+          <div className="mx-auto mt-5 max-w-3xl overflow-hidden rounded-2xl border border-border">
             {faqs.map((faq, index) => {
-              const isOpen = openFaq === index;
+              const isOpen =
+                openFaq === index;
 
               return (
                 <div
                   key={faq.question}
-                  className="border-b border-neutral-200 last:border-b-0"
+                  className="border-b border-border last:border-b-0"
                 >
                   <button
-                    className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-neutral-50"
+                    type="button"
+                    className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-surface-secondary"
                     onClick={() =>
-                      setOpenFaq(isOpen ? null : index)
+                      setOpenFaq(
+                        isOpen ? null : index,
+                      )
                     }
                     aria-expanded={isOpen}
                   >
@@ -300,15 +343,17 @@ export default function PacksPage() {
 
                     <ChevronDown
                       size={17}
-                      className={`shrink-0 text-neutral-400 transition-transform ${
-                        isOpen ? "rotate-180" : ""
+                      className={`shrink-0 text-muted transition-transform ${
+                        isOpen
+                          ? "rotate-180"
+                          : ""
                       }`}
                     />
                   </button>
 
                   {isOpen && (
-                    <div className="px-5 pb-5">
-                      <p className="text-sm leading-6 text-neutral-500">
+                    <div className="bg-surface px-5 pb-5">
+                      <p className="text-sm leading-6 text-muted">
                         {faq.answer}
                       </p>
                     </div>
@@ -323,25 +368,39 @@ export default function PacksPage() {
   );
 }
 
-function PackCard({ pack }: { pack: Pack }) {
+function PackCard({
+  pack,
+}: {
+  pack: Pack;
+}) {
+  const isPopular = Boolean(
+    pack.popular,
+  );
+
   return (
     <article
-      className={`relative flex flex-col rounded-3xl border p-6 sm:p-7 ${
-        pack.popular
-          ? "border-neutral-950 bg-neutral-950 text-white shadow-xl"
-          : "border-neutral-200 bg-white"
+      className={`relative flex flex-col rounded-3xl border p-6 transition sm:p-7 ${
+        isPopular
+          ? "border-accent bg-accent text-accent-foreground shadow-xl"
+          : "border-border bg-surface hover:border-border-strong"
       }`}
     >
-      {pack.popular && (
-        <div className="absolute right-5 top-5 rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-neutral-950">
+      {/* Popular badge */}
+
+      {isPopular && (
+        <div className="absolute right-5 top-5 rounded-full bg-accent-foreground px-3 py-1 text-[11px] font-semibold text-accent">
           Le plus choisi
         </div>
       )}
 
+      {/* Pack identity */}
+
       <div>
         <p
           className={`text-sm font-medium ${
-            pack.popular ? "text-neutral-400" : "text-neutral-500"
+            isPopular
+              ? "opacity-60"
+              : "text-muted"
           }`}
         >
           Pack
@@ -353,12 +412,16 @@ function PackCard({ pack }: { pack: Pack }) {
 
         <p
           className={`mt-3 min-h-[48px] text-sm leading-6 ${
-            pack.popular ? "text-neutral-400" : "text-neutral-500"
+            isPopular
+              ? "opacity-60"
+              : "text-muted"
           }`}
         >
           {pack.description}
         </p>
       </div>
+
+      {/* Price */}
 
       <div className="mt-7">
         <div className="flex items-baseline gap-1">
@@ -369,24 +432,35 @@ function PackCard({ pack }: { pack: Pack }) {
 
         <div
           className={`mt-1 flex items-center gap-2 text-sm ${
-            pack.popular ? "text-neutral-400" : "text-neutral-500"
+            isPopular
+              ? "opacity-60"
+              : "text-muted"
           }`}
         >
           <Clock3 size={15} />
+
           {pack.duration}
         </div>
       </div>
 
+      {/* Separator */}
+
       <div
         className={`my-7 h-px ${
-          pack.popular ? "bg-white/10" : "bg-neutral-200"
+          isPopular
+            ? "bg-accent-foreground/10"
+            : "bg-border"
         }`}
       />
+
+      {/* Credits */}
 
       <div>
         <p
           className={`text-xs font-medium uppercase tracking-wider ${
-            pack.popular ? "text-neutral-400" : "text-neutral-500"
+            isPopular
+              ? "opacity-60"
+              : "text-muted"
           }`}
         >
           Crédit inclus
@@ -397,10 +471,14 @@ function PackCard({ pack }: { pack: Pack }) {
         </p>
       </div>
 
+      {/* Models */}
+
       <div className="mt-7">
         <p
           className={`text-xs font-medium uppercase tracking-wider ${
-            pack.popular ? "text-neutral-400" : "text-neutral-500"
+            isPopular
+              ? "opacity-60"
+              : "text-muted"
           }`}
         >
           Modèles
@@ -417,18 +495,18 @@ function PackCard({ pack }: { pack: Pack }) {
                   <Check
                     size={15}
                     className={
-                      pack.popular
-                        ? "text-white"
-                        : "text-neutral-700"
+                      isPopular
+                        ? "text-accent-foreground"
+                        : "text-muted-strong"
                     }
                   />
                 ) : (
                   <Lock
                     size={14}
                     className={
-                      pack.popular
-                        ? "text-neutral-600"
-                        : "text-neutral-400"
+                      isPopular
+                        ? "opacity-35"
+                        : "text-muted"
                     }
                   />
                 )}
@@ -436,12 +514,12 @@ function PackCard({ pack }: { pack: Pack }) {
                 <span
                   className={`text-sm ${
                     tier.available
-                      ? pack.popular
-                        ? "text-neutral-200"
-                        : "text-neutral-700"
-                      : pack.popular
-                        ? "text-neutral-600"
-                        : "text-neutral-400"
+                      ? isPopular
+                        ? "opacity-90"
+                        : "text-muted-strong"
+                      : isPopular
+                        ? "opacity-35"
+                        : "text-muted"
                   }`}
                 >
                   {tier.name}
@@ -451,9 +529,9 @@ function PackCard({ pack }: { pack: Pack }) {
               {!tier.available && (
                 <span
                   className={`text-[10px] uppercase tracking-wider ${
-                    pack.popular
-                      ? "text-neutral-600"
-                      : "text-neutral-400"
+                    isPopular
+                      ? "opacity-35"
+                      : "text-muted"
                   }`}
                 >
                   Verrouillé
@@ -464,46 +542,59 @@ function PackCard({ pack }: { pack: Pack }) {
         </div>
       </div>
 
+      {/* Features */}
+
       <div className="mt-7">
         <p
           className={`text-xs font-medium uppercase tracking-wider ${
-            pack.popular ? "text-neutral-400" : "text-neutral-500"
+            isPopular
+              ? "opacity-60"
+              : "text-muted"
           }`}
         >
           Inclus
         </p>
 
         <ul className="mt-3 space-y-2.5">
-          {pack.features.map((feature) => (
-            <li key={feature} className="flex gap-2.5">
-              <Check
-                size={16}
-                className={`mt-0.5 shrink-0 ${
-                  pack.popular
-                    ? "text-white"
-                    : "text-neutral-700"
-                }`}
-              />
-
-              <span
-                className={`text-sm ${
-                  pack.popular
-                    ? "text-neutral-300"
-                    : "text-neutral-600"
-                }`}
+          {pack.features.map(
+            (feature) => (
+              <li
+                key={feature}
+                className="flex gap-2.5"
               >
-                {feature}
-              </span>
-            </li>
-          ))}
+                <Check
+                  size={16}
+                  className={`mt-0.5 shrink-0 ${
+                    isPopular
+                      ? "text-accent-foreground"
+                      : "text-muted-strong"
+                  }`}
+                />
+
+                <span
+                  className={`text-sm ${
+                    isPopular
+                      ? "opacity-80"
+                      : "text-muted-strong"
+                  }`}
+                >
+                  {feature}
+                </span>
+              </li>
+            ),
+          )}
         </ul>
       </div>
 
+      {/* Purchase */}
+
       <button
-        className={`mt-8 w-full rounded-xl px-4 py-3 text-sm font-medium transition ${
-          pack.popular
-            ? "bg-white text-neutral-950 hover:bg-neutral-200"
-            : "bg-neutral-950 text-white hover:bg-neutral-800"
+        type="button"
+        disabled
+        className={`mt-8 w-full cursor-not-allowed rounded-xl px-4 py-3 text-sm font-medium transition ${
+          isPopular
+            ? "bg-accent-foreground text-accent opacity-60"
+            : "bg-accent text-accent-foreground opacity-60"
         }`}
       >
         Choisir {pack.name}
@@ -522,8 +613,8 @@ function Step({
   description: string;
 }) {
   return (
-    <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-5">
-      <span className="text-xs font-semibold text-neutral-400">
+    <div className="rounded-2xl border border-border bg-surface-secondary p-5">
+      <span className="text-xs font-semibold text-muted">
         {number}
       </span>
 
@@ -531,7 +622,7 @@ function Step({
         {title}
       </h3>
 
-      <p className="mt-2 text-sm leading-6 text-neutral-500">
+      <p className="mt-2 text-sm leading-6 text-muted">
         {description}
       </p>
     </div>
