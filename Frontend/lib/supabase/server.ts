@@ -19,8 +19,8 @@ export async function createClient() {
               cookieStore.set(name, value, options);
             });
           } catch {
-            // Les Server Components ne permettent pas toujours
-            // de modifier les cookies.
+            // Les Server Components ne peuvent pas toujours
+            // modifier les cookies.
           }
         },
       },
