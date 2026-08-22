@@ -14,6 +14,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { useState } from "react";
+import LogoutButton from "@/components/layout/LogoutButton";
 
 const conversations = [
   "Nouvelle stratégie marketing",
@@ -35,206 +36,276 @@ export default function ChatPage() {
   const [selectedModel, setSelectedModel] = useState("Standard");
 
   return (
-    <main className="flex min-h-dvh overflow-hidden bg-white text-neutral-950">
-      {/* Mobile overlay */}
-      {sidebarOpen && (
+    <main className="min-h-dvh overflow-hidden bg-[#f7f7f5] text-neutral-950">
+        {/* Mobile overlay */}
+        {sidebarOpen && (
         <button
-          aria-label="Fermer le menu"
-          className="fixed inset-0 z-40 bg-black/30 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Sidebar */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[280px] flex-col border-r border-neutral-200 bg-neutral-50 transition-transform duration-200 md:static md:translate-x-0 ${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <div className="flex h-16 items-center justify-between border-b border-neutral-200 px-4">
-          <span className="font-semibold tracking-tight">
-            LBV-Connect.ia
-          </span>
-
-          <button
             aria-label="Fermer le menu"
-            className="rounded-lg p-2 hover:bg-neutral-200 md:hidden"
+            className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px] md:hidden"
             onClick={() => setSidebarOpen(false)}
-          >
-            ×
-          </button>
-        </div>
+        />
+        )}
 
-        <div className="p-3">
-          <button className="flex w-full items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm font-medium shadow-sm transition hover:bg-neutral-50">
-            <Plus size={18} />
-            Nouvelle conversation
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-3">
-          <p className="px-3 py-2 text-xs font-medium uppercase tracking-wider text-neutral-400">
-            Conversations récentes
-          </p>
-
-          <div className="space-y-1">
-            {conversations.map((conversation) => (
-              <button
-                key={conversation}
-                className="w-full truncate rounded-xl px-3 py-2.5 text-left text-sm text-neutral-600 transition hover:bg-neutral-200 hover:text-neutral-950"
-              >
-                {conversation}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="border-t border-neutral-200 p-3">
-          <div className="mb-2 rounded-xl bg-white p-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-neutral-500">Crédits</span>
-              <Wallet size={16} className="text-neutral-500" />
+        {/* Floating navigation */}
+        <aside
+        className={`fixed bottom-4 left-4 top-4 z-50 flex w-[260px] flex-col rounded-3xl border border-neutral-200 bg-white/95 shadow-2xl shadow-neutral-900/10 backdrop-blur-xl transition-transform duration-300 md:translate-x-0 ${
+            sidebarOpen
+            ? "translate-x-0"
+            : "-translate-x-[120%]"
+        }`}
+        >
+        {/* Brand */}
+        <div className="flex h-16 items-center justify-between px-5">
+            <div>
+            <div className="font-semibold tracking-tight">
+                LBV-Connect.ia
             </div>
 
-            <p className="mt-1 text-lg font-semibold">15 000</p>
+            <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-neutral-400">
+                Intelligence workspace
+            </div>
+            </div>
 
-            <p className="text-xs text-neutral-500">
-              35 jours restants
+            <button
+            aria-label="Fermer le menu"
+            className="rounded-xl p-2 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-950 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+            >
+            ×
+            </button>
+        </div>
+
+        {/* New conversation */}
+        <div className="px-4 pt-2">
+            <button className="flex w-full items-center justify-between rounded-2xl bg-neutral-950 px-4 py-3.5 text-sm font-medium text-white transition hover:bg-neutral-800">
+            <span className="flex items-center gap-3">
+                <Plus size={17} />
+                Nouvelle conversation
+            </span>
+
+            <span className="text-xs text-neutral-400">
+                +
+            </span>
+            </button>
+        </div>
+
+        {/* Conversations */}
+        <div className="mt-6 flex-1 overflow-y-auto px-4">
+            <div className="mb-3 px-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+            Historique
+            </div>
+
+            <div className="space-y-1">
+            {conversations.map((conversation) => (
+                <button
+                key={conversation}
+                className="w-full truncate rounded-xl px-3 py-2.5 text-left text-sm text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+                >
+                {conversation}
+                </button>
+            ))}
+            </div>
+        </div>
+
+        {/* Credits */}
+        <div className="px-4 pb-3">
+            <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+            <div className="flex items-center justify-between">
+                <span className="text-xs text-neutral-500">
+                Crédits disponibles
+                </span>
+
+                <Wallet size={15} className="text-neutral-400" />
+            </div>
+
+            <p className="mt-2 text-xl font-semibold tracking-tight">
+                15 000
             </p>
-          </div>
 
-          <button className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-neutral-600 hover:bg-neutral-200 hover:text-neutral-950">
+            <p className="mt-1 text-[11px] text-neutral-400">
+                35 jours restants
+            </p>
+            </div>
+        </div>
+
+        {/* Navigation */}
+        <div className="space-y-1 border-t border-neutral-200 px-4 py-3">
+            <button className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950">
             <Wallet size={17} />
             Mes crédits
-          </button>
-
-          <button className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-neutral-600 hover:bg-neutral-200 hover:text-neutral-950">
-            <Settings size={17} />
-            Paramètres
-          </button>
-        </div>
-      </aside>
-
-      {/* Main chat */}
-      <section className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-neutral-200 px-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <button
-              aria-label="Ouvrir le menu"
-              className="rounded-lg p-2 hover:bg-neutral-100 md:hidden"
-              onClick={() => setSidebarOpen(true)}
-            >
-              <Menu size={21} />
             </button>
 
-            <div className="relative">
-              <button
-                className="flex items-center gap-2 rounded-xl px-2 py-2 text-sm font-medium hover:bg-neutral-100"
-                onClick={() => setModelMenuOpen(!modelMenuOpen)}
-              >
-                <Sparkles size={17} />
-                {selectedModel}
-                <ChevronDown size={15} />
-              </button>
+            <button className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950">
+            <Settings size={17} />
+            Paramètres
+            </button>
 
-              {modelMenuOpen && (
-                <div className="absolute left-0 top-12 z-30 w-64 rounded-2xl border border-neutral-200 bg-white p-2 shadow-xl">
-                  <ModelOption
-                    name="Standard"
-                    description="Rapide et économique"
-                    active={selectedModel === "Standard"}
-                    onClick={() => {
-                      setSelectedModel("Standard");
-                      setModelMenuOpen(false);
-                    }}
-                  />
+            <LogoutButton />
+        </div>
+        </aside>
 
-                  <ModelOption
-                    name="Raisonnement"
-                    description="Pour les problèmes complexes"
-                    active={selectedModel === "Raisonnement"}
-                    onClick={() => {
-                      setSelectedModel("Raisonnement");
-                      setModelMenuOpen(false);
-                    }}
-                  />
+        {/* Main workspace */}
+        <section className="flex min-h-dvh flex-col">
+        {/* Top bar */}
+        <header className="flex h-16 shrink-0 items-center justify-between px-5 sm:px-8">
+            <div className="flex items-center gap-3">
+            <button
+                aria-label="Ouvrir le menu"
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-neutral-200 bg-white shadow-sm transition hover:bg-neutral-50"
+                onClick={() => setSidebarOpen(true)}
+            >
+                <Menu size={19} />
+            </button>
 
-                  <ModelOption
-                    name="Premium"
-                    description="Puissance maximale"
-                    locked
-                  />
-                </div>
-              )}
+            <div className="hidden sm:block">
+                <p className="text-xs text-neutral-400">
+                Workspace
+                </p>
+
+                <p className="text-sm font-medium">
+                Nouvelle conversation
+                </p>
             </div>
-          </div>
+            </div>
 
-          <div className="flex items-center gap-2 rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1.5">
-            <span className="text-xs text-neutral-500">Crédits</span>
-            <span className="text-sm font-semibold">15 000</span>
-          </div>
+            <div className="flex items-center gap-2">
+            <div className="hidden rounded-full border border-neutral-200 bg-white px-3 py-1.5 sm:flex">
+                <span className="text-xs text-neutral-500">
+                Crédits
+                </span>
+
+                <span className="ml-2 text-sm font-semibold">
+                15 000
+                </span>
+            </div>
+
+            <button className="flex h-10 w-10 items-center justify-center rounded-full border border-neutral-200 bg-white text-sm font-medium shadow-sm">
+                U
+            </button>
+            </div>
         </header>
 
-        {/* Conversation */}
-        <div className="flex flex-1 flex-col overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center px-5 py-12">
-            <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-neutral-950 text-white">
-              <Sparkles size={22} />
-            </div>
-
-            <h1 className="text-center text-2xl font-semibold tracking-tight sm:text-3xl">
-              Comment puis-je vous aider ?
-            </h1>
-
-            <p className="mt-3 max-w-lg text-center text-sm leading-6 text-neutral-500">
-              Discutez avec les modèles disponibles sur LBV-Connect.ia,
-              analysez vos fichiers, utilisez la recherche Web et bien plus.
-            </p>
-          </div>
-
-          {/* Input area */}
-          <div className="mx-auto w-full max-w-3xl px-4 pb-5 sm:px-5">
-            <div className="rounded-2xl border border-neutral-300 bg-white shadow-sm transition focus-within:border-neutral-500">
-              <textarea
-                rows={3}
-                placeholder="Écrivez à LBV-Connect.ia..."
-                className="w-full resize-none bg-transparent px-4 pt-4 text-sm outline-none placeholder:text-neutral-400"
-              />
-
-              <div className="flex items-center justify-between gap-3 px-3 pb-3 pt-2">
-                <div className="flex items-center gap-1 overflow-x-auto">
-                  {capabilities.map(({ label, icon: Icon }) => (
-                    <button
-                      key={label}
-                      title={label}
-                      className="flex shrink-0 items-center gap-1.5 rounded-lg p-2 text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950 sm:px-2.5"
-                    >
-                      <Icon size={17} />
-                      <span className="hidden text-xs sm:inline">
-                        {label}
-                      </span>
-                    </button>
-                  ))}
+        {/* Workspace */}
+        <div className="flex flex-1 flex-col px-4 pb-4 sm:px-8">
+            <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center">
+            {/* Intro */}
+            <div className="mx-auto w-full max-w-3xl">
+                <div className="mb-6 flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-neutral-950 text-white shadow-sm">
+                    <Sparkles size={20} />
                 </div>
 
-                <button
-                  aria-label="Envoyer"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-neutral-950 text-white transition hover:bg-neutral-800"
-                >
-                  <ArrowUp size={18} />
-                </button>
-              </div>
+                <div>
+                    <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                    LBV-Connect.ia
+                    </p>
+
+                    <p className="text-sm font-medium">
+                    Intelligence workspace
+                    </p>
+                </div>
+                </div>
+
+                <h1 className="max-w-2xl text-4xl font-semibold leading-[1.05] tracking-[-0.04em] sm:text-5xl">
+                Comment puis-je vous aider ?
+                </h1>
+
+                <p className="mt-5 max-w-xl text-sm leading-6 text-neutral-500">
+                Discutez avec les modèles disponibles, analysez vos fichiers,
+                utilisez la recherche Web et bien plus.
+                </p>
             </div>
 
-            <p className="mt-2 text-center text-[11px] text-neutral-400">
-              Les crédits consommés dépendent du modèle et de l'opération.
-            </p>
-          </div>
+            {/* Model selector */}
+            <div className="mx-auto mt-10 w-full max-w-3xl">
+                <div className="relative inline-block">
+                <button
+                    className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3.5 py-2.5 text-sm font-medium shadow-sm transition hover:bg-neutral-50"
+                    onClick={() =>
+                    setModelMenuOpen(!modelMenuOpen)
+                    }
+                >
+                    <Sparkles size={16} />
+                    {selectedModel}
+                    <ChevronDown size={15} />
+                </button>
+
+                {modelMenuOpen && (
+                    <div className="absolute left-0 top-12 z-30 w-64 rounded-2xl border border-neutral-200 bg-white p-2 shadow-xl">
+                    <ModelOption
+                        name="Standard"
+                        description="Rapide et économique"
+                        active={selectedModel === "Standard"}
+                        onClick={() => {
+                        setSelectedModel("Standard");
+                        setModelMenuOpen(false);
+                        }}
+                    />
+
+                    <ModelOption
+                        name="Raisonnement"
+                        description="Pour les problèmes complexes"
+                        active={selectedModel === "Raisonnement"}
+                        onClick={() => {
+                        setSelectedModel("Raisonnement");
+                        setModelMenuOpen(false);
+                        }}
+                    />
+
+                    <ModelOption
+                        name="Premium"
+                        description="Puissance maximale"
+                        locked
+                    />
+                    </div>
+                )}
+                </div>
+            </div>
+
+            {/* Composer */}
+            <div className="mx-auto mt-5 w-full max-w-3xl">
+                <div className="overflow-hidden rounded-[28px] border border-neutral-300 bg-white shadow-[0_12px_40px_rgba(0,0,0,0.06)] transition focus-within:border-neutral-500">
+                <textarea
+                    rows={4}
+                    placeholder="Écrivez à LBV-Connect.ia..."
+                    className="w-full resize-none bg-transparent px-5 pt-5 text-sm leading-6 outline-none placeholder:text-neutral-400"
+                />
+
+                <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-2">
+                    <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+                    {capabilities.map(({ label, icon: Icon }) => (
+                        <button
+                        key={label}
+                        title={label}
+                        className="flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-2 text-neutral-500 transition hover:bg-neutral-100 hover:text-neutral-950"
+                        >
+                        <Icon size={17} />
+
+                        <span className="hidden text-xs sm:inline">
+                            {label}
+                        </span>
+                        </button>
+                    ))}
+                    </div>
+
+                    <button
+                    aria-label="Envoyer"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-neutral-950 text-white transition hover:bg-neutral-800"
+                    >
+                    <ArrowUp size={18} />
+                    </button>
+                </div>
+                </div>
+
+                <p className="mt-3 text-center text-[11px] text-neutral-400">
+                Les crédits consommés dépendent du modèle et de l'opération.
+                </p>
+            </div>
+            </div>
         </div>
-      </section>
+        </section>
     </main>
-  );
+    );
 }
 
 function ModelOption({
@@ -252,6 +323,7 @@ function ModelOption({
 }) {
   return (
     <button
+      type="button"
       disabled={locked}
       onClick={onClick}
       className={`w-full rounded-xl px-3 py-2.5 text-left transition ${
@@ -263,7 +335,9 @@ function ModelOption({
       }`}
     >
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">{name}</span>
+        <span className="text-sm font-medium">
+          {name}
+        </span>
 
         {locked && (
           <span className="text-[10px] uppercase tracking-wider text-neutral-400">
