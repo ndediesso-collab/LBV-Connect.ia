@@ -4,18 +4,109 @@ import {
   ArrowLeft,
   Eye,
   EyeOff,
+  Loader2,
   Sparkles,
   UserRound,
 } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 
 export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    setError("");
+    setMessage("");
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+
+    const firstName = String(formData.get("firstName") ?? "").trim();
+    const lastName = String(formData.get("lastName") ?? "").trim();
+    const email = String(formData.get("email") ?? "")
+      .trim()
+      .toLowerCase();
+    const password = String(formData.get("password") ?? "");
+    const confirmPassword = String(
+      formData.get("confirmPassword") ?? "",
+    );
+
+    if (password !== confirmPassword) {
+      setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+
+    if (password.length < 8) {
+      setError("Le mot de passe doit contenir au moins 8 caractères.");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const supabase = createClient();
+
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            first_name: firstName,
+            last_name: lastName,
+          },
+        },
+      });
+
+      if (signUpError) {
+        setError(
+          signUpError.message ||
+            "Impossible de créer le compte. Veuillez réessayer.",
+        );
+        return;
+      }
+
+      /*
+       * Si Supabase demande une confirmation e-mail,
+       * l'utilisateur n'est pas encore connecté.
+       */
+      if (data.user && !data.session) {
+        setMessage(
+          "Compte créé avec succès. Consultez votre boîte e-mail pour confirmer votre adresse.",
+        );
+
+        form.reset();
+        return;
+      }
+
+      /*
+       * Si la confirmation e-mail est désactivée,
+       * Supabase peut créer directement une session.
+       */
+      if (data.session) {
+        window.location.href = "/chat";
+        return;
+      }
+
+      setMessage(
+        "Votre compte a été créé. Vérifiez votre adresse e-mail pour continuer.",
+      );
+    } catch (error) {
+      console.error(error);
+
+      setError(
+        "Une erreur inattendue est survenue. Veuillez réessayer.",
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -53,8 +144,8 @@ export default function RegisterPage() {
               </h1>
 
               <p className="mt-2 text-sm leading-6 text-neutral-500">
-                Rejoignez LBV-Connect.ia et accédez à vos outils d'intelligence
-                artificielle depuis un seul espace.
+                Rejoignez LBV-Connect.ia et accédez à vos outils
+                d'intelligence artificielle depuis un seul espace.
               </p>
             </div>
 
@@ -75,7 +166,8 @@ export default function RegisterPage() {
                     autoComplete="given-name"
                     placeholder="Votre prénom"
                     required
-                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
+                    disabled={loading}
+                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
 
@@ -94,7 +186,8 @@ export default function RegisterPage() {
                     autoComplete="family-name"
                     placeholder="Votre nom"
                     required
-                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
+                    disabled={loading}
+                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -114,7 +207,8 @@ export default function RegisterPage() {
                   autoComplete="email"
                   placeholder="vous@exemple.com"
                   required
-                  className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
+                  disabled={loading}
+                  className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </div>
 
@@ -135,7 +229,8 @@ export default function RegisterPage() {
                     placeholder="Créer un mot de passe"
                     required
                     minLength={8}
-                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 pr-12 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
+                    disabled={loading}
+                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 pr-12 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <button
@@ -146,7 +241,8 @@ export default function RegisterPage() {
                         : "Afficher le mot de passe"
                     }
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-950"
+                    disabled={loading}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-950 disabled:opacity-50"
                   >
                     {showPassword ? (
                       <EyeOff size={18} />
@@ -178,7 +274,8 @@ export default function RegisterPage() {
                     placeholder="Confirmer votre mot de passe"
                     required
                     minLength={8}
-                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 pr-12 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
+                    disabled={loading}
+                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 pr-12 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <button
@@ -191,7 +288,8 @@ export default function RegisterPage() {
                     onClick={() =>
                       setShowConfirmPassword(!showConfirmPassword)
                     }
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-950"
+                    disabled={loading}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-950 disabled:opacity-50"
                   >
                     {showConfirmPassword ? (
                       <EyeOff size={18} />
@@ -202,25 +300,52 @@ export default function RegisterPage() {
                 </div>
               </div>
 
+              {error && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-5 text-red-700"
+                >
+                  {error}
+                </div>
+              )}
+
+              {message && (
+                <div
+                  role="status"
+                  className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm leading-5 text-green-700"
+                >
+                  {message}
+                </div>
+              )}
+
               <label className="flex items-start gap-3">
                 <input
                   type="checkbox"
                   name="terms"
                   required
+                  disabled={loading}
                   className="mt-1 h-4 w-4 shrink-0 accent-black"
                 />
 
                 <span className="text-xs leading-5 text-neutral-500">
-                  J'accepte les conditions d'utilisation et la politique de
-                  confidentialité de LBV-Connect.ia.
+                  J&apos;accepte les conditions d&apos;utilisation et la
+                  politique de confidentialité de LBV-Connect.ia.
                 </span>
               </label>
 
               <button
                 type="submit"
-                className="h-12 w-full rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800"
+                disabled={loading}
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Créer mon compte
+                {loading ? (
+                  <>
+                    <Loader2 size={17} className="animate-spin" />
+                    Création du compte...
+                  </>
+                ) : (
+                  "Créer mon compte"
+                )}
               </button>
             </form>
 
@@ -232,7 +357,8 @@ export default function RegisterPage() {
 
             <button
               type="button"
-              className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 text-sm font-medium transition hover:bg-neutral-50"
+              disabled={loading}
+              className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 text-sm font-medium transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Continuer avec Google
             </button>
