@@ -1,14 +1,68 @@
 "use client";
 
-import { ArrowLeft, Eye, EyeOff, LockKeyhole, Sparkles } from "lucide-react";
+import {
+  ArrowLeft,
+  Eye,
+  EyeOff,
+  Loader2,
+  LockKeyhole,
+  Sparkles,
+} from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    setError("");
+    setMessage("");
+    setLoading(true);
+
+    const formData = new FormData(event.currentTarget);
+
+    const email = String(formData.get("email") ?? "")
+      .trim()
+      .toLowerCase();
+
+    const password = String(formData.get("password") ?? "");
+
+    try {
+      const supabase = createClient();
+
+      const { error: signInError } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+      if (signInError) {
+        setError(
+          "Adresse e-mail ou mot de passe incorrect.",
+        );
+        return;
+      }
+
+      setMessage("Connexion réussie. Redirection...");
+
+      window.location.href = "/chat";
+    } catch (error) {
+      console.error("SUPABASE LOGIN ERROR:", error);
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Une erreur inattendue est survenue. Veuillez réessayer.",
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -66,7 +120,8 @@ export default function LoginPage() {
                   autoComplete="email"
                   placeholder="vous@exemple.com"
                   required
-                  className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
+                  disabled={loading}
+                  className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </div>
 
@@ -81,7 +136,8 @@ export default function LoginPage() {
 
                   <button
                     type="button"
-                    className="text-xs font-medium text-neutral-500 transition hover:text-neutral-950"
+                    disabled={loading}
+                    className="text-xs font-medium text-neutral-500 transition hover:text-neutral-950 disabled:opacity-50"
                   >
                     Mot de passe oublié ?
                   </button>
@@ -95,7 +151,8 @@ export default function LoginPage() {
                     autoComplete="current-password"
                     placeholder="Votre mot de passe"
                     required
-                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 pr-12 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
+                    disabled={loading}
+                    className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 pr-12 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <button
@@ -106,7 +163,8 @@ export default function LoginPage() {
                         : "Afficher le mot de passe"
                     }
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-950"
+                    disabled={loading}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-950 disabled:opacity-50"
                   >
                     {showPassword ? (
                       <EyeOff size={18} />
@@ -117,11 +175,37 @@ export default function LoginPage() {
                 </div>
               </div>
 
+              {error && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-5 text-red-700"
+                >
+                  {error}
+                </div>
+              )}
+
+              {message && (
+                <div
+                  role="status"
+                  className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm leading-5 text-green-700"
+                >
+                  {message}
+                </div>
+              )}
+
               <button
                 type="submit"
-                className="h-12 w-full rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800"
+                disabled={loading}
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-neutral-950 px-4 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Se connecter
+                {loading ? (
+                  <>
+                    <Loader2 size={17} className="animate-spin" />
+                    Connexion...
+                  </>
+                ) : (
+                  "Se connecter"
+                )}
               </button>
             </form>
 
@@ -133,13 +217,14 @@ export default function LoginPage() {
 
             <button
               type="button"
-              className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 text-sm font-medium transition hover:bg-neutral-50"
+              disabled={loading}
+              className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 text-sm font-medium transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Continuer avec Google
             </button>
 
             <p className="mt-7 text-center text-sm text-neutral-500">
-              Vous n'avez pas encore de compte ?{" "}
+              Vous n&apos;avez pas encore de compte ?{" "}
               <Link
                 href="/register"
                 className="font-medium text-neutral-950 hover:underline"
@@ -150,8 +235,8 @@ export default function LoginPage() {
           </div>
 
           <p className="mt-5 text-center text-xs leading-5 text-neutral-400">
-            En continuant, vous acceptez les conditions d'utilisation et la
-            politique de confidentialité de LBV-Connect.ia.
+            En continuant, vous acceptez les conditions d&apos;utilisation et
+            la politique de confidentialité de LBV-Connect.ia.
           </p>
         </div>
       </div>
