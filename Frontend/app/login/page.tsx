@@ -14,58 +14,58 @@ import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    setError("");
-    setMessage("");
     setLoading(true);
+    setErrorMessage("");
+    setSuccessMessage("");
 
-    const formData = new FormData(event.currentTarget);
+    const supabase = createClient();
 
-    const email = String(formData.get("email") ?? "")
-      .trim()
-      .toLowerCase();
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
 
-    const password = String(formData.get("password") ?? "");
-
-    try {
-      const supabase = createClient();
-
-      const { error: signInError } =
-        await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-      if (signInError) {
-        console.error("SUPABASE LOGIN ERROR:", signInError);
-
-        setError(
-            `${signInError.message} (${signInError.status ?? "unknown"})`,
-        );
-
-        return;
-        }
-
-      setMessage("Connexion réussie. Redirection...");
-
-      window.location.href = "/chat";
-    } catch (error) {
+    if (error) {
       console.error("SUPABASE LOGIN ERROR:", error);
 
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Une erreur inattendue est survenue. Veuillez réessayer.",
-      );
-    } finally {
+      if (error.code === "email_not_confirmed") {
+        setErrorMessage(
+          "Votre adresse e-mail n'est pas encore confirmée. Consultez votre boîte mail pour activer votre compte.",
+        );
+      } else if (error.code === "invalid_credentials") {
+        setErrorMessage(
+          "Adresse e-mail ou mot de passe incorrect.",
+        );
+      } else {
+        setErrorMessage(error.message);
+      }
+
       setLoading(false);
+      return;
     }
+
+    console.log("LBV-Connect.ia : accès accordé.");
+
+    setSuccessMessage("Connexion réussie. Redirection...");
+
+    /*
+     * Rechargement complet volontaire.
+     *
+     * Cela permet aux cookies/session Supabase d'être
+     * correctement pris en compte avant d'arriver dans /chat.
+     */
+    window.location.href = "/chat";
   }
 
   return (
@@ -123,6 +123,8 @@ export default function LoginPage() {
                   autoComplete="email"
                   placeholder="vous@exemple.com"
                   required
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
                   disabled={loading}
                   className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                 />
@@ -154,6 +156,8 @@ export default function LoginPage() {
                     autoComplete="current-password"
                     placeholder="Votre mot de passe"
                     required
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
                     disabled={loading}
                     className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 px-4 pr-12 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
@@ -178,21 +182,21 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              {error && (
+              {errorMessage && (
                 <div
                   role="alert"
                   className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-5 text-red-700"
                 >
-                  {error}
+                  {errorMessage}
                 </div>
               )}
 
-              {message && (
+              {successMessage && (
                 <div
                   role="status"
                   className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm leading-5 text-green-700"
                 >
-                  {message}
+                  {successMessage}
                 </div>
               )}
 
