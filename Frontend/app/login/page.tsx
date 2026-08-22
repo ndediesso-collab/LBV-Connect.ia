@@ -43,11 +43,14 @@ export default function LoginPage() {
         });
 
       if (signInError) {
+        console.error("SUPABASE LOGIN ERROR:", signInError);
+
         setError(
-          "Adresse e-mail ou mot de passe incorrect.",
+            `${signInError.message} (${signInError.status ?? "unknown"})`,
         );
+
         return;
-      }
+        }
 
       setMessage("Connexion réussie. Redirection...");
 
