@@ -72,6 +72,9 @@ export default function SettingsPage() {
   const [personalOpen, setPersonalOpen] = useState(false);
   const [securityOpen, setSecurityOpen] = useState(false);
 
+  const [userId, setUserId] = useState<string | null>(null);
+
+  
   useEffect(() => {
     loadSettings();
   }, []);
@@ -85,324 +88,446 @@ export default function SettingsPage() {
     setErrorMessage("");
 
     try {
-      const {
+        const {
         data: { user },
         error: userError,
-      } = await supabase.auth.getUser();
+        } = await supabase.auth.getUser();
 
-      if (userError) {
+        if (userError) {
         throw userError;
-      }
+        }
 
-      if (!user) {
+        if (!user) {
         window.location.href = "/login";
         return;
-      }
+        }
 
-      setEmail(user.email ?? "");
+        // Source d'identité officielle
+        setUserId(user.id);
+        setEmail(user.email ?? "");
 
-      const { data, error } = await supabase
-        .from("profiles")
-        .select(
-          `
-          id,
-          first_name,
-          last_name,
-          language,
-          region,
-          notifications_enabled,
-          theme,
-          latitude,
-          longitude,
-          location_updated_at,
-          created_at,
-          updated_at
-        `,
-        )
-        .eq("id", user.id)
-        .maybeSingle();
+        // Recherche du profil de CET utilisateur
+        const { data: existingProfile, error: profileError } =
+        await supabase
+            .from("profiles")
+            .select(
+            `
+            id,
+            first_name,
+            last_name,
+            language,
+            region,
+            notifications_enabled,
+            theme,
+            latitude,
+            longitude,
+            location_updated_at,
+            created_at,
+            updated_at
+            `,
+            )
+            .eq("id", user.id)
+            .maybeSingle();
 
-      if (error) {
-        throw error;
-      }
+        if (profileError) {
+        throw profileError;
+        }
 
-      if (!data) {
-        setErrorMessage(
-          "Votre profil n'a pas encore été créé.",
-        );
-        return;
-      }
+        let currentProfile = existingProfile as Profile | null;
 
-      const currentProfile = data as Profile;
+        // Si le trigger n'a pas créé le profil,
+        // on le crée maintenant.
+        if (!currentProfile) {
+        const { data: createdProfile, error: createError } =
+            await supabase
+            .from("profiles")
+            .insert({
+                id: user.id,
+                first_name:
+                (user.user_metadata?.first_name as string | undefined) ??
+                null,
+                last_name:
+                (user.user_metadata?.last_name as string | undefined) ??
+                null,
+                language: "fr",
+                region: "GA",
+                notifications_enabled: true,
+                theme: "light",
+            })
+            .select()
+            .single();
 
-      setProfile(currentProfile);
+        if (createError) {
+            throw createError;
+        }
 
-      setFirstName(currentProfile.first_name ?? "");
-      setLastName(currentProfile.last_name ?? "");
-      setLanguage(currentProfile.language);
-      setNotifications(
+        currentProfile = createdProfile as Profile;
+        }
+
+        setProfile(currentProfile);
+
+        setFirstName(currentProfile.first_name ?? "");
+        setLastName(currentProfile.last_name ?? "");
+        setLanguage(currentProfile.language);
+        setNotifications(
         currentProfile.notifications_enabled,
-      );
-      setTheme(currentProfile.theme);
+        );
+        setTheme(currentProfile.theme);
     } catch (error) {
-      console.error("SETTINGS LOAD ERROR:", error);
+        console.error("SETTINGS LOAD ERROR:", error);
 
-      setErrorMessage(
+        setErrorMessage(
         "Impossible de charger les paramètres de votre compte.",
-      );
+        );
     } finally {
-      setLoading(false);
+        setLoading(false);
     }
-  }
+    }
 
   async function savePersonalInformation() {
     setSavingProfile(true);
     clearMessages();
 
     try {
-      const {
+        const {
         data: { user },
-      } = await supabase.auth.getUser();
+        error: userError,
+        } = await supabase.auth.getUser();
 
-      if (!user) {
+        if (userError) {
+        throw userError;
+        }
+
+        if (!user) {
         window.location.href = "/login";
         return;
-      }
+        }
 
-      const { data, error } = await supabase
+        const { error } = await supabase
         .from("profiles")
         .update({
-          first_name: firstName.trim() || null,
-          last_name: lastName.trim() || null,
+            first_name: firstName.trim() || null,
+            last_name: lastName.trim() || null,
         })
-        .eq("id", user.id)
-        .select()
-        .single();
+        .eq("id", user.id);
 
-      if (error) {
+        if (error) {
         throw error;
-      }
+        }
 
-      setProfile(data as Profile);
+        setProfile((current) =>
+        current
+            ? {
+                ...current,
+                first_name: firstName.trim() || null,
+                last_name: lastName.trim() || null,
+            }
+            : current,
+        );
 
-      setSuccessMessage(
+        setSuccessMessage(
         "Vos informations personnelles ont été enregistrées.",
-      );
+        );
     } catch (error) {
-      console.error(
-        "PROFILE UPDATE ERROR:",
-        error,
-      );
+        console.error("PROFILE UPDATE ERROR:", error);
 
-      setErrorMessage(
+        setErrorMessage(
         "Impossible d'enregistrer vos informations.",
-      );
+        );
     } finally {
-      setSavingProfile(false);
+        setSavingProfile(false);
     }
-  }
+    }
 
-  async function changeLanguage(
-    value: Language,
-  ) {
+  async function changeLanguage(value: Language) {
+    const previousLanguage = language;
+
     setLanguage(value);
     setSavingLanguage(true);
     clearMessages();
 
     try {
-      const { error } = await supabase
+        const {
+        data: { user },
+        error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError) {
+        throw userError;
+        }
+
+        if (!user) {
+        window.location.href = "/login";
+        return;
+        }
+
+        const { error } = await supabase
         .from("profiles")
         .update({
-          language: value,
+            language: value,
         })
-        .eq("id", profile?.id);
+        .eq("id", user.id);
 
-      if (error) {
+        if (error) {
         throw error;
-      }
+        }
 
-      setSuccessMessage(
+        setProfile((current) =>
+        current
+            ? {
+                ...current,
+                language: value,
+            }
+            : current,
+        );
+
+        setSuccessMessage(
         value === "fr"
-          ? "Langue française activée."
-          : "English language activated.",
-      );
+            ? "Langue française activée."
+            : "English language activated.",
+        );
     } catch (error) {
-      console.error(
-        "LANGUAGE UPDATE ERROR:",
-        error,
-      );
+        console.error("LANGUAGE UPDATE ERROR:", error);
 
-      setErrorMessage(
+        setLanguage(previousLanguage);
+
+        setErrorMessage(
         "Impossible d'enregistrer la langue.",
-      );
+        );
     } finally {
-      setSavingLanguage(false);
+        setSavingLanguage(false);
     }
-  }
+    }
 
-  async function changeNotifications(
-    value: boolean,
-  ) {
+ async function changeNotifications(value: boolean) {
+    const previousValue = notifications;
+
     setNotifications(value);
     setSavingNotifications(true);
     clearMessages();
 
     try {
-      const { error } = await supabase
+        const {
+        data: { user },
+        error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError) {
+        throw userError;
+        }
+
+        if (!user) {
+        window.location.href = "/login";
+        return;
+        }
+
+        const { error } = await supabase
         .from("profiles")
         .update({
-          notifications_enabled: value,
+            notifications_enabled: value,
         })
-        .eq("id", profile?.id);
+        .eq("id", user.id);
 
-      if (error) {
+        if (error) {
         throw error;
-      }
+        }
 
-      setSuccessMessage(
+        setProfile((current) =>
+        current
+            ? {
+                ...current,
+                notifications_enabled: value,
+            }
+            : current,
+        );
+
+        setSuccessMessage(
         value
-          ? "Les notifications sont activées."
-          : "Les notifications sont désactivées.",
-      );
+            ? "Les notifications sont activées."
+            : "Les notifications sont désactivées.",
+        );
     } catch (error) {
-      console.error(
+        console.error(
         "NOTIFICATION UPDATE ERROR:",
         error,
-      );
+        );
 
-      setNotifications(!value);
+        setNotifications(previousValue);
 
-      setErrorMessage(
+        setErrorMessage(
         "Impossible d'enregistrer cette préférence.",
-      );
+        );
     } finally {
-      setSavingNotifications(false);
+        setSavingNotifications(false);
     }
-  }
+    }
 
   async function changeTheme(value: Theme) {
+    const previousTheme = theme;
+
     setTheme(value);
+    applyTheme(value);
     setSavingTheme(true);
     clearMessages();
 
     try {
-      const { error } = await supabase
+        const {
+        data: { user },
+        error: userError,
+        } = await supabase.auth.getUser();
+
+        if (userError) {
+        throw userError;
+        }
+
+        if (!user) {
+        window.location.href = "/login";
+        return;
+        }
+
+        const { error } = await supabase
         .from("profiles")
         .update({
-          theme: value,
+            theme: value,
         })
-        .eq("id", profile?.id);
+        .eq("id", user.id);
 
-      if (error) {
+        if (error) {
         throw error;
-      }
+        }
 
-      applyTheme(value);
+        setProfile((current) =>
+        current
+            ? {
+                ...current,
+                theme: value,
+            }
+            : current,
+        );
 
-      setSuccessMessage(
+        setSuccessMessage(
         value === "dark"
-          ? "Mode sombre activé."
-          : "Mode clair activé.",
-      );
+            ? "Mode sombre activé."
+            : "Mode clair activé.",
+        );
     } catch (error) {
-      console.error(
-        "THEME UPDATE ERROR:",
-        error,
-      );
+        console.error("THEME UPDATE ERROR:", error);
 
-      setTheme(value === "dark" ? "light" : "dark");
+        setTheme(previousTheme);
+        applyTheme(previousTheme);
 
-      setErrorMessage(
+        setErrorMessage(
         "Impossible d'enregistrer le thème.",
-      );
+        );
     } finally {
-      setSavingTheme(false);
+        setSavingTheme(false);
     }
-  }
+    }
 
   function detectLocation() {
     if (!navigator.geolocation) {
-      setErrorMessage(
+        setErrorMessage(
         "La géolocalisation n'est pas disponible sur cet appareil.",
-      );
-      return;
+        );
+        return;
     }
 
     setLocating(true);
     clearMessages();
 
     navigator.geolocation.getCurrentPosition(
-      async (position) => {
+        async (position) => {
         try {
-          const latitude =
-            position.coords.latitude;
+            const {
+            data: { user },
+            error: userError,
+            } = await supabase.auth.getUser();
 
-          const longitude =
-            position.coords.longitude;
+            if (userError) {
+            throw userError;
+            }
 
-          const { data, error } = await supabase
+            if (!user) {
+            window.location.href = "/login";
+            return;
+            }
+
+            const latitude = position.coords.latitude;
+            const longitude = position.coords.longitude;
+
+            const locationUpdatedAt =
+            new Date().toISOString();
+
+            const { error } = await supabase
             .from("profiles")
             .update({
-              latitude,
-              longitude,
-              location_updated_at:
-                new Date().toISOString(),
+                latitude,
+                longitude,
+                location_updated_at: locationUpdatedAt,
             })
-            .eq("id", profile?.id)
-            .select()
-            .single();
+            .eq("id", user.id);
 
-          if (error) {
+            if (error) {
             throw error;
-          }
+            }
 
-          setProfile(data as Profile);
+            setProfile((current) =>
+            current
+                ? {
+                    ...current,
+                    latitude,
+                    longitude,
+                    location_updated_at:
+                    locationUpdatedAt,
+                }
+                : current,
+            );
 
-          setSuccessMessage(
+            setSuccessMessage(
             "Votre position a été enregistrée.",
-          );
+            );
         } catch (error) {
-          console.error(
+            console.error(
             "LOCATION UPDATE ERROR:",
             error,
-          );
+            );
 
-          setErrorMessage(
+            setErrorMessage(
             "Impossible d'enregistrer votre position.",
-          );
+            );
         } finally {
-          setLocating(false);
+            setLocating(false);
         }
-      },
-      (error) => {
+        },
+        (error) => {
         console.error(
-          "GEOLOCATION ERROR:",
-          error,
+            "GEOLOCATION ERROR:",
+            error,
         );
 
         setLocating(false);
 
         if (error.code === 1) {
-          setErrorMessage(
+            setErrorMessage(
             "Vous avez refusé l'accès à votre position.",
-          );
+            );
         } else if (error.code === 2) {
-          setErrorMessage(
+            setErrorMessage(
             "Votre position n'a pas pu être déterminée.",
-          );
+            );
         } else {
-          setErrorMessage(
+            setErrorMessage(
             "La récupération de votre position a expiré.",
-          );
+            );
         }
-      },
-      {
+        },
+        {
         enableHighAccuracy: true,
         timeout: 15000,
         maximumAge: 300000,
-      },
+        },
     );
-  }
+    }
 
   async function sendPasswordReset() {
     if (!email) {
@@ -516,9 +641,9 @@ export default function SettingsPage() {
       .join(" ") || "Utilisateur";
 
   const hasLocation =
-    profile?.latitude !== null &&
-    profile?.longitude !== null;
-
+  profile?.latitude != null &&
+  profile?.longitude != null;
+  
   return (
     <main className="min-h-dvh bg-white text-neutral-950">
       <header className="border-b border-neutral-200">
