@@ -7,16 +7,16 @@ import {
   FileText,
   Globe,
   Image as ImageIcon,
+  Lock,
   Menu,
   Plus,
   Settings,
   Sparkles,
-  Video,
   Wallet,
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
 import { createClient } from "@/lib/supabase/client";
@@ -88,22 +88,20 @@ const capabilities = [
   {
     label: "Fichier",
     icon: FileText,
-    accept: ".pdf,.doc,.docx,.txt,.csv,.xlsx",
+    accept: null,
+    disabled: true,
   },
   {
     label: "Image",
     icon: ImageIcon,
-    accept: "image/*",
+    accept: null,
+    disabled: true,
   },
   {
     label: "Recherche Web",
     icon: Globe,
     accept: null,
-  },
-  {
-    label: "Vidéo",
-    icon: Video,
-    accept: "video/*",
+    disabled: false,
   },
 ];
 
@@ -265,8 +263,6 @@ export default function ChatPage() {
     setActiveCapability,
   ] = useState<string | null>(null);
 
-  const [selectedFile, setSelectedFile] =
-    useState<File | null>(null);
 
   const [wallet, setWallet] =
     useState<WalletData | null>(null);
@@ -282,14 +278,6 @@ export default function ChatPage() {
   const [error, setError] =
     useState<string | null>(null);
 
-  const fileInputRef =
-    useRef<HTMLInputElement>(null);
-
-  const imageInputRef =
-    useRef<HTMLInputElement>(null);
-
-  const videoInputRef =
-    useRef<HTMLInputElement>(null);
 
   /*
    * ==========================================================
@@ -403,7 +391,6 @@ export default function ChatPage() {
     setActiveConversationId(null);
     setMessages([]);
     setMessage("");
-    setSelectedFile(null);
     setActiveCapability(null);
     setError(null);
     setSidebarOpen(false);
@@ -454,55 +441,15 @@ export default function ChatPage() {
    * ==========================================================
    */
 
-  function handleCapabilityClick(
-    label: string,
-  ) {
+  function handleCapabilityClick(label: string) {
     if (label === "Recherche Web") {
       setActiveCapability((current) =>
         current === label ? null : label,
       );
-
-      return;
     }
 
-    if (label === "Fichier") {
-      fileInputRef.current?.click();
-      return;
-    }
-
-    if (label === "Image") {
-      imageInputRef.current?.click();
-      return;
-    }
-
-    if (label === "Vidéo") {
-      videoInputRef.current?.click();
-    }
-  }
-
-  /*
-   * ==========================================================
-   * FICHIER
-   * ==========================================================
-   */
-
-  function handleFileSelected(
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) {
-    const file = event.target.files?.[0];
-
-    if (!file) {
-      return;
-    }
-
-    setSelectedFile(file);
-    setActiveCapability(null);
-
-    event.target.value = "";
-  }
-
-  function removeSelectedFile() {
-    setSelectedFile(null);
+    // Fichier et Image sont volontairement verrouillés en V1.
+    // Ils seront activés dans une prochaine version.
   }
 
   /*
@@ -514,10 +461,7 @@ export default function ChatPage() {
   async function handleSendMessage() {
     const content = message.trim();
 
-    if (
-      (!content && !selectedFile) ||
-      isThinking
-    ) {
+    if (!content || isThinking) {
       return;
     }
 
@@ -529,7 +473,6 @@ export default function ChatPage() {
     if (!conversationId) {
       const titleSource =
         content ||
-        selectedFile?.name ||
         "Nouvelle conversation";
 
       const newConversation: Conversation = {
@@ -563,7 +506,6 @@ export default function ChatPage() {
                   content.length > 45
                     ? `${content.slice(0, 45)}...`
                     : content ||
-                      selectedFile?.name ||
                       "Nouvelle conversation",
                 updatedAt: now,
               }
@@ -572,11 +514,7 @@ export default function ChatPage() {
       );
     }
 
-    const messageContent = selectedFile
-      ? content
-        ? `${content}\n\n📎 ${selectedFile.name}`
-        : `📎 ${selectedFile.name}`
-      : content;
+    const messageContent = content;
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -592,7 +530,6 @@ export default function ChatPage() {
     ]);
 
     setMessage("");
-    setSelectedFile(null);
     setActiveCapability(null);
     setIsThinking(true);
 
@@ -698,32 +635,6 @@ export default function ChatPage() {
 
   return (
     <main className="min-h-dvh overflow-hidden bg-background text-foreground">
-      {/* Inputs fichiers invisibles */}
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".pdf,.doc,.docx,.txt,.csv,.xlsx"
-        className="hidden"
-        onChange={handleFileSelected}
-      />
-
-      <input
-        ref={imageInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleFileSelected}
-      />
-
-      <input
-        ref={videoInputRef}
-        type="file"
-        accept="video/*"
-        className="hidden"
-        onChange={handleFileSelected}
-      />
-
       {/* Overlay mobile */}
 
       {sidebarOpen && (
@@ -1001,9 +912,8 @@ export default function ChatPage() {
 
                   <p className="mt-5 max-w-xl text-sm leading-6 text-muted">
                     Discutez avec les modèles
-                    disponibles, analysez vos
-                    fichiers, utilisez la recherche
-                    Web et bien plus.
+                    disponibles et utilisez la recherche
+                    Web directement depuis votre espace.
                   </p>
                 </div>
               </div>
@@ -1120,43 +1030,6 @@ export default function ChatPage() {
               </div>
             </div>
 
-            {/* Fichier sélectionné */}
-
-            {selectedFile && (
-              <div className="mx-auto mt-3 flex w-full max-w-3xl items-center justify-between rounded-2xl border border-border bg-surface px-4 py-3 shadow-sm">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-surface-tertiary">
-                    <FileText
-                      size={17}
-                      className="text-muted-strong"
-                    />
-                  </div>
-
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">
-                      {selectedFile.name}
-                    </p>
-
-                    <p className="text-[11px] text-muted">
-                      {(
-                        selectedFile.size / 1024
-                      ).toFixed(1)}{" "}
-                      KB
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  aria-label="Supprimer le fichier"
-                  onClick={removeSelectedFile}
-                  className="rounded-lg p-2 text-muted transition hover:bg-surface-tertiary hover:text-foreground"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            )}
-
             {/* Mode Web */}
 
             {activeCapability ===
@@ -1222,6 +1095,7 @@ export default function ChatPage() {
                       ({
                         label,
                         icon: Icon,
+                        disabled,
                       }) => {
                         const isActive =
                           activeCapability ===
@@ -1231,16 +1105,23 @@ export default function ChatPage() {
                           <button
                             key={label}
                             type="button"
-                            title={label}
+                            title={
+                              disabled
+                                ? `${label} — Arrive bientôt`
+                                : label
+                            }
                             onClick={() =>
                               handleCapabilityClick(
                                 label,
                               )
                             }
+                            disabled={disabled}
                             className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-2 transition ${
-                              isActive
-                                ? "bg-accent text-accent-foreground"
-                                : "text-muted-strong hover:bg-surface-tertiary hover:text-foreground"
+                              disabled
+                                ? "cursor-not-allowed text-muted opacity-50"
+                                : isActive
+                                  ? "bg-accent text-accent-foreground"
+                                  : "text-muted-strong hover:bg-surface-tertiary hover:text-foreground"
                             }`}
                           >
                             <Icon size={17} />
@@ -1248,6 +1129,10 @@ export default function ChatPage() {
                             <span className="hidden text-xs sm:inline">
                               {label}
                             </span>
+
+                            {disabled && (
+                              <Lock size={12} />
+                            )}
                           </button>
                         );
                       },
@@ -1259,8 +1144,7 @@ export default function ChatPage() {
                     aria-label="Envoyer"
                     onClick={handleSendMessage}
                     disabled={
-                      (!message.trim() &&
-                        !selectedFile) ||
+                      !message.trim() ||
                       isThinking
                     }
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
