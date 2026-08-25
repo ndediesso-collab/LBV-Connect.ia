@@ -755,3 +755,401 @@ def create_business_wallet_test(
             status_code=500,
             detail=str(error),
         )
+
+# ============================================================
+# CONVERSATIONS + HISTORIQUE
+# ============================================================
+#
+# Les routes ci-dessous utilisent le même client Supabase que
+# le reste du backend. Ce client doit être initialisé avec
+# SUPABASE_SERVICE_ROLE_KEY côté Render.
+#
+# L'utilisateur n'est jamais identifié uniquement par le
+# user-id envoyé par le frontend :
+#
+#   user-id: <UUID>
+#   authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+#
+# Le token est vérifié auprès de Supabase puis comparé au
+# user-id transmis.
+# ============================================================
+
+
+class ConversationCreateRequest(BaseModel):
+    title: str = "Nouvelle conversation"
+    model: str | None = None
+
+
+class ConversationMessageCreateRequest(BaseModel):
+    role: str
+    content: str
+
+
+def _validate_conversation_role(role: str) -> str:
+    normalized_role = role.strip().lower()
+
+    if normalized_role not in {"user", "assistant", "system"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Rôle de message invalide.",
+        )
+
+    return normalized_role
+
+
+def _get_conversation(
+    conversation_id: str,
+    authenticated_user_id: str,
+):
+    response = (
+        supabase
+        .table("conversations")
+        .select("*")
+        .eq("id", conversation_id)
+        .eq("user_id", authenticated_user_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation introuvable.",
+        )
+
+    return response.data[0]
+
+
+# ============================================================
+# GET /conversations
+# ============================================================
+
+
+@router.get("/conversations")
+def get_conversations(
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Retourne uniquement les conversations de l'utilisateur
+    authentifié.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    response = (
+        supabase
+        .table("conversations")
+        .select("*")
+        .eq("user_id", authenticated_user_id)
+        .order("updated_at", desc=True)
+        .execute()
+    )
+
+    return {
+        "success": True,
+        "user_id": authenticated_user_id,
+        "conversations": response.data or [],
+    }
+
+
+# ============================================================
+# POST /conversations
+# ============================================================
+
+
+@router.post("/conversations")
+def create_conversation(
+    request: ConversationCreateRequest,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Crée une conversation appartenant à l'utilisateur
+    authentifié.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    title = request.title.strip() or "Nouvelle conversation"
+
+    payload = {
+        "user_id": authenticated_user_id,
+        "title": title,
+    }
+
+    if request.model:
+        payload["model"] = request.model
+
+    response = (
+        supabase
+        .table("conversations")
+        .insert(payload)
+        .execute()
+    )
+
+    if not response.data:
+        raise HTTPException(
+            status_code=500,
+            detail="Impossible de créer la conversation.",
+        )
+
+    return {
+        "success": True,
+        "conversation": response.data[0],
+    }
+
+
+# ============================================================
+# GET /conversations/{conversation_id}
+# ============================================================
+
+
+@router.get("/conversations/{conversation_id}")
+def get_conversation(
+    conversation_id: str,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Retourne une conversation uniquement si elle appartient
+    à l'utilisateur authentifié.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    conversation = _get_conversation(
+        conversation_id=conversation_id,
+        authenticated_user_id=authenticated_user_id,
+    )
+
+    return {
+        "success": True,
+        "conversation": conversation,
+    }
+
+
+# ============================================================
+# GET /conversations/{conversation_id}/messages
+# ============================================================
+
+
+@router.get("/conversations/{conversation_id}/messages")
+def get_conversation_messages(
+    conversation_id: str,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Retourne l'historique d'une conversation.
+
+    La conversation est d'abord vérifiée contre l'utilisateur
+    authentifié afin d'empêcher l'accès à l'historique d'un
+    autre utilisateur.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    _get_conversation(
+        conversation_id=conversation_id,
+        authenticated_user_id=authenticated_user_id,
+    )
+
+    response = (
+        supabase
+        .table("messages")
+        .select("*")
+        .eq("conversation_id", conversation_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+
+    return {
+        "success": True,
+        "conversation_id": conversation_id,
+        "messages": response.data or [],
+    }
+
+
+# ============================================================
+# POST /conversations/{conversation_id}/messages
+# ============================================================
+
+
+@router.post("/conversations/{conversation_id}/messages")
+def create_conversation_message(
+    conversation_id: str,
+    request: ConversationMessageCreateRequest,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Ajoute un message à une conversation authentifiée.
+
+    Cette route est utile pour la persistance de l'historique.
+    Le moteur IA peut également utiliser directement cette
+    route après une réponse OpenAI réussie.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    _get_conversation(
+        conversation_id=conversation_id,
+        authenticated_user_id=authenticated_user_id,
+    )
+
+    role = _validate_conversation_role(request.role)
+    content = request.content.strip()
+
+    if not content:
+        raise HTTPException(
+            status_code=400,
+            detail="Le contenu du message ne peut pas être vide.",
+        )
+
+    response = (
+        supabase
+        .table("messages")
+        .insert(
+            {
+                "conversation_id": conversation_id,
+                "user_id": authenticated_user_id,
+                "role": role,
+                "content": content,
+            }
+        )
+        .execute()
+    )
+
+    if not response.data:
+        raise HTTPException(
+            status_code=500,
+            detail="Impossible d'enregistrer le message.",
+        )
+
+    # Mise à jour de la date de dernière activité.
+    supabase.table("conversations").update(
+        {
+            "updated_at": "now()",
+        }
+    ).eq(
+        "id",
+        conversation_id,
+    ).eq(
+        "user_id",
+        authenticated_user_id,
+    ).execute()
+
+    return {
+        "success": True,
+        "message": response.data[0],
+    }
+
+
+# ============================================================
+# DELETE /conversations/{conversation_id}
+# ============================================================
+
+
+@router.delete("/conversations/{conversation_id}")
+def delete_conversation(
+    conversation_id: str,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Supprime une conversation appartenant à l'utilisateur
+    authentifié.
+
+    Les messages liés doivent être supprimés par la base via
+    une contrainte ON DELETE CASCADE, ou être supprimés avant
+    la conversation si cette contrainte n'existe pas.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    _get_conversation(
+        conversation_id=conversation_id,
+        authenticated_user_id=authenticated_user_id,
+    )
+
+    # Suppression explicite des messages afin de ne pas dépendre
+    # d'une configuration CASCADE particulière.
+    supabase.table("messages").delete().eq(
+        "conversation_id",
+        conversation_id,
+    ).execute()
+
+    response = (
+        supabase
+        .table("conversations")
+        .delete()
+        .eq("id", conversation_id)
+        .eq("user_id", authenticated_user_id)
+        .execute()
+    )
+
+    if not response.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation introuvable ou déjà supprimée.",
+        )
+
+    return {
+        "success": True,
+        "conversation_id": conversation_id,
+    }

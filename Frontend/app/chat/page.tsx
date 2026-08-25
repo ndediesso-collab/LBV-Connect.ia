@@ -29,12 +29,17 @@ import type { ChatMessage, Conversation } from "@/types/lbv";
  *
  * NEXT_PUBLIC_API_URL doit pointer vers le backend FastAPI.
  *
- * Exemple :
+ * En production, NEXT_PUBLIC_API_URL doit contenir
+ * l'URL publique du backend Render.
  *
+ * Exemple local :
  * NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
  *
- * Les routes peuvent être modifiées ici sans toucher
- * à l'interface.
+ * Exemple production :
+ * NEXT_PUBLIC_API_URL=https://lbv-connect-api.onrender.com
+ *
+ * Le fallback ci-dessous permet au frontend de continuer
+ * à fonctionner même si la variable n'est pas définie.
  */
 
 const API_URL =
@@ -516,6 +521,12 @@ export default function ChatPage() {
 
     const messageContent = content;
 
+    // Le mode Web est indépendant du modèle sélectionné.
+    // Le backend décide ensuite si le modèle du pack peut
+    // exécuter l'opération Web et applique le coût correspondant.
+    const webEnabled =
+      activeCapability === "Recherche Web";
+
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       conversationId,
@@ -543,9 +554,7 @@ export default function ChatPage() {
             body: JSON.stringify({
               model: selectedModel,
               message: messageContent,
-              web:
-                activeCapability ===
-                "Recherche Web",
+              web: webEnabled,
               confirmed: true,
             }),
           },

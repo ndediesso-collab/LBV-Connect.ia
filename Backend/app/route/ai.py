@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from app.config.credit_costs import CreditAction
@@ -32,11 +32,9 @@ router = APIRouter(
 # ============================================================
 
 class ChatRequest(BaseModel):
-    user_id: str
     model: str
     message: str
     web: bool = False
-    confirmed: bool = False
 
 
 # ============================================================
@@ -149,14 +147,100 @@ PACK_ALLOWED_MODELS = {
 # POST /ai/chat
 # ============================================================
 
+def _authenticate_chat_user(
+    user_id: str | None,
+    authorization: str | None,
+) -> str:
+    """
+    Authentifie l'utilisateur à partir des headers :
+
+        user-id: <UUID Supabase>
+        authorization: Bearer <access_token>
+
+    Le token Supabase est vérifié côté backend puis son
+    identité est comparée au user-id transmis.
+    """
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Header user-id manquant.",
+        )
+
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Header authorization manquant.",
+        )
+
+    clean_token = authorization.strip()
+
+    if clean_token.lower().startswith("bearer "):
+        clean_token = clean_token[7:].strip()
+
+    if not clean_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Token d'authentification manquant.",
+        )
+
+    try:
+        user_response = supabase.auth.get_user(clean_token)
+        authenticated_user = user_response.user
+
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Token Supabase invalide ou expiré.",
+        )
+
+    if authenticated_user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Utilisateur non authentifié.",
+        )
+
+    authenticated_user_id = str(authenticated_user.id)
+
+    if authenticated_user_id != str(user_id):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Le user-id ne correspond pas "
+                "à l'utilisateur authentifié."
+            ),
+        )
+
+    return authenticated_user_id
+
+
 @router.post(
     "/chat",
     response_model=ChatResponse,
 )
-def chat(request: ChatRequest):
+def chat(
+    request: ChatRequest,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
 
     # ========================================================
-    # 1. VALIDATION DU MESSAGE
+    # 1. AUTHENTIFICATION
+    # ========================================================
+
+    authenticated_user_id = _authenticate_chat_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    # ========================================================
+    # 2. VALIDATION DU MESSAGE
     # ========================================================
 
     message = request.message.strip()
@@ -168,28 +252,23 @@ def chat(request: ChatRequest):
         )
 
     # ========================================================
-    # 2. VALIDATION DU MODÈLE
+    # 3. VALIDATION DU MODÈLE
     # ========================================================
 
     if request.model not in MODEL_ACTIONS:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Modèle inconnu : "
-                f"{request.model}"
-            ),
+            detail=f"Modèle inconnu : {request.model}",
         )
 
     # ========================================================
-    # 3. RÉCUPÉRATION DU WALLET
+    # 4. RÉCUPÉRATION DU WALLET
     # ========================================================
 
-    repository = SupabaseCreditRepository(
-        supabase
-    )
+    repository = SupabaseCreditRepository(supabase)
 
     wallet = repository.get_wallet(
-        request.user_id
+        authenticated_user_id
     )
 
     if wallet is None:
@@ -202,7 +281,7 @@ def chat(request: ChatRequest):
         )
 
     # ========================================================
-    # 4. VÉRIFICATION DU PACK
+    # 5. VÉRIFICATION DU PACK
     # ========================================================
 
     allowed_models = PACK_ALLOWED_MODELS.get(
@@ -221,23 +300,20 @@ def chat(request: ChatRequest):
         )
 
     # ========================================================
-    # 5. DÉTERMINATION DE L'ACTION
+    # 6. MODÈLE + MODE WEB
+    #
+    # Le modèle reste celui sélectionné dans le pack.
+    # Web est une capacité supplémentaire du même modèle.
     # ========================================================
 
-    action_type = (
-        "web"
-        if request.web
-        else "normal"
-    )
+    action_type = "web" if request.web else "normal"
 
     action = MODEL_ACTIONS[
         request.model
-    ][
-        action_type
-    ]
+    ][action_type]
 
     # ========================================================
-    # 6. VÉRIFICATION DU COÛT
+    # 7. VÉRIFICATION DU COÛT
     # ========================================================
 
     try:
@@ -253,20 +329,19 @@ def chat(request: ChatRequest):
         )
 
     # ========================================================
-    # 7. VÉRIFICATION DU PACK ACTIF
+    # 8. PACK ACTIF
     # ========================================================
 
     if not wallet.is_pack_active:
         raise HTTPException(
             status_code=403,
             detail=(
-                "Le pack de crédits est "
-                "expiré ou inactif."
+                "Le pack de crédits est expiré ou inactif."
             ),
         )
 
     # ========================================================
-    # 8. VÉRIFICATION DU SOLDE
+    # 9. SOLDE
     # ========================================================
 
     if wallet.balance < cost:
@@ -279,47 +354,37 @@ def chat(request: ChatRequest):
         )
 
     # ========================================================
-    # 9. APPEL OPENAI
+    # 10. APPEL IA
     #
-    # IMPORTANT :
-    # Aucun crédit n'est encore débité.
+    # OpenAIService doit utiliser request.web pour activer
+    # réellement l'outil web_search lorsque Web est actif.
     #
-    # Si OpenAI échoue :
-    # → aucun débit
-    # → aucune transaction
+    # Aucun crédit n'est débité avant une réponse réussie.
     # ========================================================
 
     openai_service = OpenAIService()
 
     try:
-
         response = openai_service.chat(
-            model=MODEL_OPENAI_IDS[
-                request.model
-            ],
+            model=MODEL_OPENAI_IDS[request.model],
             message=message,
             web=request.web,
         )
 
     except Exception as error:
-
         raise HTTPException(
             status_code=502,
             detail=(
-                "Impossible de contacter "
-                f"OpenAI : {str(error)}"
+                "Impossible de contacter le service IA : "
+                f"{str(error)}"
             ),
         )
 
     # ========================================================
-    # 10. CONSOMMATION DES CRÉDITS
-    #
-    # OpenAI a répondu correctement.
-    # On peut maintenant débiter.
+    # 11. CONSOMMATION
     # ========================================================
 
     try:
-
         result = CreditService.consume(
             wallet=wallet,
             action=action,
@@ -327,42 +392,35 @@ def chat(request: ChatRequest):
         )
 
     except InactivePackError as error:
-
         raise HTTPException(
             status_code=403,
             detail=str(error),
         )
 
     except InsufficientCreditsError as error:
-
         raise HTTPException(
             status_code=402,
             detail=str(error),
         )
 
     except ValueError as error:
-
         raise HTTPException(
             status_code=400,
             detail=str(error),
         )
 
     # ========================================================
-    # 11. MISE À JOUR DU WALLET SUPABASE
+    # 12. WALLET
     # ========================================================
 
     try:
-
-        repository.update_wallet(
-            wallet
-        )
+        repository.update_wallet(wallet)
 
     except Exception as error:
-
         raise HTTPException(
             status_code=500,
             detail=(
-                "La réponse OpenAI a été obtenue, "
+                "La réponse IA a été obtenue, "
                 "mais la mise à jour du portefeuille "
                 "a échoué : "
                 f"{str(error)}"
@@ -370,12 +428,12 @@ def chat(request: ChatRequest):
         )
 
     # ========================================================
-    # 12. CRÉATION DE LA TRANSACTION
+    # 13. TRANSACTION
     # ========================================================
 
     transaction = CreditTransaction(
         id=str(uuid4()),
-        user_id=request.user_id,
+        user_id=authenticated_user_id,
         transaction_type=CreditTransactionType.USAGE,
         amount=-result.cost,
         balance_after=result.new_balance,
@@ -385,51 +443,33 @@ def chat(request: ChatRequest):
     )
 
     try:
-
-        repository.create_transaction(
-            transaction
-        )
+        repository.create_transaction(transaction)
 
     except Exception as error:
-
         raise HTTPException(
             status_code=500,
             detail=(
                 "Le portefeuille a été mis à jour, "
-                "mais l'enregistrement de la "
-                "transaction a échoué : "
+                "mais l'enregistrement de la transaction "
+                "a échoué : "
                 f"{str(error)}"
             ),
         )
 
     # ========================================================
-    # 13. RÉPONSE AU FRONTEND
+    # 14. RÉPONSE
     # ========================================================
 
     return ChatResponse(
         success=True,
-
         model=request.model,
         action=result.action.value,
         message=response,
-
         cost=result.cost,
         previous_balance=result.previous_balance,
         credits_remaining=result.new_balance,
-
-        consumed_percentage=(
-            result.consumed_percentage
-        ),
-
-        remaining_percentage=(
-            result.remaining_percentage
-        ),
-
-        requires_warning=(
-            result.requires_warning
-        ),
-
-        requires_critical_warning=(
-            result.requires_critical_warning
-        ),
+        consumed_percentage=result.consumed_percentage,
+        remaining_percentage=result.remaining_percentage,
+        requires_warning=result.requires_warning,
+        requires_critical_warning=result.requires_critical_warning,
     )

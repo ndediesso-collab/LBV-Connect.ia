@@ -14,17 +14,9 @@ app = FastAPI(
 # CORS
 # ============================================================
 
-# Autorise :
-# - les deployments Vercel du projet LBV-Connect
-# - le domaine de production lorsqu'il sera défini
-#
-# Les URLs de preview Vercel peuvent changer à chaque
-# déploiement : elles sont donc gérées dynamiquement.
-
 VERCEL_ORIGIN_REGEX = (
     r"^https://lbv-connect-[a-z0-9-]+-ndediesso-collabs-projects\.vercel\.app$"
 )
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,5 +32,14 @@ app.add_middleware(
 # ROUTES
 # ============================================================
 
+# Routes générales :
+# - crédits
+# - wallet
+# - transactions
+# - conversations
+# - historique
 app.include_router(router)
+
+# Routes IA :
+# - /ai/chat
 app.include_router(ai_router)
