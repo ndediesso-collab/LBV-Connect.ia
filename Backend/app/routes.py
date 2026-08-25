@@ -1,26 +1,23 @@
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from app.config.credit_costs import CreditAction
 from app.core.supabase import supabase
-
 from app.models.credit_transaction import (
     CreditTransaction,
     CreditTransactionType,
 )
-
 from app.repositories.supabase_credit_repository import (
     SupabaseCreditRepository,
 )
-
 from app.services.credit_service import (
     CreditService,
     InactivePackError,
     InsufficientCreditsError,
+    UnsupportedActionError,
 )
-
 from app.services.wallet_service import WalletService
 
 
@@ -31,18 +28,20 @@ router = APIRouter()
 # SCHEMAS
 # ============================================================
 
+
 class CreditConsumptionRequest(BaseModel):
     action: CreditAction
     confirmed: bool = False
 
 
 # ============================================================
-# HELPERS
+# HELPERS — RÉPONSES
 # ============================================================
+
 
 def _wallet_response(wallet):
     """
-    Transforme un objet Wallet en réponse JSON stable.
+    Transforme un objet CreditWallet en réponse JSON stable.
     """
 
     if wallet is None:
@@ -67,15 +66,12 @@ def _wallet_response(wallet):
 def _transaction_response(transaction):
     """
     Transforme une transaction en réponse JSON.
-
-    La fonction utilise getattr afin de rester tolérante
-    si certains champs sont absents d'une ancienne version
-    du modèle.
     """
 
     return {
         "id": getattr(transaction, "id", None),
         "user_id": getattr(transaction, "user_id", None),
+
         "transaction_type": (
             transaction.transaction_type.value
             if hasattr(
@@ -84,24 +80,43 @@ def _transaction_response(transaction):
             )
             else transaction.transaction_type
         ),
-        "amount": getattr(transaction, "amount", None),
+
+        "amount": getattr(
+            transaction,
+            "amount",
+            None,
+        ),
+
         "balance_after": getattr(
             transaction,
             "balance_after",
             None,
         ),
+
         "created_at": getattr(
             transaction,
             "created_at",
             None,
         ),
+
         "action": (
             transaction.action.value
-            if getattr(transaction, "action", None)
-            is not None
-            and hasattr(transaction.action, "value")
-            else getattr(transaction, "action", None)
+            if getattr(
+                transaction,
+                "action",
+                None,
+            ) is not None
+            and hasattr(
+                transaction.action,
+                "value",
+            )
+            else getattr(
+                transaction,
+                "action",
+                None,
+            )
         ),
+
         "reference_id": getattr(
             transaction,
             "reference_id",
@@ -110,46 +125,81 @@ def _transaction_response(transaction):
     }
 
 
-def _extract_user_id_from_token(
+# ============================================================
+# AUTHENTIFICATION
+# ============================================================
+
+
+def _extract_token(
     authorization: str | None,
-):
+) -> str:
     """
-    Récupère l'identifiant de l'utilisateur connecté
-    à partir du token Bearer Supabase.
+    Nettoie le header Authorization.
 
-    Le frontend appelle alors simplement :
+    Format attendu :
 
-        GET /credits/me
-
-    sans transmettre le user_id dans l'URL.
+        Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
     """
 
     if not authorization:
         raise HTTPException(
             status_code=401,
-            detail="Authentification requise.",
+            detail="Header authorization manquant.",
         )
 
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="Format du token d'authentification invalide.",
-        )
+    clean_token = authorization.strip()
 
-    token = authorization.replace(
-        "Bearer ",
-        "",
-        1,
-    ).strip()
+    if clean_token.lower().startswith("bearer "):
+        clean_token = clean_token[7:].strip()
 
-    if not token:
+    if not clean_token:
         raise HTTPException(
             status_code=401,
             detail="Token d'authentification manquant.",
         )
 
+    return clean_token
+
+
+def _authenticate_user(
+    user_id: str | None,
+    authorization: str | None,
+) -> str:
+    """
+    Authentifie l'utilisateur connecté.
+
+    Le frontend transmet :
+
+        user-id: <UUID utilisateur>
+        authorization: Bearer <access_token>
+
+    Le backend :
+
+        1. vérifie que les headers existent ;
+        2. nettoie le token ;
+        3. demande à Supabase de vérifier le token ;
+        4. récupère l'identité réelle ;
+        5. compare l'identité du token au user-id transmis ;
+        6. retourne l'UUID utilisateur validé.
+
+    Le user_id transmis par le frontend n'est donc jamais
+    considéré comme une preuve d'identité à lui seul.
+    """
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Header user-id manquant.",
+        )
+
+    token = _extract_token(
+        authorization
+    )
+
     try:
-        response = supabase.auth.get_user(token)
+        response = supabase.auth.get_user(
+            token
+        )
 
         user = getattr(
             response,
@@ -163,19 +213,32 @@ def _extract_user_id_from_token(
                 detail="Utilisateur non authentifié.",
             )
 
-        user_id = getattr(
+        authenticated_user_id = getattr(
             user,
             "id",
             None,
         )
 
-        if not user_id:
+        if not authenticated_user_id:
             raise HTTPException(
                 status_code=401,
                 detail="Identifiant utilisateur introuvable.",
             )
 
-        return user_id
+        # --------------------------------------------------------
+        # Vérification anti-usurpation
+        # --------------------------------------------------------
+
+        if authenticated_user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "L'identifiant utilisateur ne correspond "
+                    "pas au token d'authentification."
+                ),
+            )
+
+        return authenticated_user_id
 
     except HTTPException:
         raise
@@ -183,16 +246,39 @@ def _extract_user_id_from_token(
     except Exception:
         raise HTTPException(
             status_code=401,
-            detail="Session utilisateur invalide ou expirée.",
+            detail=(
+                "Session utilisateur invalide ou expirée."
+            ),
         )
+
+
+def _get_authenticated_user_id(
+    user_id: str | None,
+    authorization: str | None,
+) -> str:
+    """
+    Point d'entrée unique pour les routes protégées.
+    """
+
+    return _authenticate_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+
+# ============================================================
+# HELPERS — REPOSITORY
+# ============================================================
 
 
 def _get_repository():
     """
-    Centralise la création du repository.
+    Centralise la création du repository Supabase.
     """
 
-    return SupabaseCreditRepository(supabase)
+    return SupabaseCreditRepository(
+        supabase
+    )
 
 
 def _get_wallet_service():
@@ -202,50 +288,70 @@ def _get_wallet_service():
 
     repository = _get_repository()
 
-    return WalletService(repository)
+    return WalletService(
+        repository
+    )
 
 
 # ============================================================
 # WALLET — UTILISATEUR CONNECTÉ
 # ============================================================
 
-@router.get("/credits/me")
+
+@router.get(
+    "/credits/me"
+)
 def get_my_wallet(
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
     authorization: str | None = Header(
         default=None,
+        alias="authorization",
     ),
 ):
     """
-    Retourne le portefeuille de crédits de l'utilisateur
-    actuellement connecté.
+    Retourne le portefeuille de crédits
+    de l'utilisateur authentifié.
 
-    Endpoint utilisé par le frontend :
+    Endpoint frontend :
 
         GET /credits/me
+
+    Headers :
+
+        user-id: <UUID>
+        authorization: Bearer <TOKEN>
     """
 
-    user_id = _extract_user_id_from_token(
-        authorization
+    authenticated_user_id = (
+        _get_authenticated_user_id(
+            user_id=user_id,
+            authorization=authorization,
+        )
     )
 
     repository = _get_repository()
 
     wallet = repository.get_wallet(
-        user_id
+        authenticated_user_id
     )
 
     if wallet is None:
         raise HTTPException(
             status_code=404,
             detail=(
-                "Aucun portefeuille de crédits trouvé "
-                "pour cet utilisateur."
+                "Aucun portefeuille de crédits "
+                "trouvé pour cet utilisateur."
             ),
         )
 
     return {
         "success": True,
-        "wallet": _wallet_response(wallet),
+        "wallet": _wallet_response(
+            wallet
+        ),
     }
 
 
@@ -253,30 +359,39 @@ def get_my_wallet(
 # TRANSACTIONS — UTILISATEUR CONNECTÉ
 # ============================================================
 
-@router.get("/credits/me/transactions")
+
+@router.get(
+    "/credits/me/transactions"
+)
 def get_my_credit_transactions(
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
     authorization: str | None = Header(
         default=None,
+        alias="authorization",
     ),
 ):
     """
-    Retourne les transactions de crédits de l'utilisateur
-    actuellement connecté.
-
-    Endpoint utilisé par le frontend :
-
-        GET /credits/me/transactions
+    Retourne les transactions de crédits
+    de l'utilisateur authentifié.
     """
 
-    user_id = _extract_user_id_from_token(
-        authorization
+    authenticated_user_id = (
+        _get_authenticated_user_id(
+            user_id=user_id,
+            authorization=authorization,
+        )
     )
 
     repository = _get_repository()
 
     try:
-        transactions = repository.get_transactions(
-            user_id
+        transactions = (
+            repository.get_transactions(
+                authenticated_user_id
+            )
         )
 
     except AttributeError:
@@ -291,17 +406,181 @@ def get_my_credit_transactions(
 
     return {
         "success": True,
-        "user_id": user_id,
+        "user_id": authenticated_user_id,
         "transactions": [
-            _transaction_response(transaction)
+            _transaction_response(
+                transaction
+            )
             for transaction in transactions
         ],
     }
 
 
 # ============================================================
+# CONSOMMATION — UTILISATEUR CONNECTÉ
+# ============================================================
+
+
+@router.post(
+    "/credits/me/consume"
+)
+def consume_my_credits(
+    request: CreditConsumptionRequest,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Consomme des crédits pour l'utilisateur authentifié.
+
+    IMPORTANT :
+
+    Le user_id n'est plus fourni dans l'URL.
+
+    On utilise :
+
+        POST /credits/me/consume
+
+    avec les headers d'authentification.
+    """
+
+    authenticated_user_id = (
+        _get_authenticated_user_id(
+            user_id=user_id,
+            authorization=authorization,
+        )
+    )
+
+    repository = _get_repository()
+
+    wallet = repository.get_wallet(
+        authenticated_user_id
+    )
+
+    if wallet is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Aucun portefeuille de crédits "
+                "trouvé pour cet utilisateur."
+            ),
+        )
+
+    try:
+        service = CreditService()
+
+        result = service.consume(
+            wallet=wallet,
+            action=request.action,
+            confirmed=request.confirmed,
+        )
+
+        repository.update_wallet(
+            wallet
+        )
+
+        transaction = CreditTransaction(
+            id=str(uuid4()),
+            user_id=authenticated_user_id,
+            transaction_type=(
+                CreditTransactionType.USAGE
+            ),
+            amount=-result.cost,
+            balance_after=result.new_balance,
+            created_at=wallet.updated_at,
+            action=request.action,
+            reference_id=None,
+        )
+
+        repository.create_transaction(
+            transaction
+        )
+
+        return {
+            "success": True,
+            "user_id": authenticated_user_id,
+            "pack_id": wallet.pack_id,
+
+            "action": result.action.value,
+
+            "cost": result.cost,
+
+            "previous_balance": (
+                result.previous_balance
+            ),
+
+            "new_balance": (
+                result.new_balance
+            ),
+
+            "consumed_credits": (
+                result.consumed_credits
+            ),
+
+            "consumed_percentage": (
+                result.consumed_percentage
+            ),
+
+            "remaining_percentage": (
+                result.remaining_percentage
+            ),
+
+            "requires_warning": (
+                result.requires_warning
+            ),
+
+            "requires_critical_warning": (
+                result.requires_critical_warning
+            ),
+
+            "requires_confirmation": (
+                result.requires_confirmation
+            ),
+        }
+
+    except InactivePackError as error:
+        raise HTTPException(
+            status_code=403,
+            detail=str(error),
+        )
+
+    except InsufficientCreditsError as error:
+        raise HTTPException(
+            status_code=402,
+            detail=str(error),
+        )
+
+    except UnsupportedActionError as error:
+        raise HTTPException(
+            status_code=403,
+            detail=str(error),
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error),
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        )
+
+
+# ============================================================
 # PACK LÉGER — TEST
 # ============================================================
+
 
 @router.post(
     "/credits/test/light-wallet/{user_id}"
@@ -314,15 +593,20 @@ def create_light_wallet_test(
 
         wallet = (
             wallet_service
-            .create_light_wallet(user_id)
+            .create_light_wallet(
+                user_id
+            )
         )
 
         return {
             "success": True,
             "message": (
-                "Pack Léger attribué avec succès."
+                "Pack Léger attribué "
+                "avec succès."
             ),
-            "wallet": _wallet_response(wallet),
+            "wallet": _wallet_response(
+                wallet
+            ),
         }
 
     except ValueError as error:
@@ -342,6 +626,7 @@ def create_light_wallet_test(
 # PACK INTERMÉDIAIRE — TEST
 # ============================================================
 
+
 @router.post(
     "/credits/test/intermediate-wallet/{user_id}"
 )
@@ -353,7 +638,9 @@ def create_intermediate_wallet_test(
 
         wallet = (
             wallet_service
-            .create_intermediate_wallet(user_id)
+            .create_intermediate_wallet(
+                user_id
+            )
         )
 
         return {
@@ -362,7 +649,9 @@ def create_intermediate_wallet_test(
                 "Pack Intermédiaire attribué "
                 "avec succès."
             ),
-            "wallet": _wallet_response(wallet),
+            "wallet": _wallet_response(
+                wallet
+            ),
         }
 
     except ValueError as error:
@@ -382,6 +671,7 @@ def create_intermediate_wallet_test(
 # PACK PRO — TEST
 # ============================================================
 
+
 @router.post(
     "/credits/test/pro-wallet/{user_id}"
 )
@@ -393,15 +683,20 @@ def create_pro_wallet_test(
 
         wallet = (
             wallet_service
-            .create_pro_wallet(user_id)
+            .create_pro_wallet(
+                user_id
+            )
         )
 
         return {
             "success": True,
             "message": (
-                "Pack Pro attribué avec succès."
+                "Pack Pro attribué "
+                "avec succès."
             ),
-            "wallet": _wallet_response(wallet),
+            "wallet": _wallet_response(
+                wallet
+            ),
         }
 
     except ValueError as error:
@@ -421,6 +716,7 @@ def create_pro_wallet_test(
 # PACK BUSINESS — TEST
 # ============================================================
 
+
 @router.post(
     "/credits/test/business-wallet/{user_id}"
 )
@@ -432,7 +728,9 @@ def create_business_wallet_test(
 
         wallet = (
             wallet_service
-            .create_business_wallet(user_id)
+            .create_business_wallet(
+                user_id
+            )
         )
 
         return {
@@ -441,7 +739,9 @@ def create_business_wallet_test(
                 "Pack Business attribué "
                 "avec succès."
             ),
-            "wallet": _wallet_response(wallet),
+            "wallet": _wallet_response(
+                wallet
+            ),
         }
 
     except ValueError as error:
@@ -449,117 +749,6 @@ def create_business_wallet_test(
             status_code=409,
             detail=str(error),
         )
-
-    except Exception as error:
-        raise HTTPException(
-            status_code=500,
-            detail=str(error),
-        )
-
-
-# ============================================================
-# CONSOMMATION DE CRÉDITS
-# ============================================================
-
-@router.post(
-    "/credits/{user_id}/consume"
-)
-def consume_credits(
-    user_id: str,
-    request: CreditConsumptionRequest,
-):
-    repository = _get_repository()
-
-    try:
-        wallet = repository.get_wallet(
-            user_id
-        )
-
-        if wallet is None:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    "Aucun portefeuille de crédits "
-                    "trouvé."
-                ),
-            )
-
-        service = CreditService()
-
-        result = service.consume(
-            wallet=wallet,
-            action=request.action,
-            confirmed=request.confirmed,
-        )
-
-        repository.update_wallet(wallet)
-
-        transaction = CreditTransaction(
-            id=str(uuid4()),
-            user_id=user_id,
-            transaction_type=(
-                CreditTransactionType.USAGE
-            ),
-            amount=-result.cost,
-            balance_after=result.new_balance,
-            created_at=wallet.updated_at,
-            action=request.action,
-            reference_id=None,
-        )
-
-        repository.create_transaction(
-            transaction
-        )
-
-        return {
-            "success": True,
-            "pack_id": wallet.pack_id,
-            "action": result.action.value,
-            "cost": result.cost,
-            "previous_balance": (
-                result.previous_balance
-            ),
-            "new_balance": result.new_balance,
-            "consumed_credits": (
-                result.consumed_credits
-            ),
-            "consumed_percentage": (
-                result.consumed_percentage
-            ),
-            "remaining_percentage": (
-                result.remaining_percentage
-            ),
-            "requires_warning": (
-                result.requires_warning
-            ),
-            "requires_critical_warning": (
-                result.requires_critical_warning
-            ),
-            "requires_confirmation": (
-                result.requires_confirmation
-            ),
-        }
-
-    except InactivePackError as error:
-        raise HTTPException(
-            status_code=403,
-            detail=str(error),
-        )
-
-    except InsufficientCreditsError as error:
-        raise HTTPException(
-            status_code=402,
-            detail=str(error),
-        )
-
-    except ValueError as error:
-        raise HTTPException(
-            status_code=400,
-            detail=str(error),
-        )
-
-    except HTTPException:
-        raise
 
     except Exception as error:
         raise HTTPException(

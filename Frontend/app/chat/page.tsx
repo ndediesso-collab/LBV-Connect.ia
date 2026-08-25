@@ -19,6 +19,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
+import { createClient } from "@/lib/supabase/client";
 import type { ChatMessage, Conversation } from "@/types/lbv";
 
 /*
@@ -38,7 +39,7 @@ import type { ChatMessage, Conversation } from "@/types/lbv";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
-  "http://127.0.0.1:8000";
+  "https://lbv-connect-api.onrender.com";
 
 /*
  * ============================================================
@@ -162,26 +163,60 @@ function getAvailableModels(packId: string | null): ModelDefinition[] {
  * ============================================================
  */
 
+const supabase = createClient();
+
 async function apiFetch<T>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (!session?.user || !session.access_token) {
+    throw new Error(
+      "Utilisateur non authentifié.",
+    );
+  }
+
+  const headers = new Headers(
+    options?.headers,
+  );
+
+  headers.set(
+    "Content-Type",
+    "application/json",
+  );
+
+  headers.set(
+    "user-id",
+    session.user.id,
+  );
+
+  headers.set(
+    "authorization",
+    `Bearer ${session.access_token}`,
+  );
+
   const response = await fetch(
     `${API_URL}${path}`,
     {
       ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(options?.headers ?? {}),
-      },
-      credentials: "include",
+      headers,
     },
   );
 
   if (!response.ok) {
-    const error = await response.json().catch(
-      () => null,
-    );
+    const error =
+      await response.json().catch(
+        () => null,
+      );
+
+    if (response.status === 401) {
+      throw new Error(
+        "Session expirée. Veuillez vous reconnecter.",
+      );
+    }
 
     throw new Error(
       error?.detail ||
@@ -272,13 +307,21 @@ export default function ChatPage() {
       setError(null);
 
       const data =
-        await apiFetch<WalletData>(
+        await apiFetch<{
+          success: boolean;
+          wallet: WalletData;
+        }>(
           "/credits/me",
         );
 
-      setWallet(data);
+      const walletData = data.wallet;
 
-      const availableModels = getAvailableModels(data.pack_id);
+      setWallet(walletData);
+
+      const availableModels =
+        getAvailableModels(
+          walletData.pack_id,
+        );
 
       if (availableModels.length > 0) {
         setSelectedModel((current) =>
@@ -554,52 +597,32 @@ export default function ChatPage() {
     setIsThinking(true);
 
     try {
-      const apiUrl =
-        process.env.NEXT_PUBLIC_API_URL;
+      const data =
+        await apiFetch<ChatResponse>(
+          "/ai/chat",
+          {
+            method: "POST",
 
-      if (!apiUrl) {
-        throw new Error(
-          "NEXT_PUBLIC_API_URL n'est pas configurée.",
-        );
-      }
-
-      const response = await fetch(
-        `${apiUrl}/ai/chat`,
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type": "application/json",
+            body: JSON.stringify({
+              model: selectedModel,
+              message: messageContent,
+              web:
+                activeCapability ===
+                "Recherche Web",
+              confirmed: true,
+            }),
           },
-
-          body: JSON.stringify({
-            user_id: "ID_UTILISATEUR",
-            model: selectedModel,
-            message: messageContent,
-            web:
-              activeCapability ===
-              "Recherche Web",
-            confirmed: true,
-          }),
-        },
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.detail ||
-            "Une erreur est survenue.",
         );
-      }
 
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
         conversationId,
         role: "assistant",
-        content: data.message,
-        createdAt:
-          new Date().toISOString(),
+        content:
+          data.message ||
+          data.response ||
+          "Aucune réponse reçue.",
+        createdAt: new Date().toISOString(),
       };
 
       setMessages((current) => [
@@ -618,6 +641,8 @@ export default function ChatPage() {
             : conversation,
         ),
       );
+
+      await loadWallet();
 
     } catch (error) {
       const errorMessage =
