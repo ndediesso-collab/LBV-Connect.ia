@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-
+import { createClient } from "@/lib/supabase/client";
 type Pack = {
   id:
     | "light_pack"
@@ -191,7 +191,7 @@ const packs: Pack[] = [
 
     name: "Pro",
 
-    price: "25 000 XAF",
+    price: "17 500 XAF",
 
     credits: "45 000",
 
@@ -396,6 +396,23 @@ export default function PacksPage() {
   const [openFaq, setOpenFaq] =
     useState<number | null>(null);
 
+  async function handlePackSelection(pack: Pack) {
+    const supabase = createClient();
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      window.location.href = `/login?redirect=${encodeURIComponent(
+        `/packs/activation?pack=${pack.id}`,
+      )}`;
+      return;
+    }
+
+    window.location.href = `/packs/activation?pack=${pack.id}`;
+  }
+
   return (
     <main className="min-h-dvh bg-background text-foreground">
       {/* Header */}
@@ -462,6 +479,7 @@ export default function PacksPage() {
             <PackCard
               key={pack.id}
               pack={pack}
+              onSelect={handlePackSelection}
             />
           ))}
         </div>
@@ -711,8 +729,10 @@ export default function PacksPage() {
 
 function PackCard({
   pack,
+  onSelect,
 }: {
   pack: Pack;
+  onSelect: (pack: Pack) => void;
 }) {
   const isPopular = Boolean(
     pack.popular,
@@ -992,11 +1012,11 @@ function PackCard({
 
       <button
         type="button"
-        disabled
-        className={`mt-8 w-full cursor-not-allowed rounded-xl px-4 py-3 text-sm font-medium transition ${
+        onClick={() => onSelect(pack)}
+        className={`mt-8 w-full rounded-xl px-4 py-3 text-sm font-medium transition hover:opacity-85 ${
           isPopular
-            ? "bg-accent-foreground text-accent opacity-60"
-            : "bg-accent text-accent-foreground opacity-60"
+            ? "bg-accent-foreground text-accent"
+            : "bg-accent text-accent-foreground"
         }`}
       >
         Choisir {pack.name}
