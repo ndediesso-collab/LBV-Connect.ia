@@ -11,5 +11,5 @@ OPENAI_API_KEY = os.getenv("OPENAI_LBV_KEY")
 
 if not OPENAI_API_KEY:
     raise RuntimeError(
-        "La variable d'environnement OPENAI_API_KEY est introuvable."
-    )
+        "La variable d'environnement OPENAI_API_KEY est introuvable." 
+    )#
