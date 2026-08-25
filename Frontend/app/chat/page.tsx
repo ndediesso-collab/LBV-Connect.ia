@@ -26,20 +26,6 @@ import type { ChatMessage, Conversation } from "@/types/lbv";
  * ============================================================
  * CONFIGURATION API
  * ============================================================
- *
- * NEXT_PUBLIC_API_URL doit pointer vers le backend FastAPI.
- *
- * En production, NEXT_PUBLIC_API_URL doit contenir
- * l'URL publique du backend Render.
- *
- * Exemple local :
- * NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
- *
- * Exemple production :
- * NEXT_PUBLIC_API_URL=https://lbv-connect-api.onrender.com
- *
- * Le fallback ci-dessous permet au frontend de continuer
- * à fonctionner même si la variable n'est pas définie.
  */
 
 const API_URL =
@@ -48,7 +34,7 @@ const API_URL =
 
 /*
  * ============================================================
- * TYPES FRONTEND
+ * TYPES
  * ============================================================
  */
 
@@ -85,6 +71,134 @@ type MessagesResponse = {
 
 /*
  * ============================================================
+ * CACHE LOCAL
+ * ============================================================
+ */
+
+type LocalChatCache = {
+  conversations: Conversation[];
+  messages: Record<string, ChatMessage[]>;
+  activeConversationId: string | null;
+  selectedModel: string;
+  activeCapability: string | null;
+  savedAt: string;
+};
+
+const LOCAL_CACHE_PREFIX =
+  "lbv_connect_chat_cache_v1";
+
+function getLocalCacheKey(userId: string) {
+  return `${LOCAL_CACHE_PREFIX}_${userId}`;
+}
+
+function readLocalCache(
+  userId: string,
+): LocalChatCache | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = localStorage.getItem(
+      getLocalCacheKey(userId),
+    );
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+
+    return {
+      conversations: Array.isArray(
+        parsed?.conversations,
+      )
+        ? parsed.conversations
+        : [],
+
+      messages:
+        parsed?.messages &&
+        typeof parsed.messages === "object"
+          ? parsed.messages
+          : {},
+
+      activeConversationId:
+        typeof parsed?.activeConversationId ===
+        "string"
+          ? parsed.activeConversationId
+          : null,
+
+      selectedModel:
+        typeof parsed?.selectedModel === "string"
+          ? parsed.selectedModel
+          : "luna",
+
+      activeCapability:
+        typeof parsed?.activeCapability ===
+        "string"
+          ? parsed.activeCapability
+          : null,
+
+      savedAt:
+        typeof parsed?.savedAt === "string"
+          ? parsed.savedAt
+          : new Date().toISOString(),
+    };
+  } catch (error) {
+    console.error(
+      "Erreur lecture cache LBV-Connect :",
+      error,
+    );
+
+    return null;
+  }
+}
+
+function writeLocalCache(
+  userId: string,
+  cache: Omit<LocalChatCache, "savedAt">,
+) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const payload: LocalChatCache = {
+      ...cache,
+      savedAt: new Date().toISOString(),
+    };
+
+    localStorage.setItem(
+      getLocalCacheKey(userId),
+      JSON.stringify(payload),
+    );
+  } catch (error) {
+    console.error(
+      "Erreur sauvegarde cache LBV-Connect :",
+      error,
+    );
+  }
+}
+
+function removeLocalCache(userId: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    localStorage.removeItem(
+      getLocalCacheKey(userId),
+    );
+  } catch (error) {
+    console.error(
+      "Erreur suppression cache LBV-Connect :",
+      error,
+    );
+  }
+}
+
+/*
+ * ============================================================
  * CAPACITÉS
  * ============================================================
  */
@@ -114,11 +228,6 @@ const capabilities = [
  * ============================================================
  * MODÈLES
  * ============================================================
- *
- * Les noms sont désormais alignés sur les modèles du système.
- *
- * L'autorisation réelle du modèle doit être vérifiée par
- * le backend selon le pack de l'utilisateur.
  */
 
 type ModelDefinition = {
@@ -132,41 +241,70 @@ const models: ModelDefinition[] = [
   {
     id: "luna",
     name: "Luna",
-    description: "Modèle économique · Rapide pour les échanges courants",
-    packs: ["light_pack", "intermediate_pack", "pro_pack", "business_pack"],
+    description:
+      "Modèle économique · Rapide pour les échanges courants",
+    packs: [
+      "light_pack",
+      "intermediate_pack",
+      "pro_pack",
+      "business_pack",
+    ],
   },
   {
     id: "gpt-5",
     name: "GPT-5",
-    description: "Modèle polyvalent · Pour les tâches plus avancées",
-    packs: ["intermediate_pack", "pro_pack", "business_pack"],
+    description:
+      "Modèle polyvalent · Pour les tâches plus avancées",
+    packs: [
+      "intermediate_pack",
+      "pro_pack",
+      "business_pack",
+    ],
   },
   {
     id: "gpt-5.6-terra",
     name: "GPT-5.6 Terra",
-    description: "Raisonnement avancé · Pour les problèmes complexes",
-    packs: ["pro_pack", "business_pack"],
+    description:
+      "Raisonnement avancé · Pour les problèmes complexes",
+    packs: [
+      "pro_pack",
+      "business_pack",
+    ],
   },
   {
     id: "gpt-5.6-sol",
     name: "GPT-5.6 Sol",
-    description: "Puissance maximale · Pour les tâches les plus exigeantes",
+    description:
+      "Puissance maximale · Pour les tâches les plus exigeantes",
     packs: ["business_pack"],
   },
 ];
 
-function getAvailableModels(packId: string | null): ModelDefinition[] {
-  if (!packId) return [];
-  return models.filter((model) => model.packs.includes(packId));
+function getAvailableModels(
+  packId: string | null,
+): ModelDefinition[] {
+  if (!packId) {
+    return [];
+  }
+
+  return models.filter((model) =>
+    model.packs.includes(packId),
+  );
 }
 
 /*
  * ============================================================
- * API
+ * SUPABASE
  * ============================================================
  */
 
 const supabase = createClient();
+
+/*
+ * ============================================================
+ * API AUTHENTIFIÉE
+ * ============================================================
+ */
 
 async function apiFetch<T>(
   path: string,
@@ -186,10 +324,15 @@ async function apiFetch<T>(
     options?.headers,
   );
 
-  headers.set(
-    "Content-Type",
-    "application/json",
-  );
+  if (
+    options?.body &&
+    !(options.body instanceof FormData)
+  ) {
+    headers.set(
+      "Content-Type",
+      "application/json",
+    );
+  }
 
   headers.set(
     "user-id",
@@ -232,6 +375,642 @@ async function apiFetch<T>(
 
 /*
  * ============================================================
+ * SYNCHRONISATION BACKEND
+ * ============================================================
+ */
+
+async function createConversationRemote(
+  title: string,
+): Promise<Conversation> {
+  const data =
+    await apiFetch<
+      Conversation | {
+        conversation: Conversation;
+      }
+    >(
+      "/conversations",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+        }),
+      },
+    );
+
+  if (
+    "conversation" in data &&
+    data.conversation
+  ) {
+    return data.conversation;
+  }
+
+  return data as Conversation;
+}
+
+async function saveMessageRemote(
+  message: ChatMessage,
+): Promise<ChatMessage | null> {
+  const data =
+    await apiFetch<
+      ChatMessage | {
+        message: ChatMessage;
+      }
+    >(
+      `/conversations/${message.conversationId}/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          role: message.role,
+          content: message.content,
+        }),
+      },
+    );
+
+  if (
+    "message" in data &&
+    data.message
+  ) {
+    return data.message;
+  }
+
+  return data as ChatMessage;
+}
+
+/*
+ * ============================================================
+ * MARKDOWN INLINE
+ * ============================================================
+ *
+ * Renderer volontairement léger et sans dépendance externe.
+ *
+ * Il permet notamment :
+ *
+ * **gras**
+ * *italique*
+ * `code`
+ * [lien](https://...)
+ */
+
+function renderInlineMarkdown(
+  text: string,
+) {
+  const parts: React.ReactNode[] = [];
+
+  let remaining = text;
+  let index = 0;
+
+  const tokenRegex =
+    /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
+
+  while (remaining.length > 0) {
+    const match =
+      remaining.match(tokenRegex);
+
+    if (!match || match.index === undefined) {
+      parts.push(
+        <span key={index}>
+          {remaining}
+        </span>,
+      );
+
+      break;
+    }
+
+    if (match.index > 0) {
+      parts.push(
+        <span key={index}>
+          {remaining.slice(
+            0,
+            match.index,
+          )}
+        </span>,
+      );
+
+      index++;
+    }
+
+    const token = match[0];
+
+    /*
+     * GRAS
+     */
+
+    if (
+      token.startsWith("**") &&
+      token.endsWith("**")
+    ) {
+      parts.push(
+        <strong
+          key={index}
+          className="font-semibold"
+        >
+          {token.slice(2, -2)}
+        </strong>,
+      );
+    }
+
+    /*
+     * CODE INLINE
+     */
+
+    else if (
+      token.startsWith("`") &&
+      token.endsWith("`")
+    ) {
+      parts.push(
+        <code
+          key={index}
+          className="rounded-md bg-surface-tertiary px-1.5 py-0.5 font-mono text-[0.9em]"
+        >
+          {token.slice(1, -1)}
+        </code>,
+      );
+    }
+
+    /*
+     * LIEN
+     */
+
+    else if (
+      token.startsWith("[")
+    ) {
+      const linkMatch =
+        token.match(
+          /^\[([^\]]+)\]\(([^)]+)\)$/,
+        );
+
+      if (linkMatch) {
+        const [, label, url] =
+          linkMatch;
+
+        parts.push(
+          <a
+            key={index}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium underline underline-offset-2 hover:opacity-70"
+          >
+            {label}
+          </a>,
+        );
+      }
+    }
+
+    /*
+     * ITALIQUE
+     */
+
+    else if (
+      token.startsWith("*") &&
+      token.endsWith("*")
+    ) {
+      parts.push(
+        <em key={index}>
+          {token.slice(1, -1)}
+        </em>,
+      );
+    }
+
+    remaining =
+      remaining.slice(
+        match.index +
+          token.length,
+      );
+
+    index++;
+  }
+
+  return parts;
+}
+
+/*
+ * ============================================================
+ * MARKDOWN BLOCK RENDERER
+ * ============================================================
+ *
+ * Transforme le texte brut de l'IA en vraie structure visuelle.
+ *
+ * Gestion :
+ *
+ * - paragraphes
+ * - titres
+ * - listes à puces
+ * - listes numérotées
+ * - blocs de code
+ * - citations
+ * - séparateurs
+ * - Markdown inline
+ */
+
+function MarkdownMessage({
+  content,
+}: {
+  content: string;
+}) {
+  const normalized =
+    content
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n");
+
+  const lines =
+    normalized.split("\n");
+
+  const blocks: React.ReactNode[] =
+    [];
+
+  let paragraph: string[] = [];
+
+  let bulletItems: string[] =
+    [];
+
+  let numberedItems: string[] =
+    [];
+
+  let codeLines: string[] =
+    [];
+
+  let codeLanguage = "";
+
+  let inCodeBlock = false;
+
+  let blockIndex = 0;
+
+  function flushParagraph() {
+    if (paragraph.length === 0) {
+      return;
+    }
+
+    const text =
+      paragraph.join(" ");
+
+    blocks.push(
+      <p
+        key={`paragraph-${blockIndex}`}
+        className="mb-4 last:mb-0"
+      >
+        {renderInlineMarkdown(
+          text,
+        )}
+      </p>,
+    );
+
+    blockIndex++;
+    paragraph = [];
+  }
+
+  function flushBulletList() {
+    if (bulletItems.length === 0) {
+      return;
+    }
+
+    flushParagraph();
+
+    blocks.push(
+      <ul
+        key={`bullet-${blockIndex}`}
+        className="mb-4 list-disc space-y-2 pl-6 last:mb-0"
+      >
+        {bulletItems.map(
+          (item, index) => (
+            <li
+              key={`bullet-item-${index}`}
+              className="pl-1"
+            >
+              {renderInlineMarkdown(
+                item,
+              )}
+            </li>
+          ),
+        )}
+      </ul>,
+    );
+
+    blockIndex++;
+    bulletItems = [];
+  }
+
+  function flushNumberedList() {
+    if (
+      numberedItems.length ===
+      0
+    ) {
+      return;
+    }
+
+    flushParagraph();
+
+    blocks.push(
+      <ol
+        key={`numbered-${blockIndex}`}
+        className="mb-4 list-decimal space-y-2 pl-6 last:mb-0"
+      >
+        {numberedItems.map(
+          (item, index) => (
+            <li
+              key={`numbered-item-${index}`}
+              className="pl-1"
+            >
+              {renderInlineMarkdown(
+                item,
+              )}
+            </li>
+          ),
+        )}
+      </ol>,
+    );
+
+    blockIndex++;
+    numberedItems = [];
+  }
+
+  function flushAllLists() {
+    flushBulletList();
+    flushNumberedList();
+  }
+
+  function flushCodeBlock() {
+    if (!inCodeBlock) {
+      return;
+    }
+
+    blocks.push(
+      <div
+        key={`code-${blockIndex}`}
+        className="mb-4 overflow-hidden rounded-2xl border border-border bg-surface-secondary last:mb-0"
+      >
+        {codeLanguage && (
+          <div className="border-b border-border px-4 py-2 text-[10px] font-medium uppercase tracking-[0.14em] text-muted">
+            {codeLanguage}
+          </div>
+        )}
+
+        <pre className="overflow-x-auto p-4 text-xs leading-6">
+          <code>
+            {codeLines.join("\n")}
+          </code>
+        </pre>
+      </div>,
+    );
+
+    blockIndex++;
+    codeLines = [];
+    codeLanguage = "";
+    inCodeBlock = false;
+  }
+
+  lines.forEach(
+    (line, index) => {
+      const trimmed =
+        line.trim();
+
+      /*
+       * BLOC DE CODE
+       */
+
+      if (
+        trimmed.startsWith("```")
+      ) {
+        if (!inCodeBlock) {
+          flushAllLists();
+          flushParagraph();
+
+          inCodeBlock = true;
+
+          codeLanguage =
+            trimmed
+              .slice(3)
+              .trim();
+
+          return;
+        }
+
+        flushCodeBlock();
+        return;
+      }
+
+      if (inCodeBlock) {
+        codeLines.push(line);
+        return;
+      }
+
+      /*
+       * LIGNE VIDE
+       */
+
+      if (trimmed === "") {
+        flushAllLists();
+        flushParagraph();
+        return;
+      }
+
+      /*
+       * SÉPARATEUR
+       */
+
+      if (
+        /^(-{3,}|\*{3,}|_{3,})$/.test(
+          trimmed,
+        )
+      ) {
+        flushAllLists();
+        flushParagraph();
+
+        blocks.push(
+          <hr
+            key={`hr-${blockIndex}`}
+            className="my-6 border-border"
+          />,
+        );
+
+        blockIndex++;
+        return;
+      }
+
+      /*
+       * TITRE H2
+       */
+
+      if (
+        trimmed.startsWith("## ")
+      ) {
+        flushAllLists();
+        flushParagraph();
+
+        blocks.push(
+          <h2
+            key={`h2-${blockIndex}`}
+            className="mb-3 mt-7 text-xl font-semibold tracking-tight first:mt-0"
+          >
+            {renderInlineMarkdown(
+              trimmed.slice(3),
+            )}
+          </h2>,
+        );
+
+        blockIndex++;
+        return;
+      }
+
+      /*
+       * TITRE H3
+       */
+
+      if (
+        trimmed.startsWith("### ")
+      ) {
+        flushAllLists();
+        flushParagraph();
+
+        blocks.push(
+          <h3
+            key={`h3-${blockIndex}`}
+            className="mb-2 mt-6 text-base font-semibold tracking-tight first:mt-0"
+          >
+            {renderInlineMarkdown(
+              trimmed.slice(4),
+            )}
+          </h3>,
+        );
+
+        blockIndex++;
+        return;
+      }
+
+      /*
+       * TITRE H1
+       */
+
+      if (
+        trimmed.startsWith("# ")
+      ) {
+        flushAllLists();
+        flushParagraph();
+
+        blocks.push(
+          <h1
+            key={`h1-${blockIndex}`}
+            className="mb-4 mt-7 text-2xl font-semibold tracking-tight first:mt-0"
+          >
+            {renderInlineMarkdown(
+              trimmed.slice(2),
+            )}
+          </h1>,
+        );
+
+        blockIndex++;
+        return;
+      }
+
+      /*
+       * LISTE À PUCES
+       */
+
+      const bulletMatch =
+        trimmed.match(
+          /^[-*•]\s+(.+)$/,
+        );
+
+      if (bulletMatch) {
+        flushParagraph();
+        flushNumberedList();
+
+        bulletItems.push(
+          bulletMatch[1],
+        );
+
+        return;
+      }
+
+      /*
+       * LISTE NUMÉROTÉE
+       */
+
+      const numberedMatch =
+        trimmed.match(
+          /^\d+[.)]\s+(.+)$/,
+        );
+
+      if (numberedMatch) {
+        flushParagraph();
+        flushBulletList();
+
+        numberedItems.push(
+          numberedMatch[1],
+        );
+
+        return;
+      }
+
+      /*
+       * CITATION
+       */
+
+      if (
+        trimmed.startsWith("> ")
+      ) {
+        flushAllLists();
+        flushParagraph();
+
+        blocks.push(
+          <blockquote
+            key={`quote-${blockIndex}`}
+            className="mb-4 border-l-2 border-border-strong pl-4 text-muted-strong last:mb-0"
+          >
+            {renderInlineMarkdown(
+              trimmed.slice(2),
+            )}
+          </blockquote>,
+        );
+
+        blockIndex++;
+        return;
+      }
+
+      /*
+       * PARAGRAPHE
+       *
+       * On conserve les phrases d'une même ligne logique
+       * ensemble, puis on les espace lors du rendu.
+       */
+
+      flushAllLists();
+
+      paragraph.push(
+        trimmed,
+      );
+    },
+  );
+
+  /*
+   * Fermeture des éventuels blocs restants.
+   */
+
+  if (inCodeBlock) {
+    flushCodeBlock();
+  }
+
+  flushAllLists();
+  flushParagraph();
+
+  /*
+   * Si le modèle est encore en train de streamer et que le
+   * contenu est vide, on évite un conteneur inutile.
+   */
+
+  if (blocks.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="break-words text-[14px] leading-7">
+      {blocks}
+    </div>
+  );
+}
+
+/*
+ * ============================================================
  * PAGE CHAT
  * ============================================================
  */
@@ -268,7 +1047,6 @@ export default function ChatPage() {
     setActiveCapability,
   ] = useState<string | null>(null);
 
-
   const [wallet, setWallet] =
     useState<WalletData | null>(null);
 
@@ -283,15 +1061,72 @@ export default function ChatPage() {
   const [error, setError] =
     useState<string | null>(null);
 
+  const [
+    isInitialized,
+    setIsInitialized,
+  ] = useState(false);
+
+  const [
+    currentUserId,
+    setCurrentUserId,
+  ] = useState<string | null>(null);
 
   /*
    * ==========================================================
-   * CHARGEMENT DU WALLET
+   * SAUVEGARDE LOCALE
    * ==========================================================
-   *
-   * L'endpoint devra être relié à l'utilisateur connecté.
-   *
-   * Pour l'instant, la structure frontend est prête.
+   */
+
+  useEffect(() => {
+    if (
+      !isInitialized ||
+      !currentUserId
+    ) {
+      return;
+    }
+
+    const timeout =
+      window.setTimeout(() => {
+        writeLocalCache(
+          currentUserId,
+          {
+            conversations,
+            messages: {
+              ...(readLocalCache(
+                currentUserId,
+              )?.messages || {}),
+              ...(activeConversationId
+                ? {
+                    [activeConversationId]:
+                      messages,
+                  }
+                : {}),
+            },
+            activeConversationId,
+            selectedModel,
+            activeCapability,
+          },
+        );
+      }, 300);
+
+    return () =>
+      window.clearTimeout(
+        timeout,
+      );
+  }, [
+    conversations,
+    messages,
+    activeConversationId,
+    selectedModel,
+    activeCapability,
+    currentUserId,
+    isInitialized,
+  ]);
+
+  /*
+   * ==========================================================
+   * CHARGEMENT WALLET
+   * ==========================================================
    */
 
   async function loadWallet() {
@@ -303,11 +1138,10 @@ export default function ChatPage() {
         await apiFetch<{
           success: boolean;
           wallet: WalletData;
-        }>(
-          "/credits/me",
-        );
+        }>("/credits/me");
 
-      const walletData = data.wallet;
+      const walletData =
+        data.wallet;
 
       setWallet(walletData);
 
@@ -316,11 +1150,17 @@ export default function ChatPage() {
           walletData.pack_id,
         );
 
-      if (availableModels.length > 0) {
-        setSelectedModel((current) =>
-          availableModels.some((model) => model.id === current)
-            ? current
-            : availableModels[0].id,
+      if (
+        availableModels.length > 0
+      ) {
+        setSelectedModel(
+          (current) =>
+            availableModels.some(
+              (model) =>
+                model.id === current,
+            )
+              ? current
+              : availableModels[0].id,
         );
       } else {
         setSelectedModel("");
@@ -343,35 +1183,94 @@ export default function ChatPage() {
 
   /*
    * ==========================================================
-   * CHARGEMENT DE L'HISTORIQUE
+   * CHARGEMENT CLOUD DES CONVERSATIONS
    * ==========================================================
    */
 
-  async function loadConversations() {
+  async function loadConversations(
+    localCache?: LocalChatCache | null,
+  ) {
     try {
-      setIsLoadingConversations(true);
+      setIsLoadingConversations(
+        true,
+      );
 
       const data =
         await apiFetch<ConversationResponse>(
           "/conversations",
         );
 
-      setConversations(
-        data.conversations || [],
-      );
+      const remoteConversations =
+        data.conversations || [];
+
+      const remoteIds =
+        new Set(
+          remoteConversations.map(
+            (conversation) =>
+              conversation.id,
+          ),
+        );
+
+      const unsyncedLocal =
+        (
+          localCache?.conversations ||
+          []
+        ).filter(
+          (conversation) =>
+            !remoteIds.has(
+              conversation.id,
+            ),
+        );
+
+      const merged = [
+        ...unsyncedLocal,
+        ...remoteConversations,
+      ];
+
+      setConversations(merged);
+
+      if (
+        !activeConversationId &&
+        localCache?.activeConversationId
+      ) {
+        const localActive =
+          merged.find(
+            (conversation) =>
+              conversation.id ===
+              localCache.activeConversationId,
+          );
+
+        if (localActive) {
+          setActiveConversationId(
+            localActive.id,
+          );
+        }
+      }
     } catch (requestError) {
       console.error(
         "Erreur chargement conversations :",
         requestError,
       );
 
-      /*
-       * L'absence d'historique ne doit pas
-       * bloquer l'ouverture du chat.
-       */
-      setConversations([]);
+      if (
+        localCache?.conversations
+      ) {
+        setConversations(
+          localCache.conversations,
+        );
+      } else {
+        setConversations([]);
+      }
+
+      setError(
+        requestError instanceof Error
+          ? `${requestError.message} Les données locales restent disponibles.`
+          : "Serveur indisponible. Les données locales restent disponibles.",
+      );
     } finally {
-      setIsLoadingConversations(false);
+      setIsLoadingConversations(
+        false,
+      );
     }
   }
 
@@ -382,8 +1281,111 @@ export default function ChatPage() {
    */
 
   useEffect(() => {
-    loadWallet();
-    loadConversations();
+    let cancelled = false;
+
+    async function initialize() {
+      try {
+        const {
+          data: { session },
+        } =
+          await supabase.auth.getSession();
+
+        if (
+          !session?.user?.id ||
+          !session.access_token
+        ) {
+          throw new Error(
+            "Utilisateur non authentifié.",
+          );
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        const userId =
+          session.user.id;
+
+        setCurrentUserId(userId);
+
+        const localCache =
+          readLocalCache(userId);
+
+        if (localCache) {
+          setConversations(
+            localCache.conversations,
+          );
+
+          setActiveConversationId(
+            localCache.activeConversationId,
+          );
+
+          if (
+            localCache.selectedModel
+          ) {
+            setSelectedModel(
+              localCache.selectedModel,
+            );
+          }
+
+          setActiveCapability(
+            localCache.activeCapability,
+          );
+
+          if (
+            localCache.activeConversationId
+          ) {
+            const cachedMessages =
+              localCache.messages[
+                localCache
+                  .activeConversationId
+              ];
+
+            if (
+              Array.isArray(
+                cachedMessages,
+              )
+            ) {
+              setMessages(
+                cachedMessages,
+              );
+            }
+          }
+        }
+
+        setIsInitialized(true);
+
+        await Promise.all([
+          loadWallet(),
+          loadConversations(
+            localCache,
+          ),
+        ]);
+      } catch (requestError) {
+        console.error(
+          "Erreur initialisation Chat :",
+          requestError,
+        );
+
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Impossible d'initialiser le chat.",
+        );
+
+        setIsLoadingConversations(
+          false,
+        );
+
+        setIsLoadingWallet(false);
+      }
+    }
+
+    initialize();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /*
@@ -392,18 +1394,122 @@ export default function ChatPage() {
    * ==========================================================
    */
 
-  function createConversation() {
-    setActiveConversationId(null);
+  async function createConversation() {
+    const now =
+      new Date().toISOString();
+
+    const localId =
+      crypto.randomUUID();
+
+    const newConversation:
+      Conversation = {
+      id: localId,
+      title:
+        "Nouvelle conversation",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    setConversations(
+      (current) => [
+        newConversation,
+        ...current,
+      ],
+    );
+
+    setActiveConversationId(
+      localId,
+    );
+
     setMessages([]);
     setMessage("");
     setActiveCapability(null);
     setError(null);
     setSidebarOpen(false);
+
+    if (currentUserId) {
+      writeLocalCache(
+        currentUserId,
+        {
+          conversations: [
+            newConversation,
+            ...conversations,
+          ],
+          messages: {
+            ...(readLocalCache(
+              currentUserId,
+            )?.messages || {}),
+            [localId]: [],
+          },
+          activeConversationId:
+            localId,
+          selectedModel,
+          activeCapability: null,
+        },
+      );
+    }
+
+    try {
+      const remoteConversation =
+        await createConversationRemote(
+          "Nouvelle conversation",
+        );
+
+      setConversations(
+        (current) =>
+          current.map(
+            (conversation) =>
+              conversation.id ===
+              localId
+                ? remoteConversation
+                : conversation,
+          ),
+      );
+
+      setActiveConversationId(
+        remoteConversation.id,
+      );
+
+      const localCache =
+        currentUserId
+          ? readLocalCache(
+              currentUserId,
+            )
+          : null;
+
+      if (
+        localCache?.messages[
+          localId
+        ]
+      ) {
+        const cachedMessages =
+          localCache.messages[
+            localId
+          ];
+
+        for (const cachedMessage of cachedMessages) {
+          await saveMessageRemote({
+            ...cachedMessage,
+            conversationId:
+              remoteConversation.id,
+          });
+        }
+      }
+    } catch (requestError) {
+      console.error(
+        "Erreur création conversation backend :",
+        requestError,
+      );
+
+      setError(
+        "Conversation créée localement. Synchronisation cloud en attente.",
+      );
+    }
   }
 
   /*
    * ==========================================================
-   * SÉLECTION D'UNE CONVERSATION
+   * SÉLECTION CONVERSATION
    * ==========================================================
    */
 
@@ -417,15 +1523,72 @@ export default function ChatPage() {
     setSidebarOpen(false);
     setError(null);
 
+    if (currentUserId) {
+      const cache =
+        readLocalCache(
+          currentUserId,
+        );
+
+      const localMessages =
+        cache?.messages[
+          conversationId
+        ];
+
+      if (
+        Array.isArray(
+          localMessages,
+        )
+      ) {
+        setMessages(
+          localMessages,
+        );
+      } else {
+        setMessages([]);
+      }
+    }
+
     try {
       const data =
         await apiFetch<MessagesResponse>(
           `/conversations/${conversationId}/messages`,
         );
 
-      setMessages(
-        data.messages || [],
-      );
+      const remoteMessages =
+        data.messages || [];
+
+      if (
+        remoteMessages.length > 0
+      ) {
+        setMessages(
+          remoteMessages,
+        );
+
+        if (currentUserId) {
+          const cache =
+            readLocalCache(
+              currentUserId,
+            );
+
+          writeLocalCache(
+            currentUserId,
+            {
+              conversations:
+                cache?.conversations ||
+                conversations,
+              messages: {
+                ...(cache?.messages ||
+                  {}),
+                [conversationId]:
+                  remoteMessages,
+              },
+              activeConversationId:
+                conversationId,
+              selectedModel,
+              activeCapability,
+            },
+          );
+        }
+      }
     } catch (requestError) {
       console.error(
         "Erreur chargement messages :",
@@ -434,8 +1597,8 @@ export default function ChatPage() {
 
       setError(
         requestError instanceof Error
-          ? requestError.message
-          : "Impossible de charger la conversation.",
+          ? `${requestError.message} Les messages locaux restent affichés.`
+          : "Impossible de charger les messages cloud. Les données locales restent affichées.",
       );
     }
   }
@@ -446,157 +1609,446 @@ export default function ChatPage() {
    * ==========================================================
    */
 
-  function handleCapabilityClick(label: string) {
-    if (label === "Recherche Web") {
-      setActiveCapability((current) =>
-        current === label ? null : label,
+  function handleCapabilityClick(
+    label: string,
+  ) {
+    if (
+      label === "Recherche Web"
+    ) {
+      setActiveCapability(
+        (current) =>
+          current === label
+            ? null
+            : label,
       );
     }
-
-    // Fichier et Image sont volontairement verrouillés en V1.
-    // Ils seront activés dans une prochaine version.
   }
 
   /*
    * ==========================================================
-   * ENVOI DU MESSAGE
+   * MISE À JOUR CONVERSATION
+   * ==========================================================
+   */
+
+  function updateConversationLocally(
+    conversationId: string,
+    content: string,
+    now: string,
+  ) {
+    setConversations(
+      (current) =>
+        current.map(
+          (conversation) =>
+            conversation.id ===
+            conversationId
+              ? {
+                  ...conversation,
+                  title:
+                    conversation.title ===
+                      "Nouvelle conversation" &&
+                    content
+                      ? content.length > 45
+                        ? `${content.slice(
+                            0,
+                            45,
+                          )}...`
+                        : content
+                      : conversation.title,
+                  updatedAt: now,
+                }
+              : conversation,
+        ),
+    );
+  }
+
+  /*
+   * ==========================================================
+   * ENVOI MESSAGE
    * ==========================================================
    */
 
   async function handleSendMessage() {
-    const content = message.trim();
+    const content =
+      message.trim();
 
-    if (!content || isThinking) {
+    if (
+      !content ||
+      isThinking
+    ) {
       return;
     }
 
-    const now = new Date().toISOString();
+    const now =
+      new Date().toISOString();
 
     let conversationId =
       activeConversationId;
 
-    if (!conversationId) {
-      const titleSource =
-        content ||
-        "Nouvelle conversation";
+    /*
+     * ========================================================
+     * CONVERSATION
+     * ========================================================
+     */
 
-      const newConversation: Conversation = {
-        id: crypto.randomUUID(),
+    if (!conversationId) {
+      const localId =
+        crypto.randomUUID();
+
+      const localConversation:
+        Conversation = {
+        id: localId,
         title:
-          titleSource.length > 45
-            ? `${titleSource.slice(0, 45)}...`
-            : titleSource,
+          content.length > 45
+            ? `${content.slice(
+                0,
+                45,
+              )}...`
+            : content ||
+              "Nouvelle conversation",
         createdAt: now,
         updatedAt: now,
       };
 
-      conversationId = newConversation.id;
+      conversationId =
+        localId;
 
-      setConversations((current) => [
-        newConversation,
-        ...current,
-      ]);
+      setConversations(
+        (current) => [
+          localConversation,
+          ...current,
+        ],
+      );
 
       setActiveConversationId(
-        conversationId,
+        localId,
       );
+
+      if (currentUserId) {
+        const cache =
+          readLocalCache(
+            currentUserId,
+          );
+
+        writeLocalCache(
+          currentUserId,
+          {
+            conversations: [
+              localConversation,
+              ...(cache?.conversations ||
+                conversations),
+            ],
+            messages: {
+              ...(cache?.messages ||
+                {}),
+              [localId]: [],
+            },
+            activeConversationId:
+              localId,
+            selectedModel,
+            activeCapability,
+          },
+        );
+      }
+
+      try {
+        const remoteConversation =
+          await createConversationRemote(
+            localConversation.title,
+          );
+
+        const oldLocalId =
+          localId;
+
+        conversationId =
+          remoteConversation.id;
+
+        setActiveConversationId(
+          remoteConversation.id,
+        );
+
+        setConversations(
+          (current) =>
+            current.map(
+              (conversation) =>
+                conversation.id ===
+                oldLocalId
+                  ? remoteConversation
+                  : conversation,
+            ),
+        );
+      } catch (requestError) {
+        console.error(
+          "Création conversation cloud échouée :",
+          requestError,
+        );
+
+        setError(
+          "Conversation sauvegardée localement. La synchronisation cloud sera réessayée.",
+        );
+      }
     } else {
-      setConversations((current) =>
-        current.map((conversation) =>
-          conversation.id === conversationId &&
-          conversation.title === "Nouvelle conversation"
-            ? {
-                ...conversation,
-                title:
-                  content.length > 45
-                    ? `${content.slice(0, 45)}...`
-                    : content ||
-                      "Nouvelle conversation",
-                updatedAt: now,
-              }
-            : conversation,
-        ),
+      updateConversationLocally(
+        conversationId,
+        content,
+        now,
       );
     }
 
-    const messageContent = content;
+    /*
+     * ========================================================
+     * MESSAGE UTILISATEUR
+     * ========================================================
+     */
 
-    // Le mode Web est indépendant du modèle sélectionné.
-    // Le backend décide ensuite si le modèle du pack peut
-    // exécuter l'opération Web et applique le coût correspondant.
     const webEnabled =
-      activeCapability === "Recherche Web";
+      activeCapability ===
+      "Recherche Web";
 
-    const userMessage: ChatMessage = {
+    const userMessage:
+      ChatMessage = {
       id: crypto.randomUUID(),
       conversationId,
       role: "user",
-      content: messageContent,
+      content,
       createdAt: now,
     };
 
-    setMessages((current) => [
-      ...current,
-      userMessage,
-    ]);
+    setMessages(
+      (current) => [
+        ...current,
+        userMessage,
+      ],
+    );
+
+    if (currentUserId) {
+      const cache =
+        readLocalCache(
+          currentUserId,
+        );
+
+      const existingMessages =
+        cache?.messages[
+          conversationId
+        ] || [];
+
+      writeLocalCache(
+        currentUserId,
+        {
+          conversations:
+            cache?.conversations ||
+            conversations,
+          messages: {
+            ...(cache?.messages ||
+              {}),
+            [conversationId]: [
+              ...existingMessages,
+              userMessage,
+            ],
+          },
+          activeConversationId:
+            conversationId,
+          selectedModel,
+          activeCapability,
+        },
+      );
+    }
 
     setMessage("");
-    setActiveCapability(null);
     setIsThinking(true);
 
+    /*
+     * La recherche Web reste volontairement active.
+     */
+
     try {
+      /*
+       * ======================================================
+       * SAUVEGARDE MESSAGE UTILISATEUR
+       * ======================================================
+       */
+
+      try {
+        await saveMessageRemote(
+          userMessage,
+        );
+      } catch (saveError) {
+        console.error(
+          "Erreur sauvegarde message utilisateur :",
+          saveError,
+        );
+
+        setError(
+          "Message conservé localement. Synchronisation cloud en attente.",
+        );
+      }
+
+      /*
+       * ======================================================
+       * OPENAI
+       * ======================================================
+       */
+
       const data =
         await apiFetch<ChatResponse>(
           "/ai/chat",
           {
             method: "POST",
-
             body: JSON.stringify({
-              model: selectedModel,
-              message: messageContent,
+              model:
+                selectedModel,
+              message:
+                content,
               web: webEnabled,
               confirmed: true,
             }),
           },
         );
 
-      const assistantMessage: ChatMessage = {
+      /*
+       * ======================================================
+       * MESSAGE IA
+       * ======================================================
+       */
+
+      const assistantContent =
+        data.message ||
+        data.response ||
+        "Aucune réponse reçue.";
+
+      const assistantMessage:
+        ChatMessage = {
         id: crypto.randomUUID(),
         conversationId,
         role: "assistant",
         content:
-          data.message ||
-          data.response ||
-          "Aucune réponse reçue.",
-        createdAt: new Date().toISOString(),
+          assistantContent,
+        createdAt:
+          new Date().toISOString(),
       };
 
-      setMessages((current) => [
-        ...current,
-        assistantMessage,
-      ]);
-
-      setConversations((current) =>
-        current.map((conversation) =>
-          conversation.id === conversationId
-            ? {
-                ...conversation,
-                updatedAt:
-                  new Date().toISOString(),
-              }
-            : conversation,
-        ),
+      setMessages(
+        (current) => [
+          ...current,
+          assistantMessage,
+        ],
       );
 
-      await loadWallet();
+      /*
+       * ======================================================
+       * SAUVEGARDE LOCALE
+       * ======================================================
+       */
 
-    } catch (error) {
+      if (currentUserId) {
+        const cache =
+          readLocalCache(
+            currentUserId,
+          );
+
+        const existingMessages =
+          cache?.messages[
+            conversationId
+          ] || [];
+
+        const hasUserMessage =
+          existingMessages.some(
+            (item) =>
+              item.id ===
+              userMessage.id,
+          );
+
+        const mergedMessages =
+          hasUserMessage
+            ? [
+                ...existingMessages,
+                assistantMessage,
+              ]
+            : [
+                ...existingMessages,
+                userMessage,
+                assistantMessage,
+              ];
+
+        writeLocalCache(
+          currentUserId,
+          {
+            conversations:
+              cache?.conversations ||
+              conversations,
+            messages: {
+              ...(cache?.messages ||
+                {}),
+              [conversationId]:
+                mergedMessages,
+            },
+            activeConversationId:
+              conversationId,
+            selectedModel,
+            activeCapability,
+          },
+        );
+      }
+
+      /*
+       * ======================================================
+       * SAUVEGARDE BACKEND
+       * ======================================================
+       */
+
+      try {
+        await saveMessageRemote(
+          assistantMessage,
+        );
+      } catch (saveError) {
+        console.error(
+          "Erreur sauvegarde réponse IA :",
+          saveError,
+        );
+
+        setError(
+          "Réponse IA conservée localement. Synchronisation cloud en attente.",
+        );
+      }
+
+      /*
+       * ======================================================
+       * CONVERSATION
+       * ======================================================
+       */
+
+      const updatedAt =
+        new Date().toISOString();
+
+      setConversations(
+        (current) =>
+          current.map(
+            (conversation) =>
+              conversation.id ===
+              conversationId
+                ? {
+                    ...conversation,
+                    updatedAt,
+                  }
+                : conversation,
+          ),
+      );
+
+      /*
+       * ======================================================
+       * WALLET
+       * ======================================================
+       */
+
+      await loadWallet();
+    } catch (requestError) {
       const errorMessage =
-        error instanceof Error
-          ? error.message
+        requestError instanceof
+        Error
+          ? requestError.message
           : "Impossible de contacter LBV-Connect.ia.";
 
-      const assistantMessage: ChatMessage = {
+      const assistantMessage:
+        ChatMessage = {
         id: crypto.randomUUID(),
         conversationId,
         role: "assistant",
@@ -605,10 +2057,45 @@ export default function ChatPage() {
           new Date().toISOString(),
       };
 
-      setMessages((current) => [
-        ...current,
-        assistantMessage,
-      ]);
+      setMessages(
+        (current) => [
+          ...current,
+          assistantMessage,
+        ],
+      );
+
+      if (currentUserId) {
+        const cache =
+          readLocalCache(
+            currentUserId,
+          );
+
+        const existingMessages =
+          cache?.messages[
+            conversationId
+          ] || [];
+
+        writeLocalCache(
+          currentUserId,
+          {
+            conversations:
+              cache?.conversations ||
+              conversations,
+            messages: {
+              ...(cache?.messages ||
+                {}),
+              [conversationId]: [
+                ...existingMessages,
+                assistantMessage,
+              ],
+            },
+            activeConversationId:
+              conversationId,
+            selectedModel,
+            activeCapability,
+          },
+        );
+      }
     } finally {
       setIsThinking(false);
     }
@@ -631,7 +2118,10 @@ export default function ChatPage() {
               ).getTime() -
               Date.now()
             ) /
-              (1000 * 60 * 60 * 24),
+              (1000 *
+                60 *
+                60 *
+                24),
           ),
         )
       : null;
@@ -644,8 +2134,6 @@ export default function ChatPage() {
 
   return (
     <main className="min-h-dvh overflow-hidden bg-background text-foreground">
-      {/* Overlay mobile */}
-
       {sidebarOpen && (
         <button
           type="button"
@@ -657,7 +2145,9 @@ export default function ChatPage() {
         />
       )}
 
-      {/* Sidebar */}
+      {/* ======================================================
+          SIDEBAR
+          ====================================================== */}
 
       <aside
         className={`fixed bottom-4 left-4 top-4 z-50 flex w-[260px] flex-col rounded-3xl border border-border bg-surface/95 shadow-2xl backdrop-blur-xl transition-transform duration-300 md:translate-x-0 ${
@@ -666,8 +2156,6 @@ export default function ChatPage() {
             : "-translate-x-[120%]"
         }`}
       >
-        {/* Brand */}
-
         <div className="flex h-16 items-center justify-between px-5">
           <div>
             <div className="font-semibold tracking-tight">
@@ -691,12 +2179,12 @@ export default function ChatPage() {
           </button>
         </div>
 
-        {/* Nouvelle conversation */}
-
         <div className="px-4 pt-2">
           <button
             type="button"
-            onClick={createConversation}
+            onClick={
+              createConversation
+            }
             className="flex w-full items-center justify-between rounded-2xl bg-accent px-4 py-3.5 text-sm font-medium text-accent-foreground transition hover:opacity-85"
           >
             <span className="flex items-center gap-3">
@@ -710,8 +2198,6 @@ export default function ChatPage() {
           </button>
         </div>
 
-        {/* Historique */}
-
         <div className="mt-6 flex-1 overflow-y-auto px-4">
           <div className="mb-3 px-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
             Historique
@@ -721,17 +2207,20 @@ export default function ChatPage() {
             <p className="px-2 py-3 text-xs leading-5 text-muted">
               Chargement...
             </p>
-          ) : conversations.length === 0 ? (
+          ) : conversations.length ===
+            0 ? (
             <p className="px-2 py-3 text-xs leading-5 text-muted">
-              Aucune conversation pour le
-              moment.
+              Aucune conversation
+              pour le moment.
             </p>
           ) : (
             <div className="space-y-1">
               {conversations.map(
                 (conversation) => (
                   <button
-                    key={conversation.id}
+                    key={
+                      conversation.id
+                    }
                     type="button"
                     onClick={() =>
                       selectConversation(
@@ -752,8 +2241,6 @@ export default function ChatPage() {
             </div>
           )}
         </div>
-
-        {/* Crédits */}
 
         <div className="px-4 pb-3">
           <div className="rounded-2xl border border-border bg-surface-secondary p-4">
@@ -779,14 +2266,13 @@ export default function ChatPage() {
             </p>
 
             <p className="mt-1 text-[11px] text-muted">
-              {remainingDays !== null
+              {remainingDays !==
+              null
                 ? `${remainingDays} jours restants`
                 : "Durée indisponible"}
             </p>
           </div>
         </div>
-
-        {/* Navigation basse */}
 
         <div className="space-y-1 border-t border-border px-4 py-3">
           <Link
@@ -815,11 +2301,11 @@ export default function ChatPage() {
         </div>
       </aside>
 
-      {/* Workspace principal */}
+      {/* ======================================================
+          WORKSPACE
+          ====================================================== */}
 
       <section className="flex min-h-dvh flex-col">
-        {/* Header */}
-
         <header className="flex h-16 shrink-0 items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <button
@@ -841,7 +2327,9 @@ export default function ChatPage() {
               <p className="text-sm font-medium">
                 {activeConversationId
                   ? conversations.find(
-                      (conversation) =>
+                      (
+                        conversation,
+                      ) =>
                         conversation.id ===
                         activeConversationId,
                     )?.title ||
@@ -881,26 +2369,27 @@ export default function ChatPage() {
           </div>
         </header>
 
-        {/* Workspace */}
-
         <div className="flex flex-1 flex-col px-4 pb-4 sm:px-8">
           <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col">
-            {/* Erreur */}
-
             {error && (
               <div className="mx-auto mt-4 w-full max-w-3xl rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm text-muted-strong">
                 {error}
               </div>
             )}
 
-            {/* Empty state */}
+            {/* ==================================================
+                EMPTY STATE
+                ================================================== */}
 
-            {messages.length === 0 && (
+            {messages.length ===
+              0 && (
               <div className="flex flex-1 flex-col justify-center">
                 <div className="mx-auto w-full max-w-3xl">
                   <div className="mb-6 flex items-center gap-3">
                     <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground shadow-sm">
-                      <Sparkles size={20} />
+                      <Sparkles
+                        size={20}
+                      />
                     </div>
 
                     <div>
@@ -909,50 +2398,86 @@ export default function ChatPage() {
                       </p>
 
                       <p className="text-sm font-medium">
-                        Intelligence workspace
+                        Intelligence
+                        workspace
                       </p>
                     </div>
                   </div>
 
                   <h1 className="max-w-2xl text-4xl font-semibold leading-[1.05] tracking-[-0.04em] sm:text-5xl">
-                    Comment puis-je vous
-                    aider ?
+                    Comment puis-je
+                    vous aider ?
                   </h1>
 
                   <p className="mt-5 max-w-xl text-sm leading-6 text-muted">
-                    Discutez avec les modèles
-                    disponibles et utilisez la recherche
-                    Web directement depuis votre espace.
+                    Discutez avec les
+                    modèles disponibles
+                    et utilisez la
+                    recherche Web
+                    directement depuis
+                    votre espace.
                   </p>
                 </div>
               </div>
             )}
 
-            {/* Messages */}
+            {/* ==================================================
+                MESSAGES
+                ================================================== */}
 
-            {messages.length > 0 && (
+            {messages.length >
+              0 && (
               <div className="flex-1 overflow-y-auto py-8">
-                <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-                  {messages.map((item) => (
-                    <div
-                      key={item.id}
-                      className={
-                        item.role === "user"
-                          ? "flex justify-end"
-                          : "flex justify-start"
-                      }
-                    >
+                <div className="mx-auto flex w-full max-w-3xl flex-col gap-7">
+                  {messages.map(
+                    (item) => (
                       <div
+                        key={
+                          item.id
+                        }
                         className={
-                          item.role === "user"
-                            ? "max-w-[85%] rounded-3xl rounded-br-lg bg-accent px-5 py-3.5 text-sm leading-6 text-accent-foreground"
-                            : "max-w-[85%] rounded-3xl rounded-bl-lg border border-border bg-surface px-5 py-3.5 text-sm leading-6 text-foreground shadow-sm"
+                          item.role ===
+                          "user"
+                            ? "flex justify-end"
+                            : "flex justify-start"
                         }
                       >
-                        {item.content}
+                        <div
+                          className={
+                            item.role ===
+                            "user"
+                              ? "max-w-[85%] rounded-3xl rounded-br-lg bg-accent px-5 py-3.5 text-sm leading-6 text-accent-foreground"
+                              : "max-w-[90%] rounded-3xl rounded-bl-lg border border-border bg-surface px-5 py-4 text-foreground shadow-sm"
+                          }
+                        >
+                          {item.role ===
+                          "assistant" ? (
+                            /*
+                             * IMPORTANT :
+                             *
+                             * Les réponses IA passent maintenant
+                             * par le renderer Markdown.
+                             */
+                            <MarkdownMessage
+                              content={
+                                item.content
+                              }
+                            />
+                          ) : (
+                            /*
+                             * Le message utilisateur reste simple
+                             * et conserve les retours à la ligne.
+                             */
+                            <div className="whitespace-pre-wrap break-words">
+                              {
+                                item.content
+                              }
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ),
+                  )}
 
                   {isThinking && (
                     <div className="flex justify-start">
@@ -960,7 +2485,9 @@ export default function ChatPage() {
                         <div className="flex items-center gap-2">
                           <span className="flex gap-1">
                             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
+
                             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:150ms]" />
+
                             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:300ms]" />
                           </span>
 
@@ -973,11 +2500,14 @@ export default function ChatPage() {
               </div>
             )}
 
-            {/* Modèle */}
+            {/* ==================================================
+                MODÈLE
+                ================================================== */}
 
             <div
               className={`mx-auto w-full max-w-3xl ${
-                messages.length === 0
+                messages.length ===
+                0
                   ? "mt-10"
                   : "mt-4"
               }`}
@@ -992,17 +2522,29 @@ export default function ChatPage() {
                   }`}
                   onClick={() => {
                     if (
-                      getAvailableModels(wallet?.pack_id ?? null).length > 1
+                      getAvailableModels(
+                        wallet?.pack_id ??
+                          null,
+                      ).length >
+                      1
                     ) {
-                      setModelMenuOpen((current) => !current);
+                      setModelMenuOpen(
+                        (current) =>
+                          !current,
+                      );
                     }
                   }}
                 >
-                  <Sparkles size={16} />
+                  <Sparkles
+                    size={16}
+                  />
 
                   {models.find(
-                    (model) => model.id === selectedModel,
-                  )?.name || "Modèle"}
+                    (model) =>
+                      model.id ===
+                      selectedModel,
+                  )?.name ||
+                    "Modèle"}
 
                   <ChevronDown
                     size={15}
@@ -1016,22 +2558,48 @@ export default function ChatPage() {
 
                 {modelMenuOpen && (
                   <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl">
-                    {getAvailableModels(wallet?.pack_id ?? null).map((model) => (
-                      <ModelOption
-                        key={model.id}
-                        name={model.name}
-                        description={model.description}
-                        active={selectedModel === model.id}
-                        onClick={() => {
-                          setSelectedModel(model.id);
-                          setModelMenuOpen(false);
-                        }}
-                      />
-                    ))}
+                    {getAvailableModels(
+                      wallet?.pack_id ??
+                        null,
+                    ).map(
+                      (model) => (
+                        <ModelOption
+                          key={
+                            model.id
+                          }
+                          name={
+                            model.name
+                          }
+                          description={
+                            model.description
+                          }
+                          active={
+                            selectedModel ===
+                            model.id
+                          }
+                          onClick={() => {
+                            setSelectedModel(
+                              model.id,
+                            );
 
-                    {getAvailableModels(wallet?.pack_id ?? null).length === 0 && (
+                            setModelMenuOpen(
+                              false,
+                            );
+                          }}
+                        />
+                      ),
+                    )}
+
+                    {getAvailableModels(
+                      wallet?.pack_id ??
+                        null,
+                    ).length ===
+                      0 && (
                       <p className="px-3 py-2 text-xs text-muted">
-                        Aucun modèle disponible avec ce pack.
+                        Aucun modèle
+                        disponible
+                        avec ce
+                        pack.
                       </p>
                     )}
                   </div>
@@ -1039,24 +2607,32 @@ export default function ChatPage() {
               </div>
             </div>
 
-            {/* Mode Web */}
+            {/* ==================================================
+                MODE WEB
+                ================================================== */}
 
             {activeCapability ===
               "Recherche Web" && (
               <div className="mx-auto mt-3 flex w-full max-w-3xl items-center justify-between rounded-2xl border border-border bg-surface px-4 py-3 shadow-sm">
                 <div className="flex items-center gap-3">
                   <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-surface-tertiary">
-                    <Globe size={17} />
+                    <Globe
+                      size={17}
+                    />
                   </div>
 
                   <div>
                     <p className="text-sm font-medium">
-                      Recherche Web activée
+                      Recherche Web
+                      activée
                     </p>
 
                     <p className="text-[11px] text-muted">
-                      La recherche Web sera
-                      exécutée par le backend.
+                      La recherche Web
+                      reste active pour
+                      les prochains
+                      messages jusqu'à
+                      sa désactivation.
                     </p>
                   </div>
                 </div>
@@ -1064,7 +2640,9 @@ export default function ChatPage() {
                 <button
                   type="button"
                   onClick={() =>
-                    setActiveCapability(null)
+                    setActiveCapability(
+                      null,
+                    )
                   }
                   className="rounded-lg p-2 text-muted hover:bg-surface-tertiary hover:text-foreground"
                   aria-label="Désactiver la recherche Web"
@@ -1074,7 +2652,9 @@ export default function ChatPage() {
               </div>
             )}
 
-            {/* Composer */}
+            {/* ==================================================
+                COMPOSER
+                ================================================== */}
 
             <div className="mx-auto mt-4 w-full max-w-3xl">
               <div className="overflow-hidden rounded-[28px] border border-border-strong bg-surface shadow-[0_12px_40px_var(--shadow-color)] transition focus-within:border-muted-strong">
@@ -1082,19 +2662,25 @@ export default function ChatPage() {
                   rows={4}
                   value={message}
                   onChange={(event) =>
-                    setMessage(event.target.value)
+                    setMessage(
+                      event.target.value,
+                    )
                   }
                   onKeyDown={(event) => {
                     if (
-                      event.key === "Enter" &&
+                      event.key ===
+                        "Enter" &&
                       !event.shiftKey
                     ) {
                       event.preventDefault();
+
                       handleSendMessage();
                     }
                   }}
                   placeholder="Écrivez à LBV-Connect.ia..."
-                  disabled={isThinking}
+                  disabled={
+                    isThinking
+                  }
                   className="w-full resize-none bg-transparent px-5 pt-5 text-sm leading-6 outline-none placeholder:text-muted disabled:opacity-60"
                 />
 
@@ -1112,7 +2698,9 @@ export default function ChatPage() {
 
                         return (
                           <button
-                            key={label}
+                            key={
+                              label
+                            }
                             type="button"
                             title={
                               disabled
@@ -1124,7 +2712,9 @@ export default function ChatPage() {
                                 label,
                               )
                             }
-                            disabled={disabled}
+                            disabled={
+                              disabled
+                            }
                             className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-2 transition ${
                               disabled
                                 ? "cursor-not-allowed text-muted opacity-50"
@@ -1133,14 +2723,20 @@ export default function ChatPage() {
                                   : "text-muted-strong hover:bg-surface-tertiary hover:text-foreground"
                             }`}
                           >
-                            <Icon size={17} />
+                            <Icon
+                              size={17}
+                            />
 
                             <span className="hidden text-xs sm:inline">
                               {label}
                             </span>
 
                             {disabled && (
-                              <Lock size={12} />
+                              <Lock
+                                size={
+                                  12
+                                }
+                              />
                             )}
                           </button>
                         );
@@ -1151,21 +2747,26 @@ export default function ChatPage() {
                   <button
                     type="button"
                     aria-label="Envoyer"
-                    onClick={handleSendMessage}
+                    onClick={
+                      handleSendMessage
+                    }
                     disabled={
                       !message.trim() ||
                       isThinking
                     }
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
                   >
-                    <ArrowUp size={18} />
+                    <ArrowUp
+                      size={18}
+                    />
                   </button>
                 </div>
               </div>
 
               <p className="mt-3 text-center text-[11px] text-muted">
-                Les crédits consommés dépendent
-                du modèle et de l&apos;opération.
+                Les crédits consommés
+                dépendent du modèle
+                et de l&apos;opération.
               </p>
             </div>
           </div>

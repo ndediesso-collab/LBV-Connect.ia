@@ -1,6 +1,8 @@
+from json import dumps
 from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.config.credit_costs import CreditAction
@@ -31,6 +33,7 @@ router = APIRouter(
 # REQUEST
 # ============================================================
 
+
 class ChatRequest(BaseModel):
     model: str
     message: str
@@ -38,8 +41,9 @@ class ChatRequest(BaseModel):
 
 
 # ============================================================
-# RESPONSE
+# RESPONSE CLASSIQUE
 # ============================================================
+
 
 class ChatResponse(BaseModel):
     success: bool
@@ -62,6 +66,7 @@ class ChatResponse(BaseModel):
 # ============================================================
 # MODÈLES → ACTIONS DE CRÉDITS
 # ============================================================
+
 
 MODEL_ACTIONS = {
     "luna": {
@@ -90,6 +95,7 @@ MODEL_ACTIONS = {
 # MODÈLES LBV-CONNECT → IDS OPENAI
 # ============================================================
 
+
 MODEL_OPENAI_IDS = {
     "luna": "gpt-5.6-luna",
     "gpt-5": "gpt-5",
@@ -102,37 +108,22 @@ MODEL_OPENAI_IDS = {
 # MODÈLES AUTORISÉS PAR PACK
 # ============================================================
 
-PACK_ALLOWED_MODELS = {
-    # --------------------------------------------------------
-    # PACK LÉGER
-    # --------------------------------------------------------
 
+PACK_ALLOWED_MODELS = {
     "light_pack": {
         "luna",
     },
-
-    # --------------------------------------------------------
-    # PACK INTERMÉDIAIRE
-    # --------------------------------------------------------
 
     "intermediate_pack": {
         "luna",
         "gpt-5",
     },
 
-    # --------------------------------------------------------
-    # PACK PRO
-    # --------------------------------------------------------
-
     "pro_pack": {
         "luna",
         "gpt-5",
         "gpt-5.6-terra",
     },
-
-    # --------------------------------------------------------
-    # PACK BUSINESS
-    # --------------------------------------------------------
 
     "business_pack": {
         "luna",
@@ -144,8 +135,9 @@ PACK_ALLOWED_MODELS = {
 
 
 # ============================================================
-# POST /ai/chat
+# AUTHENTIFICATION
 # ============================================================
+
 
 def _authenticate_chat_user(
     user_id: str | None,
@@ -185,8 +177,13 @@ def _authenticate_chat_user(
         )
 
     try:
-        user_response = supabase.auth.get_user(clean_token)
-        authenticated_user = user_response.user
+        user_response = supabase.auth.get_user(
+            clean_token
+        )
+
+        authenticated_user = (
+            user_response.user
+        )
 
     except Exception:
         raise HTTPException(
@@ -200,7 +197,9 @@ def _authenticate_chat_user(
             detail="Utilisateur non authentifié.",
         )
 
-    authenticated_user_id = str(authenticated_user.id)
+    authenticated_user_id = str(
+        authenticated_user.id
+    )
 
     if authenticated_user_id != str(user_id):
         raise HTTPException(
@@ -212,6 +211,186 @@ def _authenticate_chat_user(
         )
 
     return authenticated_user_id
+
+
+# ============================================================
+# VALIDATION COMMUNE CHAT
+# ============================================================
+
+
+def _prepare_chat(
+    request: ChatRequest,
+    user_id: str | None,
+    authorization: str | None,
+):
+    """
+    Prépare et valide une requête Chat.
+
+    Cette fonction est utilisée à la fois par le endpoint
+    classique et par le endpoint streaming.
+    """
+
+    authenticated_user_id = (
+        _authenticate_chat_user(
+            user_id=user_id,
+            authorization=authorization,
+        )
+    )
+
+    message = request.message.strip()
+
+    if not message:
+        raise HTTPException(
+            status_code=400,
+            detail="Le message ne peut pas être vide.",
+        )
+
+    if request.model not in MODEL_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Modèle inconnu : {request.model}",
+        )
+
+    repository = SupabaseCreditRepository(
+        supabase
+    )
+
+    wallet = repository.get_wallet(
+        authenticated_user_id
+    )
+
+    if wallet is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Aucun portefeuille de crédits "
+                "trouvé pour cet utilisateur."
+            ),
+        )
+
+    allowed_models = PACK_ALLOWED_MODELS.get(
+        wallet.pack_id,
+        set(),
+    )
+
+    if request.model not in allowed_models:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Le modèle '{request.model}' "
+                f"n'est pas disponible avec le pack "
+                f"'{wallet.pack_id}'."
+            ),
+        )
+
+    action_type = (
+        "web"
+        if request.web
+        else "normal"
+    )
+
+    action = MODEL_ACTIONS[
+        request.model
+    ][action_type]
+
+    try:
+        cost = CreditService.get_cost(
+            wallet,
+            action,
+        )
+
+    except UnsupportedActionError as error:
+        raise HTTPException(
+            status_code=403,
+            detail=str(error),
+        )
+
+    if not wallet.is_pack_active:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Le pack de crédits est expiré ou inactif."
+            ),
+        )
+
+    if wallet.balance < cost:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                "Crédits insuffisants "
+                "pour effectuer cette action."
+            ),
+        )
+
+    return (
+        authenticated_user_id,
+        repository,
+        wallet,
+        message,
+        action,
+        cost,
+    )
+
+
+# ============================================================
+# CONSOMMATION + TRANSACTION
+# ============================================================
+
+
+def _consume_and_record(
+    repository,
+    wallet,
+    authenticated_user_id: str,
+    action,
+):
+    """
+    Débite les crédits et enregistre la transaction.
+
+    Cette fonction est appelée uniquement après que
+    la génération OpenAI soit terminée avec succès.
+    """
+
+    try:
+        result = CreditService.consume(
+            wallet=wallet,
+            action=action,
+            confirmed=True,
+        )
+
+    except InactivePackError as error:
+        raise RuntimeError(str(error))
+
+    except InsufficientCreditsError as error:
+        raise RuntimeError(str(error))
+
+    except ValueError as error:
+        raise RuntimeError(str(error))
+
+    repository.update_wallet(wallet)
+
+    transaction = CreditTransaction(
+        id=str(uuid4()),
+        user_id=authenticated_user_id,
+        transaction_type=(
+            CreditTransactionType.USAGE
+        ),
+        amount=-result.cost,
+        balance_after=result.new_balance,
+        created_at=wallet.updated_at,
+        action=action,
+        reference_id=None,
+    )
+
+    repository.create_transaction(
+        transaction
+    )
+
+    return result
+
+
+# ============================================================
+# POST /ai/chat
+# ============================================================
 
 
 @router.post(
@@ -230,143 +409,30 @@ def chat(
     ),
 ):
 
-    # ========================================================
-    # 1. AUTHENTIFICATION
-    # ========================================================
-
-    authenticated_user_id = _authenticate_chat_user(
+    (
+        authenticated_user_id,
+        repository,
+        wallet,
+        message,
+        action,
+        cost,
+    ) = _prepare_chat(
+        request=request,
         user_id=user_id,
         authorization=authorization,
     )
 
     # ========================================================
-    # 2. VALIDATION DU MESSAGE
-    # ========================================================
-
-    message = request.message.strip()
-
-    if not message:
-        raise HTTPException(
-            status_code=400,
-            detail="Le message ne peut pas être vide.",
-        )
-
-    # ========================================================
-    # 3. VALIDATION DU MODÈLE
-    # ========================================================
-
-    if request.model not in MODEL_ACTIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Modèle inconnu : {request.model}",
-        )
-
-    # ========================================================
-    # 4. RÉCUPÉRATION DU WALLET
-    # ========================================================
-
-    repository = SupabaseCreditRepository(supabase)
-
-    wallet = repository.get_wallet(
-        authenticated_user_id
-    )
-
-    if wallet is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Aucun portefeuille de crédits "
-                "trouvé pour cet utilisateur."
-            ),
-        )
-
-    # ========================================================
-    # 5. VÉRIFICATION DU PACK
-    # ========================================================
-
-    allowed_models = PACK_ALLOWED_MODELS.get(
-        wallet.pack_id,
-        set(),
-    )
-
-    if request.model not in allowed_models:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"Le modèle '{request.model}' "
-                f"n'est pas disponible avec le pack "
-                f"'{wallet.pack_id}'."
-            ),
-        )
-
-    # ========================================================
-    # 6. MODÈLE + MODE WEB
-    #
-    # Le modèle reste celui sélectionné dans le pack.
-    # Web est une capacité supplémentaire du même modèle.
-    # ========================================================
-
-    action_type = "web" if request.web else "normal"
-
-    action = MODEL_ACTIONS[
-        request.model
-    ][action_type]
-
-    # ========================================================
-    # 7. VÉRIFICATION DU COÛT
-    # ========================================================
-
-    try:
-        cost = CreditService.get_cost(
-            wallet,
-            action,
-        )
-
-    except UnsupportedActionError as error:
-        raise HTTPException(
-            status_code=403,
-            detail=str(error),
-        )
-
-    # ========================================================
-    # 8. PACK ACTIF
-    # ========================================================
-
-    if not wallet.is_pack_active:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Le pack de crédits est expiré ou inactif."
-            ),
-        )
-
-    # ========================================================
-    # 9. SOLDE
-    # ========================================================
-
-    if wallet.balance < cost:
-        raise HTTPException(
-            status_code=402,
-            detail=(
-                "Crédits insuffisants "
-                "pour effectuer cette action."
-            ),
-        )
-
-    # ========================================================
-    # 10. APPEL IA
-    #
-    # OpenAIService doit utiliser request.web pour activer
-    # réellement l'outil web_search lorsque Web est actif.
-    #
-    # Aucun crédit n'est débité avant une réponse réussie.
+    # APPEL IA CLASSIQUE
     # ========================================================
 
     openai_service = OpenAIService()
 
     try:
         response = openai_service.chat(
-            model=MODEL_OPENAI_IDS[request.model],
+            model=MODEL_OPENAI_IDS[
+                request.model
+            ],
             message=message,
             web=request.web,
         )
@@ -381,83 +447,27 @@ def chat(
         )
 
     # ========================================================
-    # 11. CONSOMMATION
+    # CONSOMMATION
     # ========================================================
 
     try:
-        result = CreditService.consume(
+        result = _consume_and_record(
+            repository=repository,
             wallet=wallet,
+            authenticated_user_id=(
+                authenticated_user_id
+            ),
             action=action,
-            confirmed=True,
         )
 
-    except InactivePackError as error:
-        raise HTTPException(
-            status_code=403,
-            detail=str(error),
-        )
-
-    except InsufficientCreditsError as error:
-        raise HTTPException(
-            status_code=402,
-            detail=str(error),
-        )
-
-    except ValueError as error:
-        raise HTTPException(
-            status_code=400,
-            detail=str(error),
-        )
-
-    # ========================================================
-    # 12. WALLET
-    # ========================================================
-
-    try:
-        repository.update_wallet(wallet)
-
-    except Exception as error:
+    except RuntimeError as error:
         raise HTTPException(
             status_code=500,
-            detail=(
-                "La réponse IA a été obtenue, "
-                "mais la mise à jour du portefeuille "
-                "a échoué : "
-                f"{str(error)}"
-            ),
+            detail=str(error),
         )
 
     # ========================================================
-    # 13. TRANSACTION
-    # ========================================================
-
-    transaction = CreditTransaction(
-        id=str(uuid4()),
-        user_id=authenticated_user_id,
-        transaction_type=CreditTransactionType.USAGE,
-        amount=-result.cost,
-        balance_after=result.new_balance,
-        created_at=wallet.updated_at,
-        action=action,
-        reference_id=None,
-    )
-
-    try:
-        repository.create_transaction(transaction)
-
-    except Exception as error:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Le portefeuille a été mis à jour, "
-                "mais l'enregistrement de la transaction "
-                "a échoué : "
-                f"{str(error)}"
-            ),
-        )
-
-    # ========================================================
-    # 14. RÉPONSE
+    # RÉPONSE
     # ========================================================
 
     return ChatResponse(
@@ -468,8 +478,234 @@ def chat(
         cost=result.cost,
         previous_balance=result.previous_balance,
         credits_remaining=result.new_balance,
-        consumed_percentage=result.consumed_percentage,
-        remaining_percentage=result.remaining_percentage,
-        requires_warning=result.requires_warning,
-        requires_critical_warning=result.requires_critical_warning,
+        consumed_percentage=(
+            result.consumed_percentage
+        ),
+        remaining_percentage=(
+            result.remaining_percentage
+        ),
+        requires_warning=(
+            result.requires_warning
+        ),
+        requires_critical_warning=(
+            result.requires_critical_warning
+        ),
+    )
+
+
+# ============================================================
+# POST /ai/chat/stream
+# ============================================================
+
+
+@router.post(
+    "/chat/stream",
+)
+def chat_stream(
+    request: ChatRequest,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Endpoint streaming du Chat LBV-Connect.
+
+    OpenAI → FastAPI → Frontend
+
+    Le frontend reçoit progressivement les fragments
+    de la réponse au lieu d'attendre la réponse complète.
+
+    Les crédits ne sont débités qu'après la génération
+    complète et réussie de la réponse.
+    """
+
+    (
+        authenticated_user_id,
+        repository,
+        wallet,
+        message,
+        action,
+        cost,
+    ) = _prepare_chat(
+        request=request,
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    openai_service = OpenAIService()
+
+    def event_stream():
+        full_response = ""
+
+        try:
+            # ==================================================
+            # SIGNAL DE DÉMARRAGE
+            # ==================================================
+
+            yield (
+                "event: start\n"
+                "data: "
+                + dumps(
+                    {
+                        "success": True,
+                        "model": request.model,
+                        "web": request.web,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+
+            # ==================================================
+            # STREAM OPENAI
+            # ==================================================
+
+            for delta in openai_service.chat_stream(
+                model=MODEL_OPENAI_IDS[
+                    request.model
+                ],
+                message=message,
+                web=request.web,
+            ):
+                full_response += delta
+
+                yield (
+                    "event: delta\n"
+                    "data: "
+                    + dumps(
+                        {
+                            "content": delta,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+
+            # ==================================================
+            # VÉRIFICATION RÉPONSE
+            # ==================================================
+
+            if not full_response.strip():
+                yield (
+                    "event: error\n"
+                    "data: "
+                    + dumps(
+                        {
+                            "detail": (
+                                "Le service IA "
+                                "n'a retourné "
+                                "aucun contenu."
+                            )
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+
+                return
+
+            # ==================================================
+            # CONSOMMATION CRÉDITS
+            # ==================================================
+
+            try:
+                result = _consume_and_record(
+                    repository=repository,
+                    wallet=wallet,
+                    authenticated_user_id=(
+                        authenticated_user_id
+                    ),
+                    action=action,
+                )
+
+            except Exception as error:
+                yield (
+                    "event: error\n"
+                    "data: "
+                    + dumps(
+                        {
+                            "detail": (
+                                "La réponse IA a été "
+                                "générée mais la "
+                                "consommation des "
+                                "crédits a échoué : "
+                                f"{str(error)}"
+                            )
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+
+                return
+
+            # ==================================================
+            # FIN
+            # ==================================================
+
+            yield (
+                "event: done\n"
+                "data: "
+                + dumps(
+                    {
+                        "success": True,
+                        "model": request.model,
+                        "action": (
+                            result.action.value
+                        ),
+                        "cost": result.cost,
+                        "previous_balance": (
+                            result.previous_balance
+                        ),
+                        "credits_remaining": (
+                            result.new_balance
+                        ),
+                        "consumed_percentage": (
+                            result.consumed_percentage
+                        ),
+                        "remaining_percentage": (
+                            result.remaining_percentage
+                        ),
+                        "requires_warning": (
+                            result.requires_warning
+                        ),
+                        "requires_critical_warning": (
+                            result.requires_critical_warning
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+
+        except Exception as error:
+            yield (
+                "event: error\n"
+                "data: "
+                + dumps(
+                    {
+                        "detail": (
+                            "Erreur pendant le "
+                            "streaming IA : "
+                            f"{str(error)}"
+                        )
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
