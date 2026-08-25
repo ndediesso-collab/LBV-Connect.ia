@@ -16,10 +16,72 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
 import type { ChatMessage, Conversation } from "@/types/lbv";
+
+/*
+ * ============================================================
+ * CONFIGURATION API
+ * ============================================================
+ *
+ * NEXT_PUBLIC_API_URL doit pointer vers le backend FastAPI.
+ *
+ * Exemple :
+ *
+ * NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+ *
+ * Les routes peuvent être modifiées ici sans toucher
+ * à l'interface.
+ */
+
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
+  "http://127.0.0.1:8000";
+
+/*
+ * ============================================================
+ * TYPES FRONTEND
+ * ============================================================
+ */
+
+type WalletData = {
+  balance: number;
+  initial_credits: number;
+  pack_id: string | null;
+  pack_activated_at: string | null;
+  pack_expires_at: string | null;
+};
+
+type ChatResponse = {
+  success: boolean;
+  action: string;
+  cost: number;
+  previous_balance: number;
+  new_balance: number;
+  consumed_credits: number;
+  consumed_percentage: number;
+  remaining_percentage: number;
+  requires_warning: boolean;
+  requires_critical_warning: boolean;
+  response?: string;
+  message?: string;
+};
+
+type ConversationResponse = {
+  conversations: Conversation[];
+};
+
+type MessagesResponse = {
+  messages: ChatMessage[];
+};
+
+/*
+ * ============================================================
+ * CAPACITÉS
+ * ============================================================
+ */
 
 const capabilities = [
   {
@@ -44,16 +106,116 @@ const capabilities = [
   },
 ];
 
-export default function ChatPage() {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [selectedModel, setSelectedModel] =
-    useState("Standard");
+/*
+ * ============================================================
+ * MODÈLES
+ * ============================================================
+ *
+ * Les noms sont désormais alignés sur les modèles du système.
+ *
+ * L'autorisation réelle du modèle doit être vérifiée par
+ * le backend selon le pack de l'utilisateur.
+ */
 
-  const [message, setMessage] = useState("");
+type ModelDefinition = {
+  id: string;
+  name: string;
+  description: string;
+  packs: string[];
+};
+
+const models: ModelDefinition[] = [
+  {
+    id: "luna",
+    name: "Luna",
+    description: "Modèle économique · Rapide pour les échanges courants",
+    packs: ["light_pack", "intermediate_pack", "pro_pack", "business_pack"],
+  },
+  {
+    id: "gpt-5",
+    name: "GPT-5",
+    description: "Modèle polyvalent · Pour les tâches plus avancées",
+    packs: ["intermediate_pack", "pro_pack", "business_pack"],
+  },
+  {
+    id: "gpt-5.6-terra",
+    name: "GPT-5.6 Terra",
+    description: "Raisonnement avancé · Pour les problèmes complexes",
+    packs: ["pro_pack", "business_pack"],
+  },
+  {
+    id: "gpt-5.6-sol",
+    name: "GPT-5.6 Sol",
+    description: "Puissance maximale · Pour les tâches les plus exigeantes",
+    packs: ["business_pack"],
+  },
+];
+
+function getAvailableModels(packId: string | null): ModelDefinition[] {
+  if (!packId) return [];
+  return models.filter((model) => model.packs.includes(packId));
+}
+
+/*
+ * ============================================================
+ * API
+ * ============================================================
+ */
+
+async function apiFetch<T>(
+  path: string,
+  options?: RequestInit,
+): Promise<T> {
+  const response = await fetch(
+    `${API_URL}${path}`,
+    {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...(options?.headers ?? {}),
+      },
+      credentials: "include",
+    },
+  );
+
+  if (!response.ok) {
+    const error = await response.json().catch(
+      () => null,
+    );
+
+    throw new Error(
+      error?.detail ||
+        "Une erreur est survenue avec le serveur.",
+    );
+  }
+
+  return response.json();
+}
+
+/*
+ * ============================================================
+ * PAGE CHAT
+ * ============================================================
+ */
+
+export default function ChatPage() {
+  const [sidebarOpen, setSidebarOpen] =
+    useState(false);
+
+  const [modelMenuOpen, setModelMenuOpen] =
+    useState(false);
+
+  const [selectedModel, setSelectedModel] =
+    useState("luna");
+
+  const [message, setMessage] =
+    useState("");
+
   const [messages, setMessages] =
     useState<ChatMessage[]>([]);
-  const [isThinking, setIsThinking] = useState(false);
+
+  const [isThinking, setIsThinking] =
+    useState(false);
 
   const [conversations, setConversations] =
     useState<Conversation[]>([]);
@@ -71,6 +233,20 @@ export default function ChatPage() {
   const [selectedFile, setSelectedFile] =
     useState<File | null>(null);
 
+  const [wallet, setWallet] =
+    useState<WalletData | null>(null);
+
+  const [isLoadingWallet, setIsLoadingWallet] =
+    useState(true);
+
+  const [
+    isLoadingConversations,
+    setIsLoadingConversations,
+  ] = useState(true);
+
+  const [error, setError] =
+    useState<string | null>(null);
+
   const fileInputRef =
     useRef<HTMLInputElement>(null);
 
@@ -80,33 +256,123 @@ export default function ChatPage() {
   const videoInputRef =
     useRef<HTMLInputElement>(null);
 
+  /*
+   * ==========================================================
+   * CHARGEMENT DU WALLET
+   * ==========================================================
+   *
+   * L'endpoint devra être relié à l'utilisateur connecté.
+   *
+   * Pour l'instant, la structure frontend est prête.
+   */
+
+  async function loadWallet() {
+    try {
+      setIsLoadingWallet(true);
+      setError(null);
+
+      const data =
+        await apiFetch<WalletData>(
+          "/credits/me",
+        );
+
+      setWallet(data);
+
+      const availableModels = getAvailableModels(data.pack_id);
+
+      if (availableModels.length > 0) {
+        setSelectedModel((current) =>
+          availableModels.some((model) => model.id === current)
+            ? current
+            : availableModels[0].id,
+        );
+      } else {
+        setSelectedModel("");
+      }
+    } catch (requestError) {
+      console.error(
+        "Erreur chargement wallet :",
+        requestError,
+      );
+
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Impossible de charger les crédits.",
+      );
+    } finally {
+      setIsLoadingWallet(false);
+    }
+  }
+
+  /*
+   * ==========================================================
+   * CHARGEMENT DE L'HISTORIQUE
+   * ==========================================================
+   */
+
+  async function loadConversations() {
+    try {
+      setIsLoadingConversations(true);
+
+      const data =
+        await apiFetch<ConversationResponse>(
+          "/conversations",
+        );
+
+      setConversations(
+        data.conversations || [],
+      );
+    } catch (requestError) {
+      console.error(
+        "Erreur chargement conversations :",
+        requestError,
+      );
+
+      /*
+       * L'absence d'historique ne doit pas
+       * bloquer l'ouverture du chat.
+       */
+      setConversations([]);
+    } finally {
+      setIsLoadingConversations(false);
+    }
+  }
+
+  /*
+   * ==========================================================
+   * INITIALISATION
+   * ==========================================================
+   */
+
+  useEffect(() => {
+    loadWallet();
+    loadConversations();
+  }, []);
+
+  /*
+   * ==========================================================
+   * NOUVELLE CONVERSATION
+   * ==========================================================
+   */
+
   function createConversation() {
-    const now = new Date().toISOString();
-
-    const conversation: Conversation = {
-      id: crypto.randomUUID(),
-      title: "Nouvelle conversation",
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    setConversations((current) => [
-      conversation,
-      ...current,
-    ]);
-
-    setActiveConversationId(
-      conversation.id,
-    );
-
+    setActiveConversationId(null);
     setMessages([]);
     setMessage("");
     setSelectedFile(null);
     setActiveCapability(null);
+    setError(null);
     setSidebarOpen(false);
   }
 
-  function selectConversation(
+  /*
+   * ==========================================================
+   * SÉLECTION D'UNE CONVERSATION
+   * ==========================================================
+   */
+
+  async function selectConversation(
     conversationId: string,
   ) {
     setActiveConversationId(
@@ -114,14 +380,36 @@ export default function ChatPage() {
     );
 
     setSidebarOpen(false);
+    setError(null);
 
-    /*
-     * Les conversations et messages sont
-     * encore conservés côté frontend.
-     *
-     * La persistance Supabase viendra ensuite.
-     */
+    try {
+      const data =
+        await apiFetch<MessagesResponse>(
+          `/conversations/${conversationId}/messages`,
+        );
+
+      setMessages(
+        data.messages || [],
+      );
+    } catch (requestError) {
+      console.error(
+        "Erreur chargement messages :",
+        requestError,
+      );
+
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Impossible de charger la conversation.",
+      );
+    }
   }
+
+  /*
+   * ==========================================================
+   * CAPACITÉS
+   * ==========================================================
+   */
 
   function handleCapabilityClick(
     label: string,
@@ -149,6 +437,12 @@ export default function ChatPage() {
     }
   }
 
+  /*
+   * ==========================================================
+   * FICHIER
+   * ==========================================================
+   */
+
   function handleFileSelected(
     event: React.ChangeEvent<HTMLInputElement>,
   ) {
@@ -168,7 +462,13 @@ export default function ChatPage() {
     setSelectedFile(null);
   }
 
-  function handleSendMessage() {
+  /*
+   * ==========================================================
+   * ENVOI DU MESSAGE
+   * ==========================================================
+   */
+
+  async function handleSendMessage() {
     const content = message.trim();
 
     if (
@@ -199,8 +499,7 @@ export default function ChatPage() {
         updatedAt: now,
       };
 
-      conversationId =
-        newConversation.id;
+      conversationId = newConversation.id;
 
       setConversations((current) => [
         newConversation,
@@ -213,10 +512,8 @@ export default function ChatPage() {
     } else {
       setConversations((current) =>
         current.map((conversation) =>
-          conversation.id ===
-            conversationId &&
-          conversation.title ===
-            "Nouvelle conversation"
+          conversation.id === conversationId &&
+          conversation.title === "Nouvelle conversation"
             ? {
                 ...conversation,
                 title:
@@ -256,19 +553,51 @@ export default function ChatPage() {
     setActiveCapability(null);
     setIsThinking(true);
 
-    /*
-     * Simulation temporaire.
-     *
-     * Cette partie sera remplacée par l'appel
-     * au backend IA de LBV-Connect.ia.
-     */
-    window.setTimeout(() => {
+    try {
+      const apiUrl =
+        process.env.NEXT_PUBLIC_API_URL;
+
+      if (!apiUrl) {
+        throw new Error(
+          "NEXT_PUBLIC_API_URL n'est pas configurée.",
+        );
+      }
+
+      const response = await fetch(
+        `${apiUrl}/ai/chat`,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json",
+          },
+
+          body: JSON.stringify({
+            user_id: "ID_UTILISATEUR",
+            model: selectedModel,
+            message: messageContent,
+            web:
+              activeCapability ===
+              "Recherche Web",
+            confirmed: true,
+          }),
+        },
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail ||
+            "Une erreur est survenue.",
+        );
+      }
+
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
         conversationId,
         role: "assistant",
-        content:
-          "Votre message a bien été reçu. Le moteur IA de LBV-Connect.ia sera connecté prochainement.",
+        content: data.message,
         createdAt:
           new Date().toISOString(),
       };
@@ -280,8 +609,7 @@ export default function ChatPage() {
 
       setConversations((current) =>
         current.map((conversation) =>
-          conversation.id ===
-            conversationId
+          conversation.id === conversationId
             ? {
                 ...conversation,
                 updatedAt:
@@ -291,9 +619,57 @@ export default function ChatPage() {
         ),
       );
 
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Impossible de contacter LBV-Connect.ia.";
+
+      const assistantMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        conversationId,
+        role: "assistant",
+        content: `Erreur : ${errorMessage}`,
+        createdAt:
+          new Date().toISOString(),
+      };
+
+      setMessages((current) => [
+        ...current,
+        assistantMessage,
+      ]);
+    } finally {
       setIsThinking(false);
-    }, 800);
+    }
   }
+
+  /*
+   * ==========================================================
+   * JOURS RESTANTS
+   * ==========================================================
+   */
+
+  const remainingDays =
+    wallet?.pack_expires_at
+      ? Math.max(
+          0,
+          Math.ceil(
+            (
+              new Date(
+                wallet.pack_expires_at,
+              ).getTime() -
+              Date.now()
+            ) /
+              (1000 * 60 * 60 * 24),
+          ),
+        )
+      : null;
+
+  /*
+   * ==========================================================
+   * AFFICHAGE
+   * ==========================================================
+   */
 
   return (
     <main className="min-h-dvh overflow-hidden bg-background text-foreground">
@@ -396,7 +772,11 @@ export default function ChatPage() {
             Historique
           </div>
 
-          {conversations.length === 0 ? (
+          {isLoadingConversations ? (
+            <p className="px-2 py-3 text-xs leading-5 text-muted">
+              Chargement...
+            </p>
+          ) : conversations.length === 0 ? (
             <p className="px-2 py-3 text-xs leading-5 text-muted">
               Aucune conversation pour le
               moment.
@@ -444,11 +824,19 @@ export default function ChatPage() {
             </div>
 
             <p className="mt-2 text-xl font-semibold tracking-tight">
-              15 000
+              {isLoadingWallet
+                ? "..."
+                : wallet
+                  ? wallet.balance.toLocaleString(
+                      "fr-FR",
+                    )
+                  : "—"}
             </p>
 
             <p className="mt-1 text-[11px] text-muted">
-              35 jours restants
+              {remainingDays !== null
+                ? `${remainingDays} jours restants`
+                : "Durée indisponible"}
             </p>
           </div>
         </div>
@@ -528,7 +916,13 @@ export default function ChatPage() {
               </span>
 
               <span className="ml-2 text-sm font-semibold">
-                15 000
+                {isLoadingWallet
+                  ? "..."
+                  : wallet
+                    ? wallet.balance.toLocaleString(
+                        "fr-FR",
+                      )
+                    : "—"}
               </span>
             </Link>
 
@@ -546,6 +940,14 @@ export default function ChatPage() {
 
         <div className="flex flex-1 flex-col px-4 pb-4 sm:px-8">
           <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col">
+            {/* Erreur */}
+
+            {error && (
+              <div className="mx-auto mt-4 w-full max-w-3xl rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm text-muted-strong">
+                {error}
+              </div>
+            )}
+
             {/* Empty state */}
 
             {messages.length === 0 && (
@@ -644,15 +1046,19 @@ export default function ChatPage() {
                       ? "border-border-strong bg-surface-tertiary"
                       : "border-border bg-surface hover:bg-surface-secondary"
                   }`}
-                  onClick={() =>
-                    setModelMenuOpen(
-                      (current) => !current,
-                    )
-                  }
+                  onClick={() => {
+                    if (
+                      getAvailableModels(wallet?.pack_id ?? null).length > 1
+                    ) {
+                      setModelMenuOpen((current) => !current);
+                    }
+                  }}
                 >
                   <Sparkles size={16} />
 
-                  {selectedModel}
+                  {models.find(
+                    (model) => model.id === selectedModel,
+                  )?.name || "Modèle"}
 
                   <ChevronDown
                     size={15}
@@ -665,42 +1071,25 @@ export default function ChatPage() {
                 </button>
 
                 {modelMenuOpen && (
-                  <div className="absolute bottom-12 left-0 z-30 w-64 rounded-2xl border border-border bg-surface p-2 shadow-xl">
-                    <ModelOption
-                      name="Standard"
-                      description="Rapide et économique"
-                      active={
-                        selectedModel ===
-                        "Standard"
-                      }
-                      onClick={() => {
-                        setSelectedModel(
-                          "Standard",
-                        );
-                        setModelMenuOpen(false);
-                      }}
-                    />
+                  <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl">
+                    {getAvailableModels(wallet?.pack_id ?? null).map((model) => (
+                      <ModelOption
+                        key={model.id}
+                        name={model.name}
+                        description={model.description}
+                        active={selectedModel === model.id}
+                        onClick={() => {
+                          setSelectedModel(model.id);
+                          setModelMenuOpen(false);
+                        }}
+                      />
+                    ))}
 
-                    <ModelOption
-                      name="Raisonnement"
-                      description="Pour les problèmes complexes"
-                      active={
-                        selectedModel ===
-                        "Raisonnement"
-                      }
-                      onClick={() => {
-                        setSelectedModel(
-                          "Raisonnement",
-                        );
-                        setModelMenuOpen(false);
-                      }}
-                    />
-
-                    <ModelOption
-                      name="Premium"
-                      description="Puissance maximale"
-                      locked
-                    />
+                    {getAvailableModels(wallet?.pack_id ?? null).length === 0 && (
+                      <p className="px-3 py-2 text-xs text-muted">
+                        Aucun modèle disponible avec ce pack.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -759,8 +1148,8 @@ export default function ChatPage() {
                     </p>
 
                     <p className="text-[11px] text-muted">
-                      Le moteur Web sera connecté
-                      au backend.
+                      La recherche Web sera
+                      exécutée par le backend.
                     </p>
                   </div>
                 </div>
@@ -805,7 +1194,10 @@ export default function ChatPage() {
                 <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-2">
                   <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
                     {capabilities.map(
-                      ({ label, icon: Icon }) => {
+                      ({
+                        label,
+                        icon: Icon,
+                      }) => {
                         const isActive =
                           activeCapability ===
                           label;
@@ -855,7 +1247,7 @@ export default function ChatPage() {
 
               <p className="mt-3 text-center text-[11px] text-muted">
                 Les crédits consommés dépendent
-                du modèle et de l'opération.
+                du modèle et de l&apos;opération.
               </p>
             </div>
           </div>
@@ -865,30 +1257,31 @@ export default function ChatPage() {
   );
 }
 
+/*
+ * ============================================================
+ * OPTION MODÈLE
+ * ============================================================
+ */
+
 function ModelOption({
   name,
   description,
   active = false,
-  locked = false,
   onClick,
 }: {
   name: string;
   description: string;
   active?: boolean;
-  locked?: boolean;
   onClick?: () => void;
 }) {
   return (
     <button
       type="button"
-      disabled={locked}
       onClick={onClick}
       className={`w-full rounded-xl px-3 py-2.5 text-left transition ${
-        locked
-          ? "cursor-not-allowed opacity-45"
-          : active
-            ? "bg-surface-tertiary"
-            : "hover:bg-surface-secondary"
+        active
+          ? "bg-surface-tertiary"
+          : "hover:bg-surface-secondary"
       }`}
     >
       <div className="flex items-center justify-between">
@@ -896,17 +1289,11 @@ function ModelOption({
           {name}
         </span>
 
-        {active && !locked && (
+        {active && (
           <Check
             size={15}
             className="text-muted-strong"
           />
-        )}
-
-        {locked && (
-          <span className="text-[10px] uppercase tracking-wider text-muted">
-            Pro
-          </span>
         )}
       </div>
 

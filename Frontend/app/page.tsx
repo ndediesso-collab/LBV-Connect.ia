@@ -22,10 +22,10 @@ export default function Home() {
           </Link>
 
           <Link
-            href="/register"
+            href="/packs"
             className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-foreground transition hover:opacity-85"
           >
-            Commencer
+            Choisir un pack
           </Link>
         </div>
       </nav>
@@ -63,19 +63,12 @@ export default function Home() {
 
           {/* CTA */}
 
-          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Link
-              href="/register"
-              className="w-full rounded-xl bg-accent px-6 py-3 text-sm font-medium text-accent-foreground transition hover:opacity-85 sm:w-auto"
-            >
-              Commencer gratuitement
-            </Link>
-
+          <div className="mt-8 flex justify-center">
             <Link
               href="/packs"
-              className="w-full rounded-xl border border-border bg-surface px-6 py-3 text-sm font-medium text-foreground transition hover:bg-surface-secondary sm:w-auto"
+              className="w-full rounded-xl bg-accent px-6 py-3 text-sm font-medium text-accent-foreground transition hover:opacity-85 sm:w-auto"
             >
-              Voir les packs
+              Choisir un pack
             </Link>
           </div>
 

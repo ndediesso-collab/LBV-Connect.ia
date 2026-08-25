@@ -15,7 +15,12 @@ import Link from "next/link";
 import { useState } from "react";
 
 type Pack = {
-  id: string;
+  id:
+    | "light_pack"
+    | "intermediate_pack"
+    | "pro_pack"
+    | "business_pack";
+
   name: string;
   price: string;
   credits: string;
@@ -23,144 +28,369 @@ type Pack = {
   description: string;
   popular?: boolean;
   features: string[];
-  tiers: {
+
+  models: {
+    name: string;
+    description?: string;
+    available: boolean;
+  }[];
+
+  media: {
     name: string;
     available: boolean;
   }[];
 };
 
 /*
- * Données temporaires.
+ * ============================================================
+ * PACKS LBV-CONNECT.IA
+ * ============================================================
  *
- * Elles seront remplacées plus tard par les données
- * provenant du système de packs / abonnements.
+ * Cette configuration correspond à la logique actuellement
+ * définie côté backend.
+ *
+ * Les crédits et les durées sont :
+ *
+ * Léger         : 3 000 crédits  / 35 jours
+ * Intermédiaire : 28 500 crédits / 35 jours
+ * Pro           : 45 000 crédits / 35 jours
+ * Business      : 96 000 crédits / 35 jours
+ *
+ * Les prix correspondent aux prix actuellement définis
+ * pour les offres.
  */
+
 const packs: Pack[] = [
   {
-    id: "light",
+    id: "light_pack",
+
     name: "Léger",
+
     price: "6 500 XAF",
-    credits: "15 000",
+
+    credits: "3 000",
+
     duration: "35 jours",
+
     description:
-      "Pour découvrir LBV-Connect.ia et utiliser les fonctionnalités essentielles.",
+      "L'accès essentiel à LBV-Connect.ia pour les usages courants.",
+
     features: [
-      "Chat IA Standard",
-      "Modèles Standard",
-      "Analyse de documents",
-      "Vision et analyse d'images",
-      "Recherche Web",
-      "Génération de contenu",
+      "Chat avec Luna",
+      "Recherche Web avec Luna",
+      "Génération d'images",
+      "Génération de vidéos courtes",
+      "Analyse de fichiers",
     ],
-    tiers: [
+
+    models: [
       {
-        name: "Standard",
+        name: "Luna",
         available: true,
       },
       {
-        name: "Raisonnement",
+        name: "GPT-5.6",
         available: false,
       },
       {
-        name: "Premium",
+        name: "GPT-5.6 Terra",
+        available: false,
+      },
+      {
+        name: "GPT-5.6 Sol",
         available: false,
       },
     ],
+
+    media: [
+      {
+        name: "Images 480",
+        available: true,
+      },
+      {
+        name: "Images 720",
+        available: true,
+      },
+      {
+        name: "Vidéo 5 s",
+        available: true,
+      },
+      {
+        name: "Vidéo 10 s",
+        available: true,
+      },
+    ],
   },
+
   {
-    id: "standard",
-    name: "Standard",
-    price: "12 500 XAF",
-    credits: "35 000",
+    id: "intermediate_pack",
+
+    name: "Intermédiaire",
+
+    price: "11 500 XAF",
+
+    credits: "28 500",
+
     duration: "35 jours",
+
     description:
-      "Un équilibre entre puissance, volume de crédits et accès aux modèles avancés.",
+      "Un niveau supérieur pour accéder à davantage de puissance et de capacités.",
+
     popular: true,
+
     features: [
-      "Tout du pack Léger",
-      "Modèles Standard",
-      "Modèles Raisonnement",
-      "Analyse avancée de documents",
-      "Analyse de données",
-      "Code et assistance technique",
-      "Recherche Web avancée",
+      "Tout le pack Léger",
+      "GPT-5.6",
+      "Recherche Web avec GPT-5.6",
+      "Génération d'images avancée",
+      "Veo Lite",
+      "Analyse avancée de fichiers",
     ],
-    tiers: [
+
+    models: [
       {
-        name: "Standard",
+        name: "Luna",
         available: true,
       },
       {
-        name: "Raisonnement",
+        name: "GPT-5.6",
         available: true,
       },
       {
-        name: "Premium",
+        name: "GPT-5.6 Terra",
+        available: false,
+      },
+      {
+        name: "GPT-5.6 Sol",
+        available: false,
+      },
+    ],
+
+    media: [
+      {
+        name: "Images 480",
+        available: true,
+      },
+      {
+        name: "Images 720",
+        available: true,
+      },
+      {
+        name: "Veo Lite",
+        available: true,
+      },
+      {
+        name: "Vidéos Pro",
         available: false,
       },
     ],
   },
+
   {
-    id: "pro",
+    id: "pro_pack",
+
     name: "Pro",
+
     price: "25 000 XAF",
-    credits: "80 000",
+
+    credits: "45 000",
+
     duration: "35 jours",
+
     description:
-      "Pour les utilisateurs intensifs qui veulent accéder aux modèles les plus puissants.",
+      "Pour les utilisateurs intensifs qui recherchent davantage de puissance, de médias et de possibilités.",
+
     features: [
-      "Tout du pack Standard",
-      "Modèles Standard",
-      "Modèles Raisonnement",
-      "Modèles Premium",
-      "Analyse avancée",
-      "Code avancé",
-      "Recherche Web",
-      "Fonctionnalités créatives",
+      "Tout le pack Intermédiaire",
+      "GPT-5.6 Terra",
+      "Recherche Web avancée",
+      "Images Pro",
+      "Vidéos Pro",
+      "Extension vidéo",
+      "Accès aux capacités créatives avancées",
     ],
-    tiers: [
+
+    models: [
       {
-        name: "Standard",
+        name: "Luna",
         available: true,
       },
       {
-        name: "Raisonnement",
+        name: "GPT-5.6",
         available: true,
       },
       {
-        name: "Premium",
+        name: "GPT-5.6 Terra",
+        available: true,
+      },
+      {
+        name: "GPT-5.6 Sol",
+        available: false,
+      },
+    ],
+
+    media: [
+      {
+        name: "Image Pro",
+        available: true,
+      },
+      {
+        name: "Image Pro Standard",
+        available: true,
+      },
+      {
+        name: "Image Pro Ultra",
+        available: true,
+      },
+      {
+        name: "Veo Pro Fast",
+        available: true,
+      },
+      {
+        name: "Veo Pro Standard",
+        available: true,
+      },
+      {
+        name: "Veo Pro Extension",
+        available: true,
+      },
+    ],
+  },
+
+  {
+    id: "business_pack",
+
+    name: "Business",
+
+    price: "25 000 XAF",
+
+    credits: "96 000",
+
+    duration: "35 jours",
+
+    description:
+      "L'offre la plus complète pour les usages intensifs, professionnels et créatifs.",
+
+    features: [
+      "Tout le pack Pro",
+      "GPT-5.6 Sol",
+      "Recherche Web avec Sol",
+      "Images Business",
+      "Images HD et Ultra",
+      "Vidéos Business",
+      "Vidéos longues",
+      "Capacités IA avancées",
+    ],
+
+    models: [
+      {
+        name: "Luna",
+        available: true,
+      },
+      {
+        name: "GPT-5.6",
+        available: true,
+      },
+      {
+        name: "GPT-5.6 Terra",
+        available: true,
+      },
+      {
+        name: "GPT-5.6 Sol",
+        available: true,
+      },
+    ],
+
+    media: [
+      {
+        name: "Image Business",
+        available: true,
+      },
+      {
+        name: "Image Business HD",
+        available: true,
+      },
+      {
+        name: "Image Business Ultra",
+        available: true,
+      },
+      {
+        name: "Veo Business Fast",
+        available: true,
+      },
+      {
+        name: "Veo Business Standard",
+        available: true,
+      },
+      {
+        name: "Veo Business Long",
         available: true,
       },
     ],
   },
 ];
 
+/*
+ * ============================================================
+ * FAQ
+ * ============================================================
+ */
+
 const faqs = [
   {
     question:
       "Combien de temps mes crédits sont-ils valables ?",
+
     answer:
-      "Les crédits d'un pack sont valables pendant la durée indiquée sur celui-ci. Dans notre configuration actuelle, les packs sont valables 35 jours.",
+      "Les crédits sont valables pendant la durée de votre pack. Tous les packs LBV-Connect.ia sont actuellement configurés pour une durée de 35 jours.",
   },
+
   {
     question:
-      "Que se passe-t-il si mes crédits sont épuisés avant la fin du pack ?",
+      "Que se passe-t-il lorsque mon pack expire ?",
+
     answer:
-      "Vous pouvez acheter des crédits complémentaires sans avoir besoin d'attendre la fin de votre période.",
+      "Le portefeuille associé au pack devient inactif à sa date d'expiration. Les crédits restants ne peuvent alors plus être consommés avec ce portefeuille.",
   },
+
   {
     question:
-      "Puis-je utiliser plusieurs modèles avec un même pack ?",
+      "Les crédits sont-ils identiques entre les packs ?",
+
     answer:
-      "Oui. Les modèles auxquels vous avez accès dépendent du niveau inclus dans votre pack.",
+      "Non. Chaque pack possède son propre volume de crédits et ses propres capacités. Le pack Léger contient 3 000 crédits, l'Intermédiaire 28 500, le Pro 45 000 et le Business 96 000.",
   },
+
   {
     question:
-      "Les crédits ont-ils tous la même valeur selon les modèles ?",
+      "Toutes les actions consomment-elles le même nombre de crédits ?",
+
     answer:
-      "Non. La consommation dépend notamment du modèle et de l'opération effectuée. LBV-Connect.ia estime et réserve les crédits nécessaires avant l'opération.",
+      "Non. Le coût dépend du modèle et de l'opération effectuée. Les actions les plus avancées consomment davantage de crédits.",
+  },
+
+  {
+    question:
+      "Puis-je utiliser plusieurs modèles avec mon pack ?",
+
+    answer:
+      "Oui. Les modèles disponibles dépendent du pack. Luna est disponible sur tous les packs, GPT-5.6 à partir de l'Intermédiaire, GPT-5.6 Terra à partir du Pro et GPT-5.6 Sol avec le Business.",
+  },
+
+  {
+    question:
+      "Les vidéos sont-elles disponibles sur tous les packs ?",
+
+    answer:
+      "Les capacités vidéo évoluent selon le pack. Le pack Léger propose les vidéos courtes, l'Intermédiaire propose Veo Lite, le Pro propose les capacités vidéo Pro et le Business ajoute les capacités vidéo Business, notamment les vidéos longues.",
   },
 ];
+
+/*
+ * ============================================================
+ * PAGE
+ * ============================================================
+ */
 
 export default function PacksPage() {
   const [openFaq, setOpenFaq] =
@@ -203,8 +433,10 @@ export default function PacksPage() {
         </div>
       </header>
 
+      {/* Contenu */}
+
       <section className="mx-auto w-full max-w-6xl px-5 py-10 sm:px-8 sm:py-16">
-        {/* Header */}
+        {/* Hero */}
 
         <div className="mx-auto max-w-2xl text-center">
           <p className="text-sm font-medium text-muted">
@@ -212,20 +444,20 @@ export default function PacksPage() {
           </p>
 
           <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-5xl">
-            Choisissez votre accès à l&apos;IA.
+            Choisissez votre accès à l'IA.
           </h1>
 
           <p className="mt-4 text-sm leading-6 text-muted sm:text-base">
-            Un pack vous donne un volume de
-            crédits utilisable pendant sa période
-            de validité. Le niveau de modèle
-            accessible dépend du pack choisi.
+            Chaque pack vous donne un volume
+            de crédits utilisable pendant 35
+            jours. Les modèles et capacités
+            accessibles dépendent du pack choisi.
           </p>
         </div>
 
-        {/* Pack cards */}
+        {/* Packs */}
 
-        <div className="mt-10 grid gap-4 lg:grid-cols-3">
+        <div className="mt-10 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
           {packs.map((pack) => (
             <PackCard
               key={pack.id}
@@ -234,7 +466,7 @@ export default function PacksPage() {
           ))}
         </div>
 
-        {/* Complementary credits */}
+        {/* Crédits complémentaires */}
 
         <section className="mt-8 overflow-hidden rounded-3xl border border-border bg-surface-secondary">
           <div className="grid gap-6 p-6 sm:p-8 lg:grid-cols-[1fr_auto] lg:items-center">
@@ -248,18 +480,13 @@ export default function PacksPage() {
               </div>
 
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-                Si votre solde arrive à zéro avant
-                la fin de votre pack, vous pourrez
-                acheter des crédits complémentaires
-                à partir de 500 XAF.
+                Le système de crédits
+                complémentaires pourra être
+                activé ultérieurement. Cette
+                fonctionnalité dépendra du système
+                de paiement de LBV-Connect.ia.
               </p>
             </div>
-
-            {/*
-             * Fonctionnalité d'achat à connecter
-             * lorsque le système de paiement sera
-             * implémenté.
-             */}
 
             <button
               type="button"
@@ -272,7 +499,7 @@ export default function PacksPage() {
           </div>
         </section>
 
-        {/* How it works */}
+        {/* Fonctionnement */}
 
         <section className="mt-12">
           <div className="text-center">
@@ -289,20 +516,122 @@ export default function PacksPage() {
             <Step
               number="01"
               title="Choisissez un pack"
-              description="Sélectionnez le volume de crédits et le niveau de modèles qui correspondent à votre usage."
+              description="Sélectionnez le niveau de puissance, les capacités et le volume de crédits adaptés à votre utilisation."
             />
 
             <Step
               number="02"
               title="Utilisez LBV"
-              description="Utilisez le chat, les documents, la vision, le code, le Web et les autres capacités disponibles."
+              description="Utilisez les modèles, la recherche Web, les images, les vidéos et les autres capacités incluses dans votre pack."
             />
 
             <Step
               number="03"
               title="Suivez vos crédits"
-              description="Votre solde est toujours visible et chaque opération consomme uniquement les crédits nécessaires."
+              description="Votre solde évolue automatiquement après chaque opération et reste consultable depuis votre espace."
             />
+          </div>
+        </section>
+
+        {/* Comparaison des modèles */}
+
+        <section className="mt-12">
+          <div className="text-center">
+            <p className="text-sm font-medium text-muted">
+              Accès aux modèles
+            </p>
+
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight">
+              Comparez les niveaux d'IA
+            </h2>
+          </div>
+
+          <div className="mt-6 overflow-hidden rounded-2xl border border-border">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[700px] text-left">
+                <thead>
+                  <tr className="border-b border-border bg-surface-secondary">
+                    <th className="px-5 py-4 text-sm font-medium">
+                      Modèle
+                    </th>
+
+                    {packs.map(
+                      (pack) => (
+                        <th
+                          key={pack.id}
+                          className="px-5 py-4 text-sm font-medium"
+                        >
+                          {pack.name}
+                        </th>
+                      ),
+                    )}
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {[
+                    "Luna",
+                    "GPT-5.6",
+                    "GPT-5.6 Terra",
+                    "GPT-5.6 Sol",
+                  ].map(
+                    (modelName) => (
+                      <tr
+                        key={modelName}
+                        className="border-b border-border last:border-b-0"
+                      >
+                        <td className="px-5 py-4 text-sm font-medium">
+                          {modelName}
+                        </td>
+
+                        {packs.map(
+                          (pack) => {
+                            const model =
+                              pack.models.find(
+                                (
+                                  item,
+                                ) =>
+                                  item.name ===
+                                  modelName,
+                              );
+
+                            const available =
+                              Boolean(
+                                model?.available,
+                              );
+
+                            return (
+                              <td
+                                key={
+                                  pack.id
+                                }
+                                className="px-5 py-4"
+                              >
+                                {available ? (
+                                  <Check
+                                    size={
+                                      17
+                                    }
+                                    className="text-muted-strong"
+                                  />
+                                ) : (
+                                  <Lock
+                                    size={
+                                      15
+                                    }
+                                    className="text-muted"
+                                  />
+                                )}
+                              </td>
+                            );
+                          },
+                        )}
+                      </tr>
+                    ),
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
 
@@ -318,55 +647,67 @@ export default function PacksPage() {
           </div>
 
           <div className="mx-auto mt-5 max-w-3xl overflow-hidden rounded-2xl border border-border">
-            {faqs.map((faq, index) => {
-              const isOpen =
-                openFaq === index;
+            {faqs.map(
+              (faq, index) => {
+                const isOpen =
+                  openFaq === index;
 
-              return (
-                <div
-                  key={faq.question}
-                  className="border-b border-border last:border-b-0"
-                >
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-surface-secondary"
-                    onClick={() =>
-                      setOpenFaq(
-                        isOpen ? null : index,
-                      )
-                    }
-                    aria-expanded={isOpen}
+                return (
+                  <div
+                    key={faq.question}
+                    className="border-b border-border last:border-b-0"
                   >
-                    <span className="text-sm font-medium">
-                      {faq.question}
-                    </span>
-
-                    <ChevronDown
-                      size={17}
-                      className={`shrink-0 text-muted transition-transform ${
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-surface-secondary"
+                      onClick={() =>
+                        setOpenFaq(
+                          isOpen
+                            ? null
+                            : index,
+                        )
+                      }
+                      aria-expanded={
                         isOpen
-                          ? "rotate-180"
-                          : ""
-                      }`}
-                    />
-                  </button>
+                      }
+                    >
+                      <span className="text-sm font-medium">
+                        {faq.question}
+                      </span>
 
-                  {isOpen && (
-                    <div className="bg-surface px-5 pb-5">
-                      <p className="text-sm leading-6 text-muted">
-                        {faq.answer}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                      <ChevronDown
+                        size={17}
+                        className={`shrink-0 text-muted transition-transform ${
+                          isOpen
+                            ? "rotate-180"
+                            : ""
+                        }`}
+                      />
+                    </button>
+
+                    {isOpen && (
+                      <div className="bg-surface px-5 pb-5">
+                        <p className="text-sm leading-6 text-muted">
+                          {faq.answer}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              },
+            )}
           </div>
         </section>
       </section>
     </main>
   );
 }
+
+/*
+ * ============================================================
+ * PACK CARD
+ * ============================================================
+ */
 
 function PackCard({
   pack,
@@ -385,7 +726,7 @@ function PackCard({
           : "border-border bg-surface hover:border-border-strong"
       }`}
     >
-      {/* Popular badge */}
+      {/* Badge */}
 
       {isPopular && (
         <div className="absolute right-5 top-5 rounded-full bg-accent-foreground px-3 py-1 text-[11px] font-semibold text-accent">
@@ -393,7 +734,7 @@ function PackCard({
         </div>
       )}
 
-      {/* Pack identity */}
+      {/* Identité */}
 
       <div>
         <p
@@ -411,7 +752,7 @@ function PackCard({
         </h2>
 
         <p
-          className={`mt-3 min-h-[48px] text-sm leading-6 ${
+          className={`mt-3 min-h-[72px] text-sm leading-6 ${
             isPopular
               ? "opacity-60"
               : "text-muted"
@@ -421,7 +762,7 @@ function PackCard({
         </p>
       </div>
 
-      {/* Price */}
+      {/* Prix */}
 
       <div className="mt-7">
         <div className="flex items-baseline gap-1">
@@ -443,7 +784,7 @@ function PackCard({
         </div>
       </div>
 
-      {/* Separator */}
+      {/* Séparateur */}
 
       <div
         className={`my-7 h-px ${
@@ -453,7 +794,7 @@ function PackCard({
         }`}
       />
 
-      {/* Credits */}
+      {/* Crédits */}
 
       <div>
         <p
@@ -463,7 +804,7 @@ function PackCard({
               : "text-muted"
           }`}
         >
-          Crédit inclus
+          Crédits inclus
         </p>
 
         <p className="mt-1 text-3xl font-semibold tracking-tight">
@@ -471,7 +812,7 @@ function PackCard({
         </p>
       </div>
 
-      {/* Models */}
+      {/* Modèles */}
 
       <div className="mt-7">
         <p
@@ -484,14 +825,87 @@ function PackCard({
           Modèles
         </p>
 
-        <div className="mt-3 space-y-2">
-          {pack.tiers.map((tier) => (
-            <div
-              key={tier.name}
-              className="flex items-center justify-between gap-3"
-            >
-              <div className="flex items-center gap-2">
-                {tier.available ? (
+        <div className="mt-3 space-y-2.5">
+          {pack.models.map(
+            (model) => (
+              <div
+                key={model.name}
+                className="flex items-center justify-between gap-3"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  {model.available ? (
+                    <Check
+                      size={15}
+                      className={
+                        isPopular
+                          ? "shrink-0 text-accent-foreground"
+                          : "shrink-0 text-muted-strong"
+                      }
+                    />
+                  ) : (
+                    <Lock
+                      size={14}
+                      className={
+                        isPopular
+                          ? "shrink-0 opacity-35"
+                          : "shrink-0 text-muted"
+                      }
+                    />
+                  )}
+
+                  <span
+                    className={`text-sm ${
+                      model.available
+                        ? isPopular
+                          ? "opacity-90"
+                          : "text-muted-strong"
+                        : isPopular
+                          ? "opacity-35"
+                          : "text-muted"
+                    }`}
+                  >
+                    {model.name}
+                  </span>
+                </div>
+
+                {!model.available && (
+                  <span
+                    className={`shrink-0 text-[10px] uppercase tracking-wider ${
+                      isPopular
+                        ? "opacity-35"
+                        : "text-muted"
+                    }`}
+                  >
+                    Verrouillé
+                  </span>
+                )}
+              </div>
+            ),
+          )}
+        </div>
+      </div>
+
+      {/* Médias */}
+
+      <div className="mt-7">
+        <p
+          className={`text-xs font-medium uppercase tracking-wider ${
+            isPopular
+              ? "opacity-60"
+              : "text-muted"
+          }`}
+        >
+          Médias
+        </p>
+
+        <div className="mt-3 space-y-2.5">
+          {pack.media.map(
+            (media) => (
+              <div
+                key={media.name}
+                className="flex items-center gap-2"
+              >
+                {media.available ? (
                   <Check
                     size={15}
                     className={
@@ -513,36 +927,24 @@ function PackCard({
 
                 <span
                   className={`text-sm ${
-                    tier.available
+                    media.available
                       ? isPopular
-                        ? "opacity-90"
+                        ? "opacity-80"
                         : "text-muted-strong"
                       : isPopular
                         ? "opacity-35"
                         : "text-muted"
                   }`}
                 >
-                  {tier.name}
+                  {media.name}
                 </span>
               </div>
-
-              {!tier.available && (
-                <span
-                  className={`text-[10px] uppercase tracking-wider ${
-                    isPopular
-                      ? "opacity-35"
-                      : "text-muted"
-                  }`}
-                >
-                  Verrouillé
-                </span>
-              )}
-            </div>
-          ))}
+            ),
+          )}
         </div>
       </div>
 
-      {/* Features */}
+      {/* Capacités */}
 
       <div className="mt-7">
         <p
@@ -586,7 +988,7 @@ function PackCard({
         </ul>
       </div>
 
-      {/* Purchase */}
+      {/* Achat */}
 
       <button
         type="button"
@@ -602,6 +1004,12 @@ function PackCard({
     </article>
   );
 }
+
+/*
+ * ============================================================
+ * STEP
+ * ============================================================
+ */
 
 function Step({
   number,
