@@ -20,6 +20,18 @@ from app.services.credit_service import (
 )
 from app.services.wallet_service import WalletService
 
+from app.config.payments import (
+    ADDON_PACKS,
+    PRIMARY_PACKS,
+)
+
+from app.services.payment_service import (
+    generate_payment_reference,
+    get_payment_product,
+    validate_addon_purchase,
+    validate_provider,
+)
+
 
 router = APIRouter()
 
@@ -32,6 +44,11 @@ router = APIRouter()
 class CreditConsumptionRequest(BaseModel):
     action: CreditAction
     confirmed: bool = False
+
+class CreatePaymentRequest(BaseModel):
+    payment_type: str
+    product_id: str
+    provider: str
 
 
 # ============================================================
@@ -62,6 +79,209 @@ def _wallet_response(wallet):
         "updated_at": wallet.updated_at,
     }
 
+# ============================================================
+# PAIEMENTS — CRÉATION D'UNE COMMANDE
+# ============================================================
+
+
+@router.post("/payments/create")
+def create_payment(
+    request: CreatePaymentRequest,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Crée une commande de paiement authentifiée.
+
+    IMPORTANT :
+
+    Cette route ne considère PAS le paiement comme réussi.
+
+    Elle crée uniquement une transaction :
+
+        pending
+
+    L'activation du pack aura lieu uniquement après
+    confirmation réelle du paiement par Airtel Money
+    ou Moov Money.
+    """
+
+    # ========================================================
+    # 1. AUTHENTIFICATION
+    # ========================================================
+
+    authenticated_user_id = (
+        _get_authenticated_user_id(
+            user_id=user_id,
+            authorization=authorization,
+        )
+    )
+
+    # ========================================================
+    # 2. VALIDATION FOURNISSEUR
+    # ========================================================
+
+    validate_provider(
+        request.provider
+    )
+
+    # ========================================================
+    # 3. VALIDATION PRODUIT
+    # ========================================================
+
+    product = get_payment_product(
+        payment_type=request.payment_type,
+        product_id=request.product_id,
+    )
+
+    # ========================================================
+    # 4. WALLET
+    # ========================================================
+
+    repository = _get_repository()
+
+    wallet = repository.get_wallet(
+        authenticated_user_id
+    )
+
+    if wallet is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Aucun portefeuille de crédits "
+                "trouvé pour cet utilisateur."
+            ),
+        )
+
+    # ========================================================
+    # 5. COMPLÉMENT
+    # ========================================================
+
+    if request.payment_type == "addon":
+
+        validate_addon_purchase(
+            wallet
+        )
+
+    # ========================================================
+    # 6. RÉFÉRENCE UNIQUE
+    # ========================================================
+
+    reference = (
+        generate_payment_reference()
+    )
+
+    # ========================================================
+    # 7. PAYLOAD TRANSACTION
+    # ========================================================
+
+    transaction_payload = {
+        "user_id": authenticated_user_id,
+
+        "reference": reference,
+
+        "payment_type": request.payment_type,
+
+        "pack_id": (
+            request.product_id
+            if request.payment_type
+            == "primary_pack"
+            else None
+        ),
+
+        "addon_id": (
+            request.product_id
+            if request.payment_type
+            == "addon"
+            else None
+        ),
+
+        "provider": request.provider,
+
+        "amount": product["price"],
+
+        "currency": "XAF",
+
+        "credits": product["credits"],
+
+        "status": "pending",
+
+        "metadata": {
+            "source": "lbv_connect",
+            "version": "v1",
+        },
+    }
+
+    # ========================================================
+    # 8. CRÉATION SUPABASE
+    # ========================================================
+
+    try:
+
+        response = (
+            supabase
+            .table(
+                "payment_transactions"
+            )
+            .insert(
+                transaction_payload
+            )
+            .execute()
+        )
+
+    except Exception as error:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Impossible de créer la transaction "
+                f"de paiement : {str(error)}"
+            ),
+        )
+
+    if not response.data:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "La transaction de paiement "
+                "n'a pas pu être créée."
+            ),
+        )
+
+    transaction = response.data[0]
+
+    # ========================================================
+    # 9. RÉPONSE
+    # ========================================================
+
+    return {
+        "success": True,
+
+        "message": (
+            "Commande de paiement créée."
+        ),
+
+        "transaction": transaction,
+
+        "payment": {
+            "reference": reference,
+            "provider": request.provider,
+            "payment_type": request.payment_type,
+            "product_id": request.product_id,
+            "amount": product["price"],
+            "currency": "XAF",
+            "credits": product["credits"],
+            "status": "pending",
+        },
+    }
 
 def _transaction_response(transaction):
     """
@@ -438,16 +658,21 @@ def consume_my_credits(
     """
     Consomme des crédits pour l'utilisateur authentifié.
 
+    Le débit réel est effectué atomiquement par la RPC Supabase
+    `consume_credits` via SupabaseCreditRepository.
+
     IMPORTANT :
-
-    Le user_id n'est plus fourni dans l'URL.
-
-    On utilise :
-
-        POST /credits/me/consume
-
-    avec les headers d'authentification.
+    - le frontend ne fournit jamais le montant des crédits ;
+    - le coût est déterminé côté backend ;
+    - les requêtes multimodales peuvent fournir un `cost_override`
+      calculé côté backend ;
+    - aucune mise à jour manuelle du wallet ni transaction
+      supplémentaire n'est effectuée après la RPC.
     """
+
+    # ========================================================
+    # 1. AUTHENTIFICATION
+    # ========================================================
 
     authenticated_user_id = (
         _get_authenticated_user_id(
@@ -456,7 +681,15 @@ def consume_my_credits(
         )
     )
 
+    # ========================================================
+    # 2. REPOSITORY
+    # ========================================================
+
     repository = _get_repository()
+
+    # ========================================================
+    # 3. WALLET
+    # ========================================================
 
     wallet = repository.get_wallet(
         authenticated_user_id
@@ -472,72 +705,40 @@ def consume_my_credits(
         )
 
     try:
+        # ====================================================
+        # 4. CONSOMMATION ATOMIQUE
+        # ====================================================
+
         service = CreditService()
 
         result = service.consume(
             wallet=wallet,
             action=request.action,
             confirmed=request.confirmed,
-        )
-
-        repository.update_wallet(
-            wallet
-        )
-
-        transaction = CreditTransaction(
-            id=str(uuid4()),
+            repository=repository,
             user_id=authenticated_user_id,
-            transaction_type=(
-                CreditTransactionType.USAGE
-            ),
-            amount=-result.cost,
-            balance_after=result.new_balance,
-            created_at=wallet.updated_at,
-            action=request.action,
             reference_id=None,
         )
 
-        repository.create_transaction(
-            transaction
-        )
+        # ====================================================
+        # 5. RÉPONSE
+        # ====================================================
 
         return {
             "success": True,
             "user_id": authenticated_user_id,
             "pack_id": wallet.pack_id,
-
             "action": result.action.value,
-
             "cost": result.cost,
-
-            "previous_balance": (
-                result.previous_balance
-            ),
-
-            "new_balance": (
-                result.new_balance
-            ),
-
-            "consumed_credits": (
-                result.consumed_credits
-            ),
-
-            "consumed_percentage": (
-                result.consumed_percentage
-            ),
-
-            "remaining_percentage": (
-                result.remaining_percentage
-            ),
-
-            "requires_warning": (
-                result.requires_warning
-            ),
-
+            "previous_balance": result.previous_balance,
+            "new_balance": result.new_balance,
+            "consumed_credits": result.consumed_credits,
+            "consumed_percentage": result.consumed_percentage,
+            "remaining_percentage": result.remaining_percentage,
+            "requires_warning": result.requires_warning,
             "requires_critical_warning": (
                 result.requires_critical_warning
             ),
-
             "requires_confirmation": (
                 result.requires_confirmation
             ),

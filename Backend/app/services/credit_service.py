@@ -7,18 +7,31 @@ from app.config.credit_costs import (
 from app.models.credit import CreditWallet
 
 
+# ============================================================
+# RÉSULTAT DE CONSOMMATION
+# ============================================================
+
+
 @dataclass(frozen=True)
 class CreditConsumptionResult:
     action: CreditAction
     cost: int
+
     previous_balance: int
     new_balance: int
+
     consumed_credits: int
     consumed_percentage: float
     remaining_percentage: float
+
     requires_warning: bool
     requires_critical_warning: bool
     requires_confirmation: bool
+
+
+# ============================================================
+# ERREURS
+# ============================================================
 
 
 class InsufficientCreditsError(Exception):
@@ -31,6 +44,11 @@ class InactivePackError(Exception):
 
 class UnsupportedActionError(Exception):
     """Levée lorsqu'une action n'est pas disponible dans le pack."""
+
+
+# ============================================================
+# SERVICE
+# ============================================================
 
 
 class CreditService:
@@ -60,8 +78,8 @@ class CreditService:
             CreditAction.IMAGE_480: 50,
             CreditAction.IMAGE_720: 75,
 
-            CreditAction.VIDEO_5S: 500,
-            CreditAction.VIDEO_10S: 1_000,
+            CreditAction.VIDEO_4S: 500,
+            CreditAction.VIDEO_8S: 1_000,
         },
 
         # ====================================================
@@ -75,10 +93,10 @@ class CreditService:
             CreditAction.CHAT_GPT5: 60,
             CreditAction.CHAT_GPT5_WEB: 86,
 
-            CreditAction.IMAGE_480: 190,
-            CreditAction.IMAGE_720: 290,
+            CreditAction.IMAGE_480: 50,
+            CreditAction.IMAGE_720: 75,
 
-            CreditAction.VIDEO_LITE: 1_300,
+            CreditAction.VIDEO_LITE: 1_500,
         },
 
         # ====================================================
@@ -112,9 +130,9 @@ class CreditService:
             # VIDÉOS
             # ----------------------------
 
-            CreditAction.VIDEO_PRO_FAST: 700,
-            CreditAction.VIDEO_PRO_STANDARD: 2_000,
-            CreditAction.VIDEO_PRO_EXTENSION: 700,
+            CreditAction.VIDEO_PRO_FAST: 1_500,
+            CreditAction.VIDEO_PRO_STANDARD: 3_000,
+            CreditAction.VIDEO_PRO_EXTENSION: 1_500,
         },
 
         # ====================================================
@@ -151,14 +169,14 @@ class CreditService:
             # VIDÉOS
             # ----------------------------
 
-            CreditAction.VIDEO_BUSINESS_FAST: 1_100,
-            CreditAction.VIDEO_BUSINESS_STANDARD: 3_000,
-            CreditAction.VIDEO_BUSINESS_LONG: 6_000,
+            CreditAction.VIDEO_BUSINESS_FAST: 2_500,
+            CreditAction.VIDEO_BUSINESS_STANDARD: 5_000,
+            CreditAction.VIDEO_BUSINESS_LONG: 10_000,
         },
     }
 
     # ========================================================
-    # RÉCUPÉRATION DU COÛT
+    # RÉCUPÉRATION DU COÛT DE BASE
     # ========================================================
 
     @classmethod
@@ -189,6 +207,71 @@ class CreditService:
         return cost
 
     # ========================================================
+    # RÉSOLUTION DU COÛT FINAL
+    # ========================================================
+
+    @classmethod
+    def resolve_cost(
+        cls,
+        wallet: CreditWallet,
+        action: CreditAction,
+        cost_override: int | None = None,
+    ) -> int:
+        """
+        Détermine le coût final de consommation.
+
+        Sans override :
+            coût normal de l'action.
+
+        Avec override :
+            coût calculé en amont par la couche supérieure.
+
+        Exemple multimodal :
+
+            CHAT_LUNA = 6
+            + analyse image = supplément
+            + analyse fichier = supplément
+
+        Le service conserve malgré tout la validation de
+        disponibilité de l'action dans le pack.
+        """
+
+        # ====================================================
+        # VALIDATION DE L'ACTION
+        # ====================================================
+
+        base_cost = cls.get_cost(
+            wallet,
+            action,
+        )
+
+        # ====================================================
+        # COÛT NORMAL
+        # ====================================================
+
+        if cost_override is None:
+            return base_cost
+
+        # ====================================================
+        # VALIDATION OVERRIDE
+        # ====================================================
+
+        if not isinstance(
+            cost_override,
+            int,
+        ):
+            raise ValueError(
+                "Le coût personnalisé doit être un entier."
+            )
+
+        if cost_override <= 0:
+            raise ValueError(
+                "Le coût personnalisé doit être supérieur à zéro."
+            )
+
+        return cost_override
+
+    # ========================================================
     # VÉRIFICATION DE CONSOMMATION
     # ========================================================
 
@@ -197,17 +280,23 @@ class CreditService:
         cls,
         wallet: CreditWallet,
         action: CreditAction,
+        cost_override: int | None = None,
     ) -> bool:
 
         if not wallet.is_pack_active:
             return False
 
         try:
-            cost = cls.get_cost(
-                wallet,
-                action,
+            cost = cls.resolve_cost(
+                wallet=wallet,
+                action=action,
+                cost_override=cost_override,
             )
-        except UnsupportedActionError:
+
+        except (
+            UnsupportedActionError,
+            ValueError,
+        ):
             return False
 
         return wallet.balance >= cost
@@ -221,11 +310,13 @@ class CreditService:
         cls,
         wallet: CreditWallet,
         action: CreditAction,
+        cost_override: int | None = None,
     ) -> bool:
 
-        cost = cls.get_cost(
-            wallet,
-            action,
+        cost = cls.resolve_cost(
+            wallet=wallet,
+            action=action,
+            cost_override=cost_override,
         )
 
         if wallet.balance <= 0:
@@ -250,29 +341,59 @@ class CreditService:
         wallet: CreditWallet,
         action: CreditAction,
         confirmed: bool = False,
+        cost_override: int | None = None,
     ) -> int:
+        """
+        Valide une consommation avant débit.
+
+        cost_override permet à la couche Chat de transmettre
+        le coût final d'une requête multimodale.
+        """
+
+        # ====================================================
+        # PACK
+        # ====================================================
 
         if not wallet.is_pack_active:
             raise InactivePackError(
                 "Le pack de crédits est expiré ou inactif."
             )
 
-        cost = cls.get_cost(
-            wallet,
-            action,
+        # ====================================================
+        # COÛT FINAL
+        # ====================================================
+
+        cost = cls.resolve_cost(
+            wallet=wallet,
+            action=action,
+            cost_override=cost_override,
         )
+
+        # ====================================================
+        # SOLDE
+        # ====================================================
 
         if wallet.balance < cost:
             raise InsufficientCreditsError(
                 "Crédits insuffisants pour effectuer cette action."
             )
 
-        requires_confirmation = cls.requires_confirmation(
-            wallet,
-            action,
+        # ====================================================
+        # CONFIRMATION
+        # ====================================================
+
+        requires_confirmation = (
+            cls.requires_confirmation(
+                wallet=wallet,
+                action=action,
+                cost_override=cost,
+            )
         )
 
-        if requires_confirmation and not confirmed:
+        if (
+            requires_confirmation
+            and not confirmed
+        ):
             raise ValueError(
                 "Cette action nécessite une confirmation "
                 "avant la consommation des crédits."
@@ -281,13 +402,7 @@ class CreditService:
         return cost
 
     # ========================================================
-    # CONSOMMATION LOCALE
-    #
-    # Cette méthode reste utile pour les tests métier locaux.
-    #
-    # IMPORTANT :
-    # La route de production doit utiliser la RPC atomique
-    # via CreditRepository.consume_credits().
+    # CONSOMMATION
     # ========================================================
 
     @classmethod
@@ -296,49 +411,82 @@ class CreditService:
         wallet: CreditWallet,
         action: CreditAction,
         confirmed: bool = False,
+        cost_override: int | None = None,
+        repository=None,
+        user_id: str | None = None,
+        reference_id: str | None = None,
     ) -> CreditConsumptionResult:
+        """
+        Valide puis consomme des crédits.
+
+        En production, lorsque `repository` est fourni, le débit réel
+        passe par `repository.consume_credits()`, donc par la RPC
+        atomique Supabase.
+
+        Sans repository, le comportement local reste disponible pour
+        les tests métier unitaires.
+        """
+
+        # ====================================================
+        # VALIDATION
+        # ====================================================
 
         cost = cls.validate_consumption(
             wallet=wallet,
             action=action,
             confirmed=confirmed,
+            cost_override=cost_override,
         )
+
+        # ====================================================
+        # SOLDE AVANT
+        # ====================================================
 
         previous_balance = wallet.balance
 
-        wallet.balance -= cost
+        # ====================================================
+        # CONFIRMATION / SEUILS AVANT DÉBIT
+        # ====================================================
 
-        wallet.updated_at = datetime.now(
-            tz=wallet.updated_at.tzinfo,
+        requires_confirmation = cls.requires_confirmation(
+            wallet=wallet,
+            action=action,
+            cost_override=cost,
         )
 
-        consumed_credits = (
-            wallet.consumed_credits
-        )
+        # ====================================================
+        # DÉBIT
+        # ====================================================
 
-        consumed_percentage = (
-            wallet.consumed_percentage
-        )
+        if repository is not None:
+            if not user_id:
+                raise ValueError(
+                    "user_id est requis pour une consommation atomique."
+                )
 
-        remaining_percentage = (
-            wallet.remaining_percentage
-        )
-
-        requires_confirmation = (
-            cls.requires_confirmation(
-                wallet=CreditWallet(
-                    user_id=wallet.user_id,
-                    balance=previous_balance,
-                    initial_credits=wallet.initial_credits,
-                    created_at=wallet.created_at,
-                    updated_at=wallet.updated_at,
-                    pack_id=wallet.pack_id,
-                    pack_activated_at=wallet.pack_activated_at,
-                    pack_expires_at=wallet.pack_expires_at,
-                ),
+            updated_wallet = repository.consume_credits(
+                user_id=user_id,
+                amount=cost,
                 action=action,
+                reference_id=reference_id,
             )
-        )
+
+            wallet = updated_wallet
+
+        else:
+            # Comportement local réservé aux tests / logique métier.
+            wallet.balance -= cost
+            wallet.updated_at = datetime.now(
+                tz=wallet.updated_at.tzinfo,
+            )
+
+        # ====================================================
+        # STATISTIQUES APRÈS DÉBIT
+        # ====================================================
+
+        consumed_credits = wallet.consumed_credits
+        consumed_percentage = wallet.consumed_percentage
+        remaining_percentage = wallet.remaining_percentage
 
         requires_warning = (
             consumed_percentage
@@ -350,6 +498,10 @@ class CreditService:
             >= cls.CRITICAL_BALANCE_THRESHOLD
         )
 
+        # ====================================================
+        # RÉSULTAT
+        # ====================================================
+
         return CreditConsumptionResult(
             action=action,
             cost=cost,
@@ -359,10 +511,6 @@ class CreditService:
             consumed_percentage=consumed_percentage,
             remaining_percentage=remaining_percentage,
             requires_warning=requires_warning,
-            requires_critical_warning=(
-                requires_critical_warning
-            ),
-            requires_confirmation=(
-                requires_confirmation
-            ),
+            requires_critical_warning=requires_critical_warning,
+            requires_confirmation=requires_confirmation,
         )

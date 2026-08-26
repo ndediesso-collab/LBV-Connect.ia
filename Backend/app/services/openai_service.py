@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from typing import Any
 
 from openai import OpenAI
 
@@ -9,60 +10,150 @@ from app.services.prompt_service import build_output_prompt
 class OpenAIService:
     """Service central de communication avec OpenAI."""
 
+    MAX_ATTACHMENTS = 3
+
     def __init__(self):
         self.client = OpenAI(
             api_key=OPENAI_API_KEY,
         )
 
-    def chat(
+    # ========================================================
+    # CONSTRUCTION DU CONTENU MULTIMODAL
+    # ========================================================
+
+    def _build_input(
         self,
-        model: str,
         message: str,
+        attachments: list[dict[str, Any]] | None = None,
         web: bool = False,
-    ) -> str:
+    ) -> list[dict[str, Any]]:
         """
-        Mode classique.
+        Construit l'input natif de la Responses API.
 
-        Conservé pour les autres fonctionnalités qui ont besoin
-        d'une réponse complète.
+        Supporte :
+        - texte
+        - images
+        - fichiers
 
-        Le message utilisateur passe d'abord par le système
-        de formatage LBV-Connect afin d'obtenir une réponse
-        structurée et lisible.
+        Maximum : 3 pièces jointes par requête.
         """
 
-        # ========================================================
-        # PROMPT LBV-CONNECT
-        # ========================================================
+        attachments = attachments or []
+
+        if len(attachments) > self.MAX_ATTACHMENTS:
+            raise ValueError(
+                "Maximum 3 images ou fichiers par message."
+            )
 
         formatted_message = build_output_prompt(
             message=message,
             web=web,
         )
 
-        # ========================================================
-        # REQUÊTE OPENAI
-        # ========================================================
+        content: list[dict[str, Any]] = [
+            {
+                "type": "input_text",
+                "text": formatted_message,
+            }
+        ]
 
-        request = {
+        for attachment in attachments:
+            attachment_type = attachment.get("type")
+            mime_type = attachment.get(
+                "mime_type",
+                "application/octet-stream",
+            )
+            data = attachment.get("data")
+
+            if not data:
+                raise ValueError(
+                    "Une pièce jointe ne contient aucune donnée."
+                )
+
+            if attachment_type == "image":
+                content.append(
+                    {
+                        "type": "input_image",
+                        "image_url": (
+                            f"data:{mime_type};base64,{data}"
+                        ),
+                    }
+                )
+
+            elif attachment_type == "file":
+                content.append(
+                    {
+                        "type": "input_file",
+                        "filename": attachment.get(
+                            "name",
+                            "document",
+                        ),
+                        "file_data": (
+                            f"data:{mime_type};base64,{data}"
+                        ),
+                    }
+                )
+
+            else:
+                raise ValueError(
+                    f"Type de pièce jointe non supporté : "
+                    f"{attachment_type}"
+                )
+
+        return [
+            {
+                "role": "user",
+                "content": content,
+            }
+        ]
+
+    # ========================================================
+    # OUTILS
+    # ========================================================
+
+    @staticmethod
+    def _build_tools(
+        web: bool,
+    ) -> list[dict[str, str]]:
+        """Construit les outils OpenAI utilisés par la requête."""
+
+        if not web:
+            return []
+
+        return [
+            {
+                "type": "web_search",
+            }
+        ]
+
+    # ========================================================
+    # CHAT CLASSIQUE
+    # ========================================================
+
+    def chat(
+        self,
+        model: str,
+        message: str,
+        web: bool = False,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Mode classique texte + multimodal + recherche Web."""
+
+        input_data = self._build_input(
+            message=message,
+            attachments=attachments,
+            web=web,
+        )
+
+        request: dict[str, Any] = {
             "model": model,
-            "input": formatted_message,
+            "input": input_data,
         }
 
-        # ========================================================
-        # RECHERCHE WEB
-        # ========================================================
+        tools = self._build_tools(web)
 
-        if web:
-            request["tools"] = [
-                {
-                    "type": "web_search",
-                }
-            ]
-
-        # ========================================================
-        # APPEL OPENAI
-        # ========================================================
+        if tools:
+            request["tools"] = tools
 
         response = self.client.responses.create(
             **request,
@@ -70,64 +161,44 @@ class OpenAIService:
 
         return response.output_text
 
+    # ========================================================
+    # CHAT STREAMING
+    # ========================================================
+
     def chat_stream(
         self,
         model: str,
         message: str,
         web: bool = False,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> Iterator[str]:
         """
-        Mode streaming.
+        Streaming texte + images + fichiers + Web.
 
-        Le prompt LBV-Connect est appliqué avant l'appel OpenAI,
-        puis les fragments de réponse sont transmis immédiatement
-        dès qu'ils sont disponibles.
-
-        Aucun paramètre de raisonnement n'est imposé ici :
-        chaque modèle conserve donc son comportement actuel.
+        Les fragments response.output_text.delta sont transmis
+        immédiatement au routeur SSE.
         """
 
-        # ========================================================
-        # PROMPT LBV-CONNECT
-        # ========================================================
-
-        formatted_message = build_output_prompt(
+        input_data = self._build_input(
             message=message,
+            attachments=attachments,
             web=web,
         )
 
-        # ========================================================
-        # REQUÊTE OPENAI STREAMING
-        # ========================================================
-
-        request = {
+        request: dict[str, Any] = {
             "model": model,
-            "input": formatted_message,
+            "input": input_data,
             "stream": True,
         }
 
-        # ========================================================
-        # RECHERCHE WEB
-        # ========================================================
+        tools = self._build_tools(web)
 
-        if web:
-            request["tools"] = [
-                {
-                    "type": "web_search",
-                }
-            ]
-
-        # ========================================================
-        # APPEL OPENAI
-        # ========================================================
+        if tools:
+            request["tools"] = tools
 
         stream = self.client.responses.create(
             **request,
         )
-
-        # ========================================================
-        # TRANSMISSION DES FRAGMENTS
-        # ========================================================
 
         for event in stream:
             event_type = getattr(
@@ -136,10 +207,7 @@ class OpenAIService:
                 "",
             )
 
-            if (
-                event_type
-                == "response.output_text.delta"
-            ):
+            if event_type == "response.output_text.delta":
                 delta = getattr(
                     event,
                     "delta",

@@ -7,7 +7,6 @@ import {
   FileText,
   Globe,
   Image as ImageIcon,
-  Lock,
   Menu,
   Plus,
   Settings,
@@ -16,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
 import { createClient } from "@/lib/supabase/client";
@@ -68,6 +67,53 @@ type ConversationResponse = {
 type MessagesResponse = {
   messages: ChatMessage[];
 };
+
+/**
+ * Pièce jointe sélectionnée dans le composer.
+ *
+ * Le frontend accepte jusqu'à 3 fichiers/images par message.
+ * Les vrais objets File sont transmis au backend en
+ * multipart/form-data. Maximum : 3 pièces par message.
+ */
+type ChatAttachment = {
+  id: string;
+  file: File;
+  kind: "image" | "file";
+  previewUrl: string | null;
+};
+
+const MAX_ATTACHMENTS = 3;
+
+const ACCEPTED_FILE_TYPES = [
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+];
+
+const ACCEPTED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+];
+
+function isImageFile(file: File) {
+  return file.type.startsWith("image/");
+}
+
+function isAcceptedAttachment(file: File) {
+  return (
+    ACCEPTED_FILE_TYPES.includes(file.type) ||
+    ACCEPTED_IMAGE_TYPES.includes(file.type)
+  );
+}
+
 
 /*
  * ============================================================
@@ -207,19 +253,16 @@ const capabilities = [
   {
     label: "Fichier",
     icon: FileText,
-    accept: null,
-    disabled: true,
+    disabled: false,
   },
   {
     label: "Image",
     icon: ImageIcon,
-    accept: null,
-    disabled: true,
+    disabled: false,
   },
   {
     label: "Recherche Web",
     icon: Globe,
-    accept: null,
     disabled: false,
   },
 ];
@@ -371,6 +414,65 @@ async function apiFetch<T>(
   }
 
   return response.json();
+}
+
+/*
+ * ============================================================
+ * API STREAMING AUTHENTIFIÉE
+ * ============================================================
+ */
+
+async function apiStreamFetch(
+  path: string,
+  formData: FormData,
+): Promise<Response> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (!session?.user || !session.access_token) {
+    throw new Error(
+      "Utilisateur non authentifié.",
+    );
+  }
+
+  const response = await fetch(
+    `${API_URL}${path}`,
+    {
+      method: "POST",
+      headers: {
+        "user-id": session.user.id,
+        authorization: `Bearer ${session.access_token}`,
+      },
+      body: formData,
+    },
+  );
+
+  if (!response.ok) {
+    const error =
+      await response.json().catch(
+        () => null,
+      );
+
+    if (response.status === 401) {
+      throw new Error(
+        "Session expirée. Veuillez vous reconnecter.",
+      );
+    }
+
+    throw new Error(
+      error?.detail ||
+        "Une erreur est survenue avec le serveur.",
+    );
+  }
+
+  if (!response.body) {
+    throw new Error(
+      "Le serveur n'a pas fourni de flux de réponse.",
+    );
+  }
+
+  return response;
 }
 
 /*
@@ -1028,6 +1130,15 @@ export default function ChatPage() {
   const [message, setMessage] =
     useState("");
 
+  const [attachments, setAttachments] =
+    useState<ChatAttachment[]>([]);
+
+  const fileInputRef =
+    useRef<HTMLInputElement>(null);
+
+  const imageInputRef =
+    useRef<HTMLInputElement>(null);
+
   const [messages, setMessages] =
     useState<ChatMessage[]>([]);
 
@@ -1423,6 +1534,7 @@ export default function ChatPage() {
 
     setMessages([]);
     setMessage("");
+    setAttachments([]);
     setActiveCapability(null);
     setError(null);
     setSidebarOpen(false);
@@ -1612,9 +1724,17 @@ export default function ChatPage() {
   function handleCapabilityClick(
     label: string,
   ) {
-    if (
-      label === "Recherche Web"
-    ) {
+    if (label === "Fichier") {
+      fileInputRef.current?.click();
+      return;
+    }
+
+    if (label === "Image") {
+      imageInputRef.current?.click();
+      return;
+    }
+
+    if (label === "Recherche Web") {
       setActiveCapability(
         (current) =>
           current === label
@@ -1622,6 +1742,87 @@ export default function ChatPage() {
             : label,
       );
     }
+  }
+
+  function addAttachments(
+    fileList: FileList | File[],
+    expectedKind?: "image" | "file",
+  ) {
+    const incoming = Array.from(fileList);
+
+    if (incoming.length === 0) {
+      return;
+    }
+
+    const remainingSlots =
+      MAX_ATTACHMENTS - attachments.length;
+
+    if (remainingSlots <= 0) {
+      setError(
+        `Vous pouvez joindre au maximum ${MAX_ATTACHMENTS} éléments par message.`,
+      );
+      return;
+    }
+
+    const selected = incoming.slice(
+      0,
+      remainingSlots,
+    );
+
+    const invalid = selected.find(
+      (file) =>
+        !isAcceptedAttachment(file) ||
+        (expectedKind === "image" &&
+          !isImageFile(file)) ||
+        (expectedKind === "file" &&
+          isImageFile(file)),
+    );
+
+    if (invalid) {
+      setError(
+        expectedKind === "image"
+          ? "Format d'image non pris en charge."
+          : "Format de fichier non pris en charge.",
+      );
+      return;
+    }
+
+    const newAttachments = selected.map(
+      (file) => ({
+        id: crypto.randomUUID(),
+        file,
+        kind: isImageFile(file)
+          ? ("image" as const)
+          : ("file" as const),
+        previewUrl: isImageFile(file)
+          ? URL.createObjectURL(file)
+          : null,
+      }),
+    );
+
+    setAttachments((current) => [
+      ...current,
+      ...newAttachments,
+    ]);
+    setError(null);
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((current) => {
+      const attachment = current.find(
+        (item) => item.id === id,
+      );
+
+      if (attachment?.previewUrl) {
+        URL.revokeObjectURL(
+          attachment.previewUrl,
+        );
+      }
+
+      return current.filter(
+        (item) => item.id !== id,
+      );
+    });
   }
 
   /*
@@ -1672,7 +1873,7 @@ export default function ChatPage() {
       message.trim();
 
     if (
-      !content ||
+      (!content && attachments.length === 0) ||
       isThinking
     ) {
       return;
@@ -1804,12 +2005,19 @@ export default function ChatPage() {
       activeCapability ===
       "Recherche Web";
 
+    const attachmentSummary =
+      attachments.length > 0
+        ? `\n\n[Pièces jointes : ${attachments
+            .map((attachment) => attachment.file.name)
+            .join(", ")}]`
+        : "";
+
     const userMessage:
       ChatMessage = {
       id: crypto.randomUUID(),
       conversationId,
       role: "user",
-      content,
+      content: `${content}${attachmentSummary}`.trim(),
       createdAt: now,
     };
 
@@ -1884,54 +2092,223 @@ export default function ChatPage() {
 
       /*
        * ======================================================
-       * OPENAI
+       * OPENAI — STREAMING + MULTIMODAL
        * ======================================================
        */
 
-      const data =
-        await apiFetch<ChatResponse>(
-          "/ai/chat",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              model:
-                selectedModel,
-              message:
-                content,
-              web: webEnabled,
-              confirmed: true,
-            }),
-          },
+      const formData =
+        new FormData();
+
+      formData.append(
+        "model",
+        selectedModel,
+      );
+
+      formData.append(
+        "message",
+        content,
+      );
+
+      formData.append(
+        "web",
+        String(webEnabled),
+      );
+
+      for (
+        const attachment of attachments
+      ) {
+        formData.append(
+          "files",
+          attachment.file,
+          attachment.file.name,
         );
+      }
+
+      const streamResponse =
+        await apiStreamFetch(
+          "/ai/chat/stream",
+          formData,
+        );
+
+      const reader =
+        streamResponse.body!.getReader();
+
+      const decoder =
+        new TextDecoder();
+
+      const assistantId =
+        crypto.randomUUID();
+
+      const assistantCreatedAt =
+        new Date().toISOString();
+
+      let assistantContent = "";
+      let streamBuffer = "";
+      let streamDone = false;
+      setMessages(
+        (current) => [
+          ...current,
+          {
+            id: assistantId,
+            conversationId,
+            role: "assistant",
+            content: "",
+            createdAt:
+              assistantCreatedAt,
+          },
+        ],
+      );
+
+      while (!streamDone) {
+        const { value, done } =
+          await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        streamBuffer +=
+          decoder.decode(
+            value,
+            { stream: true },
+          );
+
+        const events =
+          streamBuffer.split(
+            "\n\n",
+          );
+
+        streamBuffer =
+          events.pop() || "";
+
+        for (
+          const rawEvent of events
+        ) {
+          if (!rawEvent.trim()) {
+            continue;
+          }
+
+          let eventName =
+            "message";
+          let dataText = "";
+
+          for (
+            const line of rawEvent.split(
+              "\n",
+            )
+          ) {
+            if (
+              line.startsWith(
+                "event:",
+              )
+            ) {
+              eventName =
+                line.slice(6).trim();
+            }
+
+            if (
+              line.startsWith(
+                "data:",
+              )
+            ) {
+              dataText +=
+                line.slice(5).trim();
+            }
+          }
+
+          if (!dataText) {
+            continue;
+          }
+
+          let eventData:
+            | Record<string, unknown>;
+
+          try {
+            eventData =
+              JSON.parse(
+                dataText,
+              );
+          } catch {
+            continue;
+          }
+
+          if (
+            eventName ===
+            "delta"
+          ) {
+            const delta =
+              typeof eventData.content ===
+              "string"
+                ? eventData.content
+                : "";
+
+            if (!delta) {
+              continue;
+            }
+
+            assistantContent +=
+              delta;
+
+            setMessages(
+              (current) =>
+                current.map(
+                  (item) =>
+                    item.id ===
+                    assistantId
+                      ? {
+                          ...item,
+                          content:
+                            assistantContent,
+                        }
+                      : item,
+                ),
+            );
+          }
+
+          if (
+            eventName ===
+            "done"
+          ) {
+            streamDone = true;
+            break;
+          }
+
+          if (
+            eventName ===
+            "error"
+          ) {
+            throw new Error(
+              typeof eventData.detail ===
+              "string"
+                ? eventData.detail
+                : "Erreur pendant le streaming IA.",
+            );
+          }
+        }
+      }
+
+      if (!assistantContent.trim()) {
+        throw new Error(
+          "Le service IA n'a retourné aucun contenu.",
+        );
+      }
+
+      const assistantMessage:
+        ChatMessage = {
+        id: assistantId,
+        conversationId,
+        role: "assistant",
+        content:
+          assistantContent,
+        createdAt:
+          assistantCreatedAt,
+      };
 
       /*
        * ======================================================
        * MESSAGE IA
        * ======================================================
        */
-
-      const assistantContent =
-        data.message ||
-        data.response ||
-        "Aucune réponse reçue.";
-
-      const assistantMessage:
-        ChatMessage = {
-        id: crypto.randomUUID(),
-        conversationId,
-        role: "assistant",
-        content:
-          assistantContent,
-        createdAt:
-          new Date().toISOString(),
-      };
-
-      setMessages(
-        (current) => [
-          ...current,
-          assistantMessage,
-        ],
-      );
 
       /*
        * ======================================================
@@ -2038,6 +2415,15 @@ export default function ChatPage() {
        * WALLET
        * ======================================================
        */
+
+      attachments.forEach((attachment) => {
+        if (attachment.previewUrl) {
+          URL.revokeObjectURL(
+            attachment.previewUrl,
+          );
+        }
+      });
+      setAttachments([]);
 
       await loadWallet();
     } catch (requestError) {
@@ -2658,6 +3044,85 @@ export default function ChatPage() {
 
             <div className="mx-auto mt-4 w-full max-w-3xl">
               <div className="overflow-hidden rounded-[28px] border border-border-strong bg-surface shadow-[0_12px_40px_var(--shadow-color)] transition focus-within:border-muted-strong">
+                {attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-2 px-4 pt-4">
+                    {attachments.map((attachment) => (
+                      <div
+                        key={attachment.id}
+                        className="group relative flex max-w-[220px] items-center gap-2 rounded-2xl border border-border bg-surface-secondary p-2"
+                      >
+                        {attachment.previewUrl ? (
+                          <img
+                            src={attachment.previewUrl}
+                            alt={attachment.file.name}
+                            className="h-12 w-12 rounded-xl object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-surface-tertiary">
+                            <FileText size={18} />
+                          </div>
+                        )}
+
+                        <div className="min-w-0 pr-6">
+                          <p className="truncate text-xs font-medium">
+                            {attachment.file.name}
+                          </p>
+                          <p className="mt-0.5 text-[10px] text-muted">
+                            {attachment.kind === "image"
+                              ? "Image"
+                              : "Fichier"}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          aria-label={`Supprimer ${attachment.file.name}`}
+                          onClick={() =>
+                            removeAttachment(attachment.id)
+                          }
+                          className="absolute right-1.5 top-1.5 rounded-full bg-surface p-1 text-muted shadow-sm transition hover:text-foreground"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  multiple
+                  accept={ACCEPTED_FILE_TYPES.join(",")}
+                  onChange={(event) => {
+                    if (event.target.files) {
+                      addAttachments(
+                        event.target.files,
+                        "file",
+                      );
+                    }
+                    event.target.value = "";
+                  }}
+                />
+
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  className="hidden"
+                  multiple
+                  accept={ACCEPTED_IMAGE_TYPES.join(",")}
+                  onChange={(event) => {
+                    if (event.target.files) {
+                      addAttachments(
+                        event.target.files,
+                        "image",
+                      );
+                    }
+                    event.target.value = "";
+                  }}
+                />
+
                 <textarea
                   rows={4}
                   value={message}
@@ -2731,13 +3196,12 @@ export default function ChatPage() {
                               {label}
                             </span>
 
-                            {disabled && (
-                              <Lock
-                                size={
-                                  12
-                                }
-                              />
-                            )}
+                            {label !== "Recherche Web" &&
+                              attachments.length > 0 && (
+                                <span className="text-[10px] opacity-70">
+                                  {attachments.length}/{MAX_ATTACHMENTS}
+                                </span>
+                              )}
                           </button>
                         );
                       },
@@ -2751,7 +3215,8 @@ export default function ChatPage() {
                       handleSendMessage
                     }
                     disabled={
-                      !message.trim() ||
+                      (!message.trim() &&
+                        attachments.length === 0) ||
                       isThinking
                     }
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
@@ -2764,9 +3229,9 @@ export default function ChatPage() {
               </div>
 
               <p className="mt-3 text-center text-[11px] text-muted">
-                Les crédits consommés
-                dépendent du modèle
-                et de l&apos;opération.
+                Jusqu&apos;à {MAX_ATTACHMENTS} fichiers ou images
+                peuvent être joints à un message. L&apos;analyse
+                multimodale sera transmise au moteur dédié.
               </p>
             </div>
           </div>

@@ -27,15 +27,21 @@ class CreditAction(str, Enum):
     CHAT_SOL_WEB = "chat_sol_web"
 
     # ========================================================
-    # IMAGES
+    # IMAGES — PACK LÉGER
     # ========================================================
     IMAGE_480 = "image_480"
     IMAGE_720 = "image_720"
 
+    # ========================================================
+    # IMAGES — PACK PRO
+    # ========================================================
     IMAGE_PRO = "image_pro"
     IMAGE_PRO_STANDARD = "image_pro_standard"
     IMAGE_PRO_ULTRA = "image_pro_ultra"
 
+    # ========================================================
+    # IMAGES — PACK BUSINESS
+    # ========================================================
     IMAGE_BUSINESS = "image_business"
     IMAGE_BUSINESS_HD = "image_business_hd"
     IMAGE_BUSINESS_ULTRA = "image_business_ultra"
@@ -43,8 +49,8 @@ class CreditAction(str, Enum):
     # ========================================================
     # VIDÉOS — PACK LÉGER
     # ========================================================
-    VIDEO_5S = "video_5s"
-    VIDEO_10S = "video_10s"
+    VIDEO_4S = "video_4s"
+    VIDEO_8S = "video_8s"
 
     # ========================================================
     # VIDÉO — PACK INTERMÉDIAIRE
@@ -104,13 +110,13 @@ CREDIT_COSTS: dict[CreditAction, int] = {
     # --------------------------------------------------------
     # VIDÉOS — LÉGER
     # --------------------------------------------------------
-    CreditAction.VIDEO_5S: 500,
-    CreditAction.VIDEO_10S: 1_000,
+    CreditAction.VIDEO_4S: 500,
+    CreditAction.VIDEO_8S: 1_000,
 
     # --------------------------------------------------------
     # VIDÉO — INTERMÉDIAIRE
     # --------------------------------------------------------
-    CreditAction.VIDEO_LITE: 1_300,
+    CreditAction.VIDEO_LITE: 1_500,
 
     # --------------------------------------------------------
     # IMAGES — PRO
@@ -122,9 +128,9 @@ CREDIT_COSTS: dict[CreditAction, int] = {
     # --------------------------------------------------------
     # VIDÉOS — PRO
     # --------------------------------------------------------
-    CreditAction.VIDEO_PRO_FAST: 700,
-    CreditAction.VIDEO_PRO_STANDARD: 2_000,
-    CreditAction.VIDEO_PRO_EXTENSION: 700,
+    CreditAction.VIDEO_PRO_FAST: 1_500,
+    CreditAction.VIDEO_PRO_STANDARD: 3_000,
+    CreditAction.VIDEO_PRO_EXTENSION: 1_500,
 
     # --------------------------------------------------------
     # IMAGES — BUSINESS
@@ -136,10 +142,93 @@ CREDIT_COSTS: dict[CreditAction, int] = {
     # --------------------------------------------------------
     # VIDÉOS — BUSINESS
     # --------------------------------------------------------
-    CreditAction.VIDEO_BUSINESS_FAST: 1_100,
-    CreditAction.VIDEO_BUSINESS_STANDARD: 3_000,
-    CreditAction.VIDEO_BUSINESS_LONG: 6_000,
+    CreditAction.VIDEO_BUSINESS_FAST: 2_500,
+    CreditAction.VIDEO_BUSINESS_STANDARD: 5_000,
+    CreditAction.VIDEO_BUSINESS_LONG: 10_000,
 }
+
+
+# ============================================================
+# SUPPLÉMENTS D'ANALYSE MULTIMODALE
+# ============================================================
+#
+# Ces coûts NE remplacent PAS le coût du chat.
+#
+# Exemple :
+#
+#   Luna + texte
+#       → 6 crédits
+#
+#   Luna + texte + 1 image
+#       → 6 + 1 = 7 crédits
+#
+#   Luna + texte + 1 fichier
+#       → 6 + 2 = 8 crédits
+#
+# Les coûts sont appliqués PAR élément.
+#
+# Maximum frontend prévu : 3 images/fichiers par message.
+#
+
+IMAGE_ANALYSIS_COSTS: dict[CreditAction, int] = {
+    # --------------------------------------------------------
+    # LUNA
+    # --------------------------------------------------------
+    CreditAction.CHAT_LUNA: 1,
+    CreditAction.CHAT_LUNA_WEB: 1,
+
+    # --------------------------------------------------------
+    # GPT-5
+    # --------------------------------------------------------
+    CreditAction.CHAT_GPT5: 5,
+    CreditAction.CHAT_GPT5_WEB: 5,
+
+    # --------------------------------------------------------
+    # TERRA
+    # --------------------------------------------------------
+    CreditAction.CHAT_TERRA: 8,
+    CreditAction.CHAT_TERRA_WEB: 8,
+
+    # --------------------------------------------------------
+    # SOL
+    # --------------------------------------------------------
+    CreditAction.CHAT_SOL: 12,
+    CreditAction.CHAT_SOL_WEB: 12,
+}
+
+
+FILE_ANALYSIS_COSTS: dict[CreditAction, int] = {
+    # --------------------------------------------------------
+    # LUNA
+    # --------------------------------------------------------
+    CreditAction.CHAT_LUNA: 2,
+    CreditAction.CHAT_LUNA_WEB: 2,
+
+    # --------------------------------------------------------
+    # GPT-5
+    # --------------------------------------------------------
+    CreditAction.CHAT_GPT5: 10,
+    CreditAction.CHAT_GPT5_WEB: 10,
+
+    # --------------------------------------------------------
+    # TERRA
+    # --------------------------------------------------------
+    CreditAction.CHAT_TERRA: 15,
+    CreditAction.CHAT_TERRA_WEB: 15,
+
+    # --------------------------------------------------------
+    # SOL
+    # --------------------------------------------------------
+    CreditAction.CHAT_SOL: 20,
+    CreditAction.CHAT_SOL_WEB: 20,
+}
+
+
+# ============================================================
+# LIMITES MULTIMODALES
+# ============================================================
+
+MAX_MULTIMODAL_ATTACHMENTS = 3
 
 
 # ============================================================
@@ -149,6 +238,7 @@ CREDIT_COSTS: dict[CreditAction, int] = {
 LIGHT_PACK_CREDITS = 3_000
 LIGHT_PACK_PRICE_XAF = 6_500
 LIGHT_PACK_DURATION_DAYS = 35
+LIGHT_PACK_API_BUDGET_XAF = 2_500
 
 
 # ============================================================
@@ -158,6 +248,7 @@ LIGHT_PACK_DURATION_DAYS = 35
 INTERMEDIATE_PACK_CREDITS = 28_500
 INTERMEDIATE_PACK_PRICE_XAF = 11_500
 INTERMEDIATE_PACK_DURATION_DAYS = 35
+INTERMEDIATE_PACK_API_BUDGET_XAF = 4_500
 
 
 # ============================================================
