@@ -280,6 +280,18 @@ type ModelDefinition = {
   packs: string[];
 };
 
+type TrialInfo = {
+  used: number;
+  max: number;
+  remaining: number;
+};
+
+type TrialResponse = {
+  success: boolean;
+  pack_id: string | null;
+  trials: Record<string, TrialInfo>;
+};
+
 const models: ModelDefinition[] = [
   {
     id: "luna",
@@ -333,6 +345,43 @@ function getAvailableModels(
   return models.filter((model) =>
     model.packs.includes(packId),
   );
+}
+
+function getSelectableModels(
+  packId: string | null,
+  trials: Record<string, TrialInfo>,
+): ModelDefinition[] {
+  const normalModels =
+    getAvailableModels(packId);
+
+  if (!packId) {
+    return [];
+  }
+
+  const selectable = [...normalModels];
+  const normalIds = new Set(
+    normalModels.map(
+      (model) => model.id,
+    ),
+  );
+
+  for (const trialModelId of Object.keys(
+    trials,
+  )) {
+    const trialModel = models.find(
+      (model) =>
+        model.id === trialModelId,
+    );
+
+    if (
+      trialModel &&
+      !normalIds.has(trialModel.id)
+    ) {
+      selectable.push(trialModel);
+    }
+  }
+
+  return selectable;
 }
 
 /*
@@ -705,6 +754,49 @@ function renderInlineMarkdown(
  * - Markdown inline
  */
 
+function CopyButton({
+  value,
+}: {
+  value: string;
+}) {
+  const [copied, setCopied] =
+    useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(
+        value,
+      );
+
+      setCopied(true);
+
+      window.setTimeout(() => {
+        setCopied(false);
+      }, 1800);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:bg-surface-tertiary hover:text-foreground"
+      aria-label="Copier le code"
+      title="Copier le code"
+    >
+      {copied ? "Copié" : "Copier"}
+    </button>
+  );
+}
+
+/*
+ * ============================================================
+ * MARKDOWN MESSAGE
+ * ============================================================
+ */
+
 function MarkdownMessage({
   content,
 }: {
@@ -841,17 +933,23 @@ function MarkdownMessage({
         key={`code-${blockIndex}`}
         className="mb-4 overflow-hidden rounded-2xl border border-border bg-surface-secondary last:mb-0"
       >
-        {codeLanguage && (
-          <div className="border-b border-border px-4 py-2 text-[10px] font-medium uppercase tracking-[0.14em] text-muted">
-            {codeLanguage}
-          </div>
-        )}
+        <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+          <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted">
+            {codeLanguage || "Code"}
+          </span>
 
-        <pre className="overflow-x-auto p-4 text-xs leading-6">
-          <code>
-            {codeLines.join("\n")}
-          </code>
-        </pre>
+          <CopyButton
+            value={codeLines.join("\n")}
+          />
+        </div>
+
+        <div className="max-h-[360px] overflow-auto">
+          <pre className="min-w-max p-4 text-xs leading-6">
+            <code>
+              {codeLines.join("\n")}
+            </code>
+          </pre>
+        </div>
       </div>,
     );
 
@@ -1161,6 +1259,12 @@ export default function ChatPage() {
   const [wallet, setWallet] =
     useState<WalletData | null>(null);
 
+  const [trials, setTrials] =
+    useState<Record<string, TrialInfo>>({});
+
+  const [isLoadingTrials, setIsLoadingTrials] =
+    useState(true);
+
   const [isLoadingWallet, setIsLoadingWallet] =
     useState(true);
 
@@ -1240,7 +1344,9 @@ export default function ChatPage() {
    * ==========================================================
    */
 
-  async function loadWallet() {
+  async function loadWallet(
+    trialState: Record<string, TrialInfo> = trials,
+  ) {
     try {
       setIsLoadingWallet(true);
       setError(null);
@@ -1257,8 +1363,9 @@ export default function ChatPage() {
       setWallet(walletData);
 
       const availableModels =
-        getAvailableModels(
+        getSelectableModels(
           walletData.pack_id,
+          trialState,
         );
 
       if (
@@ -1289,6 +1396,46 @@ export default function ChatPage() {
       );
     } finally {
       setIsLoadingWallet(false);
+    }
+  }
+
+  /*
+   * ==========================================================
+   * CHARGEMENT DES ESSAIS
+   * ==========================================================
+   *
+   * Le backend est la source de vérité.
+   * Le frontend récupère l'état réel via /ai/trials.
+   */
+
+  async function loadTrials(): Promise<
+    Record<string, TrialInfo>
+  > {
+    try {
+      setIsLoadingTrials(true);
+
+      const data =
+        await apiFetch<TrialResponse>(
+          "/ai/trials",
+        );
+
+      const trialState =
+        data.trials || {};
+
+      setTrials(trialState);
+
+      return trialState;
+    } catch (requestError) {
+      console.error(
+        "Erreur chargement essais :",
+        requestError,
+      );
+
+      setTrials({});
+
+      return {};
+    } finally {
+      setIsLoadingTrials(false);
     }
   }
 
@@ -1466,8 +1613,11 @@ export default function ChatPage() {
 
         setIsInitialized(true);
 
+        const trialState =
+          await loadTrials();
+
         await Promise.all([
-          loadWallet(),
+          loadWallet(trialState),
           loadConversations(
             localCache,
           ),
@@ -1872,6 +2022,19 @@ export default function ChatPage() {
     const content =
       message.trim();
 
+    const selectedTrial =
+      trials[selectedModel];
+
+    if (
+      selectedTrial &&
+      selectedTrial.remaining <= 0
+    ) {
+      setError(
+        "Les essais gratuits de ce modèle sont épuisés.",
+      );
+      return;
+    }
+
     if (
       (!content && attachments.length === 0) ||
       isThinking
@@ -2112,6 +2275,13 @@ export default function ChatPage() {
       formData.append(
         "web",
         String(webEnabled),
+      );
+
+      // Identifie la conversation côté backend afin que l'IA
+      // puisse recharger son historique persistant.
+      formData.append(
+        "conversation_id",
+        conversationId,
       );
 
       for (
@@ -2425,7 +2595,12 @@ export default function ChatPage() {
       });
       setAttachments([]);
 
-      await loadWallet();
+      const refreshedTrials =
+        await loadTrials();
+
+      await loadWallet(
+        refreshedTrials,
+      );
     } catch (requestError) {
       const errorMessage =
         requestError instanceof
@@ -2908,9 +3083,10 @@ export default function ChatPage() {
                   }`}
                   onClick={() => {
                     if (
-                      getAvailableModels(
+                      getSelectableModels(
                         wallet?.pack_id ??
                           null,
+                        trials,
                       ).length >
                       1
                     ) {
@@ -2932,6 +3108,14 @@ export default function ChatPage() {
                   )?.name ||
                     "Modèle"}
 
+                  {trials[selectedModel] && (
+                    <span className="rounded-full bg-accent px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-accent-foreground">
+                      Essai ·{" "}
+                      {trials[selectedModel].remaining}/
+                      {trials[selectedModel].max}
+                    </span>
+                  )}
+
                   <ChevronDown
                     size={15}
                     className={`transition-transform ${
@@ -2944,9 +3128,10 @@ export default function ChatPage() {
 
                 {modelMenuOpen && (
                   <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl">
-                    {getAvailableModels(
+                    {getSelectableModels(
                       wallet?.pack_id ??
                         null,
+                      trials,
                     ).map(
                       (model) => (
                         <ModelOption
@@ -2963,7 +3148,25 @@ export default function ChatPage() {
                             selectedModel ===
                             model.id
                           }
+                          trial={
+                            trials[model.id]
+                          }
+                          disabled={
+                            Boolean(
+                              trials[model.id],
+                            ) &&
+                            trials[model.id]
+                              .remaining <= 0
+                          }
                           onClick={() => {
+                            if (
+                              trials[model.id] &&
+                              trials[model.id]
+                                .remaining <= 0
+                            ) {
+                              return;
+                            }
+
                             setSelectedModel(
                               model.id,
                             );
@@ -2976,9 +3179,10 @@ export default function ChatPage() {
                       ),
                     )}
 
-                    {getAvailableModels(
+                    {getSelectableModels(
                       wallet?.pack_id ??
                         null,
+                      trials,
                     ).length ===
                       0 && (
                       <p className="px-3 py-2 text-xs text-muted">
@@ -3251,39 +3455,79 @@ function ModelOption({
   name,
   description,
   active = false,
+  trial,
+  disabled = false,
   onClick,
 }: {
   name: string;
   description: string;
   active?: boolean;
+  trial?: TrialInfo;
+  disabled?: boolean;
   onClick?: () => void;
 }) {
+  const isTrial =
+    Boolean(trial);
+
+  const trialExhausted =
+    isTrial &&
+    (trial?.remaining ?? 0) <= 0;
+
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
+      title={
+        trialExhausted
+          ? "Les 5 essais de ce modèle sont épuisés."
+          : undefined
+      }
       className={`w-full rounded-xl px-3 py-2.5 text-left transition ${
-        active
-          ? "bg-surface-tertiary"
-          : "hover:bg-surface-secondary"
+        disabled
+          ? "cursor-not-allowed opacity-45"
+          : active
+            ? "bg-surface-tertiary"
+            : "hover:bg-surface-secondary"
       }`}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <span className="text-sm font-medium">
           {name}
         </span>
 
-        {active && (
-          <Check
-            size={15}
-            className="text-muted-strong"
-          />
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {isTrial && (
+            <span
+              className={`rounded-full px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] ${
+                trialExhausted
+                  ? "bg-surface-tertiary text-muted"
+                  : "bg-accent text-accent-foreground"
+              }`}
+            >
+              Essai · {trial?.remaining ?? 0}/
+              {trial?.max ?? 5}
+            </span>
+          )}
+
+          {active && (
+            <Check
+              size={15}
+              className="text-muted-strong"
+            />
+          )}
+        </div>
       </div>
 
       <p className="mt-0.5 text-xs text-muted">
         {description}
       </p>
+
+      {isTrial && (
+        <p className="mt-1 text-[10px] text-muted">
+          Modèle supérieur · 5 essais maximum
+        </p>
+      )}
     </button>
   );
 }

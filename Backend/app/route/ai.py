@@ -1,4 +1,5 @@
 from json import dumps
+import base64
 from uuid import uuid4
 from types import SimpleNamespace
 from datetime import datetime, timezone
@@ -152,6 +153,27 @@ class ChatResponse(BaseModel):
 
 
 # ============================================================
+# RÉPONSES MÉDIAS
+# ============================================================
+
+
+class MediaResponse(BaseModel):
+    success: bool
+    type: str
+    action: str
+    model: str
+    cost: int
+    previous_balance: int
+    credits_remaining: int
+    remaining_percentage: float
+    mime_type: str
+    data: str
+    video_id: str | None = None
+    seconds: str | None = None
+    size: str | None = None
+
+
+# ============================================================
 # MODÈLES → ACTIONS DE CRÉDITS
 # ============================================================
 
@@ -219,6 +241,66 @@ PACK_ALLOWED_MODELS = {
         "gpt-5.6-terra",
         "gpt-5.6-sol",
     },
+}
+
+
+# ============================================================
+# MÉDIAS AUTORISÉS PAR PACK
+# ============================================================
+
+
+PACK_ALLOWED_MEDIA = {
+    "light_pack": {
+        CreditAction.IMAGE_480,
+        CreditAction.IMAGE_720,
+        CreditAction.VIDEO_4S,
+        CreditAction.VIDEO_8S,
+    },
+    "intermediate_pack": {
+        CreditAction.IMAGE_480,
+        CreditAction.IMAGE_720,
+        CreditAction.VIDEO_LITE,
+    },
+    "pro_pack": {
+        CreditAction.IMAGE_PRO,
+        CreditAction.IMAGE_PRO_STANDARD,
+        CreditAction.IMAGE_PRO_ULTRA,
+        CreditAction.VIDEO_PRO_FAST,
+        CreditAction.VIDEO_PRO_STANDARD,
+        CreditAction.VIDEO_PRO_EXTENSION,
+    },
+    "business_pack": {
+        CreditAction.IMAGE_BUSINESS,
+        CreditAction.IMAGE_BUSINESS_HD,
+        CreditAction.IMAGE_BUSINESS_ULTRA,
+        CreditAction.VIDEO_BUSINESS_FAST,
+        CreditAction.VIDEO_BUSINESS_STANDARD,
+        CreditAction.VIDEO_BUSINESS_LONG,
+    },
+}
+
+
+IMAGE_ACTIONS = {
+    CreditAction.IMAGE_480,
+    CreditAction.IMAGE_720,
+    CreditAction.IMAGE_PRO,
+    CreditAction.IMAGE_PRO_STANDARD,
+    CreditAction.IMAGE_PRO_ULTRA,
+    CreditAction.IMAGE_BUSINESS,
+    CreditAction.IMAGE_BUSINESS_HD,
+    CreditAction.IMAGE_BUSINESS_ULTRA,
+}
+
+VIDEO_ACTIONS = {
+    CreditAction.VIDEO_4S,
+    CreditAction.VIDEO_8S,
+    CreditAction.VIDEO_LITE,
+    CreditAction.VIDEO_PRO_FAST,
+    CreditAction.VIDEO_PRO_STANDARD,
+    CreditAction.VIDEO_PRO_EXTENSION,
+    CreditAction.VIDEO_BUSINESS_FAST,
+    CreditAction.VIDEO_BUSINESS_STANDARD,
+    CreditAction.VIDEO_BUSINESS_LONG,
 }
 
 
@@ -427,6 +509,90 @@ def _attachments_for_openai(
 
 
 # ============================================================
+# MÉMOIRE CONVERSATIONNELLE
+# ============================================================
+
+MAX_HISTORY_MESSAGES = 40
+
+
+def _get_conversation_history(
+    conversation_id: str | None,
+    authenticated_user_id: str,
+    current_message: str,
+) -> list[dict[str, str]]:
+    """
+    Charge l'historique persistant d'une conversation appartenant
+    à l'utilisateur authentifié.
+
+    Le message courant est retiré lorsqu'il a déjà été enregistré
+    par le frontend avant l'appel IA afin d'éviter de l'envoyer deux fois.
+    """
+    if not conversation_id:
+        return []
+
+    conversation_response = (
+        supabase
+        .table("conversations")
+        .select("id")
+        .eq("id", conversation_id)
+        .eq("user_id", authenticated_user_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not conversation_response.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation introuvable ou non autorisée.",
+        )
+
+    response = (
+        supabase
+        .table("messages")
+        .select("role,content,created_at")
+        .eq("conversation_id", conversation_id)
+        .eq("user_id", authenticated_user_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+
+    rows = response.data or []
+
+    # Le frontend sauvegarde déjà le message utilisateur avant
+    # d'appeler /ai/chat ou /ai/chat/stream. On retire donc une
+    # occurrence finale identique au message courant.
+    normalized_current = current_message.strip()
+    if rows and normalized_current:
+        last = rows[-1]
+        if (
+            last.get("role") == "user"
+            and str(last.get("content", "")).strip()
+            == normalized_current
+        ):
+            rows.pop()
+
+    history: list[dict[str, str]] = []
+
+    for row in rows[-MAX_HISTORY_MESSAGES:]:
+        role = row.get("role")
+        content = row.get("content")
+
+        if role not in {"user", "assistant", "system", "developer"}:
+            continue
+        if not content:
+            continue
+
+        history.append(
+            {
+                "role": role,
+                "content": str(content),
+            }
+        )
+
+    return history
+
+
+# ============================================================
 # VALIDATION COMMUNE CHAT
 # ============================================================
 
@@ -438,6 +604,7 @@ def _prepare_chat(
     attachments: list[ChatAttachment],
     user_id: str | None,
     authorization: str | None,
+    conversation_id: str | None = None,
 ):
     """
     Prépare et valide une requête Chat.
@@ -633,6 +800,12 @@ def _prepare_chat(
             ),
         )
 
+    history = _get_conversation_history(
+        conversation_id=conversation_id,
+        authenticated_user_id=authenticated_user_id,
+        current_message=message,
+    )
+
     return (
         authenticated_user_id,
         repository,
@@ -641,6 +814,7 @@ def _prepare_chat(
         action,
         cost,
         is_trial_model,
+        history,
     )
 
 
@@ -838,6 +1012,7 @@ async def chat(
     model: str = Form(...),
     message: str = Form(""),
     web: bool = Form(False),
+    conversation_id: str | None = Form(default=None),
     files: list[UploadFile] = File(default=[]),
     user_id: str | None = Header(
         default=None,
@@ -859,6 +1034,7 @@ async def chat(
         action,
         cost,
         is_trial_model,
+        history,
     ) = _prepare_chat(
         model=model,
         message=message,
@@ -866,6 +1042,7 @@ async def chat(
         attachments=attachments,
         user_id=user_id,
         authorization=authorization,
+        conversation_id=conversation_id,
     )
 
     openai_service = OpenAIService()
@@ -885,6 +1062,7 @@ async def chat(
             attachments=_attachments_for_openai(
                 attachments
             ),
+            history=history,
         )
 
     except Exception as error:
@@ -951,6 +1129,349 @@ async def chat(
         trial=is_trial_model,
         trials_remaining=trials_remaining,
     )
+
+
+# ============================================================
+# PRÉPARATION D'UNE CRÉATION MÉDIA
+# ============================================================
+
+
+def _prepare_media(
+    action_value: str,
+    prompt: str,
+    user_id: str | None,
+    authorization: str | None,
+):
+    """Authentifie, valide le pack et réserve le coût logique du média."""
+
+    authenticated_user_id = _authenticate_chat_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    prompt = prompt.strip()
+
+    if not prompt:
+        raise HTTPException(
+            status_code=400,
+            detail="Le prompt de création est requis.",
+        )
+
+    try:
+        action = CreditAction(action_value)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Action média inconnue : {action_value}",
+        )
+
+    if action not in IMAGE_ACTIONS and action not in VIDEO_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="L'action demandée n'est pas une action de création média.",
+        )
+
+    repository = SupabaseCreditRepository(supabase)
+    wallet = repository.get_wallet(authenticated_user_id)
+
+    if wallet is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Aucun portefeuille de crédits trouvé pour cet utilisateur.",
+        )
+
+    if not wallet.is_pack_active:
+        raise HTTPException(
+            status_code=403,
+            detail="Le pack de crédits est expiré ou inactif.",
+        )
+
+    allowed_media = PACK_ALLOWED_MEDIA.get(wallet.pack_id, set())
+
+    if action not in allowed_media:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"L'action '{action.value}' n'est pas disponible "
+                f"avec le pack '{wallet.pack_id}'."
+            ),
+        )
+
+    try:
+        cost = CreditService.get_cost(wallet, action)
+    except UnsupportedActionError as error:
+        raise HTTPException(
+            status_code=403,
+            detail=str(error),
+        )
+
+    if wallet.balance < cost:
+        raise HTTPException(
+            status_code=402,
+            detail="Crédits insuffisants pour effectuer cette création.",
+        )
+
+    return (
+        authenticated_user_id,
+        repository,
+        wallet,
+        action,
+        prompt,
+        cost,
+    )
+
+
+# ============================================================
+# CONSOMMATION MÉDIA ATOMIQUE
+# ============================================================
+
+
+def _consume_media(
+    repository,
+    wallet,
+    authenticated_user_id: str,
+    action: CreditAction,
+    cost: int,
+):
+    """Débite le média via la RPC Supabase atomique."""
+
+    try:
+        result = CreditService.consume(
+            wallet=wallet,
+            action=action,
+            confirmed=True,
+            cost_override=cost,
+            repository=repository,
+            user_id=authenticated_user_id,
+        )
+    except InactivePackError as error:
+        raise HTTPException(status_code=403, detail=str(error))
+    except InsufficientCreditsError as error:
+        raise HTTPException(status_code=402, detail=str(error))
+    except UnsupportedActionError as error:
+        raise HTTPException(status_code=403, detail=str(error))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    return result
+
+
+# ============================================================
+# POST /ai/image
+# ============================================================
+
+
+@router.post(
+    "/image",
+    response_model=MediaResponse,
+)
+async def generate_image(
+    action: str = Form(...),
+    prompt: str = Form(...),
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """Génère une image réelle via l'API Images OpenAI."""
+
+    (
+        authenticated_user_id,
+        repository,
+        wallet,
+        credit_action,
+        prompt,
+        cost,
+    ) = _prepare_media(
+        action_value=action,
+        prompt=prompt,
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    if credit_action not in IMAGE_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Cette action n'est pas une création d'image.",
+        )
+
+    service = OpenAIService()
+
+    try:
+        generated = service.generate_image(
+            action=credit_action.value,
+            prompt=prompt,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"La génération d'image a échoué : {error}",
+        )
+
+    result = _consume_media(
+        repository=repository,
+        wallet=wallet,
+        authenticated_user_id=authenticated_user_id,
+        action=credit_action,
+        cost=cost,
+    )
+
+    return MediaResponse(
+        success=True,
+        type="image",
+        action=credit_action.value,
+        model=generated["model"],
+        cost=result.cost,
+        previous_balance=result.previous_balance,
+        credits_remaining=result.new_balance,
+        remaining_percentage=result.remaining_percentage,
+        mime_type=generated["mime_type"],
+        data=generated["b64_json"],
+        size=generated["size"],
+    )
+
+
+# ============================================================
+# POST /ai/video
+# ============================================================
+
+
+@router.post(
+    "/video",
+    response_model=MediaResponse,
+)
+async def generate_video(
+    action: str = Form(...),
+    prompt: str = Form(...),
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """Génère une vidéo réelle via Sora."""
+
+    (
+        authenticated_user_id,
+        repository,
+        wallet,
+        credit_action,
+        prompt,
+        cost,
+    ) = _prepare_media(
+        action_value=action,
+        prompt=prompt,
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    if credit_action not in VIDEO_ACTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Cette action n'est pas une création vidéo.",
+        )
+
+    service = OpenAIService()
+
+    try:
+        generated = service.generate_video(
+            action=credit_action.value,
+            prompt=prompt,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"La génération vidéo a échoué : {error}",
+        )
+
+    result = _consume_media(
+        repository=repository,
+        wallet=wallet,
+        authenticated_user_id=authenticated_user_id,
+        action=credit_action,
+        cost=cost,
+    )
+
+    return MediaResponse(
+        success=True,
+        type="video",
+        action=credit_action.value,
+        model=generated["model"],
+        cost=result.cost,
+        previous_balance=result.previous_balance,
+        credits_remaining=result.new_balance,
+        remaining_percentage=result.remaining_percentage,
+        mime_type=generated["mime_type"],
+        data=base64.b64encode(generated["data"]).decode("utf-8"),
+        video_id=generated["video_id"],
+        seconds=generated["seconds"],
+        size=generated["size"],
+    )
+
+
+# ============================================================
+# GET /ai/media-capabilities
+# ============================================================
+
+
+@router.get("/media-capabilities")
+def get_media_capabilities(
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """Retourne les créations média autorisées par le pack courant."""
+
+    authenticated_user_id = _authenticate_chat_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    repository = SupabaseCreditRepository(supabase)
+    wallet = repository.get_wallet(authenticated_user_id)
+
+    if wallet is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Aucun portefeuille de crédits trouvé pour cet utilisateur.",
+        )
+
+    allowed = PACK_ALLOWED_MEDIA.get(wallet.pack_id, set())
+
+    return {
+        "success": True,
+        "pack_id": wallet.pack_id,
+        "media": [
+            {
+                "action": action.value,
+                "type": (
+                    "image"
+                    if action in IMAGE_ACTIONS
+                    else "video"
+                ),
+                "credits": CreditService.get_cost(
+                    wallet,
+                    action,
+                ),
+            }
+            for action in sorted(
+                allowed,
+                key=lambda item: item.value,
+            )
+        ],
+    }
 
 
 # ============================================================
@@ -1044,6 +1565,7 @@ async def chat_stream(
     model: str = Form(...),
     message: str = Form(""),
     web: bool = Form(False),
+    conversation_id: str | None = Form(default=None),
     files: list[UploadFile] = File(default=[]),
     user_id: str | None = Header(
         default=None,
@@ -1081,6 +1603,7 @@ async def chat_stream(
         action,
         cost,
         is_trial_model,
+        history,
     ) = _prepare_chat(
         model=model,
         message=message,
@@ -1088,6 +1611,7 @@ async def chat_stream(
         attachments=attachments,
         user_id=user_id,
         authorization=authorization,
+        conversation_id=conversation_id,
     )
 
     openai_service = OpenAIService()
@@ -1141,6 +1665,7 @@ async def chat_stream(
                 message=message,
                 web=web,
                 attachments=attachments,
+                history=history,
             )
 
             for delta in stream:
