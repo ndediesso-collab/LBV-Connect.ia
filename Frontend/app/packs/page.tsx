@@ -9,6 +9,7 @@ import {
   HelpCircle,
   Lock,
   Sparkles,
+  X,
   Zap,
 } from "lucide-react";
 import Link from "next/link";
@@ -38,7 +39,16 @@ type Pack = {
   media: {
     name: string;
     available: boolean;
+    cost: number;
+    unit?: string;
   }[];
+};
+
+type CreditTopUp = {
+  id: string;
+  credits: number;
+  price: string;
+  description: string;
 };
 
 /*
@@ -59,6 +69,15 @@ type Pack = {
  * Les prix correspondent aux prix actuellement définis
  * pour les offres.
  */
+
+const complementaryCredits: CreditTopUp[] = [
+  {
+    id: "credit_1000",
+    credits: 1_000,
+    price: "500 XAF",
+    description: "1 000 crédits supplémentaires",
+  },
+];
 
 const packs: Pack[] = [
   {
@@ -106,18 +125,26 @@ const packs: Pack[] = [
       {
         name: "Images 480",
         available: true,
+        cost: 50,
+        unit: "génération",
       },
       {
         name: "Images 720",
         available: true,
+        cost: 75,
+        unit: "génération",
       },
       {
-        name: "Vidéo 5 s",
+        name: "Vidéo 4 s",
         available: true,
+        cost: 500,
+        unit: "génération",
       },
       {
-        name: "Vidéo 10 s",
+        name: "Vidéo 8 s",
         available: true,
+        cost: 1_000,
+        unit: "génération",
       },
     ],
   },
@@ -170,18 +197,14 @@ const packs: Pack[] = [
       {
         name: "Images 480",
         available: true,
+        cost: 50,
+        unit: "génération",
       },
       {
         name: "Images 720",
         available: true,
-      },
-      {
-        name: "Veo Lite",
-        available: true,
-      },
-      {
-        name: "Vidéos Pro",
-        available: false,
+        cost: 75,
+        unit: "génération",
       },
     ],
   },
@@ -233,26 +256,38 @@ const packs: Pack[] = [
       {
         name: "Image Pro",
         available: true,
+        cost: 100,
+        unit: "génération",
       },
       {
         name: "Image Pro Standard",
         available: true,
+        cost: 180,
+        unit: "génération",
       },
       {
         name: "Image Pro Ultra",
         available: true,
+        cost: 270,
+        unit: "génération",
       },
       {
         name: "Veo Pro Fast",
         available: true,
+        cost: 1_500,
+        unit: "génération",
       },
       {
         name: "Veo Pro Standard",
         available: true,
+        cost: 3_000,
+        unit: "génération",
       },
       {
         name: "Veo Pro Extension",
         available: true,
+        cost: 1_500,
+        unit: "génération",
       },
     ],
   },
@@ -305,26 +340,38 @@ const packs: Pack[] = [
       {
         name: "Image Business",
         available: true,
+        cost: 250,
+        unit: "génération",
       },
       {
         name: "Image Business HD",
         available: true,
+        cost: 400,
+        unit: "génération",
       },
       {
         name: "Image Business Ultra",
         available: true,
+        cost: 600,
+        unit: "génération",
       },
       {
         name: "Veo Business Fast",
         available: true,
+        cost: 2_500,
+        unit: "génération",
       },
       {
         name: "Veo Business Standard",
         available: true,
+        cost: 5_000,
+        unit: "génération",
       },
       {
         name: "Veo Business Long",
         available: true,
+        cost: 10_000,
+        unit: "génération",
       },
     ],
   },
@@ -366,7 +413,15 @@ const faqs = [
       "Toutes les actions consomment-elles le même nombre de crédits ?",
 
     answer:
-      "Non. Le coût dépend du modèle et de l'opération effectuée. Les actions les plus avancées consomment davantage de crédits.",
+      "Non. Le coût dépend du modèle et de l'opération effectuée. Les actions les plus avancées consomment davantage de crédits. Une génération d'image ou de vidéo affiche son coût directement dans le pack concerné.",
+  },
+
+  {
+    question:
+      "Puis-je acheter des crédits supplémentaires ?",
+
+    answer:
+      "Oui. Une recharge complémentaire de 1 000 crédits est proposée à 500 XAF. Le paiement sera relié au système de paiement LBV-Connect.ia.",
   },
 
   {
@@ -395,6 +450,9 @@ const faqs = [
 export default function PacksPage() {
   const [openFaq, setOpenFaq] =
     useState<number | null>(null);
+
+  const [showCreditTopUp, setShowCreditTopUp] =
+    useState(false);
 
   async function handlePackSelection(pack: Pack) {
     const supabase = createClient();
@@ -498,24 +556,115 @@ export default function PacksPage() {
               </div>
 
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-                Le système de crédits
-                complémentaires pourra être
-                activé ultérieurement. Cette
-                fonctionnalité dépendra du système
-                de paiement de LBV-Connect.ia.
+                Rechargez votre solde sans changer de pack.
+                Les crédits complémentaires sont ajoutés
+                directement à votre portefeuille.
+              </p>
+
+              <p className="mt-3 text-sm font-medium">
+                À partir de 500 XAF pour 1 000 crédits
               </p>
             </div>
 
             <button
               type="button"
-              disabled
-              className="inline-flex cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-medium text-accent-foreground opacity-60"
+              onClick={() => setShowCreditTopUp(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-medium text-accent-foreground transition hover:opacity-85"
             >
               Acheter des crédits
               <Zap size={16} />
             </button>
           </div>
         </section>
+
+        {/* Modal crédits complémentaires */}
+
+        {showCreditTopUp && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="credit-topup-title"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setShowCreditTopUp(false);
+              }
+            }}
+          >
+            <div className="w-full max-w-lg rounded-3xl border border-border bg-surface p-6 shadow-2xl sm:p-7">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-muted">
+                    Crédits complémentaires
+                  </p>
+
+                  <h2
+                    id="credit-topup-title"
+                    className="mt-1 text-2xl font-semibold tracking-tight"
+                  >
+                    Rechargez votre solde
+                  </h2>
+
+                  <p className="mt-2 text-sm leading-6 text-muted">
+                    Choisissez une recharge. Le paiement sera relié
+                    au système de paiement LBV-Connect.ia.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowCreditTopUp(false)}
+                  aria-label="Fermer"
+                  className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="mt-6 space-y-3">
+                {complementaryCredits.map((topUp) => (
+                  <div
+                    key={topUp.id}
+                    className="flex flex-col gap-4 rounded-2xl border border-border bg-surface-secondary p-5 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div>
+                      <p className="text-lg font-semibold">
+                        {topUp.credits.toLocaleString("fr-FR")} crédits
+                      </p>
+
+                      <p className="mt-1 text-sm text-muted">
+                        {topUp.description}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-4 sm:flex-col sm:items-end">
+                      <span className="text-lg font-semibold">
+                        {topUp.price}
+                      </span>
+
+                      <button
+                        type="button"
+                        disabled
+                        className="rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground opacity-60"
+                        title="Paiement à connecter"
+                      >
+                        Bientôt disponible
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-border bg-surface-secondary p-4">
+                <p className="text-xs leading-5 text-muted">
+                  Le montant sera débité uniquement après confirmation
+                  du paiement. Moov Money et Airtel Money seront
+                  connectés à cette étape.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Fonctionnement */}
 
@@ -945,23 +1094,49 @@ function PackCard({
                   />
                 )}
 
-                <span
-                  className={`text-sm ${
-                    media.available
-                      ? isPopular
-                        ? "opacity-80"
-                        : "text-muted-strong"
-                      : isPopular
-                        ? "opacity-35"
-                        : "text-muted"
-                  }`}
-                >
-                  {media.name}
-                </span>
+                <div className="min-w-0">
+                  <span
+                    className={`block text-sm ${
+                      media.available
+                        ? isPopular
+                          ? "opacity-80"
+                          : "text-muted-strong"
+                        : isPopular
+                          ? "opacity-35"
+                          : "text-muted"
+                    }`}
+                  >
+                    {media.name}
+                  </span>
+
+                  {media.available && (
+                    <span
+                      className={`mt-0.5 block text-[11px] ${
+                        isPopular
+                          ? "opacity-60"
+                          : "text-muted"
+                      }`}
+                    >
+                      {media.cost.toLocaleString("fr-FR")} crédits
+                      {media.unit ? ` / ${media.unit}` : ""}
+                    </span>
+                  )}
+                </div>
               </div>
             ),
           )}
         </div>
+
+        <p
+          className={`mt-3 text-[11px] leading-5 ${
+            isPopular
+              ? "opacity-55"
+              : "text-muted"
+          }`}
+        >
+          Le coût affiché correspond à une génération et
+          est déduit de votre solde de crédits.
+        </p>
       </div>
 
       {/* Capacités */}
