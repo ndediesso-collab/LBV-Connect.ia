@@ -64,7 +64,16 @@ class ModelTrialService:
     def get_trial(
         user_id: str,
         model_id: str,
-    ):
+    ) -> dict | None:
+        """
+        Retourne le compteur d'essais d'un utilisateur.
+
+        Si aucun compteur n'existe encore, retourne None.
+
+        Une réponse Supabase absente est également traitée
+        comme une absence de compteur afin d'éviter une
+        erreur AttributeError sur response.data.
+        """
 
         response = (
             supabase
@@ -76,6 +85,9 @@ class ModelTrialService:
             .execute()
         )
 
+        if response is None:
+            return None
+
         return response.data
 
     # ========================================================
@@ -86,7 +98,11 @@ class ModelTrialService:
     def get_or_create_trial(
         user_id: str,
         model_id: str,
-    ):
+    ) -> dict:
+        """
+        Retourne le compteur existant ou crée le compteur
+        initial de 5 essais pour le modèle concerné.
+        """
 
         existing = (
             ModelTrialService.get_trial(
@@ -112,6 +128,12 @@ class ModelTrialService:
             .execute()
         )
 
+        if response is None:
+            raise RuntimeError(
+                "Supabase n'a retourné aucune réponse "
+                "lors de la création du compteur d'essais."
+            )
+
         if not response.data:
             raise RuntimeError(
                 "Impossible de créer le compteur "
@@ -129,6 +151,9 @@ class ModelTrialService:
         user_id: str,
         model_id: str,
     ) -> int:
+        """
+        Retourne le nombre d'essais encore disponibles.
+        """
 
         trial = (
             ModelTrialService.get_or_create_trial(
@@ -153,6 +178,10 @@ class ModelTrialService:
         pack_id: str | None,
         model_id: str,
     ) -> bool:
+        """
+        Vérifie que le modèle correspond au modèle d'essai
+        du pack et qu'il reste au moins un essai.
+        """
 
         expected_model = (
             ModelTrialService.get_trial_model(
@@ -180,7 +209,13 @@ class ModelTrialService:
     def consume_trial(
         user_id: str,
         model_id: str,
-    ):
+    ) -> dict:
+        """
+        Consomme exactement un essai.
+
+        La condition used_trials == ancienne valeur
+        protège contre une consommation concurrente.
+        """
 
         trial = (
             ModelTrialService.get_or_create_trial(
@@ -215,10 +250,18 @@ class ModelTrialService:
             .execute()
         )
 
+        if response is None:
+            raise RuntimeError(
+                "Supabase n'a retourné aucune réponse "
+                "lors de la consommation de l'essai."
+            )
+
         if not response.data:
             raise RuntimeError(
                 "Impossible de mettre à jour "
-                "le compteur d'essais."
+                "le compteur d'essais. "
+                "Le compteur a peut-être été modifié "
+                "par une autre requête."
             )
 
         return response.data[0]
