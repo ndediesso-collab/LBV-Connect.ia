@@ -78,6 +78,24 @@ const complementaryCredits: CreditTopUp[] = [
     price: "500 XAF",
     description: "1 000 crédits supplémentaires",
   },
+  {
+    id: "credit_2000",
+    credits: 2_000,
+    price: "1 000 XAF",
+    description: "2 000 crédits supplémentaires",
+  },
+  {
+    id: "credit_4000",
+    credits: 4_000,
+    price: "2 000 XAF",
+    description: "4 000 crédits supplémentaires",
+  },
+  {
+    id: "credit_10000",
+    credits: 10_000,
+    price: "5 000 XAF",
+    description: "10 000 crédits supplémentaires",
+  },
 ];
 
 const packs: Pack[] = [
@@ -422,7 +440,7 @@ const faqs = [
       "Puis-je acheter des crédits supplémentaires ?",
 
     answer:
-      "Oui. Une recharge complémentaire de 1 000 crédits est proposée à 500 XAF. Le paiement est lancé depuis cette page et confirmé par le système de paiement LBV-Connect.ia.",
+      "Oui. Vous pouvez acheter des recharges complémentaires de 1 000 crédits pour 500 XAF, 2 000 crédits pour 1 000 XAF, 4 000 crédits pour 2 000 XAF ou 10 000 crédits pour 5 000 XAF. Le paiement est lancé depuis cette page et confirmé par le système de paiement LBV-Connect.ia.",
   },
 
   {
@@ -477,15 +495,16 @@ export default function PacksPage() {
       // Le frontend déclenche uniquement la création du paiement.
       // Le backend reste responsable du prix, du pack, de la transaction
       // et de l'activation après confirmation du paiement.
-      const response = await fetch("/api/payments/checkout", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/payments/checkout`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          product_type: "pack",
+          payment_type: "primary_pack",
           product_id: pack.id,
+          provider: "chariow",
         }),
       });
 
@@ -555,15 +574,16 @@ export default function PacksPage() {
     setIsPaying(topUp.id);
 
     try {
-      const response = await fetch("/api/payments/checkout", {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/payments/checkout`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          product_type: "credit_topup",
+          payment_type: "addon",
           product_id: topUp.id,
+          provider: "chariow",
         }),
       });
 

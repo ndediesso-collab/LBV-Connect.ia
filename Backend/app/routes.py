@@ -1,5 +1,3 @@
-
-
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
@@ -342,6 +340,138 @@ def _transaction_response(transaction):
             "reference_id",
             None,
         ),
+    }
+
+# ============================================================
+# PAIEMENTS — CHECKOUT FRONTEND
+# ============================================================
+
+@router.post("/payments/checkout")
+def checkout_payment(
+    request: CreatePaymentRequest,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Alias utilisé par le frontend pour initialiser un paiement.
+
+    Cette route crée uniquement une transaction `pending`.
+    Elle ne considère jamais le paiement comme réussi.
+
+    L'activation d'un pack principal ou l'ajout de crédits
+    intervient uniquement après confirmation par le webhook
+    Chariow.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    validate_provider(
+        request.provider
+    )
+
+    product = get_payment_product(
+        payment_type=request.payment_type,
+        product_id=request.product_id,
+    )
+
+    repository = _get_repository()
+
+    wallet = repository.get_wallet(
+        authenticated_user_id
+    )
+
+    if wallet is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Aucun portefeuille de crédits "
+                "trouvé pour cet utilisateur."
+            ),
+        )
+
+    if request.payment_type == "addon":
+        validate_addon_purchase(
+            wallet
+        )
+
+    reference = generate_payment_reference()
+
+    transaction_payload = {
+        "user_id": authenticated_user_id,
+        "reference": reference,
+        "payment_type": request.payment_type,
+        "pack_id": (
+            request.product_id
+            if request.payment_type == "primary_pack"
+            else None
+        ),
+        "addon_id": (
+            request.product_id
+            if request.payment_type == "addon"
+            else None
+        ),
+        "provider": request.provider,
+        "amount": product["price"],
+        "currency": "XAF",
+        "credits": product["credits"],
+        "status": "pending",
+        "metadata": {
+            "source": "lbv_connect",
+            "version": "v1",
+            "endpoint": "/payments/checkout",
+        },
+    }
+
+    try:
+        response = (
+            supabase
+            .table("payment_transactions")
+            .insert(transaction_payload)
+            .execute()
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Impossible de créer la transaction "
+                f"de paiement : {str(error)}"
+            ),
+        )
+
+    if response is None or not response.data:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "La transaction de paiement "
+                "n'a pas pu être créée."
+            ),
+        )
+
+    transaction = response.data[0]
+
+    return {
+        "success": True,
+        "message": "Commande de paiement créée.",
+        "transaction": transaction,
+        "payment": {
+            "reference": reference,
+            "provider": request.provider,
+            "payment_type": request.payment_type,
+            "product_id": request.product_id,
+            "amount": product["price"],
+            "currency": "XAF",
+            "credits": product["credits"],
+            "status": "pending",
+        },
     }
 
 
