@@ -500,6 +500,7 @@ export default function PacksPage() {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
+          "user-id": session.user.id,
         },
         body: JSON.stringify({
           payment_type: "primary_pack",
@@ -579,6 +580,7 @@ export default function PacksPage() {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${session.access_token}`,
+          "user-id": session.user.id,
         },
         body: JSON.stringify({
           payment_type: "addon",
