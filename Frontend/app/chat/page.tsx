@@ -347,6 +347,14 @@ function getAvailableModels(
   );
 }
 
+const TRIAL_MODEL_BY_PACK: Record<string, string> = {
+  // Le pack inférieur peut essayer gratuitement le modèle
+  // immédiatement supérieur, jusqu'à 5 utilisations.
+  light_pack: "gpt-5",
+  intermediate_pack: "gpt-5.6-terra",
+  pro_pack: "gpt-5.6-sol",
+};
+
 function getSelectableModels(
   packId: string | null,
   trials: Record<string, TrialInfo>,
@@ -365,18 +373,20 @@ function getSelectableModels(
     ),
   );
 
-  for (const trialModelId of Object.keys(
-    trials,
-  )) {
+  // Un seul modèle supérieur est proposé en essai pour
+  // chaque pack inférieur : 5 essais maximum.
+  const trialModelId =
+    TRIAL_MODEL_BY_PACK[packId];
+
+  if (trialModelId && !normalIds.has(trialModelId)) {
     const trialModel = models.find(
       (model) =>
         model.id === trialModelId,
     );
 
-    if (
-      trialModel &&
-      !normalIds.has(trialModel.id)
-    ) {
+    const trial = trials[trialModelId];
+
+    if (trialModel && trial) {
       selectable.push(trialModel);
     }
   }

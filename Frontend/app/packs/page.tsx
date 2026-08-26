@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 type Pack = {
   id:
@@ -421,7 +422,7 @@ const faqs = [
       "Puis-je acheter des crédits supplémentaires ?",
 
     answer:
-      "Oui. Une recharge complémentaire de 1 000 crédits est proposée à 500 XAF. Le paiement sera relié au système de paiement LBV-Connect.ia.",
+      "Oui. Une recharge complémentaire de 1 000 crédits est proposée à 500 XAF. Le paiement est lancé depuis cette page et confirmé par le système de paiement LBV-Connect.ia.",
   },
 
   {
@@ -453,6 +454,8 @@ export default function PacksPage() {
 
   const [showCreditTopUp, setShowCreditTopUp] =
     useState(false);
+  const [isPaying, setIsPaying] = useState<string | null>(null);
+  const router = useRouter();
 
   async function handlePackSelection(pack: Pack) {
     const supabase = createClient();
@@ -463,12 +466,149 @@ export default function PacksPage() {
 
     if (!session) {
       window.location.href = `/login?redirect=${encodeURIComponent(
-        `/packs/activation?pack=${pack.id}`,
+        `/packs?checkout=${pack.id}`,
       )}`;
       return;
     }
 
-    window.location.href = `/packs/activation?pack=${pack.id}`;
+    setIsPaying(pack.id);
+
+    try {
+      // Le frontend déclenche uniquement la création du paiement.
+      // Le backend reste responsable du prix, du pack, de la transaction
+      // et de l'activation après confirmation du paiement.
+      const response = await fetch("/api/payments/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          product_type: "pack",
+          product_id: pack.id,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.detail === "string"
+            ? data.detail
+            : typeof data?.error === "string"
+              ? data.error
+              : "Impossible d'initialiser le paiement.",
+        );
+      }
+
+      if (typeof data?.checkout_url === "string") {
+        window.location.href = data.checkout_url;
+        return;
+      }
+
+      if (typeof data?.redirect_url === "string") {
+        window.location.href = data.redirect_url;
+        return;
+      }
+
+      if (typeof data?.payment_url === "string") {
+        window.location.href = data.payment_url;
+        return;
+      }
+
+      if (typeof data?.payment_id === "string") {
+        router.push(
+          `/payments/${encodeURIComponent(data.payment_id)}`,
+        );
+        return;
+      }
+
+      throw new Error(
+        "Le serveur n'a fourni aucune destination de paiement.",
+      );
+    } catch (error) {
+      console.error("Initialisation paiement pack échouée :", error);
+      window.alert(
+        error instanceof Error
+          ? error.message
+          : "Impossible d'initialiser le paiement.",
+      );
+    } finally {
+      setIsPaying(null);
+    }
+  }
+
+  async function handleCreditTopUp(topUp: CreditTopUp) {
+    const supabase = createClient();
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      window.location.href = `/login?redirect=${encodeURIComponent(
+        "/packs?checkout=credit_1000",
+      )}`;
+      return;
+    }
+
+    setIsPaying(topUp.id);
+
+    try {
+      const response = await fetch("/api/payments/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          product_type: "credit_topup",
+          product_id: topUp.id,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.detail === "string"
+            ? data.detail
+            : typeof data?.error === "string"
+              ? data.error
+              : "Impossible d'initialiser le paiement.",
+        );
+      }
+
+      const destination =
+        data?.checkout_url ??
+        data?.redirect_url ??
+        data?.payment_url;
+
+      if (typeof destination === "string") {
+        window.location.href = destination;
+        return;
+      }
+
+      if (typeof data?.payment_id === "string") {
+        router.push(
+          `/payments/${encodeURIComponent(data.payment_id)}`,
+        );
+        return;
+      }
+
+      throw new Error(
+        "Le serveur n'a fourni aucune destination de paiement.",
+      );
+    } catch (error) {
+      console.error("Initialisation recharge échouée :", error);
+      window.alert(
+        error instanceof Error
+          ? error.message
+          : "Impossible d'initialiser le paiement.",
+      );
+    } finally {
+      setIsPaying(null);
+    }
   }
 
   return (
@@ -606,8 +746,8 @@ export default function PacksPage() {
                   </h2>
 
                   <p className="mt-2 text-sm leading-6 text-muted">
-                    Choisissez une recharge. Le paiement sera relié
-                    au système de paiement LBV-Connect.ia.
+                    Choisissez une recharge. Le paiement est lancé depuis cette page et confirmé
+                    par le système de paiement LBV-Connect.ia.
                   </p>
                 </div>
 
@@ -644,11 +784,13 @@ export default function PacksPage() {
 
                       <button
                         type="button"
-                        disabled
-                        className="rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground opacity-60"
-                        title="Paiement à connecter"
+                        onClick={() => handleCreditTopUp(topUp)}
+                        disabled={isPaying !== null}
+                        className="rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        Bientôt disponible
+                        {isPaying === topUp.id
+                          ? "Paiement..."
+                          : "Acheter"}
                       </button>
                     </div>
                   </div>
