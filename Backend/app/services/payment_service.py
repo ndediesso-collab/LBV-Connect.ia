@@ -42,26 +42,18 @@ def get_payment_product(
     """
 
     if payment_type == "primary_pack":
-
-        product = PRIMARY_PACKS.get(
-            product_id
-        )
+        product = PRIMARY_PACKS.get(product_id)
 
     elif payment_type == "addon":
-
-        product = ADDON_PACKS.get(
-            product_id
-        )
+        product = ADDON_PACKS.get(product_id)
 
     else:
-
         raise HTTPException(
             status_code=400,
             detail="Type de paiement invalide.",
         )
 
     if product is None:
-
         raise HTTPException(
             status_code=404,
             detail="Produit de paiement introuvable.",
@@ -81,17 +73,21 @@ def validate_addon_purchase(
     Vérifie qu'un utilisateur possède actuellement
     un pack principal actif avant d'autoriser
     l'achat d'un complément.
+
+    Une recharge complémentaire :
+    - ajoute uniquement des crédits au solde ;
+    - ne crée pas un nouveau pack ;
+    - ne prolonge pas la durée du pack ;
+    - ne remplace pas le pack actif.
     """
 
     if wallet is None:
-
         raise HTTPException(
             status_code=404,
             detail="Portefeuille introuvable.",
         )
 
     if not wallet.pack_id:
-
         raise HTTPException(
             status_code=403,
             detail=(
@@ -100,25 +96,11 @@ def validate_addon_purchase(
             ),
         )
 
-    if not wallet.pack_expires_at:
-
+    if not wallet.is_pack_active:
         raise HTTPException(
             status_code=403,
             detail=(
-                "Votre pack principal n'est plus actif."
-            ),
-        )
-
-    expiration = wallet.pack_expires_at
-
-    if expiration <= datetime.now(
-        timezone.utc
-    ):
-
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Votre pack principal a expiré. "
+                "Votre pack principal est expiré ou inactif. "
                 "Activez d'abord un nouveau pack."
             ),
         )
@@ -139,7 +121,6 @@ def validate_provider(
         "airtel_money",
         "moov_money",
     }:
-
         raise HTTPException(
             status_code=400,
             detail=(

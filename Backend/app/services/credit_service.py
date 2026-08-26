@@ -401,6 +401,61 @@ class CreditService:
 
         return cost
 
+
+    # ========================================================
+    # RECHARGE COMPLÉMENTAIRE
+    # ========================================================
+
+    @classmethod
+    def recharge(
+        cls,
+        wallet: CreditWallet,
+        credits: int,
+        repository=None,
+        user_id: str | None = None,
+        reference_id: str | None = None,
+    ) -> CreditWallet:
+        """
+        Ajoute des crédits complémentaires au portefeuille.
+
+        Une recharge :
+        - augmente uniquement le solde disponible ;
+        - ne modifie pas le pack actif ;
+        - ne modifie pas la durée du pack ;
+        - ne modifie pas les crédits initiaux du pack ;
+        - doit être exécutée atomiquement via le repository
+          en production.
+
+        `reference_id` doit correspondre à l'identifiant unique
+        du paiement afin de permettre l'idempotence du webhook.
+        """
+
+        if credits <= 0:
+            raise ValueError(
+                "Le nombre de crédits à recharger doit être supérieur à zéro."
+            )
+
+        if repository is None:
+            raise ValueError(
+                "Un repository est requis pour effectuer une recharge."
+            )
+
+        if not user_id:
+            raise ValueError(
+                "user_id est requis pour une recharge atomique."
+            )
+
+        if not reference_id:
+            raise ValueError(
+                "reference_id est requis pour une recharge."
+            )
+
+        return repository.recharge_credits(
+            user_id=user_id,
+            amount=credits,
+            reference_id=reference_id,
+        )
+
     # ========================================================
     # CONSOMMATION
     # ========================================================

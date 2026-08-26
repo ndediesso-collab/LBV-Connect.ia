@@ -76,12 +76,52 @@ class WalletService:
         return wallet
 
     # ========================================================
+    # RECHARGE COMPLÉMENTAIRE
+    # ========================================================
+
+    def recharge(
+        self,
+        user_id: str,
+        credits: int,
+        reference_id: str,
+    ) -> CreditWallet:
+        """
+        Ajoute des crédits complémentaires au portefeuille.
+
+        La recharge :
+        - ne modifie pas initial_credits ;
+        - ne modifie pas pack_id ;
+        - ne modifie pas pack_activated_at ;
+        - ne modifie pas pack_expires_at ;
+        - utilise la référence du paiement pour l'idempotence.
+
+        L'opération réelle et atomique est déléguée au repository.
+        """
+
+        if credits <= 0:
+            raise ValueError(
+                "Le nombre de crédits à recharger doit être supérieur à zéro."
+            )
+
+        if not reference_id:
+            raise ValueError(
+                "La référence de paiement est obligatoire pour une recharge."
+            )
+
+        return self.repository.recharge_credits(
+            user_id=user_id,
+            amount=credits,
+            reference_id=reference_id,
+        )
+
+    # ========================================================
     # PACK LÉGER
     # ========================================================
 
     def create_light_wallet(
         self,
         user_id: str,
+        reference_id: str = "light_pack",
     ) -> CreditWallet:
 
         return self._create_wallet(
@@ -89,7 +129,7 @@ class WalletService:
             pack_id="light_pack",
             credits=LIGHT_PACK_CREDITS,
             duration_days=LIGHT_PACK_DURATION_DAYS,
-            reference_id="light_pack",
+            reference_id=reference_id,
         )
 
     # ========================================================
@@ -99,6 +139,7 @@ class WalletService:
     def create_intermediate_wallet(
         self,
         user_id: str,
+        reference_id: str = "intermediate_pack",
     ) -> CreditWallet:
 
         return self._create_wallet(
@@ -106,7 +147,7 @@ class WalletService:
             pack_id="intermediate_pack",
             credits=INTERMEDIATE_PACK_CREDITS,
             duration_days=INTERMEDIATE_PACK_DURATION_DAYS,
-            reference_id="intermediate_pack",
+            reference_id=reference_id,
         )
 
     # ========================================================
@@ -116,6 +157,7 @@ class WalletService:
     def create_pro_wallet(
         self,
         user_id: str,
+        reference_id: str = "pro_pack",
     ) -> CreditWallet:
 
         return self._create_wallet(
@@ -123,7 +165,7 @@ class WalletService:
             pack_id="pro_pack",
             credits=PRO_PACK_CREDITS,
             duration_days=PRO_PACK_DURATION_DAYS,
-            reference_id="pro_pack",
+            reference_id=reference_id,
         )
 
     # ========================================================
@@ -133,6 +175,7 @@ class WalletService:
     def create_business_wallet(
         self,
         user_id: str,
+        reference_id: str = "business_pack",
     ) -> CreditWallet:
 
         return self._create_wallet(
@@ -140,5 +183,5 @@ class WalletService:
             pack_id="business_pack",
             credits=BUSINESS_PACK_CREDITS,
             duration_days=BUSINESS_PACK_DURATION_DAYS,
-            reference_id="business_pack",
+            reference_id=reference_id,
         )

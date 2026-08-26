@@ -41,9 +41,4 @@ ADDON_PACKS = {
         "price": 5000,
         "credits": 10000,
     },
-
-    "credits_22000": {
-        "price": 10000,
-        "credits": 22000,
-    },
 }

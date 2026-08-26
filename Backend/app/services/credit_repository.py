@@ -4,6 +4,7 @@ from app.models.credit import CreditWallet
 from app.models.credit_transaction import CreditTransaction
 from app.config.credit_costs import CreditAction
 
+
 class CreditRepository(ABC):
     """Contrat de persistance des crédits."""
 
@@ -48,4 +49,19 @@ class CreditRepository(ABC):
         reference_id: str | None = None,
     ) -> CreditWallet:
         """Débite et journalise atomiquement les crédits."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def recharge_credits(
+        self,
+        user_id: str,
+        amount: int,
+        reference_id: str,
+    ) -> CreditWallet:
+        """
+        Ajoute et journalise atomiquement des crédits complémentaires.
+
+        `reference_id` correspond à la référence unique du paiement
+        et permet de garantir l'idempotence d'une recharge.
+        """
         raise NotImplementedError

@@ -1,4 +1,4 @@
-from uuid import uuid4
+
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
@@ -956,6 +956,283 @@ def create_business_wallet_test(
             status_code=500,
             detail=str(error),
         )
+
+
+# ============================================================
+# CHARIOW — WEBHOOK DE PAIEMENT
+# ============================================================
+
+class ChariowWebhookRequest(BaseModel):
+    """
+    Payload volontairement tolérant.
+
+    Chariow peut faire évoluer la structure du Pulse.
+    Les champs sont donc normalisés par `_normalize_chariow_event`
+    avant traitement.
+    """
+    event: str | None = None
+    type: str | None = None
+    status: str | None = None
+    order_id: str | None = None
+    transaction_id: str | None = None
+    reference: str | None = None
+    product_id: str | None = None
+    product_name: str | None = None
+    user_id: str | None = None
+    customer_email: str | None = None
+    email: str | None = None
+    amount: int | float | str | None = None
+    data: dict | None = None
+
+
+def _chariow_value(payload: ChariowWebhookRequest, *keys):
+    """Recherche une valeur dans le payload racine puis dans `data`."""
+    raw = payload.model_dump(exclude_none=True)
+
+    data = raw.get("data")
+    if isinstance(data, dict):
+        raw = {**data, **raw}
+
+    for key in keys:
+        value = raw.get(key)
+        if value not in (None, ""):
+            return value
+
+    return None
+
+
+def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
+    """Normalise les champs essentiels du Pulse Chariow."""
+    event = str(
+        _chariow_value(payload, "event", "type") or ""
+    ).strip().lower()
+
+    status = str(
+        _chariow_value(payload, "status", "payment_status")
+        or ""
+    ).strip().lower()
+
+    order_id = _chariow_value(
+        payload,
+        "order_id",
+        "transaction_id",
+        "id",
+        "reference",
+    )
+
+    product_id = _chariow_value(
+        payload,
+        "product_id",
+        "product",
+        "product_reference",
+    )
+
+    user_id = _chariow_value(
+        payload,
+        "user_id",
+        "customer_id",
+        "client_id",
+        "metadata_user_id",
+    )
+
+    email = _chariow_value(
+        payload,
+        "customer_email",
+        "email",
+    )
+
+    return {
+        "event": event,
+        "status": status,
+        "order_id": str(order_id) if order_id else None,
+        "product_id": str(product_id) if product_id else None,
+        "user_id": str(user_id) if user_id else None,
+        "email": str(email) if email else None,
+    }
+
+
+def _is_chariow_success(event: dict) -> bool:
+    """
+    Détermine si le Pulse représente une vente confirmée.
+
+    Tant que Chariow n'a pas envoyé son payload réel de test,
+    on reste volontairement conservateur : seuls les statuts
+    explicitement positifs sont acceptés.
+    """
+    success_statuses = {
+        "success",
+        "successful",
+        "paid",
+        "completed",
+        "complete",
+        "succeeded",
+    }
+
+    success_events = {
+        "sale_success",
+        "sale_successful",
+        "successful_sale",
+        "vente_reussie",
+        "vente réussie",
+        "payment_success",
+        "payment_succeeded",
+    }
+
+    return (
+        event["status"] in success_statuses
+        or event["event"] in success_events
+    )
+
+
+def _find_chariow_user_id(event: dict) -> str:
+    """
+    Retourne l'utilisateur LBV-Connect auquel attribuer l'achat.
+
+    Pour la première version, le Pulse doit transmettre user_id.
+    L'email seul n'est volontairement pas utilisé pour créditer
+    un wallet afin d'éviter une attribution ambiguë.
+    """
+    if not event["user_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Le Pulse Chariow ne contient pas "
+                "l'identifiant utilisateur LBV-Connect."
+            ),
+        )
+
+    return event["user_id"]
+
+
+@router.post("/payments/chariow/webhook")
+def chariow_webhook(
+    payload: ChariowWebhookRequest,
+):
+    """
+    Point d'entrée Chariow pour les ventes.
+
+    Vente réussie :
+        - pack principal -> activation du pack ;
+        - complément -> ajout des crédits.
+
+    Vente échouée :
+        - aucune modification du wallet.
+
+    IMPORTANT :
+    Le traitement final doit être protégé par l'idempotence
+    côté base de données/RPC avant la mise en production.
+    """
+
+    event = _normalize_chariow_event(payload)
+
+    # --------------------------------------------------------
+    # 1. Échec / événement non payé
+    # --------------------------------------------------------
+
+    if not _is_chariow_success(event):
+        return {
+            "success": True,
+            "processed": False,
+            "message": "Paiement non confirmé : aucune action effectuée.",
+        }
+
+    # --------------------------------------------------------
+    # 2. Données obligatoires
+    # --------------------------------------------------------
+
+    user_id = _find_chariow_user_id(event)
+    reference_id = event["order_id"]
+
+    if not reference_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Identifiant unique de commande Chariow manquant.",
+        )
+
+    product_id = event["product_id"]
+
+    if not product_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Identifiant du produit Chariow manquant.",
+        )
+
+    # --------------------------------------------------------
+    # 3. Détection du produit
+    # --------------------------------------------------------
+
+    repository = _get_repository()
+    wallet_service = WalletService(repository)
+
+    # Pack principal
+    if product_id in PRIMARY_PACKS:
+        product = PRIMARY_PACKS[product_id]
+
+        if product_id == "light_pack":
+            wallet = wallet_service.create_light_wallet(
+                user_id=user_id,
+                reference_id=reference_id,
+            )
+        elif product_id == "intermediate_pack":
+            wallet = wallet_service.create_intermediate_wallet(
+                user_id=user_id,
+                reference_id=reference_id,
+            )
+        elif product_id == "pro_pack":
+            wallet = wallet_service.create_pro_wallet(
+                user_id=user_id,
+                reference_id=reference_id,
+            )
+        elif product_id == "business_pack":
+            wallet = wallet_service.create_business_wallet(
+                user_id=user_id,
+                reference_id=reference_id,
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Pack principal non supporté.",
+            )
+
+        return {
+            "success": True,
+            "processed": True,
+            "payment_type": "primary_pack",
+            "product_id": product_id,
+            "reference_id": reference_id,
+            "credits": product["credits"],
+            "wallet": _wallet_response(wallet),
+        }
+
+    # Complément
+    if product_id in ADDON_PACKS:
+        product = ADDON_PACKS[product_id]
+
+        wallet = repository.get_wallet(user_id)
+
+        validate_addon_purchase(wallet)
+
+        wallet = wallet_service.recharge(
+            user_id=user_id,
+            credits=product["credits"],
+            reference_id=reference_id,
+        )
+
+        return {
+            "success": True,
+            "processed": True,
+            "payment_type": "addon",
+            "product_id": product_id,
+            "reference_id": reference_id,
+            "credits_added": product["credits"],
+            "wallet": _wallet_response(wallet),
+        }
+
+    raise HTTPException(
+        status_code=404,
+        detail="Produit Chariow inconnu.",
+    )
+
 
 # ============================================================
 # CONVERSATIONS + HISTORIQUE

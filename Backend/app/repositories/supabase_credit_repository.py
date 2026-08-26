@@ -275,6 +275,80 @@ class SupabaseCreditRepository(CreditRepository):
         )
 
     # ========================================================
+    # RECHARGE ATOMIQUE
+    # ========================================================
+
+    def recharge_credits(
+        self,
+        user_id: str,
+        amount: int,
+        reference_id: str,
+    ) -> CreditWallet:
+        """
+        Ajoute des crédits à un portefeuille après confirmation
+        d'un paiement de recharge.
+
+        La recharge :
+        - augmente uniquement `balance` ;
+        - ne modifie pas `initial_credits` ;
+        - ne modifie pas `pack_id` ;
+        - ne modifie pas `pack_activated_at` ;
+        - ne modifie pas `pack_expires_at` ;
+        - doit être effectuée atomiquement côté PostgreSQL ;
+        - utilise `reference_id` pour l'idempotence du paiement.
+
+        La RPC PostgreSQL `recharge_credits` doit effectuer
+        simultanément le crédit du wallet et l'enregistrement
+        de la transaction `RECHARGE`.
+        """
+
+        if amount <= 0:
+            raise ValueError(
+                "Le montant de recharge doit être supérieur à zéro."
+            )
+
+        if not reference_id:
+            raise ValueError(
+                "La référence de paiement est obligatoire pour une recharge."
+            )
+
+        response = (
+            self.supabase
+            .rpc(
+                "recharge_credits",
+                {
+                    "p_user_id": user_id,
+                    "p_amount": amount,
+                    "p_reference_id": reference_id,
+                },
+            )
+            .execute()
+        )
+
+        if not response or not response.data:
+            raise RuntimeError(
+                "Impossible de recharger les crédits."
+            )
+
+        data = response.data
+
+        if isinstance(data, list):
+            if not data:
+                raise RuntimeError(
+                    "La RPC recharge_credits "
+                    "n'a retourné aucun portefeuille."
+                )
+
+            data = data[0]
+
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                "Réponse inattendue de la RPC recharge_credits."
+            )
+
+        return self._wallet_from_data(data)
+
+    # ========================================================
     # CRÉATION D'UNE TRANSACTION
     # ========================================================
     #

@@ -1,5 +1,11 @@
 from enum import Enum
 
+class ComplementaryCreditPack(str, Enum):
+    CREDIT_1000 = "credit_1000"
+    CREDIT_2000 = "credit_2000"
+    CREDIT_4000 = "credit_4000"
+    CREDIT_10000 = "credit_10000"
+
 
 class CreditAction(str, Enum):
     # ========================================================
@@ -269,3 +275,24 @@ BUSINESS_PACK_CREDITS = 96_000
 BUSINESS_PACK_PRICE_XAF = 25_000
 BUSINESS_PACK_DURATION_DAYS = 35
 BUSINESS_PACK_API_BUDGET_XAF = 10_000
+
+
+
+COMPLEMENTARY_CREDIT_PACKS = {
+    ComplementaryCreditPack.CREDIT_1000: {
+        "credits": 1_000,
+        "price_xaf": 500,
+    },
+    ComplementaryCreditPack.CREDIT_2000: {
+        "credits": 2_000,
+        "price_xaf": 1_000,
+    },
+    ComplementaryCreditPack.CREDIT_4000: {
+        "credits": 4_000,
+        "price_xaf": 2_000,
+    },
+    ComplementaryCreditPack.CREDIT_10000: {
+        "credits": 10_000,
+        "price_xaf": 5_000,
+    },
+}   
