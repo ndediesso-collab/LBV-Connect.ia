@@ -12,10 +12,11 @@ import {
   Settings,
   Sparkles,
   Wallet,
+  Video,
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
 import { createClient } from "@/lib/supabase/client";
@@ -58,6 +59,31 @@ type ChatResponse = {
   requires_critical_warning: boolean;
   response?: string;
   message?: string;
+};
+
+type MediaCapability = {
+  action: string;
+  type: "image" | "video";
+  credits: number;
+};
+
+type MediaCapabilitiesResponse = {
+  success: boolean;
+  pack_id: string | null;
+  media: MediaCapability[];
+};
+
+type GeneratedMedia = {
+  id: string;
+  type: "image" | "video";
+  mimeType: string;
+  url: string;
+  action: string;
+  model: string;
+  cost: number;
+  creditsRemaining: number;
+  seconds?: string | null;
+  size?: string | null;
 };
 
 type ConversationResponse = {
@@ -263,6 +289,11 @@ const capabilities = [
   {
     label: "Recherche Web",
     icon: Globe,
+    disabled: false,
+  },
+  {
+    label: "Création",
+    icon: Video,
     disabled: false,
   },
 ];
@@ -475,6 +506,16 @@ async function apiFetch<T>(
   return response.json();
 }
 
+async function apiMediaFetch<T>(
+  path: string,
+  payload: { action: string; prompt: string },
+): Promise<T> {
+  return apiFetch<T>(path, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 /*
  * ============================================================
  * API STREAMING AUTHENTIFIÉE
@@ -615,7 +656,7 @@ async function saveMessageRemote(
 function renderInlineMarkdown(
   text: string,
 ) {
-  const parts: React.ReactNode[] = [];
+  const parts: ReactNode[] = [];
 
   let remaining = text;
   let index = 0;
@@ -820,7 +861,7 @@ function MarkdownMessage({
   const lines =
     normalized.split("\n");
 
-  const blocks: React.ReactNode[] =
+  const blocks: ReactNode[] =
     [];
 
   let paragraph: string[] = [];
@@ -1296,6 +1337,24 @@ export default function ChatPage() {
     setCurrentUserId,
   ] = useState<string | null>(null);
 
+  const [mediaCapabilities, setMediaCapabilities] =
+    useState<MediaCapability[]>([]);
+
+  const [selectedMediaAction, setSelectedMediaAction] =
+    useState<string>("");
+
+  const [mediaPrompt, setMediaPrompt] =
+    useState("");
+
+  const [generatedMedia, setGeneratedMedia] =
+    useState<GeneratedMedia[]>([]);
+
+  const [isLoadingMediaCapabilities, setIsLoadingMediaCapabilities] =
+    useState(false);
+
+  const [mediaMenuOpen, setMediaMenuOpen] =
+    useState(false);
+
   /*
    * ==========================================================
    * SAUVEGARDE LOCALE
@@ -1631,6 +1690,7 @@ export default function ChatPage() {
           loadConversations(
             localCache,
           ),
+          loadMediaCapabilities(),
         ]);
       } catch (requestError) {
         console.error(
@@ -1877,6 +1937,44 @@ export default function ChatPage() {
 
   /*
    * ==========================================================
+   * CHARGEMENT DES CAPACITÉS MÉDIA
+   * ==========================================================
+   */
+
+  async function loadMediaCapabilities(): Promise<void> {
+    try {
+      setIsLoadingMediaCapabilities(true);
+
+      const data = await apiFetch<MediaCapabilitiesResponse>(
+        "/ai/media-capabilities",
+      );
+
+      const available = Array.isArray(data.media)
+        ? data.media
+        : [];
+
+      setMediaCapabilities(available);
+
+      setSelectedMediaAction((current) => {
+        if (current && available.some((item) => item.action === current)) {
+          return current;
+        }
+        return available[0]?.action ?? "";
+      });
+    } catch (requestError) {
+      console.error(
+        "Erreur chargement capacités média :",
+        requestError,
+      );
+      setMediaCapabilities([]);
+      setSelectedMediaAction("");
+    } finally {
+      setIsLoadingMediaCapabilities(false);
+    }
+  }
+
+  /*
+   * ==========================================================
    * CAPACITÉS
    * ==========================================================
    */
@@ -1901,6 +1999,21 @@ export default function ChatPage() {
             ? null
             : label,
       );
+      setMediaMenuOpen(false);
+      return;
+    }
+
+    if (label === "Création") {
+      if (mediaCapabilities.length === 0) {
+        setError(
+          "Aucune création média n'est disponible avec votre pack.",
+        );
+        return;
+      }
+
+      setActiveCapability("Création");
+      setMediaMenuOpen(true);
+      setError(null);
     }
   }
 
@@ -2022,6 +2135,294 @@ export default function ChatPage() {
     );
   }
 
+  async function handleGenerateMedia(promptOverride?: string) {
+    const prompt = (promptOverride ?? mediaPrompt).trim();
+
+    if (!prompt || isThinking) {
+      return;
+    }
+
+    if (!selectedMediaAction) {
+      setError(
+        "Aucune option de création n'est disponible.",
+      );
+      return;
+    }
+
+    const capability =
+      mediaCapabilities.find(
+        (item) =>
+          item.action === selectedMediaAction,
+      );
+
+    if (!capability) {
+      setError(
+        "Cette option de création n'est plus disponible.",
+      );
+      await loadMediaCapabilities();
+      return;
+    }
+
+    const now =
+      new Date().toISOString();
+
+    let conversationId =
+      activeConversationId;
+
+    setIsThinking(true);
+    setError(null);
+
+    try {
+      if (!conversationId) {
+        const localId =
+          crypto.randomUUID();
+
+        const title =
+          prompt.length > 45
+            ? `${prompt.slice(0, 45)}...`
+            : prompt;
+
+        const localConversation:
+          Conversation = {
+          id: localId,
+          title,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        conversationId = localId;
+
+        setConversations(
+          (current) => [
+            localConversation,
+            ...current,
+          ],
+        );
+
+        setActiveConversationId(localId);
+
+        if (currentUserId) {
+          const cache =
+            readLocalCache(
+              currentUserId,
+            );
+
+          writeLocalCache(
+            currentUserId,
+            {
+              conversations: [
+                localConversation,
+                ...(cache?.conversations ||
+                  conversations),
+              ],
+              messages: {
+                ...(cache?.messages || {}),
+                [localId]: [],
+              },
+              activeConversationId:
+                localId,
+              selectedModel,
+              activeCapability: "Création",
+            },
+          );
+        }
+
+        try {
+          const remoteConversation =
+            await createConversationRemote(title);
+
+          setConversations(
+            (current) =>
+              current.map(
+                (conversation) =>
+                  conversation.id === localId
+                    ? remoteConversation
+                    : conversation,
+              ),
+          );
+
+          conversationId =
+            remoteConversation.id;
+
+          setActiveConversationId(
+            remoteConversation.id,
+          );
+        } catch (requestError) {
+          console.error(
+            "Création conversation cloud échouée :",
+            requestError,
+          );
+        }
+      }
+
+      const userMessage:
+        ChatMessage = {
+        id: crypto.randomUUID(),
+        conversationId,
+        role: "user",
+        content:
+          `[Création ${capability.type === "image" ? "image" : "vidéo"} · ${selectedMediaAction}]\n${prompt}`,
+        createdAt: now,
+      };
+
+      setMessages(
+        (current) => [
+          ...current,
+          userMessage,
+        ],
+      );
+
+      try {
+        await saveMessageRemote(
+          userMessage,
+        );
+      } catch (saveError) {
+        console.error(
+          "Erreur sauvegarde prompt média :",
+          saveError,
+        );
+      }
+
+      const endpoint =
+        capability.type === "image"
+          ? "/ai/image"
+          : "/ai/video";
+
+      const response =
+        await apiMediaFetch<{
+          success: boolean;
+          type: "image" | "video";
+          action: string;
+          model: string;
+          cost: number;
+          credits_remaining: number;
+          mime_type: string;
+          data: string;
+          seconds?: string | null;
+          size?: string | null;
+        }>(
+          endpoint,
+          {
+            action:
+              selectedMediaAction,
+            prompt,
+          },
+        );
+
+      if (!response.success || !response.data) {
+        throw new Error(
+          "Le serveur n'a retourné aucun média.",
+        );
+      }
+
+      const binaryString =
+        window.atob(response.data);
+
+      const bytes =
+        new Uint8Array(
+          binaryString.length,
+        );
+
+      for (
+        let index = 0;
+        index < binaryString.length;
+        index++
+      ) {
+        bytes[index] =
+          binaryString.charCodeAt(index);
+      }
+
+      const blob =
+        new Blob(
+          [bytes],
+          {
+            type:
+              response.mime_type ||
+              (response.type === "image"
+                ? "image/png"
+                : "video/mp4"),
+          },
+        );
+
+      const url =
+        URL.createObjectURL(blob);
+
+      const mediaId =
+        crypto.randomUUID();
+
+      setGeneratedMedia(
+        (current) => [
+          ...current,
+          {
+            id: mediaId,
+            type: response.type,
+            mimeType: blob.type,
+            url,
+            action: response.action,
+            model: response.model,
+            cost: response.cost,
+            creditsRemaining:
+              response.credits_remaining,
+            seconds: response.seconds,
+            size: response.size,
+          },
+        ],
+      );
+
+      const assistantMessage:
+        ChatMessage = {
+        id: mediaId,
+        conversationId,
+        role: "assistant",
+        content:
+          response.type === "image"
+            ? `Image générée · ${response.action}`
+            : `Vidéo générée · ${response.action}`,
+        createdAt:
+          new Date().toISOString(),
+      };
+
+      setMessages(
+        (current) => [
+          ...current,
+          assistantMessage,
+        ],
+      );
+
+      try {
+        await saveMessageRemote(
+          assistantMessage,
+        );
+      } catch (saveError) {
+        console.error(
+          "Erreur sauvegarde résultat média :",
+          saveError,
+        );
+      }
+
+      setMediaPrompt("");
+      setMediaMenuOpen(false);
+
+      const refreshedTrials =
+        await loadTrials();
+
+      await loadWallet(
+        refreshedTrials,
+      );
+
+      await loadMediaCapabilities();
+    } catch (requestError) {
+      const errorMessage =
+        requestError instanceof Error
+          ? requestError.message
+          : "La création média a échoué.";
+
+      setError(errorMessage);
+    } finally {
+      setIsThinking(false);
+    }
+  }
+
   /*
    * ==========================================================
    * ENVOI MESSAGE
@@ -2049,6 +2450,12 @@ export default function ChatPage() {
       (!content && attachments.length === 0) ||
       isThinking
     ) {
+      return;
+    }
+
+    if (activeCapability === "Création") {
+      setMediaPrompt(content);
+      await handleGenerateMedia(content);
       return;
     }
 
@@ -3046,6 +3453,37 @@ export default function ChatPage() {
                             </div>
                           )}
                         </div>
+
+                        {item.role === "assistant" &&
+                          generatedMedia.some(
+                            (media) => media.id === item.id,
+                          ) && (
+                            <div className="mt-3 max-w-[90%]">
+                              {generatedMedia
+                                .filter(
+                                  (media) =>
+                                    media.id === item.id,
+                                )
+                                .map((media) =>
+                                  media.type === "image" ? (
+                                    <img
+                                      key={media.id}
+                                      src={media.url}
+                                      alt="Image générée par LBV-Connect.ia"
+                                      className="max-h-[620px] w-auto rounded-2xl border border-border shadow-sm"
+                                    />
+                                  ) : (
+                                    <video
+                                      key={media.id}
+                                      src={media.url}
+                                      controls
+                                      playsInline
+                                      className="max-h-[620px] w-full rounded-2xl border border-border bg-black shadow-sm"
+                                    />
+                                  ),
+                                )}
+                            </div>
+                          )}
                       </div>
                     ),
                   )}
@@ -3252,6 +3690,120 @@ export default function ChatPage() {
               </div>
             )}
 
+            {activeCapability === "Création" && (
+              <div className="mx-auto mt-3 w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">
+                      Création média
+                    </p>
+                    <p className="mt-1 text-[11px] text-muted">
+                      Choisissez une image ou une vidéo autorisée par votre pack.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveCapability(null);
+                      setMediaMenuOpen(false);
+                    }}
+                    className="rounded-lg p-2 text-muted hover:bg-surface-tertiary hover:text-foreground"
+                    aria-label="Fermer la création média"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                {isLoadingMediaCapabilities ? (
+                  <p className="mt-4 text-xs text-muted">
+                    Chargement des créations disponibles...
+                  </p>
+                ) : mediaCapabilities.length === 0 ? (
+                  <p className="mt-4 text-xs text-muted">
+                    Aucune création média disponible avec votre pack.
+                  </p>
+                ) : (
+                  <>
+                    <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {mediaCapabilities.map((media) => (
+                        <button
+                          key={media.action}
+                          type="button"
+                          onClick={() =>
+                            setSelectedMediaAction(media.action)
+                          }
+                          className={`rounded-xl border px-3 py-3 text-left transition ${
+                            selectedMediaAction === media.action
+                              ? "border-border-strong bg-surface-tertiary"
+                              : "border-border hover:bg-surface-secondary"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm font-medium">
+                              {media.type === "image"
+                                ? "Image"
+                                : "Vidéo"}
+                            </span>
+                            <span className="text-[10px] text-muted">
+                              {media.credits.toLocaleString("fr-FR")} crédits
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[11px] text-muted">
+                            {media.action}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+
+                    <textarea
+                      rows={3}
+                      value={mediaPrompt}
+                      onChange={(event) =>
+                        setMediaPrompt(event.target.value)
+                      }
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === "Enter" &&
+                          !event.shiftKey
+                        ) {
+                          event.preventDefault();
+                          handleGenerateMedia();
+                        }
+                      }}
+                      placeholder="Décrivez précisément ce que vous voulez créer..."
+                      disabled={isThinking}
+                      className="mt-4 w-full resize-none rounded-xl border border-border bg-transparent px-4 py-3 text-sm leading-6 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
+                    />
+
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <p className="text-[10px] text-muted">
+                        Le débit est effectué par le backend après génération réussie.
+                      </p>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleGenerateMedia();
+                        }}
+                        disabled={
+                          !mediaPrompt.trim() ||
+                          !selectedMediaAction ||
+                          isThinking
+                        }
+                        className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-xs font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
+                      >
+                        <Sparkles size={14} />
+                        {isThinking
+                          ? "Création..."
+                          : "Créer"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             {/* ==================================================
                 COMPOSER
                 ================================================== */}
@@ -3356,7 +3908,7 @@ export default function ChatPage() {
                       handleSendMessage();
                     }
                   }}
-                  placeholder="Écrivez à LBV-Connect.ia..."
+                  placeholder={activeCapability === "Création" ? "Décrivez votre création..." : "Écrivez à LBV-Connect.ia..."}
                   disabled={
                     isThinking
                   }
@@ -3411,6 +3963,7 @@ export default function ChatPage() {
                             </span>
 
                             {label !== "Recherche Web" &&
+                              label !== "Création" &&
                               attachments.length > 0 && (
                                 <span className="text-[10px] opacity-70">
                                   {attachments.length}/{MAX_ATTACHMENTS}
@@ -3444,8 +3997,8 @@ export default function ChatPage() {
 
               <p className="mt-3 text-center text-[11px] text-muted">
                 Jusqu&apos;à {MAX_ATTACHMENTS} fichiers ou images
-                peuvent être joints à un message. L&apos;analyse
-                multimodale sera transmise au moteur dédié.
+                peuvent être joints à un message. Les créations
+                image et vidéo dépendent du pack actif.
               </p>
             </div>
           </div>
@@ -3461,6 +4014,15 @@ export default function ChatPage() {
  * ============================================================
  */
 
+type ModelOptionProps = {
+  name: string;
+  description: string;
+  active?: boolean;
+  trial?: TrialInfo;
+  disabled?: boolean;
+  onClick?: () => void;
+};
+
 function ModelOption({
   name,
   description,
@@ -3468,14 +4030,7 @@ function ModelOption({
   trial,
   disabled = false,
   onClick,
-}: {
-  name: string;
-  description: string;
-  active?: boolean;
-  trial?: TrialInfo;
-  disabled?: boolean;
-  onClick?: () => void;
-}) {
+}: ModelOptionProps) {
   const isTrial =
     Boolean(trial);
 
