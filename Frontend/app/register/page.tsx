@@ -42,6 +42,10 @@ export default function RegisterPage() {
       formData.get("lastName") ?? "",
     ).trim();
 
+    const phone = String(
+      formData.get("phone") ?? "",
+    ).trim();
+
     const email = String(
       formData.get("email") ?? "",
     )
@@ -55,6 +59,13 @@ export default function RegisterPage() {
     const confirmPassword = String(
       formData.get("confirmPassword") ?? "",
     );
+
+    if (!phone) {
+      setError(
+        "Veuillez renseigner votre numéro de téléphone.",
+      );
+      return;
+    }
 
     if (password !== confirmPassword) {
       setError(
@@ -83,6 +94,7 @@ export default function RegisterPage() {
             data: {
               first_name: firstName,
               last_name: lastName,
+              phone,
             },
           },
         });
@@ -235,6 +247,33 @@ export default function RegisterPage() {
                     className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
+              </div>
+
+              {/* Phone */}
+
+              <div>
+                <label
+                  htmlFor="phone"
+                  className="mb-2 block text-sm font-medium"
+                >
+                  Numéro de téléphone
+                </label>
+
+                <input
+                  id="phone"
+                  name="phone"
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  placeholder="+241 06 00 00 00"
+                  required
+                  disabled={loading}
+                  className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                />
+
+                <p className="mt-2 text-xs text-muted">
+                  Utilisé pour sécuriser et initialiser vos paiements.
+                </p>
               </div>
 
               {/* Email */}
