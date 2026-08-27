@@ -73,25 +73,25 @@ type CreditTopUp = {
 
 const complementaryCredits: CreditTopUp[] = [
   {
-    id: "credit_1000",
+    id: "credits_1000_563",
     credits: 1_000,
     price: "563 XAF",
     description: "1 000 crédits supplémentaires",
   },
   {
-    id: "credit_2000",
+    id: "credits_2000",
     credits: 2_000,
     price: "1 000 XAF",
     description: "2 000 crédits supplémentaires",
   },
   {
-    id: "credit_4000",
+    id: "credits_4000",
     credits: 4_000,
     price: "2 000 XAF",
     description: "4 000 crédits supplémentaires",
   },
   {
-    id: "credit_10000",
+    id: "credits_10000",
     credits: 10_000,
     price: "5 000 XAF",
     description: "10 000 crédits supplémentaires",
