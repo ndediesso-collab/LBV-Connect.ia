@@ -37,18 +37,8 @@ CHARIOW_PRODUCTS = {
 # ============================================================
 
 def generate_payment_reference() -> str:
-    """
-    Génère une référence unique LBV-Connect pour une commande.
-    """
-
-    timestamp = datetime.now(
-        timezone.utc
-    ).strftime("%Y%m%d%H%M%S")
-
-    token = secrets.token_hex(
-        5
-    ).upper()
-
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    token = secrets.token_hex(5).upper()
     return f"LBV-{timestamp}-{token}"
 
 
@@ -56,20 +46,11 @@ def generate_payment_reference() -> str:
 # PRODUIT
 # ============================================================
 
-def get_payment_product(
-    payment_type: str,
-    product_id: str,
-):
-    """
-    Retourne les informations commerciales du produit.
-    """
-
+def get_payment_product(payment_type: str, product_id: str):
     if payment_type == "primary_pack":
         product = PRIMARY_PACKS.get(product_id)
-
     elif payment_type == "addon":
         product = ADDON_PACKS.get(product_id)
-
     else:
         raise HTTPException(
             status_code=400,
@@ -89,17 +70,8 @@ def get_payment_product(
 # PRODUIT CHARIOW
 # ============================================================
 
-def get_chariow_product_id(
-    product_id: str,
-) -> str:
-    """
-    Retourne l'identifiant du produit correspondant
-    dans Chariow.
-    """
-
-    chariow_product_id = CHARIOW_PRODUCTS.get(
-        product_id
-    )
+def get_chariow_product_id(product_id: str) -> str:
+    chariow_product_id = CHARIOW_PRODUCTS.get(product_id)
 
     if chariow_product_id is None:
         raise HTTPException(
@@ -121,14 +93,15 @@ def create_chariow_checkout(
     product_id: str,
     reference_id: str,
     email: str,
-    first_name: str | None = None,
-    last_name: str | None = None,
-    phone: str | None = None,
+    first_name: str,
+    last_name: str,
+    phone: str,
 ):
     """
-    Crée un checkout Chariow et retourne son URL.
+    Crée un checkout Chariow.
 
-    La clé CHARIOW_API reste uniquement côté backend.
+    Chariow attend email, prénom, nom et téléphone
+    directement à la racine du payload.
     """
 
     api_key = os.getenv("CHARIOW_API")
@@ -142,26 +115,44 @@ def create_chariow_checkout(
             ),
         )
 
-    chariow_product_id = get_chariow_product_id(
-        product_id
-    )
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="L'adresse e-mail du client est obligatoire.",
+        )
 
-    customer = {
-        "email": email,
-    }
+    if not first_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Le prénom du client est obligatoire.",
+        )
 
-    if first_name:
-        customer["first_name"] = first_name
+    if not last_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Le nom du client est obligatoire.",
+        )
 
-    if last_name:
-        customer["last_name"] = last_name
+    if not phone:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Le numéro de téléphone du client est obligatoire "
+                "pour le checkout Chariow."
+            ),
+        )
 
-    if phone:
-        customer["phone"] = phone
+    chariow_product_id = get_chariow_product_id(product_id)
 
     payload = {
         "product_id": chariow_product_id,
-        "customer": customer,
+        "email": email,
+        "first_name": first_name,
+        "last_name": last_name,
+        "phone": {
+            "number": str(phone).strip(),
+            "country_code": "GA",
+        },
         "custom_metadata": {
             "lbv_product_id": product_id,
             "lbv_reference_id": reference_id,
@@ -174,6 +165,7 @@ def create_chariow_checkout(
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
             },
             json=payload,
             timeout=20,
@@ -198,57 +190,91 @@ def create_chariow_checkout(
         ) from exc
 
     if not response.ok:
-        detail = (
-            data.get("message")
-            or data.get("error")
-            or "Chariow a refusé la création du checkout."
-        )
+        message = data.get("message")
+        errors = data.get("errors")
 
-        raise HTTPException(
-            status_code=502,
-            detail=f"Erreur Chariow : {detail}",
-        )
+        if isinstance(errors, dict):
+            details = []
 
-    checkout_url = (
-        data.get("data", {})
-        .get("payment", {})
-        .get("checkout_url")
-    )
+            for field, messages in errors.items():
+                if isinstance(messages, list):
+                    for item in messages:
+                        details.append(f"{field}: {item}")
+                else:
+                    details.append(f"{field}: {messages}")
 
-    if not checkout_url:
+            if details:
+                message = (
+                    f"{message or 'Erreur de validation Chariow.'} "
+                    f"({' | '.join(details)})"
+                )
+
+        if not message:
+            message = (
+                data.get("error")
+                or "Chariow a refusé la création du checkout."
+            )
+
         raise HTTPException(
             status_code=502,
             detail=(
-                "Chariow n'a fourni aucune URL "
-                "de paiement."
+                f"Erreur Chariow (HTTP {response.status_code}) : "
+                f"{message}"
             ),
         )
 
-    return {
-        "checkout_url": checkout_url,
-        "chariow_product_id": chariow_product_id,
-    }
+    response_data = data.get("data") or {}
+    step = response_data.get("step")
+    payment = response_data.get("payment") or {}
+    purchase = response_data.get("purchase") or {}
+
+    if step == "payment":
+        checkout_url = payment.get("checkout_url")
+
+        if not checkout_url:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Chariow a créé le checkout mais n'a fourni "
+                    "aucune URL de paiement."
+                ),
+            )
+
+        return {
+            "checkout_url": checkout_url,
+            "chariow_product_id": chariow_product_id,
+            "chariow_step": step,
+            "chariow_transaction_id": payment.get(
+                "transaction_id"
+            ),
+            "chariow_purchase_id": purchase.get("id"),
+        }
+
+    if step == "completed":
+        return {
+            "checkout_url": None,
+            "chariow_product_id": chariow_product_id,
+            "chariow_step": step,
+            "chariow_transaction_id": payment.get(
+                "transaction_id"
+            ),
+            "chariow_purchase_id": purchase.get("id"),
+        }
+
+    raise HTTPException(
+        status_code=502,
+        detail=(
+            "Réponse Chariow inattendue lors de la création "
+            "du checkout."
+        ),
+    )
 
 
 # ============================================================
 # VALIDATION COMPLÉMENT
 # ============================================================
 
-def validate_addon_purchase(
-    wallet,
-):
-    """
-    Vérifie qu'un utilisateur possède actuellement
-    un pack principal actif avant d'autoriser
-    l'achat d'un complément.
-
-    Une recharge complémentaire :
-    - ajoute uniquement des crédits au solde ;
-    - ne crée pas un nouveau pack ;
-    - ne prolonge pas la durée du pack ;
-    - ne remplace pas le pack actif.
-    """
-
+def validate_addon_purchase(wallet):
     if wallet is None:
         raise HTTPException(
             status_code=404,
@@ -278,24 +304,12 @@ def validate_addon_purchase(
 # VALIDATION FOURNISSEUR
 # ============================================================
 
-def validate_provider(
-    provider: str,
-):
-    """
-    Vérifie que le fournisseur demandé est supporté.
-
-    Chariow reste le prestataire de checkout.
-    Le provider correspond au moyen de paiement
-    choisi par l'utilisateur.
-    """
-
+def validate_provider(provider: str):
     if provider not in {
         "airtel_money",
         "moov_money",
     }:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Fournisseur de paiement non supporté."
-            ),
+            detail="Fournisseur de paiement non supporté.",
         )
