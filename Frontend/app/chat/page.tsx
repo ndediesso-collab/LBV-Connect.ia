@@ -86,43 +86,6 @@ type GeneratedMedia = {
   size?: string | null;
 };
 
-
-type MediaPreset = {
-  type: "image" | "video";
-  label: string;
-  description: string;
-  configuration: string;
-};
-
-const MEDIA_PRESETS: Record<string, MediaPreset> = {
-  image_480: { type: "image", label: "Image 480", description: "Génération image légère", configuration: "480 px" },
-  image_720: { type: "image", label: "Image 720", description: "Génération image légère", configuration: "720 px" },
-  image_pro: { type: "image", label: "Image Pro", description: "Génération image professionnelle", configuration: "Pro" },
-  image_pro_standard: { type: "image", label: "Image Pro Standard", description: "Qualité professionnelle standard", configuration: "Standard" },
-  image_pro_ultra: { type: "image", label: "Image Pro Ultra", description: "Qualité professionnelle maximale", configuration: "Ultra" },
-  image_business: { type: "image", label: "Image Business", description: "Génération image business", configuration: "Business" },
-  image_business_hd: { type: "image", label: "Image Business HD", description: "Génération image business haute définition", configuration: "HD" },
-  image_business_ultra: { type: "image", label: "Image Business Ultra", description: "Génération image business maximale", configuration: "Ultra" },
-  video_4s: { type: "video", label: "Vidéo 4 s", description: "Génération vidéo légère", configuration: "4 secondes" },
-  video_8s: { type: "video", label: "Vidéo 8 s", description: "Génération vidéo légère", configuration: "8 secondes" },
-  video_lite: { type: "video", label: "Vidéo Lite", description: "Génération vidéo intermédiaire", configuration: "Lite" },
-  video_pro_fast: { type: "video", label: "Vidéo Pro Fast", description: "Génération vidéo professionnelle rapide", configuration: "Fast" },
-  video_pro_standard: { type: "video", label: "Vidéo Pro Standard", description: "Génération vidéo professionnelle standard", configuration: "Standard" },
-  video_pro_extension: { type: "video", label: "Vidéo Pro Extension", description: "Extension d'une génération vidéo Pro", configuration: "Extension" },
-  video_business_fast: { type: "video", label: "Vidéo Business Fast", description: "Génération vidéo business rapide", configuration: "Fast" },
-  video_business_standard: { type: "video", label: "Vidéo Business Standard", description: "Génération vidéo business standard", configuration: "Standard" },
-  video_business_long: { type: "video", label: "Vidéo Business Long", description: "Génération vidéo business longue", configuration: "Long" },
-};
-
-function getMediaPreset(action: string): MediaPreset {
-  return MEDIA_PRESETS[action] ?? {
-    type: action.startsWith("video_") ? "video" : "image",
-    label: action,
-    description: "Configuration média disponible",
-    configuration: action,
-  };
-}
-
 type ConversationResponse = {
   conversations: Conversation[];
 };
@@ -146,6 +109,34 @@ type ChatAttachment = {
 };
 
 const MAX_ATTACHMENTS = 3;
+
+const MEDIA_GENERATION_CONFIGS = [
+  { action: "image_480", type: "image", label: "Image 480", description: "Génération image légère", configuration: "480 px", credits: 50 },
+  { action: "image_720", type: "image", label: "Image 720", description: "Génération image légère", configuration: "720 px", credits: 75 },
+  { action: "image_pro", type: "image", label: "Image Pro", description: "Génération image professionnelle", configuration: "Pro", credits: 100 },
+  { action: "image_pro_standard", type: "image", label: "Image Pro Standard", description: "Qualité professionnelle standard", configuration: "Standard", credits: 180 },
+  { action: "image_pro_ultra", type: "image", label: "Image Pro Ultra", description: "Qualité professionnelle maximale", configuration: "Ultra", credits: 270 },
+  { action: "image_business", type: "image", label: "Image Business", description: "Génération business", configuration: "Business", credits: 250 },
+  { action: "image_business_hd", type: "image", label: "Image Business HD", description: "Génération business haute définition", configuration: "HD", credits: 400 },
+  { action: "image_business_ultra", type: "image", label: "Image Business Ultra", description: "Génération business maximale", configuration: "Ultra", credits: 600 },
+
+  { action: "video_4s", type: "video", label: "Vidéo 4 s", description: "Génération vidéo légère", configuration: "4 secondes", credits: 500 },
+  { action: "video_8s", type: "video", label: "Vidéo 8 s", description: "Génération vidéo légère", configuration: "8 secondes", credits: 1000 },
+  { action: "video_lite", type: "video", label: "Vidéo Lite", description: "Génération vidéo intermédiaire", configuration: "Lite", credits: 1500 },
+  { action: "video_pro_fast", type: "video", label: "Vidéo Pro Fast", description: "Génération vidéo professionnelle rapide", configuration: "Fast", credits: 1500 },
+  { action: "video_pro_standard", type: "video", label: "Vidéo Pro Standard", description: "Génération vidéo professionnelle standard", configuration: "Standard", credits: 3000 },
+  { action: "video_pro_extension", type: "video", label: "Vidéo Pro Extension", description: "Extension d'une génération vidéo Pro", configuration: "Extension", credits: 1500 },
+  { action: "video_business_fast", type: "video", label: "Vidéo Business Fast", description: "Génération vidéo business rapide", configuration: "Fast", credits: 2500 },
+  { action: "video_business_standard", type: "video", label: "Vidéo Business Standard", description: "Génération vidéo business standard", configuration: "Standard", credits: 5000 },
+  { action: "video_business_long", type: "video", label: "Vidéo Business Long", description: "Génération vidéo business longue", configuration: "Long", credits: 10000 },
+] as const;
+
+type MediaGenerationType = (typeof MEDIA_GENERATION_CONFIGS)[number]["type"];
+
+function getMediaGenerationConfig(action: string) {
+  return MEDIA_GENERATION_CONFIGS.find((item) => item.action === action);
+}
+
 
 const ACCEPTED_FILE_TYPES = [
   "application/pdf",
@@ -3728,148 +3719,172 @@ export default function ChatPage() {
             )}
 
             {activeCapability === "Création" && (
-              <div className="mx-auto mt-3 w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-medium">Création média</p>
-                    <p className="mt-1 text-[11px] text-muted">
-                      Choisissez le type, puis la configuration avant de générer.
-                    </p>
-                  </div>
+  <div className="mx-auto mt-3 w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-sm">
+    <div className="flex items-start justify-between gap-4">
+      <div>
+        <p className="text-sm font-medium">Création média</p>
+        <p className="mt-1 text-[11px] text-muted">
+          Choisissez Image ou Vidéo, puis la configuration avant de générer.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          setActiveCapability(null);
+          setSelectedMediaAction("");
+          setMediaPrompt("");
+        }}
+        className="rounded-lg p-2 text-muted hover:bg-surface-tertiary hover:text-foreground"
+        aria-label="Fermer la création média"
+      >
+        <X size={16} />
+      </button>
+    </div>
+
+    <div className="mt-4 grid grid-cols-2 gap-3">
+      {(["image", "video"] as const).map((type) => {
+        const available = mediaCapabilities.filter((item) => item.type === type);
+        const selectedType = selectedMediaAction
+          ? getMediaGenerationConfig(selectedMediaAction)?.type
+          : undefined;
+
+        return (
+          <button
+            key={type}
+            type="button"
+            disabled={available.length === 0}
+            onClick={() => {
+              if (available.length > 0) {
+                setSelectedMediaAction(available[0].action);
+              }
+            }}
+            className={`flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border px-4 py-3 text-sm font-medium transition ${
+              selectedType === type
+                ? "border-border-strong bg-surface-tertiary"
+                : "border-border hover:bg-surface-secondary"
+            } disabled:cursor-not-allowed disabled:opacity-40`}
+          >
+            {type === "image" ? <ImageIcon size={22} /> : <Video size={22} />}
+            <span>{type === "image" ? "Générer une image" : "Générer une vidéo"}</span>
+            <span className="text-[10px] font-normal text-muted">
+              {available.length} configuration{available.length > 1 ? "s" : ""}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+
+    {selectedMediaAction && (
+      <>
+        <div className="mt-4">
+          <p className="mb-2 text-[11px] font-medium text-muted">
+            Configuration de génération
+          </p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {mediaCapabilities
+              .filter(
+                (item) =>
+                  item.type === getMediaGenerationConfig(selectedMediaAction)?.type,
+              )
+              .map((media) => {
+                const config = getMediaGenerationConfig(media.action);
+                if (!config) return null;
+
+                const selected = selectedMediaAction === media.action;
+
+                return (
                   <button
+                    key={media.action}
                     type="button"
-                    onClick={() => {
-                      setActiveCapability(null);
-                      setMediaMenuOpen(false);
-                    }}
-                    className="rounded-lg p-2 text-muted hover:bg-surface-tertiary hover:text-foreground"
-                    aria-label="Fermer la création média"
+                    onClick={() => setSelectedMediaAction(media.action)}
+                    className={`rounded-xl border px-3 py-3 text-left transition ${
+                      selected
+                        ? "border-border-strong bg-surface-tertiary"
+                        : "border-border hover:bg-surface-secondary"
+                    }`}
                   >
-                    <X size={16} />
-                  </button>
-                </div>
-
-                {isLoadingMediaCapabilities ? (
-                  <p className="mt-4 text-xs text-muted">Chargement des configurations disponibles...</p>
-                ) : mediaCapabilities.length === 0 ? (
-                  <p className="mt-4 text-xs text-muted">Aucune création média disponible avec votre pack.</p>
-                ) : (
-                  <>
-                    <div className="mt-4 grid grid-cols-2 gap-2">
-                      {(["image", "video"] as const).map((type) => {
-                        const options = mediaCapabilities.filter((item) => item.type === type);
-                        const selectedType = selectedMediaAction
-                          ? getMediaPreset(selectedMediaAction).type
-                          : null;
-
-                        return (
-                          <button
-                            key={type}
-                            type="button"
-                            disabled={options.length === 0}
-                            onClick={() => {
-                              if (options.length > 0) {
-                                setSelectedMediaAction(options[0].action);
-                              }
-                            }}
-                            className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-3 text-sm font-medium transition ${
-                              selectedType === type
-                                ? "border-border-strong bg-surface-tertiary"
-                                : "border-border hover:bg-surface-secondary"
-                            } disabled:cursor-not-allowed disabled:opacity-40`}
-                          >
-                            {type === "image" ? <ImageIcon size={17} /> : <Video size={17} />}
-                            {type === "image" ? "Image" : "Vidéo"}
-                            <span className="text-[10px] text-muted">{options.length}</span>
-                          </button>
-                        );
-                      })}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium">{config.label}</p>
+                        <p className="mt-1 text-[11px] text-muted">
+                          {config.description}
+                        </p>
+                      </div>
+                      {selected && <Check size={15} className="shrink-0" />}
                     </div>
+                    <div className="mt-3 flex items-center justify-between text-[10px] text-muted">
+                      <span>{config.configuration}</span>
+                      <span>
+                        {media.credits.toLocaleString("fr-FR")} crédits
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+          </div>
+        </div>
 
-                    {selectedMediaAction && (
-                      <>
-                        <div className="mt-4">
-                          <p className="mb-2 text-[11px] font-medium text-muted">Configurations disponibles</p>
-                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                            {mediaCapabilities
-                              .filter((media) => media.type === getMediaPreset(selectedMediaAction).type)
-                              .map((media) => {
-                                const preset = getMediaPreset(media.action);
-                                const selected = selectedMediaAction === media.action;
+        <textarea
+          rows={4}
+          value={mediaPrompt}
+          onChange={(event) => setMediaPrompt(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              void handleGenerateMedia();
+            }
+          }}
+          placeholder={
+            getMediaGenerationConfig(selectedMediaAction)?.type === "video"
+              ? "Décrivez précisément la vidéo à créer..."
+              : "Décrivez précisément l'image à créer..."
+          }
+          disabled={isThinking}
+          className="mt-4 w-full resize-none rounded-xl border border-border bg-transparent px-4 py-3 text-sm leading-6 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
+        />
 
-                                return (
-                                  <button
-                                    key={media.action}
-                                    type="button"
-                                    onClick={() => setSelectedMediaAction(media.action)}
-                                    className={`rounded-xl border px-3 py-3 text-left transition ${
-                                      selected
-                                        ? "border-border-strong bg-surface-tertiary"
-                                        : "border-border hover:bg-surface-secondary"
-                                    }`}
-                                  >
-                                    <div className="flex items-start justify-between gap-3">
-                                      <div className="min-w-0">
-                                        <p className="text-sm font-medium">{preset.label}</p>
-                                        <p className="mt-1 text-[11px] text-muted">{preset.description}</p>
-                                      </div>
-                                      {selected && <Check size={15} className="mt-0.5 shrink-0" />}
-                                    </div>
-                                    <div className="mt-3 flex items-center justify-between gap-2 text-[10px] text-muted">
-                                      <span>{preset.configuration}</span>
-                                      <span>{media.credits.toLocaleString("fr-FR")} crédits</span>
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                          </div>
-                        </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            {(() => {
+              const selected = mediaCapabilities.find(
+                (item) => item.action === selectedMediaAction,
+              );
+              return selected ? (
+                <p className="text-[10px] text-muted">
+                  Coût :{" "}
+                  <span className="font-medium">
+                    {selected.credits.toLocaleString("fr-FR")} crédits
+                  </span>
+                </p>
+              ) : null;
+            })()}
+            <p className="mt-0.5 text-[10px] text-muted">
+              Le backend valide le pack et le débit avant la génération.
+            </p>
+          </div>
 
-                        <textarea
-                          rows={3}
-                          value={mediaPrompt}
-                          onChange={(event) => setMediaPrompt(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" && !event.shiftKey) {
-                              event.preventDefault();
-                              void handleGenerateMedia();
-                            }
-                          }}
-                          placeholder={
-                            getMediaPreset(selectedMediaAction).type === "image"
-                              ? "Décrivez l'image à créer..."
-                              : "Décrivez la vidéo à créer..."
-                          }
-                          disabled={isThinking}
-                          className="mt-4 w-full resize-none rounded-xl border border-border bg-transparent px-4 py-3 text-sm leading-6 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
-                        />
-
-                        <div className="mt-3 flex items-center justify-between gap-3">
-                          <div className="min-w-0 text-[10px] text-muted">
-                            <span>{getMediaPreset(selectedMediaAction).label}</span>
-                            <span> · </span>
-                            <span>
-                              {mediaCapabilities
-                                .find((item) => item.action === selectedMediaAction)
-                                ?.credits.toLocaleString("fr-FR")} crédits
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => { void handleGenerateMedia(); }}
-                            disabled={!mediaPrompt.trim() || !selectedMediaAction || isThinking}
-                            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-xs font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
-                          >
-                            <Sparkles size={14} />
-                            {isThinking ? "Création..." : "Créer"}
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
+          <button
+            type="button"
+            onClick={() => void handleGenerateMedia()}
+            disabled={
+              !mediaPrompt.trim() ||
+              !selectedMediaAction ||
+              isThinking
+            }
+            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-accent px-5 py-3 text-xs font-semibold text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <Sparkles size={15} />
+            {isThinking
+              ? "Génération..."
+              : getMediaGenerationConfig(selectedMediaAction)?.type === "video"
+                ? "Générer la vidéo"
+                : "Générer l'image"}
+          </button>
+        </div>
+      </>
+    )}
+  </div>
+)}
 
             {/* ==================================================
                 COMPOSER
