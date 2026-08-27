@@ -75,7 +75,7 @@ const complementaryCredits: CreditTopUp[] = [
   {
     id: "credit_1000",
     credits: 1_000,
-    price: "500 XAF",
+    price: "563 XAF",
     description: "1 000 crédits supplémentaires",
   },
   {
@@ -440,7 +440,7 @@ const faqs = [
       "Puis-je acheter des crédits supplémentaires ?",
 
     answer:
-      "Oui. Vous pouvez acheter des recharges complémentaires de 1 000 crédits pour 500 XAF, 2 000 crédits pour 1 000 XAF, 4 000 crédits pour 2 000 XAF ou 10 000 crédits pour 5 000 XAF. Le paiement est lancé depuis cette page et confirmé par le système de paiement LBV-Connect.ia.",
+      "Oui. Vous pouvez acheter des recharges complémentaires de 1 000 crédits pour 563 XAF, 2 000 crédits pour 1 000 XAF, 4 000 crédits pour 2 000 XAF ou 10 000 crédits pour 5 000 XAF. Le paiement est lancé depuis cette page et confirmé par le système de paiement LBV-Connect.ia.",
   },
 
   {
@@ -822,7 +822,7 @@ export default function PacksPage() {
               </p>
 
               <p className="mt-3 text-sm font-medium">
-                À partir de 500 XAF pour 1 000 crédits
+                À partir de 563 XAF pour 1 000 crédits
               </p>
             </div>
 

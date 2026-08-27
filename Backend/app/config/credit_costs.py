@@ -281,7 +281,7 @@ BUSINESS_PACK_API_BUDGET_XAF = 10_000
 COMPLEMENTARY_CREDIT_PACKS = {
     ComplementaryCreditPack.CREDIT_1000: {
         "credits": 1_000,
-        "price_xaf": 500,
+        "price_xaf": 563,
     },
     ComplementaryCreditPack.CREDIT_2000: {
         "credits": 2_000,
