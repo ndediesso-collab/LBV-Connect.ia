@@ -1,4 +1,4 @@
-"use client";
+
 
 import {
   ArrowLeft,
@@ -104,7 +104,7 @@ const packs: Pack[] = [
 
     name: "Léger",
 
-    price: "6 500 XAF",
+    price: "4 000 XAF",
 
     credits: "3 000",
 
@@ -173,7 +173,7 @@ const packs: Pack[] = [
 
     name: "Intermédiaire",
 
-    price: "11 500 XAF",
+    price: "8 000 XAF",
 
     credits: "28 500",
 
@@ -233,7 +233,7 @@ const packs: Pack[] = [
 
     name: "Pro",
 
-    price: "17 500 XAF",
+    price: "12 000 XAF",
 
     credits: "45 000",
 
@@ -316,7 +316,7 @@ const packs: Pack[] = [
 
     name: "Business",
 
-    price: "25 000 XAF",
+    price: "19 000 XAF",
 
     credits: "96 000",
 
