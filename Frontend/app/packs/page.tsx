@@ -473,92 +473,66 @@ export default function PacksPage() {
   const [showCreditTopUp, setShowCreditTopUp] =
     useState(false);
   const [isPaying, setIsPaying] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<
+    "airtel_money" | "moov_money" | null
+  >(null);
+  const [paymentTarget, setPaymentTarget] = useState<{
+    type: "primary_pack" | "addon";
+    id: string;
+  } | null>(null);
   const router = useRouter();
 
-  async function handlePackSelection(pack: Pack) {
-    const supabase = createClient();
+  function handlePackSelection(pack: Pack) {
+    void (async () => {
+      const supabase = createClient();
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
-    if (!session) {
-      window.location.href = `/login?redirect=${encodeURIComponent(
-        `/packs?checkout=${pack.id}`,
-      )}`;
-      return;
-    }
+      if (!session) {
+        window.location.href = `/login?redirect=${encodeURIComponent(
+          `/packs?checkout=${pack.id}`,
+        )}`;
+        return;
+      }
 
-    setIsPaying(pack.id);
-
-    try {
-      // Le frontend déclenche uniquement la création du paiement.
-      // Le backend reste responsable du prix, du pack, de la transaction
-      // et de l'activation après confirmation du paiement.
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/payments/checkout`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-          "user-id": session.user.id,
-        },
-        body: JSON.stringify({
-          payment_type: "primary_pack",
-          product_id: pack.id,
-          provider: "chariow",
-        }),
+      setPaymentTarget({
+        type: "primary_pack",
+        id: pack.id,
       });
-
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(
-          typeof data?.detail === "string"
-            ? data.detail
-            : typeof data?.error === "string"
-              ? data.error
-              : "Impossible d'initialiser le paiement.",
-        );
-      }
-
-      if (typeof data?.checkout_url === "string") {
-        window.location.href = data.checkout_url;
-        return;
-      }
-
-      if (typeof data?.redirect_url === "string") {
-        window.location.href = data.redirect_url;
-        return;
-      }
-
-      if (typeof data?.payment_url === "string") {
-        window.location.href = data.payment_url;
-        return;
-      }
-
-      if (typeof data?.payment_id === "string") {
-        router.push(
-          `/payments/${encodeURIComponent(data.payment_id)}`,
-        );
-        return;
-      }
-
-      throw new Error(
-        "Le serveur n'a fourni aucune destination de paiement.",
-      );
-    } catch (error) {
-      console.error("Initialisation paiement pack échouée :", error);
-      window.alert(
-        error instanceof Error
-          ? error.message
-          : "Impossible d'initialiser le paiement.",
-      );
-    } finally {
-      setIsPaying(null);
-    }
+      setSelectedProvider(null);
+    })();
   }
 
-  async function handleCreditTopUp(topUp: CreditTopUp) {
+  function handleCreditTopUp(topUp: CreditTopUp) {
+    void (async () => {
+      const supabase = createClient();
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        window.location.href = `/login?redirect=${encodeURIComponent(
+          `/packs?checkout=${topUp.id}`,
+        )}`;
+        return;
+      }
+
+      setPaymentTarget({
+        type: "addon",
+        id: topUp.id,
+      });
+      setSelectedProvider(null);
+    })();
+  }
+
+  async function startPayment() {
+    if (!paymentTarget || !selectedProvider) {
+      return;
+    }
+
     const supabase = createClient();
 
     const {
@@ -567,27 +541,34 @@ export default function PacksPage() {
 
     if (!session) {
       window.location.href = `/login?redirect=${encodeURIComponent(
-        "/packs?checkout=credit_1000",
+        `/packs?checkout=${paymentTarget.id}`,
       )}`;
       return;
     }
 
-    setIsPaying(topUp.id);
+    setIsPaying(paymentTarget.id);
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/payments/checkout`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-          "user-id": session.user.id,
+      const apiUrl =
+        process.env.NEXT_PUBLIC_API_URL ??
+        "https://lbv-connect-api.onrender.com";
+
+      const response = await fetch(
+        `${apiUrl}/payments/checkout`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+            "user-id": session.user.id,
+          },
+          body: JSON.stringify({
+            payment_type: paymentTarget.type,
+            product_id: paymentTarget.id,
+            provider: selectedProvider,
+          }),
         },
-        body: JSON.stringify({
-          payment_type: "addon",
-          product_id: topUp.id,
-          provider: "chariow",
-        }),
-      });
+      );
 
       const data = await response.json().catch(() => ({}));
 
@@ -622,7 +603,13 @@ export default function PacksPage() {
         "Le serveur n'a fourni aucune destination de paiement.",
       );
     } catch (error) {
-      console.error("Initialisation recharge échouée :", error);
+      console.error(
+        paymentTarget.type === "addon"
+          ? "Initialisation recharge échouée :"
+          : "Initialisation paiement pack échouée :",
+        error,
+      );
+
       window.alert(
         error instanceof Error
           ? error.message
@@ -630,11 +617,122 @@ export default function PacksPage() {
       );
     } finally {
       setIsPaying(null);
+      setPaymentTarget(null);
+      setSelectedProvider(null);
     }
   }
 
+
   return (
-    <main className="min-h-dvh bg-background text-foreground">
+    <>
+      {paymentTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="payment-provider-title"
+        >
+          <div className="w-full max-w-md rounded-3xl border border-border bg-surface p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-muted">
+                  Paiement
+                </p>
+                <h2
+                  id="payment-provider-title"
+                  className="mt-1 text-2xl font-semibold tracking-tight"
+                >
+                  Choisir le moyen de paiement
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  Sélectionnez votre moyen de paiement.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPaymentTarget(null);
+                  setSelectedProvider(null);
+                }}
+                aria-label="Fermer"
+                className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedProvider("airtel_money")
+                }
+                className={`rounded-2xl border p-4 text-left transition ${
+                  selectedProvider === "airtel_money"
+                    ? "border-accent bg-accent/10"
+                    : "border-border hover:border-border-strong"
+                }`}
+              >
+                <span className="block text-sm font-semibold">
+                  Airtel Money
+                </span>
+                <span className="mt-1 block text-xs text-muted">
+                  Paiement mobile
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedProvider("moov_money")
+                }
+                className={`rounded-2xl border p-4 text-left transition ${
+                  selectedProvider === "moov_money"
+                    ? "border-accent bg-accent/10"
+                    : "border-border hover:border-border-strong"
+                }`}
+              >
+                <span className="block text-sm font-semibold">
+                  Moov Money
+                </span>
+                <span className="mt-1 block text-xs text-muted">
+                  Paiement mobile
+                </span>
+              </button>
+            </div>
+
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setPaymentTarget(null);
+                  setSelectedProvider(null);
+                }}
+                className="flex-1 rounded-xl border border-border px-4 py-3 text-sm font-medium transition hover:bg-surface-secondary"
+              >
+                Annuler
+              </button>
+
+              <button
+                type="button"
+                disabled={
+                  !selectedProvider ||
+                  isPaying !== null
+                }
+                onClick={() => void startPayment()}
+                className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isPaying === paymentTarget.id
+                  ? "Initialisation..."
+                  : "Continuer"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <main className="min-h-dvh bg-background text-foreground">
       {/* Header */}
 
       <header className="border-b border-border">
@@ -1031,6 +1129,7 @@ export default function PacksPage() {
         </section>
       </section>
     </main>
+    </>
   );
 }
 
