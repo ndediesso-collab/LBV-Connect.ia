@@ -93,9 +93,9 @@ def create_chariow_checkout(
     product_id: str,
     reference_id: str,
     email: str,
-    first_name: str,
-    last_name: str,
-    phone: str,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    phone: str | None = None,
 ):
     """
     Crée un checkout Chariow.
@@ -121,43 +121,28 @@ def create_chariow_checkout(
             detail="L'adresse e-mail du client est obligatoire.",
         )
 
-    if not first_name:
-        raise HTTPException(
-            status_code=400,
-            detail="Le prénom du client est obligatoire.",
-        )
-
-    if not last_name:
-        raise HTTPException(
-            status_code=400,
-            detail="Le nom du client est obligatoire.",
-        )
-
-    if not phone:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Le numéro de téléphone du client est obligatoire "
-                "pour le checkout Chariow."
-            ),
-        )
-
     chariow_product_id = get_chariow_product_id(product_id)
 
     payload = {
         "product_id": chariow_product_id,
         "email": email,
-        "first_name": first_name,
-        "last_name": last_name,
-        "phone": {
-            "number": str(phone).strip(),
-            "country_code": "GA",
-        },
         "custom_metadata": {
             "lbv_product_id": product_id,
             "lbv_reference_id": reference_id,
         },
     }
+
+    if first_name:
+        payload["first_name"] = first_name
+
+    if last_name:
+        payload["last_name"] = last_name
+
+    if phone:
+        payload["phone"] = {
+            "number": str(phone).strip(),
+            "country_code": "GA",
+        }
 
     try:
         response = requests.post(
@@ -192,6 +177,9 @@ def create_chariow_checkout(
     if not response.ok:
         message = data.get("message")
         errors = data.get("errors")
+
+        if isinstance(errors, list):
+            errors = {"validation": errors}
 
         if isinstance(errors, dict):
             details = []
