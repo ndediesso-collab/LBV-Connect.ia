@@ -404,12 +404,17 @@ class OpenAIService:
                 "Le prompt de génération d'image est requis."
             )
 
-        response = self.client.images.generate(
-            model=config["model"],
-            prompt=prompt,
-            quality=config["quality"],
-            size=config["size"],
-        )
+        try:
+            response = self.client.images.generate(
+                model=config["model"],
+                prompt=prompt,
+                quality=config["quality"],
+                size=config["size"],
+            )
+        except Exception as error:
+            raise RuntimeError(
+                f"Erreur API OpenAI Images : {str(error)}"
+            ) from error
 
         if not response.data:
             raise RuntimeError(
@@ -474,9 +479,14 @@ class OpenAIService:
         if poll_interval_ms is not None:
             create_kwargs["poll_interval_ms"] = poll_interval_ms
 
-        video = self.client.videos.create_and_poll(
-            **create_kwargs,
-        )
+        try:
+            video = self.client.videos.create_and_poll(
+                **create_kwargs,
+            )
+        except Exception as error:
+            raise RuntimeError(
+                f"Erreur API OpenAI Video : {str(error)}"
+            ) from error
 
         if getattr(video, "status", None) != "completed":
             error = getattr(video, "error", None)
@@ -492,11 +502,15 @@ class OpenAIService:
                 "OpenAI n'a retourné aucun identifiant vidéo."
             )
 
-        content = self.client.videos.download_content(
-            video_id,
-        )
-
-        video_bytes = content.read()
+        try:
+            content = self.client.videos.download_content(
+                video_id,
+            )
+            video_bytes = content.read()
+        except Exception as error:
+            raise RuntimeError(
+                f"Impossible de télécharger la vidéo OpenAI : {str(error)}"
+            ) from error
 
         if not video_bytes:
             raise RuntimeError(

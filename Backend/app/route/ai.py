@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -1257,6 +1257,89 @@ def _consume_media(
 
 
 # ============================================================
+# LECTURE DU PAYLOAD MÉDIA
+# ============================================================
+
+
+async def _read_media_request(
+    request: Request,
+) -> tuple[str, str]:
+    """
+    Lit une requête de création média envoyée par le frontend.
+
+    Le frontend peut envoyer :
+        - application/json
+        - multipart/form-data
+        - application/x-www-form-urlencoded
+
+    Avant cette compatibilité, les paramètres `Form(...)`
+    provoquaient un HTTP 422 dès que le frontend envoyait du JSON.
+    """
+
+    content_type = (
+        request.headers.get("content-type", "")
+        .lower()
+    )
+
+    action = None
+    prompt = None
+
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="Le corps JSON de la requête média est invalide.",
+            )
+
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=400,
+                detail="Le corps de la requête média doit être un objet JSON.",
+            )
+
+        action = (
+            payload.get("action")
+            or payload.get("media_action")
+            or payload.get("mediaAction")
+        )
+
+        prompt = payload.get("prompt")
+
+    else:
+        try:
+            form = await request.form()
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="Impossible de lire les données du formulaire média.",
+            )
+
+        action = (
+            form.get("action")
+            or form.get("media_action")
+            or form.get("mediaAction")
+        )
+
+        prompt = form.get("prompt")
+
+    if action is None or not str(action).strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Le paramètre 'action' est requis pour la création média.",
+        )
+
+    if prompt is None or not str(prompt).strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Le paramètre 'prompt' est requis pour la création média.",
+        )
+
+    return str(action).strip(), str(prompt).strip()
+
+
+# ============================================================
 # POST /ai/image
 # ============================================================
 
@@ -1266,8 +1349,7 @@ def _consume_media(
     response_model=MediaResponse,
 )
 async def generate_image(
-    action: str = Form(...),
-    prompt: str = Form(...),
+    request: Request,
     user_id: str | None = Header(
         default=None,
         alias="user-id",
@@ -1277,7 +1359,14 @@ async def generate_image(
         alias="authorization",
     ),
 ):
-    """Génère une image réelle via l'API Images OpenAI."""
+    """Génère une image réelle via l'API Images OpenAI.
+
+    Accepte désormais aussi bien JSON que multipart/form-data.
+    Cela évite les 422 lorsque le frontend envoie son payload
+    en application/json au lieu de FormData.
+    """
+
+    action, prompt = await _read_media_request(request)
 
     (
         authenticated_user_id,
@@ -1345,8 +1434,7 @@ async def generate_image(
     response_model=MediaResponse,
 )
 async def generate_video(
-    action: str = Form(...),
-    prompt: str = Form(...),
+    request: Request,
     user_id: str | None = Header(
         default=None,
         alias="user-id",
@@ -1356,7 +1444,12 @@ async def generate_video(
         alias="authorization",
     ),
 ):
-    """Génère une vidéo réelle via Sora."""
+    """Génère une vidéo réelle via Sora.
+
+    Accepte désormais aussi bien JSON que multipart/form-data.
+    """
+
+    action, prompt = await _read_media_request(request)
 
     (
         authenticated_user_id,

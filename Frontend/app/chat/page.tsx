@@ -7,9 +7,7 @@ import {
   FileText,
   Globe,
   Image as ImageIcon,
-  ImagePlus,
   Menu,
-  Video,
   Plus,
   Settings,
   Sparkles,
@@ -68,24 +66,6 @@ type ConversationResponse = {
 
 type MessagesResponse = {
   messages: ChatMessage[];
-};
-
-type GenerationResult = {
-  type: "image" | "video";
-  urls: string[];
-};
-
-type GenerationResponse = {
-  success?: boolean;
-  url?: string;
-  image_url?: string;
-  video_url?: string;
-  output_url?: string;
-  urls?: string[];
-  outputs?: unknown;
-  data?: unknown;
-  result?: unknown;
-  [key: string]: unknown;
 };
 
 /**
@@ -276,18 +256,8 @@ const capabilities = [
     disabled: false,
   },
   {
-    label: "Image · Analyse",
+    label: "Image",
     icon: ImageIcon,
-    disabled: false,
-  },
-  {
-    label: "Image · Génération",
-    icon: ImagePlus,
-    disabled: false,
-  },
-  {
-    label: "Vidéo · Génération",
-    icon: Video,
     disabled: false,
   },
   {
@@ -1251,81 +1221,6 @@ function MarkdownMessage({
 
 /*
  * ============================================================
- * GÉNÉRATION MÉDIA
- * ============================================================
- */
-
-function extractMediaUrls(value: unknown): string[] {
-  const urls: string[] = [];
-
-  function visit(item: unknown) {
-    if (typeof item === "string") {
-      if (
-        item.startsWith("http://") ||
-        item.startsWith("https://") ||
-        item.startsWith("data:image/") ||
-        item.startsWith("data:video/")
-      ) {
-        urls.push(item);
-      }
-      return;
-    }
-
-    if (Array.isArray(item)) {
-      item.forEach(visit);
-      return;
-    }
-
-    if (item && typeof item === "object") {
-      Object.values(item as Record<string, unknown>).forEach(visit);
-    }
-  }
-
-  visit(value);
-
-  return Array.from(new Set(urls));
-}
-
-async function createMediaGeneration(
-  type: "image" | "video",
-  payload: {
-    prompt: string;
-    model: string;
-    aspectRatio: string;
-    resolution: string;
-    duration?: number;
-    numberOfOutputs: number;
-  },
-): Promise<GenerationResult> {
-  const data = await apiFetch<GenerationResponse>(
-    type === "image" ? "/ai/image" : "/ai/video",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        prompt: payload.prompt,
-        model: payload.model,
-        mediaType: type,
-        aspectRatio: payload.aspectRatio,
-        resolution: payload.resolution,
-        duration: payload.duration,
-        numberOfOutputs: payload.numberOfOutputs,
-      }),
-    },
-  );
-
-  const urls = extractMediaUrls(data);
-
-  if (urls.length === 0) {
-    throw new Error(
-      `Le backend a répondu, mais aucune ${type === "image" ? "image" : "vidéo"} générée n'a été retournée.`,
-    );
-  }
-
-  return { type, urls };
-}
-
-/*
- * ============================================================
  * PAGE CHAT
  * ============================================================
  */
@@ -1370,21 +1265,6 @@ export default function ChatPage() {
     activeCapability,
     setActiveCapability,
   ] = useState<string | null>(null);
-
-  const [generationAspectRatio, setGenerationAspectRatio] =
-    useState("16:9");
-
-  const [generationResolution, setGenerationResolution] =
-    useState("1080p");
-
-  const [generationDuration, setGenerationDuration] =
-    useState(5);
-
-  const [generationResult, setGenerationResult] =
-    useState<GenerationResult | null>(null);
-
-  const [isGenerating, setIsGenerating] =
-    useState(false);
 
   const [wallet, setWallet] =
     useState<WalletData | null>(null);
@@ -2005,26 +1885,12 @@ export default function ChatPage() {
     label: string,
   ) {
     if (label === "Fichier") {
-      setActiveCapability(null);
       fileInputRef.current?.click();
       return;
     }
 
-    if (label === "Image · Analyse") {
-      setActiveCapability(null);
+    if (label === "Image") {
       imageInputRef.current?.click();
-      return;
-    }
-
-    if (
-      label === "Image · Génération" ||
-      label === "Vidéo · Génération"
-    ) {
-      setActiveCapability((current) =>
-        current === label ? null : label,
-      );
-      setGenerationResult(null);
-      setError(null);
       return;
     }
 
@@ -2158,127 +2024,11 @@ export default function ChatPage() {
 
   /*
    * ==========================================================
-   * GÉNÉRATION IMAGE / VIDÉO
-   * ==========================================================
-   */
-
-  async function handleGenerateMedia() {
-    const prompt = message.trim();
-
-    const generationType =
-      activeCapability === "Vidéo · Génération"
-        ? "video"
-        : activeCapability === "Image · Génération"
-          ? "image"
-          : null;
-
-    if (!generationType || !prompt || isThinking || isGenerating) {
-      return;
-    }
-
-    if (!selectedModel) {
-      setError("Aucun modèle IA disponible avec votre pack.");
-      return;
-    }
-
-    try {
-      setError(null);
-      setGenerationResult(null);
-      setIsGenerating(true);
-
-      const result = await createMediaGeneration(
-        generationType,
-        {
-          prompt,
-          model: selectedModel,
-          aspectRatio: generationAspectRatio,
-          resolution: generationResolution,
-          duration:
-            generationType === "video"
-              ? generationDuration
-              : undefined,
-          numberOfOutputs: 1,
-        },
-      );
-
-      setGenerationResult(result);
-      setMessage("");
-
-      const now = new Date().toISOString();
-      const mediaLabel =
-        generationType === "image"
-          ? "Image générée"
-          : "Vidéo générée";
-
-      const conversationId =
-        activeConversationId || crypto.randomUUID();
-
-      const userMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        conversationId,
-        role: "user",
-        content: `🎨 ${mediaLabel} : ${prompt}`,
-        createdAt: now,
-      };
-
-      setMessages((current) => [
-        ...current,
-        userMessage,
-      ]);
-
-      if (currentUserId) {
-        const cache = readLocalCache(currentUserId);
-
-        writeLocalCache(
-          currentUserId,
-          {
-            conversations:
-              cache?.conversations || conversations,
-            messages: {
-              ...(cache?.messages || {}),
-              [conversationId]: [
-                ...(cache?.messages?.[conversationId] || []),
-                userMessage,
-              ],
-            },
-            activeConversationId: conversationId,
-            selectedModel,
-            activeCapability,
-          },
-        );
-      }
-
-      await loadWallet(trials);
-    } catch (requestError) {
-      console.error(
-        "Erreur génération média :",
-        requestError,
-      );
-
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Impossible de générer le média.",
-      );
-    } finally {
-      setIsGenerating(false);
-    }
-  }
-
-  /*
-   * ==========================================================
    * ENVOI MESSAGE
    * ==========================================================
    */
 
   async function handleSendMessage() {
-    if (
-      activeCapability === "Image · Génération" ||
-      activeCapability === "Vidéo · Génération"
-    ) {
-      await handleGenerateMedia();
-      return;
-    }
     const content =
       message.trim();
 
@@ -3503,143 +3253,6 @@ export default function ChatPage() {
             )}
 
             {/* ==================================================
-                PARAMÈTRES DE GÉNÉRATION
-                ================================================== */}
-
-            {(activeCapability === "Image · Génération" ||
-              activeCapability === "Vidéo · Génération") && (
-              <div className="mx-auto mt-3 w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium">
-                      {activeCapability === "Image · Génération"
-                        ? "Génération d'image"
-                        : "Génération de vidéo"}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-muted">
-                      Décrivez le résultat souhaité dans le champ ci-dessous.
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveCapability(null);
-                      setGenerationResult(null);
-                    }}
-                    className="rounded-lg p-2 text-muted hover:bg-surface-tertiary hover:text-foreground"
-                    aria-label="Fermer la génération"
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <label className="text-[11px] text-muted">
-                    Format
-                    <select
-                      value={generationAspectRatio}
-                      onChange={(event) =>
-                        setGenerationAspectRatio(event.target.value)
-                      }
-                      className="mt-1.5 w-full rounded-xl border border-border bg-surface-secondary px-3 py-2.5 text-xs text-foreground outline-none"
-                    >
-                      <option value="16:9">16:9</option>
-                      <option value="9:16">9:16</option>
-                      <option value="1:1">1:1</option>
-                      <option value="4:3">4:3</option>
-                      <option value="3:4">3:4</option>
-                    </select>
-                  </label>
-
-                  <label className="text-[11px] text-muted">
-                    Résolution
-                    <select
-                      value={generationResolution}
-                      onChange={(event) =>
-                        setGenerationResolution(event.target.value)
-                      }
-                      className="mt-1.5 w-full rounded-xl border border-border bg-surface-secondary px-3 py-2.5 text-xs text-foreground outline-none"
-                    >
-                      <option value="720p">720p</option>
-                      <option value="1080p">1080p</option>
-                    </select>
-                  </label>
-
-                  {activeCapability === "Vidéo · Génération" ? (
-                    <label className="text-[11px] text-muted">
-                      Durée
-                      <select
-                        value={generationDuration}
-                        onChange={(event) =>
-                          setGenerationDuration(
-                            Number(event.target.value),
-                          )
-                        }
-                        className="mt-1.5 w-full rounded-xl border border-border bg-surface-secondary px-3 py-2.5 text-xs text-foreground outline-none"
-                      >
-                        <option value={5}>5 secondes</option>
-                        <option value={8}>8 secondes</option>
-                        <option value={10}>10 secondes</option>
-                      </select>
-                    </label>
-                  ) : (
-                    <div className="rounded-xl border border-border bg-surface-secondary px-3 py-2.5 text-[11px] text-muted">
-                      1 résultat
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {generationResult && (
-              <div className="mx-auto mt-4 w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-sm">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium">
-                      {generationResult.type === "image"
-                        ? "Image générée"
-                        : "Vidéo générée"}
-                    </p>
-                    <p className="text-[11px] text-muted">
-                      Génération terminée.
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setGenerationResult(null)}
-                    className="rounded-lg p-2 text-muted hover:bg-surface-tertiary hover:text-foreground"
-                    aria-label="Fermer le résultat"
-                  >
-                    <X size={16} />
-                  </button>
-                </div>
-
-                <div className="space-y-4">
-                  {generationResult.urls.map((url, index) =>
-                    generationResult.type === "video" ? (
-                      <video
-                        key={`${url}-${index}`}
-                        src={url}
-                        controls
-                        playsInline
-                        className="w-full rounded-2xl border border-border bg-black"
-                      />
-                    ) : (
-                      <img
-                        key={`${url}-${index}`}
-                        src={url}
-                        alt={`Image générée ${index + 1}`}
-                        className="w-full rounded-2xl border border-border object-contain"
-                      />
-                    ),
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* ==================================================
                 COMPOSER
                 ================================================== */}
 
@@ -3797,8 +3410,7 @@ export default function ChatPage() {
                               {label}
                             </span>
 
-                            {(label === "Fichier" ||
-                              label === "Image · Analyse") &&
+                            {label !== "Recherche Web" &&
                               attachments.length > 0 && (
                                 <span className="text-[10px] opacity-70">
                                   {attachments.length}/{MAX_ATTACHMENTS}
