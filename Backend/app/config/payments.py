@@ -22,7 +22,7 @@ PRIMARY_PACKS = {
 
 
 ADDON_PACKS = {
-    "credits_1000": {
+    "credits_1000_563": {
         "price": 500,
         "credits": 1000,
     },
