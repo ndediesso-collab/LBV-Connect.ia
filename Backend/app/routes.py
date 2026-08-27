@@ -508,13 +508,89 @@ def checkout_payment(
         )
 
     # ========================================================
-    # 9. CRÉATION DU CHECKOUT CHARIOW
+    # 9. RÉCUPÉRATION DES INFORMATIONS CLIENT
+    # ========================================================
+
+    # Les informations peuvent être stockées dans les
+    # métadonnées utilisateur Supabase. On accepte plusieurs
+    # variantes de noms afin de rester compatible avec le
+    # profil actuellement utilisé par le frontend.
+    user_metadata = getattr(
+        auth_user,
+        "user_metadata",
+        None,
+    )
+
+    if not isinstance(user_metadata, dict):
+        user_metadata = {}
+
+    first_name = (
+        user_metadata.get("first_name")
+        or user_metadata.get("firstname")
+        or user_metadata.get("firstName")
+        or user_metadata.get("prenom")
+        or ""
+    )
+
+    last_name = (
+        user_metadata.get("last_name")
+        or user_metadata.get("lastname")
+        or user_metadata.get("lastName")
+        or user_metadata.get("nom")
+        or ""
+    )
+
+    phone = (
+        user_metadata.get("phone")
+        or user_metadata.get("phone_number")
+        or user_metadata.get("phoneNumber")
+        or user_metadata.get("telephone")
+        or ""
+    )
+
+    first_name = str(first_name).strip()
+    last_name = str(last_name).strip()
+    phone = str(phone).strip()
+
+    if not first_name:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Votre prénom est requis pour initialiser "
+                "le paiement Chariow. Complétez votre profil."
+            ),
+        )
+
+    if not last_name:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Votre nom est requis pour initialiser "
+                "le paiement Chariow. Complétez votre profil."
+            ),
+        )
+
+    if not phone:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Votre numéro de téléphone est requis pour "
+                "initialiser le paiement Chariow. Complétez "
+                "votre profil."
+            ),
+        )
+
+    # ========================================================
+    # 10. CRÉATION DU CHECKOUT CHARIOW
     # ========================================================
 
     chariow_checkout = create_chariow_checkout(
         product_id=request.product_id,
         reference_id=reference,
         email=customer_email,
+        first_name=first_name,
+        last_name=last_name,
+        phone=phone,
     )
 
     checkout_url = chariow_checkout[
