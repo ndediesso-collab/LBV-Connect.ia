@@ -24,6 +24,7 @@ from app.config.payments import (
 )
 
 from app.services.payment_service import (
+    create_chariow_checkout,
     generate_payment_reference,
     get_payment_product,
     validate_addon_purchase,
@@ -458,9 +459,75 @@ def checkout_payment(
 
     transaction = response.data[0]
 
+    # ========================================================
+    # 8. RÉCUPÉRATION DU CLIENT AUTHENTIFIÉ
+    # ========================================================
+
+    token = _extract_token(
+        authorization
+    )
+
+    try:
+        auth_response = supabase.auth.get_user(
+            token
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Impossible de récupérer les informations "
+                "de l'utilisateur authentifié."
+            ),
+        ) from error
+
+    auth_user = getattr(
+        auth_response,
+        "user",
+        None,
+    )
+
+    if auth_user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Utilisateur authentifié introuvable.",
+        )
+
+    customer_email = getattr(
+        auth_user,
+        "email",
+        None,
+    )
+
+    if not customer_email:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Aucune adresse e-mail n'est associée "
+                "à votre compte."
+            ),
+        )
+
+    # ========================================================
+    # 9. CRÉATION DU CHECKOUT CHARIOW
+    # ========================================================
+
+    chariow_checkout = create_chariow_checkout(
+        product_id=request.product_id,
+        reference_id=reference,
+        email=customer_email,
+    )
+
+    checkout_url = chariow_checkout[
+        "checkout_url"
+    ]
+
+    # ========================================================
+    # 10. RÉPONSE FRONTEND
+    # ========================================================
+
     return {
         "success": True,
-        "message": "Commande de paiement créée.",
+        "message": "Checkout Chariow créé.",
         "transaction": transaction,
         "payment": {
             "reference": reference,
@@ -471,7 +538,12 @@ def checkout_payment(
             "currency": "XAF",
             "credits": product["credits"],
             "status": "pending",
+            "checkout_url": checkout_url,
+            "chariow_product_id": chariow_checkout[
+                "chariow_product_id"
+            ],
         },
+        "checkout_url": checkout_url,
     }
 
 
