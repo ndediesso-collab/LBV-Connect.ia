@@ -581,18 +581,7 @@ def checkout_payment(
         )
 
     # ========================================================
-    # 10. SYNCHRONISATION DU PROFIL
-    # ========================================================
-
-    _sync_user_profile(
-        user_id=authenticated_user_id,
-        first_name=first_name,
-        last_name=last_name,
-        phone=phone,
-    )
-
-    # ========================================================
-    # 11. CRÉATION DU CHECKOUT CHARIOW
+    # 10. CRÉATION DU CHECKOUT CHARIOW
     # ========================================================
 
     chariow_checkout = create_chariow_checkout(
@@ -609,7 +598,7 @@ def checkout_payment(
     ]
 
     # ========================================================
-    # 12. RÉPONSE FRONTEND
+    # 10. RÉPONSE FRONTEND
     # ========================================================
 
     return {
@@ -759,87 +748,6 @@ def _authenticate_user(
                 "Session utilisateur invalide ou expirée."
             ),
         )
-
-
-
-# ============================================================
-# SYNCHRONISATION — PROFIL UTILISATEUR
-# ============================================================
-
-def _sync_user_profile(
-    user_id: str,
-    first_name: str,
-    last_name: str,
-    phone: str,
-):
-    """
-    Synchronise les informations utilisées pour le paiement
-    avec la table `profiles`.
-
-    Le numéro de téléphone est conservé dans `profiles.phone`
-    afin qu'il soit disponible indépendamment des métadonnées
-    Supabase Auth.
-
-    La clé primaire attendue de `profiles` est `id`, correspondant
-    à l'UUID de l'utilisateur Supabase Auth.
-    """
-
-    profile_payload = {
-        "id": user_id,
-        "first_name": first_name,
-        "last_name": last_name,
-        "phone": phone,
-    }
-
-    try:
-        existing = (
-            supabase
-            .table("profiles")
-            .select("id")
-            .eq("id", user_id)
-            .limit(1)
-            .execute()
-        )
-
-        if existing.data:
-            response = (
-                supabase
-                .table("profiles")
-                .update(
-                    {
-                        "first_name": first_name,
-                        "last_name": last_name,
-                        "phone": phone,
-                    }
-                )
-                .eq("id", user_id)
-                .execute()
-            )
-        else:
-            response = (
-                supabase
-                .table("profiles")
-                .insert(profile_payload)
-                .execute()
-            )
-
-        if not response.data:
-            raise RuntimeError(
-                "La synchronisation du profil n'a retourné aucune donnée."
-            )
-
-    except HTTPException:
-        raise
-    except Exception as error:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Impossible de synchroniser les informations "
-                f"du profil : {str(error)}"
-            ),
-        ) from error
-
-    return response.data[0]
 
 
 def _get_authenticated_user_id(
