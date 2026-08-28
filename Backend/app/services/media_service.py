@@ -130,11 +130,9 @@ class MediaService:
             self._safe_delete_storage(uploaded_path)
             raise
 
-        signed_url = self.repository.create_signed_url(
+        media["url"] = self.repository.create_signed_url(
             uploaded_path
         )
-        media["url"] = signed_url
-        media["public_url"] = signed_url
 
         return media
 
@@ -213,11 +211,9 @@ class MediaService:
             self._safe_delete_storage(uploaded_path)
             raise
 
-        signed_url = self.repository.create_signed_url(
+        media["url"] = self.repository.create_signed_url(
             uploaded_path
         )
-        media["url"] = signed_url
-        media["public_url"] = signed_url
 
         return media
 
@@ -342,18 +338,10 @@ class MediaService:
             storage_path = item.get("storage_path")
 
             if storage_path:
-                if signed_url_expires_in is None:
-                    signed_url = self.repository.create_signed_url(
-                        storage_path,
-                    )
-                else:
-                    signed_url = self.repository.create_signed_url(
-                        storage_path,
-                        expires_in=signed_url_expires_in,
-                    )
-
-                item["url"] = signed_url
-                item["public_url"] = signed_url
+                item["url"] = self.repository.create_signed_url(
+                    storage_path,
+                    expires_in=signed_url_expires_in,
+                )
 
             result.append(item)
 
@@ -380,18 +368,10 @@ class MediaService:
         storage_path = result.get("storage_path")
 
         if storage_path:
-            if signed_url_expires_in is None:
-                signed_url = self.repository.create_signed_url(
-                    storage_path,
-                )
-            else:
-                signed_url = self.repository.create_signed_url(
-                    storage_path,
-                    expires_in=signed_url_expires_in,
-                )
-
-            result["url"] = signed_url
-            result["public_url"] = signed_url
+            result["url"] = self.repository.create_signed_url(
+                storage_path,
+                expires_in=signed_url_expires_in,
+            )
 
         return result
 
