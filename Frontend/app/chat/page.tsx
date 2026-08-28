@@ -1368,8 +1368,17 @@ export default function ChatPage() {
     setCurrentUserId,
   ] = useState<string | null>(null);
 
+  // Les configurations locales permettent au bouton « Création »
+  // de rester immédiatement utilisable. Le backend reste l'autorité
+  // finale pour le pack, les droits, le coût et le débit.
   const [mediaCapabilities, setMediaCapabilities] =
-    useState<MediaCapability[]>([]);
+    useState<MediaCapability[]>(() =>
+      MEDIA_GENERATION_CONFIGS.map((item) => ({
+        action: item.action,
+        type: item.type,
+        credits: item.credits,
+      })),
+    );
 
   const [selectedMediaAction, setSelectedMediaAction] =
     useState<string>("");
@@ -2306,17 +2315,28 @@ export default function ChatPage() {
       return;
     }
 
+    // Si l'endpoint de capacités est indisponible, on peut tout de même
+    // utiliser la configuration locale. Le backend décidera ensuite si
+    // l'action est réellement autorisée pour le compte.
     const capability =
       mediaCapabilities.find(
-        (item) =>
-          item.action === selectedMediaAction,
-      );
+        (item) => item.action === selectedMediaAction,
+      ) ??
+      (() => {
+        const localConfig = getMediaGenerationConfig(selectedMediaAction);
+        return localConfig
+          ? {
+              action: localConfig.action,
+              type: localConfig.type,
+              credits: localConfig.credits,
+            }
+          : undefined;
+      })();
 
     if (!capability) {
       setError(
-        "Cette option de création n'est plus disponible.",
+        "Cette option de création n'existe pas.",
       );
-      await loadMediaCapabilities();
       return;
     }
 
