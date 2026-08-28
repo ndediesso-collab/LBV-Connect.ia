@@ -1721,9 +1721,15 @@ export default function ChatPage() {
           loadConversations(
             localCache,
           ),
-          loadMediaCapabilities(),
           loadPersistedMedia(),
         ]);
+
+        // Les capacités média dépendent du wallet/pack.
+        // On les charge après le wallet pour éviter un 404
+        // transitoire lors de l'initialisation.
+        if (!cancelled) {
+          await loadMediaCapabilities();
+        }
       } catch (requestError) {
         console.error(
           "Erreur initialisation Chat :",
@@ -2104,8 +2110,11 @@ export default function ChatPage() {
         return available[0]?.action ?? "";
       });
     } catch (requestError) {
-      console.error(
-        "Erreur chargement capacités média :",
+      // Un compte sans wallet/pack peut légitimement recevoir un 404.
+      // Cela ne doit pas polluer l'interface ni transformer le bouton
+      // "Création" en erreur globale du chat.
+      console.warn(
+        "Capacités média indisponibles pour le compte courant :",
         requestError,
       );
       setMediaCapabilities([]);
@@ -3171,7 +3180,7 @@ export default function ChatPage() {
         requestError instanceof
         Error
           ? requestError.message
-          : "Impossible de contacter NKYEL.ia.";
+          : "Impossible de contacter NKYEL.";
 
       const assistantMessage:
         ChatMessage = {
@@ -3285,7 +3294,7 @@ export default function ChatPage() {
         <div className="flex h-16 items-center justify-between px-5">
           <div>
             <div className="font-semibold tracking-tight">
-              NKYEL.ia
+              NKYEL
             </div>
 
             <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-muted">
@@ -3413,6 +3422,22 @@ export default function ChatPage() {
           </Link>
 
           <Link
+            href="/creations"
+            onClick={() =>
+              setSidebarOpen(false)
+            }
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted-strong transition hover:bg-surface-tertiary hover:text-foreground"
+          >
+            <ImageIcon size={17} />
+            Mes créations
+            {generatedMedia.length > 0 && (
+              <span className="ml-auto rounded-full bg-surface-tertiary px-2 py-0.5 text-[10px] text-muted">
+                {generatedMedia.length}
+              </span>
+            )}
+          </Link>
+
+          <Link
             href="/settings"
             onClick={() =>
               setSidebarOpen(false)
@@ -3520,7 +3545,7 @@ export default function ChatPage() {
 
                     <div>
                       <p className="text-xs uppercase tracking-[0.18em] text-muted">
-                        NKYEL.ia
+                        NKYEL
                       </p>
 
                       <p className="text-sm font-medium">
@@ -3613,22 +3638,36 @@ export default function ChatPage() {
                                     media.id === item.id,
                                 )
                                 .map((media) =>
-                                  media.type === "image" ? (
-                                    <img
-                                      key={media.id}
-                                      src={media.url}
-                                      alt="Image générée par NKYEL.ia"
-                                      className="max-h-[620px] w-auto rounded-2xl border border-border shadow-sm"
-                                    />
-                                  ) : (
-                                    <video
-                                      key={media.id}
-                                      src={media.url}
-                                      controls
-                                      playsInline
-                                      className="max-h-[620px] w-full rounded-2xl border border-border bg-black shadow-sm"
-                                    />
-                                  ),
+                                  <div
+                                    key={media.id}
+                                    className="relative inline-block max-w-full"
+                                  >
+                                    {media.type === "image" ? (
+                                      <img
+                                        src={media.url}
+                                        alt="Image générée par NKYEL"
+                                        className="max-h-[620px] w-auto rounded-2xl border border-border shadow-sm"
+                                      />
+                                    ) : (
+                                      <video
+                                        src={media.url}
+                                        controls
+                                        playsInline
+                                        className="max-h-[620px] w-full rounded-2xl border border-border bg-black shadow-sm"
+                                      />
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => void downloadMedia(media)}
+                                      className="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-xl border border-white/20 bg-black/75 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur transition hover:bg-black"
+                                      title="Télécharger"
+                                      aria-label="Télécharger cette création"
+                                    >
+                                      <Download size={14} />
+                                      Télécharger
+                                    </button>
+                                  </div>,
                                 )}
                             </div>
                           )}
@@ -3648,7 +3687,7 @@ export default function ChatPage() {
                             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:300ms]" />
                           </span>
 
-                          NKYEL.ia réfléchit...
+                          NKYEL réfléchit...
                         </div>
                       </div>
                     </div>
@@ -4110,7 +4149,7 @@ export default function ChatPage() {
                       handleSendMessage();
                     }
                   }}
-                  placeholder={activeCapability === "Création" ? "Décrivez votre création..." : "Écrivez à NKYEL.ia..."}
+                  placeholder={activeCapability === "Création" ? "Décrivez votre création..." : "Écrivez à NKYEL..."}
                   disabled={
                     isThinking
                   }
