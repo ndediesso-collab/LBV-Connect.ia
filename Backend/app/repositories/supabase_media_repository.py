@@ -52,6 +52,9 @@ class SupabaseMediaRepository:
         if not storage_path:
             raise ValueError("Le chemin Storage est obligatoire.")
 
+        if not content_type or "/" not in content_type:
+            raise ValueError("Le content_type du média est invalide.")
+
         if not storage_path.startswith(f"{normalized_user_id}/"):
             raise ValueError(
                 "Le chemin Storage doit appartenir à l'utilisateur courant."
@@ -93,7 +96,16 @@ class SupabaseMediaRepository:
         if not storage_path:
             raise ValueError("Le chemin Storage est obligatoire.")
 
-        expires = expires_in or self.SIGNED_URL_EXPIRES_IN
+        expires = (
+            self.SIGNED_URL_EXPIRES_IN
+            if expires_in is None
+            else int(expires_in)
+        )
+
+        if expires <= 0:
+            raise ValueError(
+                "expires_in doit être supérieur à 0."
+            )
 
         try:
             response = supabase.storage.from_(self.BUCKET_NAME).create_signed_url(
@@ -203,6 +215,35 @@ class SupabaseMediaRepository:
             )
 
         return rows[0]
+
+    def get_public_media_url(
+        self,
+        *,
+        media_id: str | UUID,
+        user_id: str | UUID,
+        expires_in: Optional[int] = None,
+    ) -> Optional[str]:
+        """
+        Retourne uniquement l'URL signée d'une création appartenant
+        à l'utilisateur courant.
+        """
+        media = self.get_media(
+            media_id=media_id,
+            user_id=user_id,
+        )
+
+        if not media:
+            return None
+
+        storage_path = media.get("storage_path")
+
+        if not storage_path:
+            return None
+
+        return self.create_signed_url(
+            storage_path,
+            expires_in=expires_in,
+        )
 
     def get_media(
         self,
@@ -321,9 +362,10 @@ class SupabaseMediaRepository:
         rows = self._extract_rows(response)
 
         # Certaines versions de PostgREST peuvent ne pas retourner
-        # les lignes supprimées sans select. Le fait que la requête
-        # n'ait pas levé d'exception suffit alors comme confirmation.
-        return bool(rows) or True
+        # les lignes supprimées sans select. Si la requête DELETE
+        # n'a pas levé d'exception, la suppression est considérée
+        # comme effectuée.
+        return bool(rows) or response is not None
 
     # ============================================================
     # HELPERS

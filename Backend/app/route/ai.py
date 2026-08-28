@@ -47,7 +47,6 @@ from app.services.model_trial_service import (
 # ============================================================
 
 router = APIRouter(
-    prefix="/ai",
     tags=["AI"],
 )
 
@@ -305,6 +304,67 @@ VIDEO_ACTIONS = {
     CreditAction.VIDEO_BUSINESS_STANDARD,
     CreditAction.VIDEO_BUSINESS_LONG,
 }
+
+
+# ============================================================
+# GET /ai/media-capabilities
+# ============================================================
+
+@router.get("/media-capabilities")
+def get_media_capabilities(
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """
+    Retourne les créations média disponibles pour le pack actif
+    de l'utilisateur authentifié.
+
+    Le préfixe /ai est ajouté par main.py.
+    """
+    authenticated_user_id = _authenticate_chat_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    repository = SupabaseCreditRepository(supabase)
+    wallet = repository.get_wallet(authenticated_user_id)
+
+    # Un utilisateur authentifié peut ne pas encore avoir de wallet.
+    # On retourne une structure exploitable par le frontend plutôt
+    # qu'un 404 qui transforme une capacité optionnelle en erreur.
+    if wallet is None:
+        return {
+            "success": True,
+            "user_id": authenticated_user_id,
+            "pack_id": None,
+            "pack_active": False,
+            "images": [],
+            "videos": [],
+            "media": [],
+        }
+
+    allowed_media = PACK_ALLOWED_MEDIA.get(wallet.pack_id, set())
+
+    images = sorted(
+        action.value
+        for action in allowed_media
+        if action in IMAGE_ACTIONS
+    )
+    videos = sorted(
+        action.value
+        for action in allowed_media
+        if action in VIDEO_ACTIONS
+    )
+
+    return {
+        "success": True,
+        "user_id": authenticated_user_id,
+        "pack_id": wallet.pack_id,
+        "pack_active": bool(wallet.is_pack_active),
+        "images": images,
+        "videos": videos,
+        "media": images + videos,
+    }
 
 
 # ============================================================

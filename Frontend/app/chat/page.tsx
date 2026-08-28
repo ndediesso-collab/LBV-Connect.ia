@@ -3428,7 +3428,7 @@ export default function ChatPage() {
           </Link>
 
           <Link
-            href="/creations"
+            href="/mes_creations"
             onClick={() =>
               setSidebarOpen(false)
             }

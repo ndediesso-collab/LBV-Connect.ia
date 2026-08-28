@@ -83,6 +83,7 @@ app.add_middleware(
 # - transactions
 # - conversations
 # - historique
+# - médias / créations
 app.include_router(router)
 
 
@@ -90,6 +91,16 @@ app.include_router(router)
 # ROUTES IA
 # ============================================================
 
+# Le préfixe /ai permet d'exposer les routes définies
+# dans app.route.ai.router sous :
+#
 # - /ai/chat
-# - streaming IA selon les routes disponibles
-app.include_router(ai_router)
+# - /ai/image
+# - /ai/video
+# - /ai/media-capabilities
+# - /ai/trials
+# - etc.
+app.include_router(
+    ai_router,
+    prefix="/ai",
+)
