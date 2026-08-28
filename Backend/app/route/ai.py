@@ -35,6 +35,7 @@ from app.services.credit_service import (
 )
 
 from app.services.openai_service import OpenAIService
+from app.services.media_service import MediaService
 
 from app.services.model_trial_service import (
     ModelTrialService,
@@ -168,6 +169,8 @@ class MediaResponse(BaseModel):
     remaining_percentage: float
     mime_type: str
     data: str
+    media_id: str | None = None
+    media_url: str | None = None
     video_id: str | None = None
     seconds: str | None = None
     size: str | None = None
@@ -1401,13 +1404,36 @@ async def generate_image(
             detail=f"La génération d'image a échoué : {error}",
         )
 
-    result = _consume_media(
-        repository=repository,
-        wallet=wallet,
-        authenticated_user_id=authenticated_user_id,
-        action=credit_action,
-        cost=cost,
-    )
+    try:
+        persisted = MediaService().save_openai_image(
+            user_id=authenticated_user_id,
+            generated=generated,
+            prompt=prompt,
+            credits_cost=cost,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"La génération a réussi mais la sauvegarde Supabase a échoué : {error}",
+        )
+
+    try:
+        result = _consume_media(
+            repository=repository,
+            wallet=wallet,
+            authenticated_user_id=authenticated_user_id,
+            action=credit_action,
+            cost=cost,
+        )
+    except Exception:
+        try:
+            MediaService().delete_user_media(
+                media_id=persisted["id"],
+                user_id=authenticated_user_id,
+            )
+        except Exception:
+            pass
+        raise
 
     return MediaResponse(
         success=True,
@@ -1420,6 +1446,8 @@ async def generate_image(
         remaining_percentage=result.remaining_percentage,
         mime_type=generated["mime_type"],
         data=generated["b64_json"],
+        media_id=persisted["id"],
+        media_url=persisted["media_url"],
         size=generated["size"],
     )
 
@@ -1484,13 +1512,38 @@ async def generate_video(
             detail=f"La génération vidéo a échoué : {error}",
         )
 
-    result = _consume_media(
-        repository=repository,
-        wallet=wallet,
-        authenticated_user_id=authenticated_user_id,
-        action=credit_action,
-        cost=cost,
-    )
+    video_bytes = generated["data"]
+
+    try:
+        persisted = MediaService().save_openai_video(
+            user_id=authenticated_user_id,
+            generated=generated,
+            prompt=prompt,
+            credits_cost=cost,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"La génération a réussi mais la sauvegarde Supabase a échoué : {error}",
+        )
+
+    try:
+        result = _consume_media(
+            repository=repository,
+            wallet=wallet,
+            authenticated_user_id=authenticated_user_id,
+            action=credit_action,
+            cost=cost,
+        )
+    except Exception:
+        try:
+            MediaService().delete_user_media(
+                media_id=persisted["id"],
+                user_id=authenticated_user_id,
+            )
+        except Exception:
+            pass
+        raise
 
     return MediaResponse(
         success=True,
@@ -1502,7 +1555,9 @@ async def generate_video(
         credits_remaining=result.new_balance,
         remaining_percentage=result.remaining_percentage,
         mime_type=generated["mime_type"],
-        data=base64.b64encode(generated["data"]).decode("utf-8"),
+        data=base64.b64encode(video_bytes).decode("utf-8"),
+        media_id=persisted["id"],
+        media_url=persisted["media_url"],
         video_id=generated["video_id"],
         seconds=generated["seconds"],
         size=generated["size"],
@@ -1510,61 +1565,65 @@ async def generate_video(
 
 
 # ============================================================
-# GET /ai/media-capabilities
+# GET /ai/media
 # ============================================================
 
 
-@router.get("/media-capabilities")
-def get_media_capabilities(
-    user_id: str | None = Header(
-        default=None,
-        alias="user-id",
-    ),
-    authorization: str | None = Header(
-        default=None,
-        alias="authorization",
-    ),
+@router.get("/media")
+def get_generated_media(
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
 ):
-    """Retourne les créations média autorisées par le pack courant."""
+    """Retourne les créations média persistées de l'utilisateur."""
 
-    authenticated_user_id = _authenticate_chat_user(
-        user_id=user_id,
-        authorization=authorization,
-    )
+    authenticated_user_id = _authenticate_chat_user(user_id, authorization)
 
-    repository = SupabaseCreditRepository(supabase)
-    wallet = repository.get_wallet(authenticated_user_id)
-
-    if wallet is None:
+    try:
+        media = MediaService().list_user_media(
+            user_id=authenticated_user_id,
+        )
+    except Exception as error:
         raise HTTPException(
-            status_code=404,
-            detail="Aucun portefeuille de crédits trouvé pour cet utilisateur.",
+            status_code=500,
+            detail=f"Impossible de récupérer les créations média : {error}",
         )
 
-    allowed = PACK_ALLOWED_MEDIA.get(wallet.pack_id, set())
+    return {"success": True, "count": len(media), "media": media}
 
-    return {
-        "success": True,
-        "pack_id": wallet.pack_id,
-        "media": [
-            {
-                "action": action.value,
-                "type": (
-                    "image"
-                    if action in IMAGE_ACTIONS
-                    else "video"
-                ),
-                "credits": CreditService.get_cost(
-                    wallet,
-                    action,
-                ),
-            }
-            for action in sorted(
-                allowed,
-                key=lambda item: item.value,
-            )
-        ],
-    }
+
+# ============================================================
+# DELETE /ai/media/{media_id}
+# ============================================================
+
+
+@router.delete("/media/{media_id}")
+def delete_generated_media(
+    media_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Supprime une création appartenant à l'utilisateur authentifié."""
+
+    authenticated_user_id = _authenticate_chat_user(user_id, authorization)
+
+    try:
+        deleted = MediaService().delete_user_media(
+            media_id=media_id,
+            user_id=authenticated_user_id,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible de supprimer la création média : {error}",
+        )
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Création média introuvable ou non autorisée.",
+        )
+
+    return {"success": True, "id": media_id}
 
 
 # ============================================================

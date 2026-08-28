@@ -1909,3 +1909,353 @@ def delete_conversation(
         "success": True,
         "conversation_id": conversation_id,
     }
+
+
+# ============================================================
+# MÉDIAS — MES CRÉATIONS
+# ============================================================
+#
+# Les créations générées sont persistées dans Supabase.
+# Ces routes utilisent la même authentification que les autres
+# ressources protégées : le token Supabase est vérifié puis
+# comparé au user-id transmis par le frontend.
+#
+# Table Supabase attendue :
+#     generated_media
+#
+# Colonnes utilisées :
+#     id
+#     user_id
+#     media_type
+#     prompt
+#     storage_path
+#     public_url
+#     mime_type
+#     size_bytes
+#     metadata
+#     created_at
+#     updated_at
+#
+# Le frontend peut utiliser `public_url` pour afficher la création
+# et laisser le navigateur gérer son téléchargement / "Enregistrer sous".
+# ============================================================
+
+
+class MediaCreateRequest(BaseModel):
+    media_type: str
+    prompt: str | None = None
+    storage_path: str | None = None
+    public_url: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    metadata: dict | None = None
+
+
+def _validate_media_type(media_type: str) -> str:
+    normalized_media_type = media_type.strip().lower()
+
+    if normalized_media_type not in {"image", "video"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Type de média invalide. Utilisez 'image' ou 'video'.",
+        )
+
+    return normalized_media_type
+
+
+def _media_response(media: dict) -> dict:
+    """
+    Normalise une création média pour le frontend.
+    """
+    return {
+        "id": media.get("id"),
+        "user_id": media.get("user_id"),
+        "media_type": media.get("media_type"),
+        "prompt": media.get("prompt"),
+        "storage_path": media.get("storage_path"),
+        "public_url": media.get("public_url"),
+        "mime_type": media.get("mime_type"),
+        "size_bytes": media.get("size_bytes"),
+        "metadata": media.get("metadata") or {},
+        "created_at": media.get("created_at"),
+        "updated_at": media.get("updated_at"),
+    }
+
+
+# ============================================================
+# GET /media
+# ============================================================
+
+
+@router.get("/media")
+def get_my_media(
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Retourne toutes les créations média de l'utilisateur authentifié.
+
+    Cette route constitue l'endpoint principal de la page
+    "Mes créations". Le frontend peut l'appeler automatiquement
+    au chargement de la page.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    try:
+        response = (
+            supabase
+            .table("generated_media")
+            .select("*")
+            .eq("user_id", authenticated_user_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible de récupérer les créations média : {str(error)}",
+        )
+
+    media = response.data or []
+
+    return {
+        "success": True,
+        "user_id": authenticated_user_id,
+        "media": [
+            _media_response(item)
+            for item in media
+        ],
+        "count": len(media),
+    }
+
+
+# ============================================================
+# GET /media/images
+# ============================================================
+
+
+@router.get("/media/images")
+def get_my_images(
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Retourne uniquement les images générées par l'utilisateur.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    try:
+        response = (
+            supabase
+            .table("generated_media")
+            .select("*")
+            .eq("user_id", authenticated_user_id)
+            .eq("media_type", "image")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible de récupérer les images : {str(error)}",
+        )
+
+    media = response.data or []
+
+    return {
+        "success": True,
+        "user_id": authenticated_user_id,
+        "media": [
+            _media_response(item)
+            for item in media
+        ],
+        "count": len(media),
+    }
+
+
+# ============================================================
+# GET /media/videos
+# ============================================================
+
+
+@router.get("/media/videos")
+def get_my_videos(
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Retourne uniquement les vidéos générées par l'utilisateur.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    try:
+        response = (
+            supabase
+            .table("generated_media")
+            .select("*")
+            .eq("user_id", authenticated_user_id)
+            .eq("media_type", "video")
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible de récupérer les vidéos : {str(error)}",
+        )
+
+    media = response.data or []
+
+    return {
+        "success": True,
+        "user_id": authenticated_user_id,
+        "media": [
+            _media_response(item)
+            for item in media
+        ],
+        "count": len(media),
+    }
+
+
+# ============================================================
+# GET /media/{media_id}
+# ============================================================
+
+
+@router.get("/media/{media_id}")
+def get_my_media_by_id(
+    media_id: str,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Retourne une création média précise appartenant
+    à l'utilisateur authentifié.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    try:
+        response = (
+            supabase
+            .table("generated_media")
+            .select("*")
+            .eq("id", media_id)
+            .eq("user_id", authenticated_user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible de récupérer la création média : {str(error)}",
+        )
+
+    if not response.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Création média introuvable.",
+        )
+
+    return {
+        "success": True,
+        "media": _media_response(response.data[0]),
+    }
+
+
+# ============================================================
+# DELETE /media/{media_id}
+# ============================================================
+
+
+@router.delete("/media/{media_id}")
+def delete_my_media(
+    media_id: str,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Supprime une création média appartenant à l'utilisateur.
+
+    La suppression de la ligne de métadonnées ne supprime pas
+    automatiquement le fichier du Storage. La suppression du
+    fichier Storage reste donc une responsabilité du service
+    média / repository si elle est implémentée.
+    """
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    try:
+        response = (
+            supabase
+            .table("generated_media")
+            .delete()
+            .eq("id", media_id)
+            .eq("user_id", authenticated_user_id)
+            .execute()
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Impossible de supprimer la création média : {str(error)}",
+        )
+
+    if not response.data:
+        raise HTTPException(
+            status_code=404,
+            detail="Création média introuvable ou déjà supprimée.",
+        )
+
+    return {
+        "success": True,
+        "media_id": media_id,
+        "message": "Création média supprimée.",
+    }

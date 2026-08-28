@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  Download,
   FileText,
   Globe,
   Image as ImageIcon,
@@ -75,6 +76,8 @@ type MediaCapabilitiesResponse = {
 
 type GeneratedMedia = {
   id: string;
+  user_id?: string;
+  media_type?: "image" | "video";
   type: "image" | "video";
   mimeType: string;
   url: string;
@@ -185,7 +188,7 @@ type LocalChatCache = {
 };
 
 const LOCAL_CACHE_PREFIX =
-  "lbv_connect_chat_cache_v1";
+  "nkyel_chat_cache_v1";
 
 function getLocalCacheKey(userId: string) {
   return `${LOCAL_CACHE_PREFIX}_${userId}`;
@@ -246,7 +249,7 @@ function readLocalCache(
     };
   } catch (error) {
     console.error(
-      "Erreur lecture cache LBV-Connect :",
+      "Erreur lecture cache NKYEL :",
       error,
     );
 
@@ -274,7 +277,7 @@ function writeLocalCache(
     );
   } catch (error) {
     console.error(
-      "Erreur sauvegarde cache LBV-Connect :",
+      "Erreur sauvegarde cache NKYEL :",
       error,
     );
   }
@@ -291,7 +294,7 @@ function removeLocalCache(userId: string) {
     );
   } catch (error) {
     console.error(
-      "Erreur suppression cache LBV-Connect :",
+      "Erreur suppression cache NKYEL :",
       error,
     );
   }
@@ -1719,6 +1722,7 @@ export default function ChatPage() {
             localCache,
           ),
           loadMediaCapabilities(),
+          loadPersistedMedia(),
         ]);
       } catch (requestError) {
         console.error(
@@ -1968,6 +1972,116 @@ export default function ChatPage() {
    * CHARGEMENT DES CAPACITÉS MÉDIA
    * ==========================================================
    */
+
+  /*
+   * ==========================================================
+   * MÉDIAS PERSISTÉS — SUPABASE
+   * ==========================================================
+   */
+
+  async function loadPersistedMedia(): Promise<void> {
+    try {
+      const data = await apiFetch<{
+        success?: boolean;
+        media?: Array<{
+          id: string;
+          media_type?: "image" | "video";
+          type?: "image" | "video";
+          mime_type?: string | null;
+          public_url?: string | null;
+          url?: string | null;
+          action?: string | null;
+          model?: string | null;
+          cost?: number | null;
+          credits_remaining?: number | null;
+          seconds?: string | number | null;
+          size?: string | number | null;
+          size_bytes?: number | null;
+          prompt?: string | null;
+        }>;
+      }>("/media");
+
+      const restored: GeneratedMedia[] = (data.media ?? []).flatMap(
+        (item): GeneratedMedia[] => {
+          const type: "image" | "video" =
+            item.media_type === "video" || item.type === "video"
+              ? "video"
+              : "image";
+
+          const url = item.public_url ?? item.url;
+
+          if (!url) {
+            return [];
+          }
+
+          const media: GeneratedMedia = {
+            id: item.id,
+            type,
+            mimeType:
+              item.mime_type ??
+              (type === "image" ? "image/png" : "video/mp4"),
+            url,
+            action: item.action ?? "",
+            model: item.model ?? "",
+            cost: item.cost ?? 0,
+            creditsRemaining: item.credits_remaining ?? 0,
+            seconds:
+              item.seconds === null || item.seconds === undefined
+                ? undefined
+                : String(item.seconds),
+            size:
+              item.size === null || item.size === undefined
+                ? undefined
+                : String(item.size),
+          };
+
+          return [media];
+        },
+      );
+
+      setGeneratedMedia(restored);
+    } catch (requestError) {
+      console.error("Erreur chargement créations NKYEL :", requestError);
+    }
+  }
+
+  async function downloadMedia(media: GeneratedMedia): Promise<void> {
+    try {
+      const response = await fetch(media.url);
+
+      if (!response.ok) {
+        throw new Error("Téléchargement impossible.");
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+
+      const extension =
+        media.mimeType?.split("/")[1]?.split(";")[0] ??
+        (media.type === "video" ? "mp4" : "png");
+
+      const safeExtension =
+        extension === "jpeg" ? "jpg" : extension;
+
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `nkyel-${media.id}.${safeExtension}`;
+      link.rel = "noopener";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      window.setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+      }, 1000);
+    } catch (downloadError) {
+      console.error("Erreur téléchargement média NKYEL :", downloadError);
+
+      // Fallback navigateur : ouvre directement l'URL signée.
+      window.open(media.url, "_blank", "noopener,noreferrer");
+    }
+  }
+
 
   async function loadMediaCapabilities(): Promise<void> {
     try {
@@ -2328,6 +2442,10 @@ export default function ChatPage() {
           data: string;
           seconds?: string | null;
           size?: string | null;
+          media_id?: string | null;
+          id?: string | null;
+          public_url?: string | null;
+          url?: string | null;
         }>(
           endpoint,
           {
@@ -2372,10 +2490,12 @@ export default function ChatPage() {
           },
         );
 
-      const url =
-        URL.createObjectURL(blob);
+      const localUrl = URL.createObjectURL(blob);
+      const url = response.public_url || response.url || localUrl;
 
       const mediaId =
+        response.media_id ||
+        response.id ||
         crypto.randomUUID();
 
       setGeneratedMedia(
@@ -3051,7 +3171,7 @@ export default function ChatPage() {
         requestError instanceof
         Error
           ? requestError.message
-          : "Impossible de contacter LBV-Connect.ia.";
+          : "Impossible de contacter NKYEL.ia.";
 
       const assistantMessage:
         ChatMessage = {
@@ -3165,7 +3285,7 @@ export default function ChatPage() {
         <div className="flex h-16 items-center justify-between px-5">
           <div>
             <div className="font-semibold tracking-tight">
-              LBV-Connect.ia
+              NKYEL.ia
             </div>
 
             <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-muted">
@@ -3400,7 +3520,7 @@ export default function ChatPage() {
 
                     <div>
                       <p className="text-xs uppercase tracking-[0.18em] text-muted">
-                        LBV-Connect.ia
+                        NKYEL.ia
                       </p>
 
                       <p className="text-sm font-medium">
@@ -3497,7 +3617,7 @@ export default function ChatPage() {
                                     <img
                                       key={media.id}
                                       src={media.url}
-                                      alt="Image générée par LBV-Connect.ia"
+                                      alt="Image générée par NKYEL.ia"
                                       className="max-h-[620px] w-auto rounded-2xl border border-border shadow-sm"
                                     />
                                   ) : (
@@ -3528,7 +3648,7 @@ export default function ChatPage() {
                             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:300ms]" />
                           </span>
 
-                          LBV-Connect.ia réfléchit...
+                          NKYEL.ia réfléchit...
                         </div>
                       </div>
                     </div>
@@ -3990,7 +4110,7 @@ export default function ChatPage() {
                       handleSendMessage();
                     }
                   }}
-                  placeholder={activeCapability === "Création" ? "Décrivez votre création..." : "Écrivez à LBV-Connect.ia..."}
+                  placeholder={activeCapability === "Création" ? "Décrivez votre création..." : "Écrivez à NKYEL.ia..."}
                   disabled={
                     isThinking
                   }
