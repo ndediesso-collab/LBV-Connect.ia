@@ -2002,6 +2002,7 @@ export default function ChatPage() {
           type?: "image" | "video";
           mime_type?: string | null;
           public_url?: string | null;
+          media_url?: string | null;
           url?: string | null;
           action?: string | null;
           model?: string | null;
@@ -2021,7 +2022,7 @@ export default function ChatPage() {
               ? "video"
               : "image";
 
-          const url = item.public_url ?? item.url;
+          const url = item.public_url ?? item.media_url ?? item.url;
 
           if (!url) {
             return [];
@@ -2474,12 +2475,13 @@ export default function ChatPage() {
           cost: number;
           credits_remaining: number;
           mime_type: string;
-          data: string;
+          data?: string | null;
           seconds?: string | null;
           size?: string | null;
           media_id?: string | null;
           id?: string | null;
           public_url?: string | null;
+          media_url?: string | null;
           url?: string | null;
         }>(
           endpoint,
@@ -2490,56 +2492,80 @@ export default function ChatPage() {
           },
         );
 
-      if (!response.success || !response.data) {
+      if (!response.success) {
         throw new Error(
-          "Le serveur n'a retourné aucun média.",
+          "La génération du média a échoué.",
         );
       }
 
-      const binaryString =
-        window.atob(response.data);
+      /*
+       * Le backend peut renvoyer directement l'URL du média sauvegardé
+       * dans Supabase. Le base64 reste accepté comme fallback.
+       */
+      let url =
+        response.public_url ||
+        response.media_url ||
+        response.url ||
+        "";
 
-      const bytes =
-        new Uint8Array(
-          binaryString.length,
-        );
+      const mimeType =
+        response.mime_type ||
+        (response.type === "image"
+          ? "image/png"
+          : "video/mp4");
 
-      for (
-        let index = 0;
-        index < binaryString.length;
-        index++
-      ) {
-        bytes[index] =
-          binaryString.charCodeAt(index);
+      if (!url && response.data) {
+        const binaryString =
+          window.atob(response.data);
+
+        const bytes =
+          new Uint8Array(
+            binaryString.length,
+          );
+
+        for (
+          let index = 0;
+          index < binaryString.length;
+          index++
+        ) {
+          bytes[index] =
+            binaryString.charCodeAt(index);
+        }
+
+        const blob =
+          new Blob(
+            [bytes],
+            { type: mimeType },
+          );
+
+        url = URL.createObjectURL(blob);
       }
 
-      const blob =
-        new Blob(
-          [bytes],
-          {
-            type:
-              response.mime_type ||
-              (response.type === "image"
-                ? "image/png"
-                : "video/mp4"),
-          },
+      if (!url) {
+        throw new Error(
+          "Le serveur a généré le média mais n'a retourné aucune URL exploitable.",
         );
-
-      const localUrl = URL.createObjectURL(blob);
-      const url = response.public_url || response.url || localUrl;
+      }
 
       const mediaId =
         response.media_id ||
-        response.id ||
-        crypto.randomUUID();
+        response.id;
+
+      if (!mediaId) {
+        throw new Error(
+          "Le serveur a généré le média mais n'a retourné aucun identifiant.",
+        );
+      }
 
       setGeneratedMedia(
         (current) => [
-          ...current,
+          ...current.filter(
+            (media) => media.id !== mediaId,
+          ),
           {
             id: mediaId,
             type: response.type,
-            mimeType: blob.type,
+            mimeType,
             url,
             action: response.action,
             model: response.model,
