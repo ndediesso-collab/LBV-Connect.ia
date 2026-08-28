@@ -130,9 +130,13 @@ class MediaService:
             self._safe_delete_storage(uploaded_path)
             raise
 
-        media["url"] = self.repository.create_signed_url(
+        signed_url = self.repository.create_signed_url(
             uploaded_path
         )
+
+        media["url"] = signed_url
+        media["media_url"] = signed_url
+        media["public_url"] = signed_url
 
         return media
 
@@ -211,11 +215,120 @@ class MediaService:
             self._safe_delete_storage(uploaded_path)
             raise
 
-        media["url"] = self.repository.create_signed_url(
+        signed_url = self.repository.create_signed_url(
             uploaded_path
         )
 
+        media["url"] = signed_url
+        media["media_url"] = signed_url
+        media["public_url"] = signed_url
+
         return media
+
+    # ============================================================
+    # OPENAI → PERSISTANCE
+    # ============================================================
+
+    def save_openai_image(
+        self,
+        *,
+        user_id: str | UUID,
+        generated: dict[str, Any],
+        action: str,
+        prompt: Optional[str] = None,
+        credits_cost: int = 0,
+        conversation_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Persiste une image produite par OpenAIService.
+
+        OpenAIService.generate_image() retourne normalement le contenu
+        image dans `b64_json`. Cette méthode convertit le contenu en
+        bytes puis réutilise le pipeline save_image_base64() → save_image().
+        """
+        if not isinstance(generated, dict):
+            raise TypeError(
+                "Le résultat de génération image est invalide."
+            )
+
+        image_base64 = generated.get("b64_json")
+
+        if not isinstance(image_base64, str) or not image_base64.strip():
+            raise ValueError(
+                "OpenAI n'a retourné aucun contenu Base64 pour l'image."
+            )
+
+        mime_type = generated.get("mime_type") or "image/png"
+        model = generated.get("model")
+        width = generated.get("width")
+        height = generated.get("height")
+
+        return self.save_image_base64(
+            user_id=user_id,
+            image_base64=image_base64,
+            action=action,
+            model=str(model) if model is not None else None,
+            prompt=prompt,
+            credits_cost=credits_cost,
+            conversation_id=conversation_id,
+            mime_type=str(mime_type),
+            width=int(width) if width is not None else None,
+            height=int(height) if height is not None else None,
+        )
+
+    def save_openai_video(
+        self,
+        *,
+        user_id: str | UUID,
+        generated: dict[str, Any],
+        action: str,
+        prompt: Optional[str] = None,
+        credits_cost: int = 0,
+        conversation_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Persiste une vidéo produite par OpenAIService.
+
+        OpenAIService.generate_video() retourne les octets du fichier
+        dans `data`.
+        """
+        if not isinstance(generated, dict):
+            raise TypeError(
+                "Le résultat de génération vidéo est invalide."
+            )
+
+        video_data = generated.get("data")
+
+        if isinstance(video_data, bytearray):
+            video_bytes = bytes(video_data)
+        elif isinstance(video_data, bytes):
+            video_bytes = video_data
+        else:
+            raise TypeError(
+                "OpenAI n'a pas retourné les octets attendus pour la vidéo."
+            )
+
+        mime_type = generated.get("mime_type") or "video/mp4"
+        model = generated.get("model")
+        video_id = generated.get("video_id")
+        seconds = generated.get("seconds")
+        width = generated.get("width")
+        height = generated.get("height")
+
+        return self.save_video(
+            user_id=user_id,
+            video_bytes=video_bytes,
+            action=action,
+            model=str(model) if model is not None else None,
+            prompt=prompt,
+            credits_cost=credits_cost,
+            conversation_id=conversation_id,
+            video_id=str(video_id) if video_id is not None else None,
+            seconds=int(seconds) if seconds is not None else None,
+            mime_type=str(mime_type),
+            width=int(width) if width is not None else None,
+            height=int(height) if height is not None else None,
+        )
 
     # ============================================================
     # BASE64
@@ -338,10 +451,19 @@ class MediaService:
             storage_path = item.get("storage_path")
 
             if storage_path:
-                item["url"] = self.repository.create_signed_url(
-                    storage_path,
-                    expires_in=signed_url_expires_in,
-                )
+                if signed_url_expires_in is None:
+                    signed_url = self.repository.create_signed_url(
+                        storage_path
+                    )
+                else:
+                    signed_url = self.repository.create_signed_url(
+                        storage_path,
+                        expires_in=signed_url_expires_in,
+                    )
+
+                item["url"] = signed_url
+                item["media_url"] = signed_url
+                item["public_url"] = signed_url
 
             result.append(item)
 
@@ -368,10 +490,19 @@ class MediaService:
         storage_path = result.get("storage_path")
 
         if storage_path:
-            result["url"] = self.repository.create_signed_url(
-                storage_path,
-                expires_in=signed_url_expires_in,
-            )
+            if signed_url_expires_in is None:
+                signed_url = self.repository.create_signed_url(
+                    storage_path
+                )
+            else:
+                signed_url = self.repository.create_signed_url(
+                    storage_path,
+                    expires_in=signed_url_expires_in,
+                )
+
+            result["url"] = signed_url
+            result["media_url"] = signed_url
+            result["public_url"] = signed_url
 
         return result
 
