@@ -575,7 +575,11 @@ async function apiFetch<T>(
 
 async function apiMediaFetch<T>(
   path: string,
-  payload: { action: string; prompt: string },
+  payload: {
+    action: string;
+    prompt: string;
+    conversation_id?: string | null;
+  },
 ): Promise<T> {
   return apiFetch<T>(path, {
     method: "POST",
@@ -2061,7 +2065,15 @@ export default function ChatPage() {
               ? "video"
               : "image";
 
-          const url = item.public_url ?? item.media_url ?? item.url;
+          const rawUrl =
+            item.public_url ??
+            item.media_url ??
+            item.url;
+
+          const url =
+            typeof rawUrl === "string"
+              ? rawUrl.trim()
+              : "";
 
           if (!url) {
             return [];
@@ -2219,7 +2231,7 @@ export default function ChatPage() {
     } catch (downloadError) {
       console.error("Erreur téléchargement média NKYEL :", downloadError);
 
-      // Fallback navigateur : ouvre directement l'URL signée.
+      // Fallback navigateur : ouvre directement l'URL publique persistée.
       window.open(media.url, "_blank", "noopener,noreferrer");
     }
   }
@@ -2611,12 +2623,15 @@ export default function ChatPage() {
           public_url?: string | null;
           media_url?: string | null;
           url?: string | null;
+          conversation_id?: string | null;
         }>(
           endpoint,
           {
             action:
               selectedMediaAction,
             prompt,
+            conversation_id:
+              conversationId,
           },
         );
 
@@ -2630,11 +2645,16 @@ export default function ChatPage() {
        * Le backend peut renvoyer directement l'URL du média sauvegardé
        * dans Supabase. Le base64 reste accepté comme fallback.
        */
-      let url =
+      const rawUrl =
         response.public_url ||
         response.media_url ||
         response.url ||
         "";
+
+      let url =
+        typeof rawUrl === "string"
+          ? rawUrl.trim()
+          : "";
 
       const mimeType =
         response.mime_type ||
@@ -2692,7 +2712,9 @@ export default function ChatPage() {
           ),
           {
             id: mediaId,
-            conversation_id: conversationId,
+            conversation_id:
+              response.conversation_id ??
+              conversationId,
             prompt,
             created_at: new Date().toISOString(),
             type: response.type,

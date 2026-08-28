@@ -16,7 +16,7 @@ class SupabaseMediaRepository:
     - récupérer les créations d'un utilisateur ;
     - récupérer une création précise ;
     - supprimer une création et son fichier ;
-    - générer des URLs signées pour le frontend.
+    - générer les URLs publiques persistantes pour le frontend.
 
     Le bucket attendu est :
         generated-media
@@ -148,7 +148,7 @@ class SupabaseMediaRepository:
         Compatibilité avec les anciens appelants.
 
         Le nouveau flux utilise l'URL publique permanente.
-        `expires_in` est conservé pour éviter de casser les appels existants.
+        `expires_in` est conservé uniquement pour compatibilité avec les anciens appels.
         """
         return self.get_public_url(storage_path)
 
@@ -192,6 +192,9 @@ class SupabaseMediaRepository:
             if media_id is not None
             else str(uuid4())
         )
+
+        if url is None:
+            url = self.get_public_url(storage_path)
 
         payload = {
             "id": resolved_media_id,
@@ -266,7 +269,7 @@ class SupabaseMediaRepository:
         storage_path = result.get("storage_path")
 
         if storage_path:
-            public_url = result.get("url") or self.get_public_url(
+            public_url = self.get_public_url(
                 str(storage_path)
             )
             result["url"] = public_url
@@ -295,7 +298,7 @@ class SupabaseMediaRepository:
         storage_path = result.get("storage_path")
 
         if storage_path:
-            public_url = result.get("url") or self.get_public_url(
+            public_url = self.get_public_url(
                 str(storage_path)
             )
             result["url"] = public_url
@@ -376,7 +379,30 @@ class SupabaseMediaRepository:
                 f"Impossible de récupérer les créations média : {exc}"
             ) from exc
 
-        return self._extract_rows(response)
+        rows = self._extract_rows(response)
+
+        normalized_rows: list[dict[str, Any]] = []
+
+        for row in rows:
+            item = dict(row)
+            storage_path = item.get("storage_path")
+
+            if storage_path:
+                try:
+                    public_url = self.get_public_url(
+                        str(storage_path)
+                    )
+                    item["url"] = public_url
+                    item["media_url"] = public_url
+                    item["public_url"] = public_url
+                except Exception:
+                    # Ne bloque pas toute la liste si une URL ne peut pas
+                    # être reconstruite pour une ligne particulière.
+                    pass
+
+            normalized_rows.append(item)
+
+        return normalized_rows
 
     def delete_media(
         self,

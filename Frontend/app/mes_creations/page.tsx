@@ -54,17 +54,63 @@ const getMediaType = (media: MediaItem): MediaType => {
 const getMediaUrl = (media: MediaItem): string | null =>
   media.public_url || media.url || null;
 
-const normalizeMediaUrl = (media: MediaItem): string | null => {
-  const value =
+/**
+ * Retourne toujours une URL directement exploitable par le navigateur.
+ *
+ * Cas pris en charge :
+ * 1. URL publique Supabase :
+ *    /storage/v1/object/public/generated-media/...
+ * 2. Ancienne URL signée Supabase :
+ *    /storage/v1/object/sign/generated-media/...?...token=...
+ *
+ * Lorsque l'ancienne URL signée est rencontrée, elle est convertie
+ * localement en URL publique permanente. Le navigateur n'a donc plus
+ * besoin d'appeler le backend /media/{id}.
+ */
+const normalizeMediaUrl = (
+  media: MediaItem,
+): string | null => {
+  const rawValue =
     media.public_url ||
     media.url ||
     null;
 
-  if (!value || typeof value !== "string") {
+  if (
+    !rawValue ||
+    typeof rawValue !== "string"
+  ) {
     return null;
   }
 
-  return value.trim() || null;
+  const value = rawValue.trim();
+
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(value);
+
+    if (
+      parsed.pathname.includes(
+        "/storage/v1/object/sign/",
+      )
+    ) {
+      const publicPath =
+        parsed.pathname.replace(
+          "/storage/v1/object/sign/",
+          "/storage/v1/object/public/",
+        );
+
+      return `${parsed.origin}${publicPath}`;
+    }
+
+    return value;
+  } catch {
+    // Si une valeur relative est exceptionnellement renvoyée,
+    // on la conserve telle quelle plutôt que de casser l'affichage.
+    return value;
+  }
 };
 
 const formatDate = (value?: string | null) => {
@@ -255,7 +301,7 @@ export default function CreationsPage() {
 
       URL.revokeObjectURL(objectUrl);
     } catch {
-      // Fallback : le navigateur peut ouvrir directement l'URL signée.
+      // Fallback : ouvre directement l'URL publique normalisée.
       window.open(url, "_blank", "noopener,noreferrer");
     }
   }, []);

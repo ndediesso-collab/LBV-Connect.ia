@@ -440,8 +440,8 @@ class MediaService:
         signed_url_expires_in: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """
-        Récupère les créations d'un utilisateur et renvoie l'URL
-        publique persistée dans Supabase.
+        Récupère les créations d'un utilisateur et renvoie toujours
+        une URL publique exploitable.
         """
         media_list = self.repository.list_media(
             user_id=user_id,
@@ -457,16 +457,18 @@ class MediaService:
 
             storage_path = item.get("storage_path")
 
-            if not item.get("url") and storage_path:
+            if storage_path:
                 public_url = self.repository.get_public_url(
-                    storage_path
+                    str(storage_path)
                 )
                 item["url"] = public_url
                 item["media_url"] = public_url
                 item["public_url"] = public_url
-            elif item.get("url"):
-                item["media_url"] = item["url"]
-                item["public_url"] = item["url"]
+            else:
+                persisted_url = item.get("url")
+                if persisted_url:
+                    item["media_url"] = persisted_url
+                    item["public_url"] = persisted_url
 
             result.append(item)
 
@@ -492,9 +494,9 @@ class MediaService:
 
         storage_path = result.get("storage_path")
 
-        if not result.get("url") and storage_path:
+        if storage_path:
             public_url = self.repository.get_public_url(
-                storage_path
+                str(storage_path)
             )
             result["url"] = public_url
             result["media_url"] = public_url

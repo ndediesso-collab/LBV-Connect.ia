@@ -169,6 +169,7 @@ class MediaResponse(BaseModel):
     mime_type: str
     data: str
     media_id: str | None = None
+    conversation_id: str | None = None
     media_url: str | None = None
     public_url: str | None = None
     url: str | None = None
@@ -1328,7 +1329,7 @@ def _consume_media(
 
 async def _read_media_request(
     request: Request,
-) -> tuple[str, str]:
+) -> tuple[str, str, str | None]:
     """
     Lit une requête de création média envoyée par le frontend.
 
@@ -1348,6 +1349,7 @@ async def _read_media_request(
 
     action = None
     prompt = None
+    conversation_id = None
 
     if "application/json" in content_type:
         try:
@@ -1371,6 +1373,10 @@ async def _read_media_request(
         )
 
         prompt = payload.get("prompt")
+        conversation_id = (
+            payload.get("conversation_id")
+            or payload.get("conversationId")
+        )
 
     else:
         try:
@@ -1388,6 +1394,10 @@ async def _read_media_request(
         )
 
         prompt = form.get("prompt")
+        conversation_id = (
+            form.get("conversation_id")
+            or form.get("conversationId")
+        )
 
     if action is None or not str(action).strip():
         raise HTTPException(
@@ -1401,7 +1411,18 @@ async def _read_media_request(
             detail="Le paramètre 'prompt' est requis pour la création média.",
         )
 
-    return str(action).strip(), str(prompt).strip()
+    normalized_conversation_id = (
+        str(conversation_id).strip()
+        if conversation_id is not None
+        and str(conversation_id).strip()
+        else None
+    )
+
+    return (
+        str(action).strip(),
+        str(prompt).strip(),
+        normalized_conversation_id,
+    )
 
 
 # ============================================================
@@ -1431,7 +1452,7 @@ async def generate_image(
     en application/json au lieu de FormData.
     """
 
-    action, prompt = await _read_media_request(request)
+    action, prompt, conversation_id = await _read_media_request(request)
 
     (
         authenticated_user_id,
@@ -1473,6 +1494,7 @@ async def generate_image(
             action=credit_action.value,
             prompt=prompt,
             credits_cost=cost,
+            conversation_id=conversation_id,
         )
     except Exception as error:
         raise HTTPException(
@@ -1510,6 +1532,7 @@ async def generate_image(
         mime_type=generated["mime_type"],
         data=generated["b64_json"],
         media_id=persisted["id"],
+        conversation_id=conversation_id,
         media_url=persisted.get("media_url") or persisted.get("public_url") or persisted.get("url"),
         public_url=persisted.get("public_url"),
         url=persisted.get("url"),
@@ -1542,7 +1565,7 @@ async def generate_video(
     Accepte désormais aussi bien JSON que multipart/form-data.
     """
 
-    action, prompt = await _read_media_request(request)
+    action, prompt, conversation_id = await _read_media_request(request)
 
     (
         authenticated_user_id,
@@ -1586,6 +1609,7 @@ async def generate_video(
             action=credit_action.value,
             prompt=prompt,
             credits_cost=cost,
+            conversation_id=conversation_id,
         )
     except Exception as error:
         raise HTTPException(
@@ -1623,6 +1647,7 @@ async def generate_video(
         mime_type=generated["mime_type"],
         data=base64.b64encode(video_bytes).decode("utf-8"),
         media_id=persisted["id"],
+        conversation_id=conversation_id,
         media_url=persisted.get("media_url") or persisted.get("public_url") or persisted.get("url"),
         public_url=persisted.get("public_url"),
         url=persisted.get("url"),
