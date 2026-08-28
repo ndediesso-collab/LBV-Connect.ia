@@ -234,7 +234,7 @@ class MediaService:
         *,
         user_id: str | UUID,
         generated: dict[str, Any],
-        action: str,
+        action: Optional[str] = None,
         prompt: Optional[str] = None,
         credits_cost: int = 0,
         conversation_id: Optional[str] = None,
@@ -262,11 +262,12 @@ class MediaService:
         model = generated.get("model")
         width = generated.get("width")
         height = generated.get("height")
+        resolved_action = action or generated.get("action") or "image"
 
         return self.save_image_base64(
             user_id=user_id,
             image_base64=image_base64,
-            action=action,
+            action=str(resolved_action),
             model=str(model) if model is not None else None,
             prompt=prompt,
             credits_cost=credits_cost,
@@ -281,7 +282,7 @@ class MediaService:
         *,
         user_id: str | UUID,
         generated: dict[str, Any],
-        action: str,
+        action: Optional[str] = None,
         prompt: Optional[str] = None,
         credits_cost: int = 0,
         conversation_id: Optional[str] = None,
@@ -314,11 +315,12 @@ class MediaService:
         seconds = generated.get("seconds")
         width = generated.get("width")
         height = generated.get("height")
+        resolved_action = action or generated.get("action") or "video"
 
         return self.save_video(
             user_id=user_id,
             video_bytes=video_bytes,
-            action=action,
+            action=str(resolved_action),
             model=str(model) if model is not None else None,
             prompt=prompt,
             credits_cost=credits_cost,
