@@ -1,5 +1,3 @@
-
-
 "use client";
 
 import {
@@ -16,7 +14,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 type Pack = {
   id:
@@ -475,63 +472,14 @@ export default function PacksPage() {
   const [showCreditTopUp, setShowCreditTopUp] =
     useState(false);
   const [isPaying, setIsPaying] = useState<string | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState<
-    "airtel_money" | "moov_money" | null
-  >(null);
-  const [paymentTarget, setPaymentTarget] = useState<{
-    type: "primary_pack" | "addon";
-    id: string;
-  } | null>(null);
-  const router = useRouter();
 
-  function handlePackSelection(pack: Pack) {
-    void (async () => {
-      const supabase = createClient();
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        window.location.href = `/login?redirect=${encodeURIComponent(
-          `/packs?checkout=${pack.id}`,
-        )}`;
-        return;
-      }
-
-      setPaymentTarget({
-        type: "primary_pack",
-        id: pack.id,
-      });
-      setSelectedProvider(null);
-    })();
-  }
-
-  function handleCreditTopUp(topUp: CreditTopUp) {
-    void (async () => {
-      const supabase = createClient();
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        window.location.href = `/login?redirect=${encodeURIComponent(
-          `/packs?checkout=${topUp.id}`,
-        )}`;
-        return;
-      }
-
-      setPaymentTarget({
-        type: "addon",
-        id: topUp.id,
-      });
-      setSelectedProvider(null);
-    })();
-  }
-
-  async function startPayment() {
-    if (!paymentTarget || !selectedProvider) {
+  async function startPayment(
+    target: {
+      type: "primary_pack" | "addon";
+      id: string;
+    },
+  ) {
+    if (isPaying !== null) {
       return;
     }
 
@@ -543,12 +491,12 @@ export default function PacksPage() {
 
     if (!session) {
       window.location.href = `/login?redirect=${encodeURIComponent(
-        `/packs?checkout=${paymentTarget.id}`,
+        `/packs?checkout=${target.id}`,
       )}`;
       return;
     }
 
-    setIsPaying(paymentTarget.id);
+    setIsPaying(target.id);
 
     try {
       const apiUrl =
@@ -565,9 +513,11 @@ export default function PacksPage() {
             "user-id": session.user.id,
           },
           body: JSON.stringify({
-            payment_type: paymentTarget.type,
-            product_id: paymentTarget.id,
-            provider: selectedProvider,
+            payment_type: target.type,
+            product_id: target.id,
+            // Chariow est l'unique passerelle de checkout.
+            // Aucun opérateur Mobile Money n'est choisi ici.
+            provider: "chariow",
           }),
         },
       );
@@ -589,24 +539,16 @@ export default function PacksPage() {
         data?.redirect_url ??
         data?.payment_url;
 
-      if (typeof destination === "string") {
-        window.location.href = destination;
-        return;
-      }
-
-      if (typeof data?.payment_id === "string") {
-        router.push(
-          `/payments/${encodeURIComponent(data.payment_id)}`,
+      if (typeof destination !== "string" || !destination) {
+        throw new Error(
+          "Chariow n'a fourni aucune URL de paiement.",
         );
-        return;
       }
 
-      throw new Error(
-        "Le serveur n'a fourni aucune destination de paiement.",
-      );
+      window.location.href = destination;
     } catch (error) {
       console.error(
-        paymentTarget.type === "addon"
+        target.type === "addon"
           ? "Initialisation recharge échouée :"
           : "Initialisation paiement pack échouée :",
         error,
@@ -619,121 +561,25 @@ export default function PacksPage() {
       );
     } finally {
       setIsPaying(null);
-      setPaymentTarget(null);
-      setSelectedProvider(null);
     }
   }
 
+  function handlePackSelection(pack: Pack) {
+    void startPayment({
+      type: "primary_pack",
+      id: pack.id,
+    });
+  }
+
+  function handleCreditTopUp(topUp: CreditTopUp) {
+    void startPayment({
+      type: "addon",
+      id: topUp.id,
+    });
+  }
 
   return (
     <>
-      {paymentTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="payment-provider-title"
-        >
-          <div className="w-full max-w-md rounded-3xl border border-border bg-surface p-6 shadow-2xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-medium text-muted">
-                  Paiement
-                </p>
-                <h2
-                  id="payment-provider-title"
-                  className="mt-1 text-2xl font-semibold tracking-tight"
-                >
-                  Choisir le moyen de paiement
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-muted">
-                  Sélectionnez votre moyen de paiement.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setPaymentTarget(null);
-                  setSelectedProvider(null);
-                }}
-                aria-label="Fermer"
-                className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="mt-6 grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setSelectedProvider("airtel_money")
-                }
-                className={`rounded-2xl border p-4 text-left transition ${
-                  selectedProvider === "airtel_money"
-                    ? "border-accent bg-accent/10"
-                    : "border-border hover:border-border-strong"
-                }`}
-              >
-                <span className="block text-sm font-semibold">
-                  Airtel Money
-                </span>
-                <span className="mt-1 block text-xs text-muted">
-                  Paiement mobile
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  setSelectedProvider("moov_money")
-                }
-                className={`rounded-2xl border p-4 text-left transition ${
-                  selectedProvider === "moov_money"
-                    ? "border-accent bg-accent/10"
-                    : "border-border hover:border-border-strong"
-                }`}
-              >
-                <span className="block text-sm font-semibold">
-                  Moov Money
-                </span>
-                <span className="mt-1 block text-xs text-muted">
-                  Paiement mobile
-                </span>
-              </button>
-            </div>
-
-            <div className="mt-6 flex gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setPaymentTarget(null);
-                  setSelectedProvider(null);
-                }}
-                className="flex-1 rounded-xl border border-border px-4 py-3 text-sm font-medium transition hover:bg-surface-secondary"
-              >
-                Annuler
-              </button>
-
-              <button
-                type="button"
-                disabled={
-                  !selectedProvider ||
-                  isPaying !== null
-                }
-                onClick={() => void startPayment()}
-                className="flex-1 rounded-xl bg-accent px-4 py-3 text-sm font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isPaying === paymentTarget.id
-                  ? "Initialisation..."
-                  : "Continuer"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <main className="min-h-dvh bg-background text-foreground">
       {/* Header */}
 
@@ -868,8 +714,8 @@ export default function PacksPage() {
                   </h2>
 
                   <p className="mt-2 text-sm leading-6 text-muted">
-                    Choisissez une recharge. Le paiement est lancé depuis cette page et confirmé
-                    par le système de paiement LBV-Connect.ia.
+                    Choisissez une recharge. Vous serez redirigé vers
+                    Chariow pour finaliser le paiement avec les moyens disponibles.
                   </p>
                 </div>
 
@@ -911,7 +757,7 @@ export default function PacksPage() {
                         className="rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {isPaying === topUp.id
-                          ? "Paiement..."
+                          ? "Redirection..."
                           : "Acheter"}
                       </button>
                     </div>

@@ -12,6 +12,136 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
+type CountryPhoneConfig = {
+  iso2: string;
+  name: string;
+  callingCode: string;
+};
+
+/**
+ * Référentiel initial LBV-Connect :
+ * 19 pays d'Afrique francophone retenus pour la téléphonie/paiement.
+ *
+ * `iso2` est conservé comme donnée de pays et sera transmis à Chariow
+ * dans `phone.country_code`.
+ *
+ * `callingCode` sert à normaliser le numéro.
+ *
+ * Aucun opérateur Mobile Money n'est codé ici.
+ * Chariow reste responsable des moyens de paiement disponibles.
+ */
+const COUNTRY_PHONE_CONFIGS: CountryPhoneConfig[] = [
+  { iso2: "BJ", name: "Bénin", callingCode: "+229" },
+  { iso2: "BF", name: "Burkina Faso", callingCode: "+226" },
+  { iso2: "BI", name: "Burundi", callingCode: "+257" },
+  { iso2: "CM", name: "Cameroun", callingCode: "+237" },
+  { iso2: "CF", name: "République centrafricaine", callingCode: "+236" },
+  { iso2: "KM", name: "Comores", callingCode: "+269" },
+  { iso2: "CG", name: "Congo", callingCode: "+242" },
+  { iso2: "CI", name: "Côte d'Ivoire", callingCode: "+225" },
+  { iso2: "DJ", name: "Djibouti", callingCode: "+253" },
+  { iso2: "GA", name: "Gabon", callingCode: "+241" },
+  { iso2: "GN", name: "Guinée", callingCode: "+224" },
+  { iso2: "GQ", name: "Guinée équatoriale", callingCode: "+240" },
+  { iso2: "MG", name: "Madagascar", callingCode: "+261" },
+  { iso2: "ML", name: "Mali", callingCode: "+223" },
+  { iso2: "NE", name: "Niger", callingCode: "+227" },
+  { iso2: "CD", name: "République démocratique du Congo", callingCode: "+243" },
+  { iso2: "RW", name: "Rwanda", callingCode: "+250" },
+  { iso2: "SN", name: "Sénégal", callingCode: "+221" },
+  { iso2: "TG", name: "Togo", callingCode: "+228" },
+];
+
+const DEFAULT_COUNTRY_ISO2 = "GA";
+
+function getCountryConfig(
+  iso2: string,
+): CountryPhoneConfig {
+  const normalizedIso2 = iso2.trim().toUpperCase();
+
+  const country = COUNTRY_PHONE_CONFIGS.find(
+    (item) => item.iso2 === normalizedIso2,
+  );
+
+  return (
+    country ??
+    COUNTRY_PHONE_CONFIGS.find(
+      (item) => item.iso2 === DEFAULT_COUNTRY_ISO2,
+    )!
+  );
+}
+
+/**
+ * Retourne le numéro national sous forme numérique.
+ *
+ * Accepte par exemple :
+ * - 061234567
+ * - +241061234567
+ * - 00241061234567
+ *
+ * Le préfixe national 0 reste dans le numéro national.
+ */
+function normalizePhoneNumber(
+  value: string,
+  country: CountryPhoneConfig,
+): string {
+  let digits = value.replace(/\D/g, "");
+
+  if (!digits) {
+    return "";
+  }
+
+  const callingDigits =
+    country.callingCode.replace(/\D/g, "");
+
+  if (
+    callingDigits &&
+    digits.startsWith(callingDigits) &&
+    digits.length > callingDigits.length
+  ) {
+    digits = digits.slice(callingDigits.length);
+  } else if (digits.startsWith("00")) {
+    const internationalDigits = digits.slice(2);
+
+    if (
+      callingDigits &&
+      internationalDigits.startsWith(callingDigits) &&
+      internationalDigits.length > callingDigits.length
+    ) {
+      digits = internationalDigits.slice(callingDigits.length);
+    }
+  }
+
+  return digits;
+}
+
+/**
+ * Produit le numéro international utilisé comme valeur native
+ * `auth.users.phone`.
+ *
+ * Supabase attend un numéro au format international (E.164).
+ * Le 0 national est retiré avant l'ajout de l'indicatif.
+ */
+function buildInternationalPhone(
+  phoneNumber: string,
+  country: CountryPhoneConfig,
+): string {
+  let national = normalizePhoneNumber(
+    phoneNumber,
+    country,
+  );
+
+  if (!national) {
+    return "";
+  }
+
+  if (national.startsWith("0")) {
+    national = national.slice(1);
+  }
+
+  return `${country.callingCode}${national}`;
+}
+
 export default function RegisterPage() {
   const [showPassword, setShowPassword] =
     useState(false);
@@ -42,9 +172,28 @@ export default function RegisterPage() {
       formData.get("lastName") ?? "",
     ).trim();
 
-    const phone = String(
+    const countryIso2 = String(
+      formData.get("countryIso2") ?? DEFAULT_COUNTRY_ISO2,
+    ).trim().toUpperCase();
+
+    const country = getCountryConfig(
+      countryIso2,
+    );
+
+    const phoneRaw = String(
       formData.get("phone") ?? "",
     ).trim();
+
+    const phoneNumber = normalizePhoneNumber(
+      phoneRaw,
+      country,
+    );
+
+    const phoneInternational =
+      buildInternationalPhone(
+        phoneRaw,
+        country,
+      );
 
     const email = String(
       formData.get("email") ?? "",
@@ -60,9 +209,16 @@ export default function RegisterPage() {
       formData.get("confirmPassword") ?? "",
     );
 
-    if (!phone) {
+    if (!phoneNumber) {
       setError(
         "Veuillez renseigner votre numéro de téléphone.",
+      );
+      return;
+    }
+
+    if (phoneNumber.length < 6 || !phoneInternational) {
+      setError(
+        "Veuillez renseigner un numéro de téléphone valide.",
       );
       return;
     }
@@ -90,11 +246,12 @@ export default function RegisterPage() {
         await supabase.auth.signUp({
           email,
           password,
+          phone: phoneInternational,
           options: {
             data: {
               first_name: firstName,
               last_name: lastName,
-              phone,
+              country_iso2: country.iso2,
             },
           },
         });
@@ -249,7 +406,41 @@ export default function RegisterPage() {
                 </div>
               </div>
 
-              {/* Phone */}
+              {/* Pays + téléphone */}
+
+              <div>
+                <label
+                  htmlFor="countryIso2"
+                  className="mb-2 block text-sm font-medium"
+                >
+                  Pays
+                </label>
+
+                <select
+                  id="countryIso2"
+                  name="countryIso2"
+                  defaultValue={DEFAULT_COUNTRY_ISO2}
+                  required
+                  disabled={loading}
+                  className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {COUNTRY_PHONE_CONFIGS.map(
+                    (country) => (
+                      <option
+                        key={country.iso2}
+                        value={country.iso2}
+                      >
+                        {country.name} ({country.callingCode})
+                      </option>
+                    ),
+                  )}
+                </select>
+
+                <p className="mt-2 text-xs text-muted">
+                  Votre pays détermine automatiquement l’indicatif
+                  utilisé pour normaliser votre numéro.
+                </p>
+              </div>
 
               <div>
                 <label
@@ -265,14 +456,16 @@ export default function RegisterPage() {
                   type="tel"
                   inputMode="tel"
                   autoComplete="tel"
-                  placeholder="+241 06 00 00 00"
+                  placeholder="06 00 00 00"
                   required
                   disabled={loading}
                   className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
                 />
 
                 <p className="mt-2 text-xs text-muted">
-                  Utilisé pour sécuriser et initialiser vos paiements.
+                  Un seul numéro est demandé. LBV-Connect le normalise
+                  automatiquement avant son enregistrement et son utilisation
+                  pour les paiements.
                 </p>
               </div>
 

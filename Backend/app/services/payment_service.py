@@ -1,5 +1,7 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
+import re
 import secrets
 
 import requests
@@ -9,6 +11,182 @@ from app.config.payments import (
     ADDON_PACKS,
     PRIMARY_PACKS,
 )
+
+
+# ============================================================
+# RÉFÉRENTIEL PAYS — AFRIQUE FRANCOPHONE
+# ============================================================
+#
+# Source unique pour les données pays/téléphone utilisées par
+# le checkout LBV-Connect.
+#
+# iso2 :
+#     code ISO 3166-1 alpha-2 du pays.
+#     Transmis à Chariow via phone.country_code.
+#
+# calling_code :
+#     indicatif téléphonique utilisé pour normaliser le numéro.
+#
+# Aucun opérateur Mobile Money n'est codé dans ce service.
+# Chariow reste responsable des moyens de paiement disponibles.
+#
+# Périmètre initial : 19 pays convenus.
+# ============================================================
+
+
+@dataclass(frozen=True)
+class CountryPhoneConfig:
+    iso2: str
+    name: str
+    calling_code: str
+
+
+COUNTRY_PHONE_CONFIGS: dict[str, CountryPhoneConfig] = {
+    "BJ": CountryPhoneConfig("BJ", "Bénin", "+229"),
+    "BF": CountryPhoneConfig("BF", "Burkina Faso", "+226"),
+    "BI": CountryPhoneConfig("BI", "Burundi", "+257"),
+    "CM": CountryPhoneConfig("CM", "Cameroun", "+237"),
+    "CF": CountryPhoneConfig(
+        "CF",
+        "République centrafricaine",
+        "+236",
+    ),
+    "KM": CountryPhoneConfig("KM", "Comores", "+269"),
+    "CG": CountryPhoneConfig("CG", "Congo", "+242"),
+    "CI": CountryPhoneConfig(
+        "CI",
+        "Côte d'Ivoire",
+        "+225",
+    ),
+    "DJ": CountryPhoneConfig("DJ", "Djibouti", "+253"),
+    "GA": CountryPhoneConfig("GA", "Gabon", "+241"),
+    "GN": CountryPhoneConfig("GN", "Guinée", "+224"),
+    "GQ": CountryPhoneConfig(
+        "GQ",
+        "Guinée équatoriale",
+        "+240",
+    ),
+    "MG": CountryPhoneConfig("MG", "Madagascar", "+261"),
+    "ML": CountryPhoneConfig("ML", "Mali", "+223"),
+    "NE": CountryPhoneConfig("NE", "Niger", "+227"),
+    "CD": CountryPhoneConfig(
+        "CD",
+        "République démocratique du Congo",
+        "+243",
+    ),
+    "RW": CountryPhoneConfig("RW", "Rwanda", "+250"),
+    "SN": CountryPhoneConfig("SN", "Sénégal", "+221"),
+    "TG": CountryPhoneConfig("TG", "Togo", "+228"),
+}
+
+
+def get_country_phone_config(
+    country_iso2: str,
+) -> CountryPhoneConfig:
+    """Retourne la configuration correspondant au pays choisi."""
+    normalized_iso2 = (
+        str(country_iso2 or "")
+        .strip()
+        .upper()
+    )
+
+    country = COUNTRY_PHONE_CONFIGS.get(
+        normalized_iso2
+    )
+
+    if country is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Pays non pris en charge pour le "
+                "numéro de téléphone."
+            ),
+        )
+
+    return country
+
+
+def normalize_phone_number(
+    phone: str,
+    country_iso2: str,
+) -> tuple[str, str, str]:
+    """
+    Normalise le numéro selon le pays choisi.
+
+    Accepte notamment :
+        06123456
+        +24106123456
+        0024106123456
+
+    Retourne :
+        phone_number,
+        phone_international,
+        country_iso2
+    """
+    country = get_country_phone_config(
+        country_iso2
+    )
+
+    raw = str(phone or "").strip()
+
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail="Le numéro de téléphone est obligatoire.",
+        )
+
+    digits = re.sub(r"\D", "", raw)
+
+    if not digits:
+        raise HTTPException(
+            status_code=400,
+            detail="Le numéro de téléphone est invalide.",
+        )
+
+    calling_digits = re.sub(
+        r"\D",
+        "",
+        country.calling_code,
+    )
+
+    # Numéro déjà saisi avec l'indicatif.
+    if (
+        calling_digits
+        and digits.startswith(calling_digits)
+        and len(digits) > len(calling_digits)
+    ):
+        digits = digits[len(calling_digits):]
+
+    # Numéro international saisi avec 00.
+    elif digits.startswith("00"):
+        international_digits = digits[2:]
+
+        if (
+            calling_digits
+            and international_digits.startswith(
+                calling_digits
+            )
+            and len(international_digits) > len(calling_digits)
+        ):
+            digits = international_digits[
+                len(calling_digits):
+            ]
+
+    if not digits:
+        raise HTTPException(
+            status_code=400,
+            detail="Le numéro de téléphone est invalide.",
+        )
+
+    phone_international = (
+        f"{country.calling_code}{digits}"
+    )
+
+    return (
+        digits,
+        phone_international,
+        country.iso2,
+    )
 
 
 # ============================================================
@@ -195,6 +373,7 @@ def create_chariow_checkout(
     first_name: str | None = None,
     last_name: str | None = None,
     phone: str | None = None,
+    country_iso2: str | None = None,
 ):
     """
     Crée un checkout Chariow.
@@ -287,9 +466,25 @@ def create_chariow_checkout(
 
     if phone:
 
+        if not country_iso2:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Le code pays est obligatoire pour "
+                    "initialiser le paiement Chariow."
+                ),
+            )
+
+        phone_number, _, normalized_country_iso2 = (
+            normalize_phone_number(
+                phone,
+                country_iso2,
+            )
+        )
+
         payload["phone"] = {
-            "number": str(phone).strip(),
-            "country_code": "GA",
+            "number": phone_number,
+            "country_code": normalized_country_iso2,
         }
 
     # --------------------------------------------------------
@@ -568,26 +763,25 @@ def validate_addon_purchase(
 # ============================================================
 
 def validate_provider(
-    provider: str,
+    provider: str | None,
 ):
     """
-    Vérifie que le fournisseur demandé
-    est supporté.
+    Compatibilité avec les routes existantes.
 
-    Chariow reste le prestataire de checkout.
-    Le provider correspond au moyen de paiement
-    choisi par l'utilisateur.
+    Aucun opérateur ni moyen de paiement n'est whitelisté ici.
+    Airtel, Moov, MTN, Orange, cartes, etc. ne sont pas codés
+    dans LBV-Connect.
+
+    Chariow reste responsable de déterminer les moyens de paiement
+    disponibles selon le client et son pays.
     """
+    if provider is None:
+        return None
 
-    if provider not in {
-        "airtel_money",
-        "moov_money",
-    }:
-
+    if not isinstance(provider, str):
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Fournisseur de paiement "
-                "non supporté."
-            ),
+            detail="Fournisseur de paiement invalide.",
         )
+
+    return provider.strip() or None

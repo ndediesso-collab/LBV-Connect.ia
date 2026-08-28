@@ -26,6 +26,7 @@ from app.config.payments import (
 from app.services.payment_service import (
     create_chariow_checkout,
     generate_payment_reference,
+    get_country_phone_config,
     get_payment_product,
     validate_addon_purchase,
     validate_provider,
@@ -47,7 +48,7 @@ class CreditConsumptionRequest(BaseModel):
 class CreatePaymentRequest(BaseModel):
     payment_type: str
     product_id: str
-    provider: str
+    provider: str | None = None
 
 
 # ============================================================
@@ -107,8 +108,7 @@ def create_payment(
         pending
 
     L'activation du pack aura lieu uniquement après
-    confirmation réelle du paiement par Airtel Money
-    ou Moov Money.
+    confirmation réelle du paiement par Chariow.
     """
 
     # ========================================================
@@ -202,7 +202,9 @@ def create_payment(
             else None
         ),
 
-        "provider": request.provider,
+        # Historique : le champ reste persisté pour compatibilité.
+        # Il ne sert plus à limiter les moyens de paiement.
+        "provider": request.provider or "chariow",
 
         "amount": product["price"],
 
@@ -272,7 +274,9 @@ def create_payment(
 
         "payment": {
             "reference": reference,
-            "provider": request.provider,
+            # Historique : le champ reste persisté pour compatibilité.
+        # Il ne sert plus à limiter les moyens de paiement.
+        "provider": request.provider or "chariow",
             "payment_type": request.payment_type,
             "product_id": request.product_id,
             "amount": product["price"],
@@ -420,7 +424,7 @@ def checkout_payment(
             if request.payment_type == "addon"
             else None
         ),
-        "provider": request.provider,
+        "provider": request.provider or "chariow",
         "amount": product["price"],
         "currency": "XAF",
         "credits": product["credits"],
@@ -540,17 +544,47 @@ def checkout_payment(
         or ""
     )
 
+    # --------------------------------------------------------
+    # TÉLÉPHONE
+    # --------------------------------------------------------
+    #
+    # Source de vérité moderne :
+    #     auth.users.phone
+    #
+    # Compatibilité avec les anciens comptes :
+    #     user_metadata.phone
+    #     user_metadata.phone_number
+    #     user_metadata.phoneNumber
+    #     user_metadata.telephone
+    # --------------------------------------------------------
+    auth_phone = getattr(
+        auth_user,
+        "phone",
+        None,
+    )
+
     phone = (
-        user_metadata.get("phone")
+        auth_phone
+        or user_metadata.get("phone")
         or user_metadata.get("phone_number")
         or user_metadata.get("phoneNumber")
         or user_metadata.get("telephone")
         or ""
     )
 
+    # Le pays est une donnée applicative choisie lors de l'inscription.
+    # Il détermine l'indicatif attendu par la normalisation et le code ISO
+    # envoyé à Chariow.
+    country_iso2 = (
+        user_metadata.get("country_iso2")
+        or user_metadata.get("country")
+        or ""
+    )
+
     first_name = str(first_name).strip()
     last_name = str(last_name).strip()
     phone = str(phone).strip()
+    country_iso2 = str(country_iso2).strip().upper()
 
     if not first_name:
         raise HTTPException(
@@ -580,6 +614,21 @@ def checkout_payment(
             ),
         )
 
+    if not country_iso2:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Votre pays est requis pour initialiser le "
+                "paiement Chariow. Complétez votre profil."
+            ),
+        )
+
+    # Validation explicite du pays avant l'appel Chariow.
+    # Cela évite d'envoyer un code pays arbitraire.
+    get_country_phone_config(
+        country_iso2
+    )
+
     # ========================================================
     # 10. CRÉATION DU CHECKOUT CHARIOW
     # ========================================================
@@ -591,6 +640,7 @@ def checkout_payment(
         first_name=first_name,
         last_name=last_name,
         phone=phone,
+        country_iso2=country_iso2,
     )
 
     checkout_url = chariow_checkout[
@@ -607,7 +657,7 @@ def checkout_payment(
         "transaction": transaction,
         "payment": {
             "reference": reference,
-            "provider": request.provider,
+            "provider": request.provider or "chariow",
             "payment_type": request.payment_type,
             "product_id": request.product_id,
             "amount": product["price"],
