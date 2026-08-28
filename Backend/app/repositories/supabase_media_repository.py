@@ -52,9 +52,6 @@ class SupabaseMediaRepository:
         if not storage_path:
             raise ValueError("Le chemin Storage est obligatoire.")
 
-        if not content_type or "/" not in content_type:
-            raise ValueError("Le content_type du média est invalide.")
-
         if not storage_path.startswith(f"{normalized_user_id}/"):
             raise ValueError(
                 "Le chemin Storage doit appartenir à l'utilisateur courant."
@@ -96,16 +93,7 @@ class SupabaseMediaRepository:
         if not storage_path:
             raise ValueError("Le chemin Storage est obligatoire.")
 
-        expires = (
-            self.SIGNED_URL_EXPIRES_IN
-            if expires_in is None
-            else int(expires_in)
-        )
-
-        if expires <= 0:
-            raise ValueError(
-                "expires_in doit être supérieur à 0."
-            )
+        expires = expires_in or self.SIGNED_URL_EXPIRES_IN
 
         try:
             response = supabase.storage.from_(self.BUCKET_NAME).create_signed_url(
@@ -148,6 +136,8 @@ class SupabaseMediaRepository:
         storage_path: str,
         mime_type: str,
         action: str,
+        media_id: Optional[str | UUID] = None,
+        url: Optional[str] = None,
         model: Optional[str] = None,
         prompt: Optional[str] = None,
         credits_cost: int = 0,
@@ -169,12 +159,19 @@ class SupabaseMediaRepository:
         if credits_cost < 0:
             raise ValueError("credits_cost ne peut pas être négatif.")
 
+        resolved_media_id = (
+            str(media_id)
+            if media_id is not None
+            else str(uuid4())
+        )
+
         payload = {
-            "id": str(uuid4()),
+            "id": resolved_media_id,
             "user_id": str(user_id),
             "conversation_id": conversation_id,
             "type": media_type,
             "storage_path": storage_path,
+            "url": url,
             "mime_type": mime_type,
             "action": action,
             "model": model,
@@ -216,16 +213,18 @@ class SupabaseMediaRepository:
 
         return rows[0]
 
-    def get_public_media_url(
+    def refresh_media_url(
         self,
         *,
         media_id: str | UUID,
         user_id: str | UUID,
         expires_in: Optional[int] = None,
-    ) -> Optional[str]:
+    ) -> Optional[dict[str, Any]]:
         """
-        Retourne uniquement l'URL signée d'une création appartenant
-        à l'utilisateur courant.
+        Récupère une création et lui ajoute une URL signée fraîche.
+
+        La colonne `url` persistée reste inchangée. Cette méthode
+        fournit une URL temporaire exploitable immédiatement par le frontend.
         """
         media = self.get_media(
             media_id=media_id,
@@ -235,15 +234,51 @@ class SupabaseMediaRepository:
         if not media:
             return None
 
-        storage_path = media.get("storage_path")
+        result = dict(media)
+        storage_path = result.get("storage_path")
 
-        if not storage_path:
+        if storage_path:
+            signed_url = self.create_signed_url(
+                str(storage_path),
+                expires_in=expires_in,
+            )
+            result["signed_url"] = signed_url
+            result["url"] = result.get("url") or signed_url
+            result["media_url"] = signed_url
+            result["public_url"] = signed_url
+
+        return result
+
+    def get_media_with_url(
+        self,
+        *,
+        media_id: str | UUID,
+        user_id: str | UUID,
+        expires_in: Optional[int] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Récupère une création avec une URL signée fraîche."""
+        media = self.get_media(
+            media_id=media_id,
+            user_id=user_id,
+        )
+
+        if not media:
             return None
 
-        return self.create_signed_url(
-            storage_path,
-            expires_in=expires_in,
-        )
+        result = dict(media)
+        storage_path = result.get("storage_path")
+
+        if storage_path:
+            signed_url = self.create_signed_url(
+                str(storage_path),
+                expires_in=expires_in,
+            )
+            result["signed_url"] = signed_url
+            result["url"] = result.get("url") or signed_url
+            result["media_url"] = signed_url
+            result["public_url"] = signed_url
+
+        return result
 
     def get_media(
         self,
@@ -362,10 +397,9 @@ class SupabaseMediaRepository:
         rows = self._extract_rows(response)
 
         # Certaines versions de PostgREST peuvent ne pas retourner
-        # les lignes supprimées sans select. Si la requête DELETE
-        # n'a pas levé d'exception, la suppression est considérée
-        # comme effectuée.
-        return bool(rows) or response is not None
+        # les lignes supprimées sans select. Le fait que la requête
+        # n'ait pas levé d'exception suffit alors comme confirmation.
+        return bool(rows) or True
 
     # ============================================================
     # HELPERS

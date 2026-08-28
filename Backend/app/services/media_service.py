@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import base64
@@ -112,12 +113,18 @@ class MediaService:
         )
 
         try:
+            signed_url = self.repository.create_signed_url(
+                uploaded_path
+            )
+
             media = self.repository.create_media(
                 user_id=normalized_user_id,
                 media_type="image",
                 storage_path=uploaded_path,
                 mime_type=mime_type,
                 action=action,
+                media_id=media_id,
+                url=signed_url,
                 model=model,
                 prompt=prompt,
                 credits_cost=credits_cost,
@@ -129,10 +136,6 @@ class MediaService:
         except Exception:
             self._safe_delete_storage(uploaded_path)
             raise
-
-        signed_url = self.repository.create_signed_url(
-            uploaded_path
-        )
 
         media["url"] = signed_url
         media["media_url"] = signed_url
@@ -195,12 +198,18 @@ class MediaService:
         )
 
         try:
+            signed_url = self.repository.create_signed_url(
+                uploaded_path
+            )
+
             media = self.repository.create_media(
                 user_id=normalized_user_id,
                 media_type="video",
                 storage_path=uploaded_path,
                 mime_type=mime_type,
                 action=action,
+                media_id=media_id,
+                url=signed_url,
                 model=model,
                 prompt=prompt,
                 credits_cost=credits_cost,
@@ -214,10 +223,6 @@ class MediaService:
         except Exception:
             self._safe_delete_storage(uploaded_path)
             raise
-
-        signed_url = self.repository.create_signed_url(
-            uploaded_path
-        )
 
         media["url"] = signed_url
         media["media_url"] = signed_url

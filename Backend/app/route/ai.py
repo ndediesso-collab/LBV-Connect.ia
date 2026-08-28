@@ -170,6 +170,8 @@ class MediaResponse(BaseModel):
     data: str
     media_id: str | None = None
     media_url: str | None = None
+    public_url: str | None = None
+    url: str | None = None
     video_id: str | None = None
     seconds: str | None = None
     size: str | None = None
@@ -1468,6 +1470,7 @@ async def generate_image(
         persisted = MediaService().save_openai_image(
             user_id=authenticated_user_id,
             generated=generated,
+            action=credit_action.value,
             prompt=prompt,
             credits_cost=cost,
         )
@@ -1507,7 +1510,9 @@ async def generate_image(
         mime_type=generated["mime_type"],
         data=generated["b64_json"],
         media_id=persisted["id"],
-        media_url=persisted["media_url"],
+        media_url=persisted.get("media_url") or persisted.get("public_url") or persisted.get("url"),
+        public_url=persisted.get("public_url"),
+        url=persisted.get("url"),
         size=generated["size"],
     )
 
@@ -1578,6 +1583,7 @@ async def generate_video(
         persisted = MediaService().save_openai_video(
             user_id=authenticated_user_id,
             generated=generated,
+            action=credit_action.value,
             prompt=prompt,
             credits_cost=cost,
         )
@@ -1617,7 +1623,9 @@ async def generate_video(
         mime_type=generated["mime_type"],
         data=base64.b64encode(video_bytes).decode("utf-8"),
         media_id=persisted["id"],
-        media_url=persisted["media_url"],
+        media_url=persisted.get("media_url") or persisted.get("public_url") or persisted.get("url"),
+        public_url=persisted.get("public_url"),
+        url=persisted.get("url"),
         video_id=generated["video_id"],
         seconds=generated["seconds"],
         size=generated["size"],
