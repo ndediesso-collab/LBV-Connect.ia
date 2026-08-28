@@ -77,6 +77,9 @@ type MediaCapabilitiesResponse = {
 type GeneratedMedia = {
   id: string;
   user_id?: string;
+  conversation_id?: string | null;
+  prompt?: string | null;
+  created_at?: string | null;
   media_type?: "image" | "video";
   type: "image" | "video";
   mimeType: string;
@@ -138,6 +141,39 @@ type MediaGenerationType = (typeof MEDIA_GENERATION_CONFIGS)[number]["type"];
 
 function getMediaGenerationConfig(action: string) {
   return MEDIA_GENERATION_CONFIGS.find((item) => item.action === action);
+}
+
+const NKYEL_MEDIA_MARKER_REGEX =
+  /\[\[NKYEL_MEDIA_ID:([^\]]+)\]\]/;
+
+function buildMediaMessageContent(
+  type: "image" | "video",
+  action: string,
+  mediaId: string,
+): string {
+  return `${type === "image" ? "Image" : "Vidéo"} générée · ${action}
+[[NKYEL_MEDIA_ID:${mediaId}]]`;
+}
+
+function extractMediaIdFromMessage(
+  content: string,
+): string | null {
+  return (
+    content.match(
+      NKYEL_MEDIA_MARKER_REGEX,
+    )?.[1] ?? null
+  );
+}
+
+function getVisibleMessageContent(
+  content: string,
+): string {
+  return content
+    .replace(
+      /\s*\[\[NKYEL_MEDIA_ID:[^\]]+\]\]\s*$/g,
+      "",
+    )
+    .trimEnd();
 }
 
 
@@ -2012,6 +2048,9 @@ export default function ChatPage() {
           size?: string | number | null;
           size_bytes?: number | null;
           prompt?: string | null;
+          conversation_id?: string | null;
+          created_at?: string | null;
+          createdAt?: string | null;
         }>;
       }>("/media");
 
@@ -2030,7 +2069,14 @@ export default function ChatPage() {
 
           const media: GeneratedMedia = {
             id: item.id,
+            conversation_id: item.conversation_id ?? null,
+            prompt: item.prompt ?? null,
+            created_at:
+              item.created_at ??
+              item.createdAt ??
+              null,
             type,
+            media_type: type,
             mimeType:
               item.mime_type ??
               (type === "image" ? "image/png" : "video/mp4"),
@@ -2057,6 +2103,88 @@ export default function ChatPage() {
     } catch (requestError) {
       console.error("Erreur chargement créations NKYEL :", requestError);
     }
+  }
+
+  function findMediaForMessage(
+    item: ChatMessage,
+  ): GeneratedMedia | null {
+    if (item.role !== "assistant") {
+      return null;
+    }
+
+    const exact = generatedMedia.find(
+      (media) => media.id === item.id,
+    );
+
+    if (exact) {
+      return exact;
+    }
+
+    const markerId = extractMediaIdFromMessage(
+      item.content || "",
+    );
+
+    if (markerId) {
+      const byMarker = generatedMedia.find(
+        (media) => media.id === markerId,
+      );
+
+      if (byMarker) {
+        return byMarker;
+      }
+    }
+
+    const visibleContent =
+      getVisibleMessageContent(
+        item.content || "",
+      );
+
+    const actionMatch = visibleContent.match(
+      /^(?:Image|Vidéo) générée · (.+)$/u,
+    );
+
+    if (!actionMatch) {
+      return null;
+    }
+
+    const candidates =
+      generatedMedia.filter(
+        (media) =>
+          media.conversation_id ===
+            item.conversationId &&
+          media.action === actionMatch[1],
+      );
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    if (
+      candidates.length === 1 ||
+      !item.createdAt
+    ) {
+      return candidates[0];
+    }
+
+    const messageTime =
+      new Date(item.createdAt).getTime();
+
+    return [...candidates].sort(
+      (a, b) => {
+        const aTime = new Date(
+          a.created_at ?? 0,
+        ).getTime();
+
+        const bTime = new Date(
+          b.created_at ?? 0,
+        ).getTime();
+
+        return (
+          Math.abs(aTime - messageTime) -
+          Math.abs(bTime - messageTime)
+        );
+      },
+    )[0];
   }
 
   async function downloadMedia(media: GeneratedMedia): Promise<void> {
@@ -2564,7 +2692,11 @@ export default function ChatPage() {
           ),
           {
             id: mediaId,
+            conversation_id: conversationId,
+            prompt,
+            created_at: new Date().toISOString(),
             type: response.type,
+            media_type: response.type,
             mimeType,
             url,
             action: response.action,
@@ -2583,10 +2715,11 @@ export default function ChatPage() {
         id: mediaId,
         conversationId,
         role: "assistant",
-        content:
-          response.type === "image"
-            ? `Image générée · ${response.action}`
-            : `Vidéo générée · ${response.action}`,
+        content: buildMediaMessageContent(
+          response.type,
+          response.action,
+          mediaId,
+        ),
         createdAt:
           new Date().toISOString(),
       };
@@ -3662,9 +3795,9 @@ export default function ChatPage() {
                              * par le renderer Markdown.
                              */
                             <MarkdownMessage
-                              content={
-                                item.content
-                              }
+                              content={getVisibleMessageContent(
+                                item.content,
+                              )}
                             />
                           ) : (
                             /*
@@ -3679,50 +3812,51 @@ export default function ChatPage() {
                           )}
                         </div>
 
-                        {item.role === "assistant" &&
-                          generatedMedia.some(
-                            (media) => media.id === item.id,
-                          ) && (
-                            <div className="mt-3 max-w-[90%]">
-                              {generatedMedia
-                                .filter(
-                                  (media) =>
-                                    media.id === item.id,
-                                )
-                                .map((media) =>
-                                  <div
-                                    key={media.id}
-                                    className="relative inline-block max-w-full"
-                                  >
-                                    {media.type === "image" ? (
-                                      <img
-                                        src={media.url}
-                                        alt="Image générée par NKYEL"
-                                        className="max-h-[620px] w-auto rounded-2xl border border-border shadow-sm"
-                                      />
-                                    ) : (
-                                      <video
-                                        src={media.url}
-                                        controls
-                                        playsInline
-                                        className="max-h-[620px] w-full rounded-2xl border border-border bg-black shadow-sm"
-                                      />
-                                    )}
+                        {(() => {
+                          const mediaForMessage =
+                            findMediaForMessage(item);
 
-                                    <button
-                                      type="button"
-                                      onClick={() => void downloadMedia(media)}
-                                      className="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-xl border border-white/20 bg-black/75 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur transition hover:bg-black"
-                                      title="Télécharger"
-                                      aria-label="Télécharger cette création"
-                                    >
-                                      <Download size={14} />
-                                      Télécharger
-                                    </button>
-                                  </div>,
+                          if (!mediaForMessage) {
+                            return null;
+                          }
+
+                          const media =
+                            mediaForMessage;
+
+                          return (
+                            <div className="mt-3 max-w-[90%]">
+                              <div className="relative inline-block max-w-full">
+                                {media.type === "image" ? (
+                                  <img
+                                    src={media.url}
+                                    alt="Image générée par NKYEL"
+                                    className="max-h-[620px] w-auto rounded-2xl border border-border shadow-sm"
+                                  />
+                                ) : (
+                                  <video
+                                    src={media.url}
+                                    controls
+                                    playsInline
+                                    className="max-h-[620px] w-full rounded-2xl border border-border bg-black shadow-sm"
+                                  />
                                 )}
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void downloadMedia(media)
+                                  }
+                                  className="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-xl border border-white/20 bg-black/75 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur transition hover:bg-black"
+                                  title="Télécharger"
+                                  aria-label="Télécharger cette création"
+                                >
+                                  <Download size={14} />
+                                  Télécharger
+                                </button>
+                              </div>
                             </div>
-                          )}
+                          );
+                        })()}
                       </div>
                     ),
                   )}
