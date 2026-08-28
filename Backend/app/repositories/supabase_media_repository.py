@@ -88,11 +88,11 @@ class SupabaseMediaRepository:
         storage_path: str,
     ) -> str:
         """
-        Retourne l'URL publique permanente du fichier Storage.
+        Retourne l'URL publique canonique d'un fichier Storage.
 
-        Le bucket `generated-media` doit être PUBLIC dans Supabase.
-        Cette URL peut être persistée dans `generated_media.url` puis
-        utilisée directement par le navigateur dans <img> et <video>.
+        `storage_path` est la source de vérité. Même si le SDK ou une ancienne
+        donnée renvoie une URL signée /object/sign/..., elle est normalisée
+        vers /object/public/... et les paramètres d'expiration sont supprimés.
         """
         if not storage_path:
             raise ValueError("Le chemin Storage est obligatoire.")
@@ -108,35 +108,70 @@ class SupabaseMediaRepository:
                 f"Impossible de créer l'URL publique du média : {exc}"
             ) from exc
 
+        public_url: Optional[str] = None
+
         if isinstance(response, str):
             public_url = response
         elif isinstance(response, dict):
             data = response.get("data", response)
+
             if isinstance(data, dict):
                 public_url = (
                     data.get("publicUrl")
                     or data.get("public_url")
+                    or data.get("signedURL")
+                    or data.get("signedUrl")
                     or data.get("url")
                 )
-            else:
-                public_url = None
+            elif data:
+                public_url = str(data)
         else:
             data = getattr(response, "data", None)
+
             if isinstance(data, dict):
                 public_url = (
                     data.get("publicUrl")
                     or data.get("public_url")
+                    or data.get("signedURL")
+                    or data.get("signedUrl")
                     or data.get("url")
                 )
-            else:
-                public_url = None
+            elif data:
+                public_url = str(data)
 
         if not public_url:
             raise RuntimeError(
-                "Supabase n'a pas retourné d'URL publique pour le média."
+                "Supabase n'a pas retourné d'URL exploitable pour le média."
             )
 
-        return str(public_url)
+        normalized_url = str(public_url).strip()
+
+        # Sécurité : une URL signée ne doit jamais être persistée ni renvoyée
+        # comme URL de lecture permanente.
+        normalized_url = normalized_url.replace(
+            "/storage/v1/object/sign/",
+            "/storage/v1/object/public/",
+        )
+
+        # Supprime les éventuels paramètres de token/expiration.
+        try:
+            from urllib.parse import urlsplit, urlunsplit
+
+            parsed = urlsplit(normalized_url)
+
+            normalized_url = urlunsplit(
+                (
+                    parsed.scheme,
+                    parsed.netloc,
+                    parsed.path,
+                    "",
+                    "",
+                )
+            )
+        except Exception:
+            pass
+
+        return normalized_url
 
     def create_signed_url(
         self,
@@ -193,8 +228,10 @@ class SupabaseMediaRepository:
             else str(uuid4())
         )
 
-        if url is None:
-            url = self.get_public_url(storage_path)
+        # `storage_path` est la source de vérité.
+        # On reconstruit toujours l'URL publique afin qu'une ancienne URL
+        # signée fournie par un appelant ne puisse jamais être persistée.
+        url = self.get_public_url(storage_path)
 
         payload = {
             "id": resolved_media_id,
@@ -252,10 +289,9 @@ class SupabaseMediaRepository:
         expires_in: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
         """
-        Récupère une création et lui ajoute une URL signée fraîche.
+        Récupère une création et lui attribue son URL publique canonique.
 
-        La colonne `url` persistée reste inchangée. Cette méthode
-        fournit une URL temporaire exploitable immédiatement par le frontend.
+        La colonne `url` renvoyée est reconstruite à partir de `storage_path`.
         """
         media = self.get_media(
             media_id=media_id,
@@ -285,7 +321,7 @@ class SupabaseMediaRepository:
         user_id: str | UUID,
         expires_in: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
-        """Récupère une création avec une URL signée fraîche."""
+        """Récupère une création avec son URL publique canonique."""
         media = self.get_media(
             media_id=media_id,
             user_id=user_id,
