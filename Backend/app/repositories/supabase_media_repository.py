@@ -83,46 +83,74 @@ class SupabaseMediaRepository:
                 f"Impossible de supprimer le média Storage : {exc}"
             ) from exc
 
+    def get_public_url(
+        self,
+        storage_path: str,
+    ) -> str:
+        """
+        Retourne l'URL publique permanente du fichier Storage.
+
+        Le bucket `generated-media` doit être PUBLIC dans Supabase.
+        Cette URL peut être persistée dans `generated_media.url` puis
+        utilisée directement par le navigateur dans <img> et <video>.
+        """
+        if not storage_path:
+            raise ValueError("Le chemin Storage est obligatoire.")
+
+        try:
+            response = (
+                supabase.storage
+                .from_(self.BUCKET_NAME)
+                .get_public_url(storage_path)
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Impossible de créer l'URL publique du média : {exc}"
+            ) from exc
+
+        if isinstance(response, str):
+            public_url = response
+        elif isinstance(response, dict):
+            data = response.get("data", response)
+            if isinstance(data, dict):
+                public_url = (
+                    data.get("publicUrl")
+                    or data.get("public_url")
+                    or data.get("url")
+                )
+            else:
+                public_url = None
+        else:
+            data = getattr(response, "data", None)
+            if isinstance(data, dict):
+                public_url = (
+                    data.get("publicUrl")
+                    or data.get("public_url")
+                    or data.get("url")
+                )
+            else:
+                public_url = None
+
+        if not public_url:
+            raise RuntimeError(
+                "Supabase n'a pas retourné d'URL publique pour le média."
+            )
+
+        return str(public_url)
+
     def create_signed_url(
         self,
         storage_path: str,
         *,
         expires_in: Optional[int] = None,
     ) -> str:
-        """Crée une URL signée temporaire pour un média privé."""
-        if not storage_path:
-            raise ValueError("Le chemin Storage est obligatoire.")
+        """
+        Compatibilité avec les anciens appelants.
 
-        expires = expires_in or self.SIGNED_URL_EXPIRES_IN
-
-        try:
-            response = supabase.storage.from_(self.BUCKET_NAME).create_signed_url(
-                storage_path,
-                expires,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Impossible de créer l'URL signée du média : {exc}"
-            ) from exc
-
-        data = self._extract_response_data(response)
-
-        if isinstance(data, dict):
-            signed_url = (
-                data.get("signedURL")
-                or data.get("signedUrl")
-                or data.get("signed_url")
-                or data.get("url")
-            )
-        else:
-            signed_url = None
-
-        if not signed_url:
-            raise RuntimeError(
-                "Supabase n'a pas retourné d'URL signée pour le média."
-            )
-
-        return str(signed_url)
+        Le nouveau flux utilise l'URL publique permanente.
+        `expires_in` est conservé pour éviter de casser les appels existants.
+        """
+        return self.get_public_url(storage_path)
 
     # ============================================================
     # DATABASE
@@ -238,14 +266,12 @@ class SupabaseMediaRepository:
         storage_path = result.get("storage_path")
 
         if storage_path:
-            signed_url = self.create_signed_url(
-                str(storage_path),
-                expires_in=expires_in,
+            public_url = result.get("url") or self.get_public_url(
+                str(storage_path)
             )
-            result["signed_url"] = signed_url
-            result["url"] = result.get("url") or signed_url
-            result["media_url"] = signed_url
-            result["public_url"] = signed_url
+            result["url"] = public_url
+            result["media_url"] = public_url
+            result["public_url"] = public_url
 
         return result
 
@@ -269,14 +295,12 @@ class SupabaseMediaRepository:
         storage_path = result.get("storage_path")
 
         if storage_path:
-            signed_url = self.create_signed_url(
-                str(storage_path),
-                expires_in=expires_in,
+            public_url = result.get("url") or self.get_public_url(
+                str(storage_path)
             )
-            result["signed_url"] = signed_url
-            result["url"] = result.get("url") or signed_url
-            result["media_url"] = signed_url
-            result["public_url"] = signed_url
+            result["url"] = public_url
+            result["media_url"] = public_url
+            result["public_url"] = public_url
 
         return result
 

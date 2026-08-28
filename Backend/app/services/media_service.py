@@ -26,7 +26,7 @@ class MediaService:
              ↓
         generated_media
              ↓
-        signed URL
+        public URL
              ↓
         Frontend
 
@@ -113,7 +113,7 @@ class MediaService:
         )
 
         try:
-            signed_url = self.repository.create_signed_url(
+            public_url = self.repository.get_public_url(
                 uploaded_path
             )
 
@@ -124,7 +124,7 @@ class MediaService:
                 mime_type=mime_type,
                 action=action,
                 media_id=media_id,
-                url=signed_url,
+                url=public_url,
                 model=model,
                 prompt=prompt,
                 credits_cost=credits_cost,
@@ -137,9 +137,9 @@ class MediaService:
             self._safe_delete_storage(uploaded_path)
             raise
 
-        media["url"] = signed_url
-        media["media_url"] = signed_url
-        media["public_url"] = signed_url
+        media["url"] = public_url
+        media["media_url"] = public_url
+        media["public_url"] = public_url
 
         return media
 
@@ -198,7 +198,7 @@ class MediaService:
         )
 
         try:
-            signed_url = self.repository.create_signed_url(
+            public_url = self.repository.get_public_url(
                 uploaded_path
             )
 
@@ -209,7 +209,7 @@ class MediaService:
                 mime_type=mime_type,
                 action=action,
                 media_id=media_id,
-                url=signed_url,
+                url=public_url,
                 model=model,
                 prompt=prompt,
                 credits_cost=credits_cost,
@@ -224,9 +224,9 @@ class MediaService:
             self._safe_delete_storage(uploaded_path)
             raise
 
-        media["url"] = signed_url
-        media["media_url"] = signed_url
-        media["public_url"] = signed_url
+        media["url"] = public_url
+        media["media_url"] = public_url
+        media["public_url"] = public_url
 
         return media
 
@@ -440,8 +440,8 @@ class MediaService:
         signed_url_expires_in: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """
-        Récupère les créations d'un utilisateur et ajoute une URL
-        signée temporaire à chaque média.
+        Récupère les créations d'un utilisateur et renvoie l'URL
+        publique persistée dans Supabase.
         """
         media_list = self.repository.list_media(
             user_id=user_id,
@@ -457,20 +457,16 @@ class MediaService:
 
             storage_path = item.get("storage_path")
 
-            if storage_path:
-                if signed_url_expires_in is None:
-                    signed_url = self.repository.create_signed_url(
-                        storage_path
-                    )
-                else:
-                    signed_url = self.repository.create_signed_url(
-                        storage_path,
-                        expires_in=signed_url_expires_in,
-                    )
-
-                item["url"] = signed_url
-                item["media_url"] = signed_url
-                item["public_url"] = signed_url
+            if not item.get("url") and storage_path:
+                public_url = self.repository.get_public_url(
+                    storage_path
+                )
+                item["url"] = public_url
+                item["media_url"] = public_url
+                item["public_url"] = public_url
+            elif item.get("url"):
+                item["media_url"] = item["url"]
+                item["public_url"] = item["url"]
 
             result.append(item)
 
@@ -496,20 +492,16 @@ class MediaService:
 
         storage_path = result.get("storage_path")
 
-        if storage_path:
-            if signed_url_expires_in is None:
-                signed_url = self.repository.create_signed_url(
-                    storage_path
-                )
-            else:
-                signed_url = self.repository.create_signed_url(
-                    storage_path,
-                    expires_in=signed_url_expires_in,
-                )
-
-            result["url"] = signed_url
-            result["media_url"] = signed_url
-            result["public_url"] = signed_url
+        if not result.get("url") and storage_path:
+            public_url = self.repository.get_public_url(
+                storage_path
+            )
+            result["url"] = public_url
+            result["media_url"] = public_url
+            result["public_url"] = public_url
+        elif result.get("url"):
+            result["media_url"] = result["url"]
+            result["public_url"] = result["url"]
 
         return result
 

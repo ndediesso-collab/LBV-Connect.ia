@@ -54,18 +54,17 @@ const getMediaType = (media: MediaItem): MediaType => {
 const getMediaUrl = (media: MediaItem): string | null =>
   media.public_url || media.url || null;
 
-const isBackendMediaUrl = (url: string | null): boolean => {
-  if (!url || !API_BASE_URL) return false;
+const normalizeMediaUrl = (media: MediaItem): string | null => {
+  const value =
+    media.public_url ||
+    media.url ||
+    null;
 
-  try {
-    const parsed = new URL(url, API_BASE_URL);
-    return (
-      parsed.origin === new URL(API_BASE_URL).origin &&
-      parsed.pathname.startsWith("/media/")
-    );
-  } catch {
-    return false;
+  if (!value || typeof value !== "string") {
+    return null;
   }
+
+  return value.trim() || null;
 };
 
 const formatDate = (value?: string | null) => {
@@ -118,7 +117,6 @@ export default function CreationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [resolvedUrls, setResolvedUrls] = useState<Record<string, string>>({});
 
   const getAccessToken = useCallback(async () => {
     const {
@@ -127,86 +125,6 @@ export default function CreationsPage() {
 
     return session?.access_token || null;
   }, [supabase]);
-
-  const resolveMediaUrl = useCallback(
-    async (item: MediaItem): Promise<string | null> => {
-      const directUrl = getMediaUrl(item);
-
-      if (!directUrl) {
-        return null;
-      }
-
-      const cachedUrl = resolvedUrls[item.id];
-      if (cachedUrl) {
-        return cachedUrl;
-      }
-
-      if (!isBackendMediaUrl(directUrl)) {
-        return directUrl;
-      }
-
-      const token = await getAccessToken();
-
-      if (!token || !API_BASE_URL) {
-        throw new Error("Votre session a expiré. Veuillez vous reconnecter.");
-      }
-
-      const response = await fetch(
-        `${API_BASE_URL}/media/${encodeURIComponent(item.id)}`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          cache: "no-store",
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error("Impossible de récupérer cette création média.");
-      }
-
-      const contentType = response.headers.get("content-type") || "";
-
-      if (contentType.includes("application/json")) {
-        const payload = await response.json();
-
-        const returnedUrl =
-          payload?.public_url ||
-          payload?.media_url ||
-          payload?.url;
-
-        if (
-          typeof returnedUrl === "string" &&
-          returnedUrl.trim() &&
-          !isBackendMediaUrl(returnedUrl)
-        ) {
-          return returnedUrl;
-        }
-
-        throw new Error(
-          "Le backend n'a retourné aucune URL média exploitable.",
-        );
-      }
-
-      const blob = await response.blob();
-
-      if (!blob.size) {
-        throw new Error("Le fichier média reçu est vide.");
-      }
-
-      const objectUrl = URL.createObjectURL(blob);
-
-      setResolvedUrls((current) => ({
-        ...current,
-        [item.id]: objectUrl,
-      }));
-
-      return objectUrl;
-    },
-    [getAccessToken, resolvedUrls],
-  );
 
   const loadMedia = useCallback(
     async (showRefreshState = false) => {
@@ -272,21 +190,6 @@ export default function CreationsPage() {
           : [];
 
         setMedia(loadedMedia);
-
-        await Promise.all(
-          loadedMedia
-            .filter((item) => isBackendMediaUrl(getMediaUrl(item)))
-            .map(async (item) => {
-              try {
-                await resolveMediaUrl(item);
-              } catch (resolveError) {
-                console.error(
-                  `Erreur récupération média ${item.id} :`,
-                  resolveError,
-                );
-              }
-            }),
-        );
       } catch (err) {
         setError(
           err instanceof Error
@@ -298,20 +201,12 @@ export default function CreationsPage() {
         setRefreshing(false);
       }
     },
-    [resolveMediaUrl, supabase]
+    [supabase]
   );
 
   useEffect(() => {
     void loadMedia();
   }, [loadMedia]);
-
-  useEffect(() => {
-    return () => {
-      Object.values(resolvedUrls).forEach((url) => {
-        URL.revokeObjectURL(url);
-      });
-    };
-  }, [resolvedUrls]);
 
   const filteredMedia = useMemo(() => {
     if (filter === "all") return media;
@@ -330,9 +225,7 @@ export default function CreationsPage() {
   );
 
   const handleDownload = useCallback(async (item: MediaItem) => {
-    let url =
-      resolvedUrls[item.id] ??
-      getMediaUrl(item);
+    const url = normalizeMediaUrl(item);
 
     if (!url) {
       setError("Le fichier de cette création n'est plus disponible.");
@@ -340,14 +233,6 @@ export default function CreationsPage() {
     }
 
     try {
-      if (isBackendMediaUrl(url)) {
-        url = await resolveMediaUrl(item) || "";
-      }
-
-      if (!url) {
-        throw new Error("URL média indisponible.");
-      }
-
       const response = await fetch(url);
 
       if (!response.ok) {
@@ -373,7 +258,7 @@ export default function CreationsPage() {
       // Fallback : le navigateur peut ouvrir directement l'URL signée.
       window.open(url, "_blank", "noopener,noreferrer");
     }
-  }, [resolveMediaUrl, resolvedUrls]);
+  }, []);
 
   const handleDelete = useCallback(
     async (item: MediaItem) => {
@@ -614,9 +499,7 @@ export default function CreationsPage() {
           <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {filteredMedia.map((item) => {
               const type = getMediaType(item);
-              const url =
-                resolvedUrls[item.id] ??
-                getMediaUrl(item);
+              const url = normalizeMediaUrl(item);
               const size = formatSize(item.size_bytes ?? item.size);
               const action = getActionLabel(item.action);
 
@@ -629,17 +512,6 @@ export default function CreationsPage() {
                     type="button"
                     onClick={() => {
                       setSelectedMedia(item);
-                      if (
-                        isBackendMediaUrl(getMediaUrl(item)) &&
-                        !resolvedUrls[item.id]
-                      ) {
-                        void resolveMediaUrl(item).catch((resolveError) => {
-                          console.error(
-                            "Erreur ouverture création média :",
-                            resolveError,
-                          );
-                        });
-                      }
                     }}
                     className="relative block aspect-square w-full overflow-hidden bg-black/[0.04] text-left"
                     aria-label={`Ouvrir la ${type === "image" ? "création image" : "vidéo"}`}
@@ -806,24 +678,16 @@ export default function CreationsPage() {
             </div>
 
             <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-2 sm:p-5">
-              {(resolvedUrls[selectedMedia.id] ?? getMediaUrl(selectedMedia)) ? (
+              {normalizeMediaUrl(selectedMedia) ? (
                 getMediaType(selectedMedia) === "image" ? (
                   <img
-                    src={
-                      resolvedUrls[selectedMedia.id] ??
-                      getMediaUrl(selectedMedia) ??
-                      ""
-                    }
+                    src={normalizeMediaUrl(selectedMedia) || ""}
                     alt={selectedMedia.prompt || "Création NKYEL"}
                     className="max-h-[78vh] max-w-full object-contain"
                   />
                 ) : (
                   <video
-                    src={
-                      resolvedUrls[selectedMedia.id] ??
-                      getMediaUrl(selectedMedia) ??
-                      ""
-                    }
+                    src={normalizeMediaUrl(selectedMedia) || ""}
                     className="max-h-[78vh] max-w-full"
                     controls
                     autoPlay
