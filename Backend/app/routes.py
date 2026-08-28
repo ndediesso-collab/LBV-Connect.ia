@@ -1914,6 +1914,79 @@ def delete_conversation(
 # ============================================================
 # MÉDIAS — MES CRÉATIONS
 # ============================================================
+
+def _build_media_public_url(storage_path: str | None) -> str | None:
+    """
+    Construit l'URL publique canonique d'un média Supabase Storage.
+
+    `storage_path` est la source de vérité :
+        <user_id>/images/<media_id>.png
+        <user_id>/videos/<media_id>.mp4
+
+    Le bucket `generated-media` doit être public.
+    """
+    if not storage_path:
+        return None
+
+    try:
+        response = (
+            supabase.storage
+            .from_("generated-media")
+            .get_public_url(storage_path)
+        )
+    except Exception:
+        return None
+
+    public_url = None
+
+    if isinstance(response, str):
+        public_url = response
+    elif isinstance(response, dict):
+        data = response.get("data", response)
+        if isinstance(data, dict):
+            public_url = (
+                data.get("publicUrl")
+                or data.get("public_url")
+                or data.get("url")
+            )
+    else:
+        data = getattr(response, "data", None)
+        if isinstance(data, dict):
+            public_url = (
+                data.get("publicUrl")
+                or data.get("public_url")
+                or data.get("url")
+            )
+
+    if not public_url:
+        return None
+
+    public_url = str(public_url).strip()
+
+    # Même si un client/SDK renvoie une URL signée, on normalise vers
+    # l'endpoint public et on retire le token d'expiration.
+    public_url = public_url.replace(
+        "/storage/v1/object/sign/",
+        "/storage/v1/object/public/",
+    )
+
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+
+        parsed = urlsplit(public_url)
+        public_url = urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                "",
+                "",
+            )
+        )
+    except Exception:
+        pass
+
+    return public_url
 #
 # Les créations générées sont persistées dans Supabase.
 # Ces routes utilisent la même authentification que les autres
@@ -1966,14 +2039,45 @@ def _validate_media_type(media_type: str) -> str:
 def _media_response(media: dict) -> dict:
     """
     Normalise une création média pour le frontend.
+
+    `storage_path` est la source de vérité pour l'URL.
+    `url`, `media_url` et `public_url` sont exposés ensemble afin
+    que les différents frontends puissent utiliser le même contrat.
     """
+    storage_path = media.get("storage_path")
+
+    public_url = _build_media_public_url(
+        str(storage_path)
+        if storage_path
+        else None
+    )
+
+    # Fallback uniquement si storage_path n'est pas disponible.
+    if not public_url:
+        persisted_url = (
+            media.get("url")
+            or media.get("public_url")
+            or media.get("media_url")
+        )
+        if persisted_url:
+            public_url = str(persisted_url).strip()
+
     return {
         "id": media.get("id"),
         "user_id": media.get("user_id"),
-        "media_type": media.get("media_type"),
+        "media_type": (
+            media.get("media_type")
+            or media.get("type")
+        ),
+        "type": (
+            media.get("type")
+            or media.get("media_type")
+        ),
         "prompt": media.get("prompt"),
-        "storage_path": media.get("storage_path"),
-        "public_url": media.get("public_url"),
+        "storage_path": storage_path,
+        "url": public_url,
+        "media_url": public_url,
+        "public_url": public_url,
         "mime_type": media.get("mime_type"),
         "size_bytes": media.get("size_bytes"),
         "metadata": media.get("metadata") or {},
