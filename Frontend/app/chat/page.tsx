@@ -1724,12 +1724,10 @@ export default function ChatPage() {
           loadPersistedMedia(),
         ]);
 
-        // Les capacités média dépendent du wallet/pack.
-        // On les charge après le wallet pour éviter un 404
-        // transitoire lors de l'initialisation.
-        if (!cancelled) {
-          await loadMediaCapabilities();
-        }
+        // Les capacités média sont chargées à l'ouverture du mode
+        // « Création » afin qu'un endpoint indisponible ne bloque pas
+        // l'initialisation générale du chat.
+        void cancelled;
       } catch (requestError) {
         console.error(
           "Erreur initialisation Chat :",
@@ -2117,8 +2115,22 @@ export default function ChatPage() {
         "Capacités média indisponibles pour le compte courant :",
         requestError,
       );
-      setMediaCapabilities([]);
-      setSelectedMediaAction("");
+      // Secours local : le backend reste l'autorité finale sur les
+      // droits et le coût. Cela permet au mode Création de rester
+      // utilisable même si /ai/media-capabilities est momentanément
+      // indisponible ou renvoie 404.
+      const fallback = MEDIA_GENERATION_CONFIGS.map((item) => ({
+        action: item.action,
+        type: item.type,
+        credits: item.credits,
+      }));
+
+      setMediaCapabilities(fallback);
+      setSelectedMediaAction((current) =>
+        current && fallback.some((item) => item.action === current)
+          ? current
+          : fallback[0]?.action ?? "",
+      );
     } finally {
       setIsLoadingMediaCapabilities(false);
     }
@@ -2155,16 +2167,10 @@ export default function ChatPage() {
     }
 
     if (label === "Création") {
-      if (mediaCapabilities.length === 0) {
-        setError(
-          "Aucune création média n'est disponible avec votre pack.",
-        );
-        return;
-      }
-
       setActiveCapability("Création");
       setMediaMenuOpen(true);
       setError(null);
+      void loadMediaCapabilities();
     }
   }
 
