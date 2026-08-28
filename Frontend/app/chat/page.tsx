@@ -2249,14 +2249,51 @@ export default function ChatPage() {
         ? data.media
         : [];
 
-      setMediaCapabilities(available);
+      // Le backend reste l'autorité finale lors de la génération,
+      // mais une réponse vide/temporairement indisponible ne doit pas
+      // verrouiller l'interface « Création ».
+      //
+      // On conserve toujours les configurations locales lorsqu'aucune
+      // capacité exploitable n'est retournée.
+      if (available.length > 0) {
+        setMediaCapabilities(available);
 
-      setSelectedMediaAction((current) => {
-        if (current && available.some((item) => item.action === current)) {
-          return current;
-        }
-        return available[0]?.action ?? "";
-      });
+        setSelectedMediaAction((current) => {
+          if (
+            current &&
+            available.some(
+              (item) => item.action === current,
+            )
+          ) {
+            return current;
+          }
+
+          return available[0]?.action ?? "";
+        });
+      } else {
+        setMediaCapabilities(
+          MEDIA_GENERATION_CONFIGS.map(
+            (item) => ({
+              action: item.action,
+              type: item.type,
+              credits: item.credits,
+            }),
+          ),
+        );
+
+        setSelectedMediaAction((current) => {
+          if (
+            current &&
+            MEDIA_GENERATION_CONFIGS.some(
+              (item) => item.action === current,
+            )
+          ) {
+            return current;
+          }
+
+          return MEDIA_GENERATION_CONFIGS[0]?.action ?? "";
+        });
+      }
     } catch (requestError) {
       // Un compte sans wallet/pack peut légitimement recevoir un 404.
       // Cela ne doit pas polluer l'interface ni transformer le bouton
@@ -2276,8 +2313,12 @@ export default function ChatPage() {
       }));
 
       setMediaCapabilities(fallback);
+
       setSelectedMediaAction((current) =>
-        current && fallback.some((item) => item.action === current)
+        current &&
+        fallback.some(
+          (item) => item.action === current,
+        )
           ? current
           : fallback[0]?.action ?? "",
       );
