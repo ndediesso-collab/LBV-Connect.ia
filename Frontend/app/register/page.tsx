@@ -19,16 +19,12 @@ type CountryPhoneConfig = {
 };
 
 /**
- * Référentiel initial LBV-Connect :
- * 19 pays d'Afrique francophone retenus pour la téléphonie/paiement.
+ * Référentiel des 19 pays d'Afrique francophone.
  *
- * `iso2` est conservé comme donnée de pays et sera transmis à Chariow
- * dans `phone.country_code`.
- *
- * `callingCode` sert à normaliser le numéro.
- *
- * Aucun opérateur Mobile Money n'est codé ici.
- * Chariow reste responsable des moyens de paiement disponibles.
+ * Aucun opérateur Mobile Money n'est codé en dur.
+ * Le pays sert uniquement à déterminer :
+ * - l'indicatif téléphonique ;
+ * - le country_iso2 transmis au backend/Chariow.
  */
 const COUNTRY_PHONE_CONFIGS: CountryPhoneConfig[] = [
   { iso2: "BJ", name: "Bénin", callingCode: "+229" },
@@ -72,14 +68,18 @@ function getCountryConfig(
 }
 
 /**
- * Retourne le numéro national sous forme numérique.
+ * Normalise le numéro afin d'obtenir uniquement
+ * le numéro national.
  *
- * Accepte par exemple :
- * - 061234567
- * - +241061234567
- * - 00241061234567
+ * Exemples :
  *
- * Le préfixe national 0 reste dans le numéro national.
+ * 061234567
+ * +241061234567
+ * 00241061234567
+ *
+ * deviennent :
+ *
+ * 061234567
  */
 function normalizePhoneNumber(
   value: string,
@@ -94,21 +94,36 @@ function normalizePhoneNumber(
   const callingDigits =
     country.callingCode.replace(/\D/g, "");
 
+  /*
+   * Cas : +24161234567
+   */
   if (
     callingDigits &&
     digits.startsWith(callingDigits) &&
     digits.length > callingDigits.length
   ) {
     digits = digits.slice(callingDigits.length);
-  } else if (digits.startsWith("00")) {
-    const internationalDigits = digits.slice(2);
+  }
+
+  /*
+   * Cas : 0024161234567
+   */
+  else if (digits.startsWith("00")) {
+    const internationalDigits =
+      digits.slice(2);
 
     if (
       callingDigits &&
-      internationalDigits.startsWith(callingDigits) &&
-      internationalDigits.length > callingDigits.length
+      internationalDigits.startsWith(
+        callingDigits,
+      ) &&
+      internationalDigits.length >
+        callingDigits.length
     ) {
-      digits = internationalDigits.slice(callingDigits.length);
+      digits =
+        internationalDigits.slice(
+          callingDigits.length,
+        );
     }
   }
 
@@ -116,11 +131,16 @@ function normalizePhoneNumber(
 }
 
 /**
- * Produit le numéro international utilisé comme valeur native
- * `auth.users.phone`.
+ * Construit le numéro international.
  *
- * Supabase attend un numéro au format international (E.164).
- * Le 0 national est retiré avant l'ajout de l'indicatif.
+ * Exemple Gabon :
+ *
+ * 061234567
+ *      ↓
+ * +24161234567
+ *
+ * C'est cette valeur qui est enregistrée
+ * dans user_metadata.phone.
  */
 function buildInternationalPhone(
   phoneNumber: string,
@@ -135,6 +155,10 @@ function buildInternationalPhone(
     return "";
   }
 
+  /*
+   * Retire le 0 national avant d'ajouter
+   * l'indicatif international.
+   */
   if (national.startsWith("0")) {
     national = national.slice(1);
   }
@@ -146,8 +170,10 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] =
     useState(false);
 
-  const [showConfirmPassword, setShowConfirmPassword] =
-    useState(false);
+  const [
+    showConfirmPassword,
+    setShowConfirmPassword,
+  ] = useState(false);
 
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -173,21 +199,24 @@ export default function RegisterPage() {
     ).trim();
 
     const countryIso2 = String(
-      formData.get("countryIso2") ?? DEFAULT_COUNTRY_ISO2,
-    ).trim().toUpperCase();
+      formData.get("countryIso2") ??
+        DEFAULT_COUNTRY_ISO2,
+    )
+      .trim()
+      .toUpperCase();
 
-    const country = getCountryConfig(
-      countryIso2,
-    );
+    const country =
+      getCountryConfig(countryIso2);
 
     const phoneRaw = String(
       formData.get("phone") ?? "",
     ).trim();
 
-    const phoneNumber = normalizePhoneNumber(
-      phoneRaw,
-      country,
-    );
+    const phoneNumber =
+      normalizePhoneNumber(
+        phoneRaw,
+        country,
+      );
 
     const phoneInternational =
       buildInternationalPhone(
@@ -209,6 +238,9 @@ export default function RegisterPage() {
       formData.get("confirmPassword") ?? "",
     );
 
+    /*
+     * Validation téléphone
+     */
     if (!phoneNumber) {
       setError(
         "Veuillez renseigner votre numéro de téléphone.",
@@ -216,13 +248,19 @@ export default function RegisterPage() {
       return;
     }
 
-    if (phoneNumber.length < 6 || !phoneInternational) {
+    if (
+      phoneNumber.length < 6 ||
+      !phoneInternational
+    ) {
       setError(
         "Veuillez renseigner un numéro de téléphone valide.",
       );
       return;
     }
 
+    /*
+     * Validation mot de passe
+     */
     if (password !== confirmPassword) {
       setError(
         "Les mots de passe ne correspondent pas.",
@@ -240,18 +278,61 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const supabase = createClient();
+      const supabase =
+        createClient();
 
+      /*
+       * IMPORTANT
+       *
+       * Le numéro n'est PAS envoyé dans :
+       *
+       *   phone:
+       *
+       * au niveau racine de signUp().
+       *
+       * Il est enregistré comme simple
+       * donnée de profil dans :
+       *
+       *   user_metadata.phone
+       *
+       * Le backend Chariow recherche justement
+       * cette valeur.
+       *
+       * Les données enregistrées seront donc :
+       *
+       * {
+       *   first_name: "...",
+       *   last_name: "...",
+       *   phone: "+24161234567",
+       *   country_iso2: "GA"
+       * }
+       */
       const { data, error: signUpError } =
         await supabase.auth.signUp({
           email,
           password,
-          phone: phoneInternational,
+
           options: {
             data: {
               first_name: firstName,
               last_name: lastName,
-              country_iso2: country.iso2,
+
+              /*
+               * Numéro international normalisé.
+               *
+               * Exemple :
+               * +24161234567
+               */
+              phone: phoneInternational,
+
+              /*
+               * ISO2 du pays sélectionné.
+               *
+               * Exemple :
+               * GA
+               */
+              country_iso2:
+                country.iso2,
             },
           },
         });
@@ -265,25 +346,32 @@ export default function RegisterPage() {
       }
 
       /*
-       * Si Supabase demande une confirmation
-       * e-mail, l'utilisateur n'est pas encore
-       * connecté.
+       * Supabase peut demander une
+       * confirmation e-mail avant
+       * de créer une session.
        */
-      if (data.user && !data.session) {
+      if (
+        data.user &&
+        !data.session
+      ) {
         setMessage(
           "Compte créé avec succès. Consultez votre boîte e-mail pour confirmer votre adresse.",
         );
 
         form.reset();
+
         return;
       }
 
       /*
-       * Si la confirmation e-mail est désactivée,
-       * Supabase peut créer directement une session.
+       * Si la confirmation e-mail
+       * est désactivée, Supabase peut
+       * fournir directement une session.
        */
       if (data.session) {
-        window.location.href = "/chat";
+        window.location.href =
+          "/chat";
+
         return;
       }
 
@@ -406,7 +494,7 @@ export default function RegisterPage() {
                 </div>
               </div>
 
-              {/* Pays + téléphone */}
+              {/* Country */}
 
               <div>
                 <label
@@ -419,7 +507,9 @@ export default function RegisterPage() {
                 <select
                   id="countryIso2"
                   name="countryIso2"
-                  defaultValue={DEFAULT_COUNTRY_ISO2}
+                  defaultValue={
+                    DEFAULT_COUNTRY_ISO2
+                  }
                   required
                   disabled={loading}
                   className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
@@ -430,17 +520,21 @@ export default function RegisterPage() {
                         key={country.iso2}
                         value={country.iso2}
                       >
-                        {country.name} ({country.callingCode})
+                        {country.name} (
+                        {country.callingCode})
                       </option>
                     ),
                   )}
                 </select>
 
                 <p className="mt-2 text-xs text-muted">
-                  Votre pays détermine automatiquement l’indicatif
-                  utilisé pour normaliser votre numéro.
+                  Le pays sélectionné détermine
+                  automatiquement l&apos;indicatif
+                  utilisé pour votre numéro.
                 </p>
               </div>
+
+              {/* Phone */}
 
               <div>
                 <label
@@ -456,16 +550,16 @@ export default function RegisterPage() {
                   type="tel"
                   inputMode="tel"
                   autoComplete="tel"
-                  placeholder="06 00 00 00"
+                  placeholder="06 12 34 56 7"
                   required
                   disabled={loading}
                   className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
                 />
 
                 <p className="mt-2 text-xs text-muted">
-                  Un seul numéro est demandé. LBV-Connect le normalise
-                  automatiquement avant son enregistrement et son utilisation
-                  pour les paiements.
+                  Votre numéro sera enregistré
+                  comme donnée de profil et
+                  utilisé lors de vos paiements.
                 </p>
               </div>
 
