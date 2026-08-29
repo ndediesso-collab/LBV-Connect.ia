@@ -965,29 +965,14 @@ def _set_user_phone(
             status_code=400,
             detail="Le numéro de téléphone est invalide.",
         )
-    calling_digits = re.sub(
-        r"\D",
-        "",
-        str(country_config.calling_code),
-    )
-
-    if not calling_digits:
-        raise HTTPException(
-            status_code=400,
-            detail="Indicatif téléphonique du pays invalide.",
-        )
 
     phone_international = (
-        f"+{calling_digits}{digits}"
+        f"{country_config.calling_code}{digits}"
     )
 
     # ========================================================
     # 3. ÉCRITURE DIRECTE DANS auth.users.phone
     # ========================================================
-
-    # Garantit le format international E.164 avec le signe "+"
-    # juste avant l'envoi à Supabase.
-    phone_international = f"+{str(phone_international).lstrip('+')}"
 
     try:
         response = (

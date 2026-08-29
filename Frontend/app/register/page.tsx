@@ -415,7 +415,8 @@ export default function RegisterPage() {
        */
       if (
         phoneResult.phone &&
-        phoneResult.phone !== phoneInternational
+        phoneResult.phone.replace(/\D/g, "") !==
+          phoneInternational.replace(/\D/g, "")
       ) {
         console.error(
           "PHONE PROFILE SYNC MISMATCH:",
