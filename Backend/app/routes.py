@@ -1734,6 +1734,12 @@ def _find_chariow_user_id(event: dict) -> str:
     """
     payment_transaction = _find_chariow_payment_transaction(event)
 
+    print(
+        "[CHARIOW WEBHOOK] "
+        f"local_transaction_found={payment_transaction is not None}",
+        flush=True,
+    )
+
     if payment_transaction:
         user_id = payment_transaction.get("user_id")
         if user_id:
@@ -1773,6 +1779,36 @@ def chariow_webhook(
     event = _normalize_chariow_event(payload)
 
     # --------------------------------------------------------
+    # LOG DIAGNOSTIQUE — WEBHOOK CHARIOW
+    # --------------------------------------------------------
+    # Permet de vérifier exactement ce que Chariow envoie
+    # et de suivre la résolution transaction -> utilisateur
+    # -> produit -> attribution des crédits.
+    #
+    # IMPORTANT :
+    # - aucun token ni secret n'est journalisé ;
+    # - seules les données utiles au diagnostic du paiement sont affichées.
+    print(
+        "[CHARIOW WEBHOOK] "
+        f"event={event.get('event')!r} "
+        f"status={event.get('status')!r} "
+        f"order_id={event.get('order_id')!r} "
+        f"reference={event.get('reference')!r} "
+        f"product_id={event.get('product_id')!r} "
+        f"user_id={event.get('user_id')!r} "
+        f"email={event.get('email')!r}",
+        flush=True,
+    )
+
+    success = _is_chariow_success(event)
+
+    print(
+        "[CHARIOW WEBHOOK] "
+        f"payment_success={success}",
+        flush=True,
+    )
+
+    # --------------------------------------------------------
     # 1. Échec / événement non payé
     # --------------------------------------------------------
 
@@ -1796,6 +1832,15 @@ def chariow_webhook(
             payment_transaction.get("pack_id")
             or payment_transaction.get("addon_id")
             or event["product_id"]
+        )
+
+        print(
+            "[CHARIOW WEBHOOK] "
+            f"resolved_user_id={str(user_id) if user_id else None!r} "
+            f"resolved_reference={str(reference_id) if reference_id else None!r} "
+            f"resolved_product_id={str(product_id) if product_id else None!r} "
+            f"local_status={payment_transaction.get('status')!r}",
+            flush=True,
         )
 
         if not user_id:
@@ -1851,12 +1896,27 @@ def chariow_webhook(
     # 3. Détection du produit
     # --------------------------------------------------------
 
+    print(
+        "[CHARIOW WEBHOOK] "
+        f"processing_product_id={str(product_id)!r} "
+        f"for_user_id={str(user_id)!r} "
+        f"reference_id={str(reference_id)!r}",
+        flush=True,
+    )
+
     repository = _get_repository()
     wallet_service = WalletService(repository)
 
     # Pack principal
     if product_id in PRIMARY_PACKS:
         product = PRIMARY_PACKS[product_id]
+
+        print(
+            "[CHARIOW WEBHOOK] "
+            f"primary_pack_detected={product_id!r} "
+            f"credits={product.get('credits')!r}",
+            flush=True,
+        )
 
         if product_id == "light_pack":
             wallet = wallet_service.create_light_wallet(
@@ -1883,6 +1943,15 @@ def chariow_webhook(
                 status_code=400,
                 detail="Pack principal non supporté.",
             )
+
+        print(
+            "[CHARIOW WEBHOOK] "
+            f"wallet_created=True "
+            f"user_id={str(user_id)!r} "
+            f"pack_id={product_id!r} "
+            f"balance={getattr(wallet, 'balance', None)!r}",
+            flush=True,
+        )
 
         if payment_transaction:
             (
@@ -1920,6 +1989,16 @@ def chariow_webhook(
             user_id=user_id,
             credits=product["credits"],
             reference_id=reference_id,
+        )
+
+        print(
+            "[CHARIOW WEBHOOK] "
+            f"addon_recharged=True "
+            f"user_id={str(user_id)!r} "
+            f"product_id={product_id!r} "
+            f"credits_added={product.get('credits')!r} "
+            f"balance={getattr(wallet, 'balance', None)!r}",
+            flush=True,
         )
 
         if payment_transaction:
