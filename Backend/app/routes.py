@@ -985,6 +985,10 @@ def _set_user_phone(
     # 3. ÉCRITURE DIRECTE DANS auth.users.phone
     # ========================================================
 
+    # Garantit le format international E.164 avec le signe "+"
+    # juste avant l'envoi à Supabase.
+    phone_international = f"+{str(phone_international).lstrip('+')}"
+
     try:
         response = (
             supabase
