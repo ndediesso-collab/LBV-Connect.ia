@@ -156,21 +156,32 @@ def create_payment(
         authenticated_user_id
     )
 
-    if wallet is None:
-
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Aucun portefeuille de crédits "
-                "trouvé pour cet utilisateur."
-            ),
-        )
-
     # ========================================================
     # 5. COMPLÉMENT
     # ========================================================
+    #
+    # Un premier achat de pack principal ne nécessite PAS
+    # de wallet existant.
+    #
+    # Le wallet est créé uniquement après confirmation réelle
+    # du paiement par le webhook Chariow.
+    #
+    # En revanche, un addon nécessite obligatoirement un wallet
+    # déjà actif puisqu'il recharge un pack existant.
+    # ========================================================
 
     if request.payment_type == "addon":
+
+        if wallet is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Aucun portefeuille de crédits "
+                    "trouvé pour cet utilisateur. "
+                    "Un pack principal doit être acheté "
+                    "avant de pouvoir acheter un complément."
+                ),
+            )
 
         validate_addon_purchase(
             wallet
@@ -401,16 +412,34 @@ def checkout_payment(
         authenticated_user_id
     )
 
-    if wallet is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Aucun portefeuille de crédits "
-                "trouvé pour cet utilisateur."
-            ),
-        )
+    # ========================================================
+    # WALLET
+    # ========================================================
+    #
+    # IMPORTANT :
+    # Un utilisateur qui achète son premier pack principal
+    # n'a pas encore de wallet. C'est normal.
+    #
+    # Le wallet sera créé par le webhook Chariow uniquement
+    # après confirmation du paiement.
+    #
+    # Seul un achat de type "addon" exige donc un wallet
+    # existant avant l'initialisation du checkout.
+    # ========================================================
 
     if request.payment_type == "addon":
+
+        if wallet is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Aucun portefeuille de crédits "
+                    "trouvé pour cet utilisateur. "
+                    "Un pack principal doit être acheté "
+                    "avant de pouvoir acheter un complément."
+                ),
+            )
+
         validate_addon_purchase(
             wallet
         )
