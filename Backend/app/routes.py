@@ -875,22 +875,30 @@ def _set_user_phone(
     country_iso2: str,
 ) -> dict:
     """
-    Normalise le numéro puis l'écrit dans `auth.users.phone`.
+    Enregistre le téléphone de l'utilisateur authentifié.
 
-    Cette fonction utilise le client Supabase configuré avec la
-    Service Role Key. Elle ne déclenche aucune validation SMS :
-    le téléphone est une donnée de profil applicative.
+    Responsabilité de cette fonction :
+        1. Valider le pays.
+        2. Normaliser le numéro.
+        3. Construire UNE valeur canonique :
+               +<indicatif><numéro>
+        4. Écrire cette valeur dans auth.users.phone.
+        5. Relire la valeur retournée par Supabase.
+        6. Vérifier les chiffres enregistrés.
+        7. Retourner le succès.
+
+    Exemple :
+        phone = "77379848"
+        country_iso2 = "GA"
+
+        -> phone_international = "+24177379848"
     """
 
     # ========================================================
     # 1. VALIDATION DU PAYS
     # ========================================================
 
-    normalized_country = (
-        str(country_iso2)
-        .strip()
-        .upper()
-    )
+    normalized_country = str(country_iso2).strip().upper()
 
     try:
         country_config = get_country_phone_config(
@@ -906,7 +914,7 @@ def _set_user_phone(
         ) from error
 
     # ========================================================
-    # 2. NORMALISATION DU NUMÉRO
+    # 2. RÉCUPÉRATION ET NETTOYAGE DU NUMÉRO
     # ========================================================
 
     raw_phone = str(phone).strip()
@@ -917,11 +925,7 @@ def _set_user_phone(
             detail="Le numéro de téléphone est requis.",
         )
 
-    digits = re.sub(
-        r"\D",
-        "",
-        raw_phone,
-    )
+    digits = re.sub(r"\D", "", raw_phone)
 
     if not digits:
         raise HTTPException(
@@ -935,28 +939,31 @@ def _set_user_phone(
         str(country_config.calling_code),
     )
 
-    # +24177379848 -> 77379848
-    if (
-        calling_digits
-        and digits.startswith(calling_digits)
-        and len(digits) > len(calling_digits)
-    ):
+    if not calling_digits:
+        raise HTTPException(
+            status_code=500,
+            detail="Indicatif téléphonique invalide pour ce pays.",
+        )
+
+    # ========================================================
+    # 3. NORMALISATION
+    # ========================================================
+
+    # Si le numéro commence déjà par l'indicatif :
+    #     24177379848 -> 77379848
+    if digits.startswith(calling_digits):
         digits = digits[len(calling_digits):]
 
-    # 0024177379848 -> 77379848
+    # Si le numéro est au format international avec 00 :
+    #     0024177379848 -> 77379848
     elif digits.startswith("00"):
         international_digits = digits[2:]
 
-        if (
-            calling_digits
-            and international_digits.startswith(
-                calling_digits
-            )
-            and len(international_digits) > len(calling_digits)
-        ):
+        if international_digits.startswith(calling_digits):
             digits = international_digits[len(calling_digits):]
 
-    # 077379848 -> 77379848
+    # Retirer le 0 national :
+    #     077379848 -> 77379848
     if digits.startswith("0"):
         digits = digits[1:]
 
@@ -966,12 +973,23 @@ def _set_user_phone(
             detail="Le numéro de téléphone est invalide.",
         )
 
+    # ========================================================
+    # 4. CONSTRUCTION DE LA VALEUR CANONIQUE
+    # ========================================================
+
     phone_international = (
-        f"{country_config.calling_code}{digits}"
+        f"+{calling_digits}{digits}"
     )
 
+    # Exemple :
+    #
+    # calling_digits = "241"
+    # digits = "77379848"
+    #
+    # phone_international = "+24177379848"
+
     # ========================================================
-    # 3. ÉCRITURE DIRECTE DANS auth.users.phone
+    # 5. ÉCRITURE DANS auth.users.phone
     # ========================================================
 
     try:
@@ -995,6 +1013,10 @@ def _set_user_phone(
             ),
         ) from error
 
+    # ========================================================
+    # 6. RELIRE auth.users.phone
+    # ========================================================
+
     updated_user = getattr(
         response,
         "user",
@@ -1016,20 +1038,47 @@ def _set_user_phone(
         None,
     )
 
-    if native_phone != phone_international:
+    # ========================================================
+    # 7. VÉRIFICATION
+    # ========================================================
+
+    # Supabase peut éventuellement retourner :
+    #
+    # demandé  : +24177379848
+    # retourné  : 24177379848
+    #
+    # On compare donc uniquement les chiffres.
+
+    expected_digits = re.sub(
+        r"\D",
+        "",
+        phone_international,
+    )
+
+    stored_digits = re.sub(
+        r"\D",
+        "",
+        str(native_phone or ""),
+    )
+
+    if stored_digits != expected_digits:
         raise HTTPException(
             status_code=500,
             detail=(
-                "Supabase n'a pas retourné le numéro attendu "
-                f"dans auth.users.phone : {native_phone!r}."
+                "Le numéro enregistré dans auth.users.phone "
+                "ne correspond pas au numéro fourni."
             ),
         )
+
+    # ========================================================
+    # 8. SUCCÈS
+    # ========================================================
 
     return {
         "success": True,
         "message": (
-            "Numéro de téléphone enregistré dans "
-            "auth.users.phone."
+            "Numéro de téléphone enregistré "
+            "dans auth.users.phone."
         ),
         "user_id": user_id,
         "phone": phone_international,
