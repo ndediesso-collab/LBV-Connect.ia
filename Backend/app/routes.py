@@ -1000,6 +1000,9 @@ def _set_user_phone(
             detail="Le numéro de téléphone est invalide.",
         )
 
+    # Numéro final au format international.
+    # Exemple Gabon :
+    # 77379848 -> +24177379848
     phone_international = (
         f"{country_config.calling_code}{digits}"
     )
@@ -1029,6 +1032,10 @@ def _set_user_phone(
             ),
         ) from error
 
+    # ========================================================
+    # 4. VÉRIFICATION QUE SUPABASE A BIEN RÉPONDU
+    # ========================================================
+
     updated_user = getattr(
         response,
         "user",
@@ -1044,20 +1051,21 @@ def _set_user_phone(
             ),
         )
 
-    native_phone = getattr(
-        updated_user,
-        "phone",
-        None,
-    )
-
-    if native_phone != phone_international:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Supabase n'a pas retourné le numéro attendu "
-                f"dans auth.users.phone : {native_phone!r}."
-            ),
-        )
+    # ========================================================
+    # 5. SUCCÈS
+    # ========================================================
+    #
+    # IMPORTANT :
+    # On ne compare PAS `updated_user.phone` avec
+    # `phone_international`.
+    #
+    # Le SDK Supabase peut retourner le numéro sous une forme
+    # différente (ex. 24177379848) alors que la valeur envoyée
+    # était +24177379848.
+    #
+    # Cette différence de représentation ne doit donc pas
+    # provoquer une erreur 500.
+    # ========================================================
 
     return {
         "success": True,
