@@ -522,6 +522,18 @@ def create_chariow_checkout(
             ),
         ) from exc
 
+    print(
+        "[CHARIOW] HTTP STATUS:",
+        response.status_code,
+        flush=True,
+    )
+
+    print(
+        "[CHARIOW] RESPONSE:",
+        response.text[:5000],
+        flush=True,
+    )
+
     # --------------------------------------------------------
     # RÉPONSE JSON
     # --------------------------------------------------------
