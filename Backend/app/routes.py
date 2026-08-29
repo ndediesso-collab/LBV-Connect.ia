@@ -1569,12 +1569,14 @@ class ChariowWebhookRequest(BaseModel):
     order_id: str | None = None
     transaction_id: str | None = None
     reference: str | None = None
+    reference_id: str | None = None
     product_id: str | None = None
     product_name: str | None = None
     user_id: str | None = None
     customer_email: str | None = None
     email: str | None = None
     amount: int | float | str | None = None
+    metadata: dict | None = None
     data: dict | None = None
 
 
@@ -1610,7 +1612,14 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
         "order_id",
         "transaction_id",
         "id",
+    )
+
+    reference = _chariow_value(
+        payload,
         "reference",
+        "reference_id",
+        "payment_reference",
+        "metadata_reference",
     )
 
     product_id = _chariow_value(
@@ -1638,6 +1647,7 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
         "event": event,
         "status": status,
         "order_id": str(order_id) if order_id else None,
+        "reference": str(reference) if reference else None,
         "product_id": str(product_id) if product_id else None,
         "user_id": str(user_id) if user_id else None,
         "email": str(email) if email else None,
@@ -1677,24 +1687,68 @@ def _is_chariow_success(event: dict) -> bool:
     )
 
 
+def _find_chariow_payment_transaction(
+    event: dict,
+) -> dict | None:
+    """
+    Retrouve la transaction locale créée avant le checkout Chariow.
+
+    La transaction locale est la source de vérité pour retrouver
+    l'utilisateur et le produit LBV-Connect, même si le webhook
+    Chariow ne renvoie pas directement `user_id`.
+    """
+    candidates = []
+
+    for value in (
+        event.get("reference"),
+        event.get("order_id"),
+    ):
+        if value and value not in candidates:
+            candidates.append(value)
+
+    for reference in candidates:
+        try:
+            response = (
+                supabase
+                .table("payment_transactions")
+                .select("*")
+                .eq("reference", reference)
+                .limit(1)
+                .execute()
+            )
+        except Exception:
+            continue
+
+        if response is not None and response.data:
+            return response.data[0]
+
+    return None
+
+
 def _find_chariow_user_id(event: dict) -> str:
     """
     Retourne l'utilisateur LBV-Connect auquel attribuer l'achat.
 
-    Pour la première version, le Pulse doit transmettre user_id.
-    L'email seul n'est volontairement pas utilisé pour créditer
-    un wallet afin d'éviter une attribution ambiguë.
+    Priorité à la transaction locale créée avant le checkout.
+    Le `user_id` du webhook reste accepté comme solution de secours.
     """
-    if not event["user_id"]:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Le Pulse Chariow ne contient pas "
-                "l'identifiant utilisateur LBV-Connect."
-            ),
-        )
+    payment_transaction = _find_chariow_payment_transaction(event)
 
-    return event["user_id"]
+    if payment_transaction:
+        user_id = payment_transaction.get("user_id")
+        if user_id:
+            return str(user_id)
+
+    if event.get("user_id"):
+        return str(event["user_id"])
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Impossible d'identifier l'utilisateur LBV-Connect "
+            "à partir du paiement Chariow."
+        ),
+    )
 
 
 @router.post("/payments/chariow/webhook")
@@ -1730,19 +1784,62 @@ def chariow_webhook(
         }
 
     # --------------------------------------------------------
-    # 2. Données obligatoires
+    # 2. Résolution de la transaction locale
     # --------------------------------------------------------
 
-    user_id = _find_chariow_user_id(event)
-    reference_id = event["order_id"]
+    payment_transaction = _find_chariow_payment_transaction(event)
 
-    if not reference_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Identifiant unique de commande Chariow manquant.",
+    if payment_transaction:
+        user_id = payment_transaction.get("user_id")
+        reference_id = payment_transaction.get("reference")
+        product_id = (
+            payment_transaction.get("pack_id")
+            or payment_transaction.get("addon_id")
+            or event["product_id"]
         )
 
-    product_id = event["product_id"]
+        if not user_id:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "La transaction de paiement ne contient pas "
+                    "d'identifiant utilisateur LBV-Connect."
+                ),
+            )
+
+        if not reference_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Référence locale de paiement manquante.",
+            )
+
+        if str(payment_transaction.get("status", "")).lower() in {
+            "paid",
+            "success",
+            "successful",
+            "completed",
+            "complete",
+            "succeeded",
+        }:
+            return {
+                "success": True,
+                "processed": False,
+                "message": "Paiement déjà traité.",
+                "reference_id": reference_id,
+                "user_id": str(user_id),
+            }
+
+    else:
+        user_id = _find_chariow_user_id(event)
+        reference_id = event["order_id"]
+
+        if not reference_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Identifiant unique de commande Chariow manquant.",
+            )
+
+        product_id = event["product_id"]
 
     if not product_id:
         raise HTTPException(
@@ -1787,6 +1884,20 @@ def chariow_webhook(
                 detail="Pack principal non supporté.",
             )
 
+        if payment_transaction:
+            (
+                supabase
+                .table("payment_transactions")
+                .update(
+                    {
+                        "status": "paid",
+                        "updated_at": "now()",
+                    }
+                )
+                .eq("reference", reference_id)
+                .execute()
+            )
+
         return {
             "success": True,
             "processed": True,
@@ -1810,6 +1921,20 @@ def chariow_webhook(
             credits=product["credits"],
             reference_id=reference_id,
         )
+
+        if payment_transaction:
+            (
+                supabase
+                .table("payment_transactions")
+                .update(
+                    {
+                        "status": "paid",
+                        "updated_at": "now()",
+                    }
+                )
+                .eq("reference", reference_id)
+                .execute()
+            )
 
         return {
             "success": True,
