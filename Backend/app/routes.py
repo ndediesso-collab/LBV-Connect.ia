@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
@@ -49,6 +51,11 @@ class CreatePaymentRequest(BaseModel):
     payment_type: str
     product_id: str
     provider: str | None = None
+
+
+class UpdatePhoneRequest(BaseModel):
+    phone: str
+    country_iso2: str
 
 
 # ============================================================
@@ -812,6 +819,183 @@ def _get_authenticated_user_id(
         user_id=user_id,
         authorization=authorization,
     )
+
+
+# ============================================================
+# PROFIL — NUMÉRO DE TÉLÉPHONE
+# ============================================================
+
+
+@router.put("/profile/phone")
+def update_my_phone(
+    request: UpdatePhoneRequest,
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Enregistre le numéro de téléphone comme donnée native
+    Supabase Auth dans `auth.users.phone`.
+
+    Le frontend fournit :
+        - phone : numéro national ou international ;
+        - country_iso2 : ISO2 du pays sélectionné.
+
+    Le user_id envoyé par le frontend n'est jamais utilisé seul :
+    `_get_authenticated_user_id()` vérifie le Bearer token et
+    confirme que le token correspond bien au user-id.
+
+    La mise à jour est effectuée côté backend avec le client
+    Supabase initialisé avec SUPABASE_SERVICE_ROLE_KEY.
+    """
+
+    # ========================================================
+    # 1. AUTHENTIFICATION
+    # ========================================================
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    # ========================================================
+    # 2. VALIDATION DU PAYS
+    # ========================================================
+
+    country_iso2 = (
+        str(request.country_iso2)
+        .strip()
+        .upper()
+    )
+
+    try:
+        country_config = get_country_phone_config(
+            country_iso2
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Pays non supporté : {country_iso2 or 'inconnu'}."
+            ),
+        ) from error
+
+    # ========================================================
+    # 3. NORMALISATION DU NUMÉRO
+    # ========================================================
+
+    raw_phone = str(request.phone).strip()
+
+    if not raw_phone:
+        raise HTTPException(
+            status_code=400,
+            detail="Le numéro de téléphone est requis.",
+        )
+
+    digits = re.sub(r"\D", "", raw_phone)
+
+    if not digits:
+        raise HTTPException(
+            status_code=400,
+            detail="Le numéro de téléphone est invalide.",
+        )
+
+    calling_digits = re.sub(
+        r"\D",
+        "",
+        str(country_config.calling_code),
+    )
+
+    # +24161234567 -> 61234567
+    if (
+        calling_digits
+        and digits.startswith(calling_digits)
+        and len(digits) > len(calling_digits)
+    ):
+        digits = digits[len(calling_digits):]
+
+    # 0024161234567 -> 61234567
+    elif digits.startswith("00"):
+        international_digits = digits[2:]
+
+        if (
+            calling_digits
+            and international_digits.startswith(
+                calling_digits
+            )
+            and len(international_digits) > len(calling_digits)
+        ):
+            digits = international_digits[len(calling_digits):]
+
+    # 061234567 -> 61234567
+    if digits.startswith("0"):
+        digits = digits[1:]
+
+    if not digits:
+        raise HTTPException(
+            status_code=400,
+            detail="Le numéro de téléphone est invalide.",
+        )
+
+    phone_international = (
+        f"{country_config.calling_code}{digits}"
+    )
+
+    # ========================================================
+    # 4. ÉCRITURE DANS auth.users.phone
+    # ========================================================
+
+    try:
+        response = (
+            supabase
+            .auth
+            .admin
+            .update_user_by_id(
+                authenticated_user_id,
+                {
+                    "phone": phone_international,
+                },
+            )
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Impossible d'enregistrer le numéro de "
+                f"téléphone dans Supabase : {str(error)}"
+            ),
+        ) from error
+
+    updated_user = getattr(
+        response,
+        "user",
+        None,
+    )
+
+    if updated_user is None:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Supabase n'a pas confirmé la mise à jour "
+                "du numéro de téléphone."
+            ),
+        )
+
+    return {
+        "success": True,
+        "message": (
+            "Numéro de téléphone enregistré "
+            "avec succès."
+        ),
+        "user_id": authenticated_user_id,
+        "phone": phone_international,
+        "country_iso2": country_iso2,
+    }
 
 
 # ============================================================

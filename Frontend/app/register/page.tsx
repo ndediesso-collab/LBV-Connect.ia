@@ -140,7 +140,7 @@ function normalizePhoneNumber(
  * +24161234567
  *
  * C'est cette valeur qui est enregistrée
- * dans user_metadata.phone.
+ * dans le profil utilisateur puis synchronisé dans auth.users.phone.
  */
 function buildInternationalPhone(
   phoneNumber: string,
@@ -282,30 +282,17 @@ export default function RegisterPage() {
         createClient();
 
       /*
-       * IMPORTANT
+       * Création du compte Supabase.
        *
-       * Le numéro n'est PAS envoyé dans :
+       * Le numéro est conservé dans les métadonnées afin de
+       * garder les informations de profil disponibles pendant
+       * la création du compte.
        *
-       *   phone:
-       *
-       * au niveau racine de signUp().
-       *
-       * Il est enregistré comme simple
-       * donnée de profil dans :
-       *
-       *   user_metadata.phone
-       *
-       * Le backend Chariow recherche justement
-       * cette valeur.
-       *
-       * Les données enregistrées seront donc :
-       *
-       * {
-       *   first_name: "...",
-       *   last_name: "...",
-       *   phone: "+24161234567",
-       *   country_iso2: "GA"
-       * }
+       * IMPORTANT :
+       * `options.data.phone` ne remplit PAS la colonne native
+       * `auth.users.phone`. Après la création du compte et dès
+       * qu'une session est disponible, le backend sécurisé
+       * `/profile/phone` écrit le numéro dans `auth.users.phone`.
        */
       const { data, error: signUpError } =
         await supabase.auth.signUp({
@@ -316,21 +303,7 @@ export default function RegisterPage() {
             data: {
               first_name: firstName,
               last_name: lastName,
-
-              /*
-               * Numéro international normalisé.
-               *
-               * Exemple :
-               * +24161234567
-               */
               phone: phoneInternational,
-
-              /*
-               * ISO2 du pays sélectionné.
-               *
-               * Exemple :
-               * GA
-               */
               country_iso2:
                 country.iso2,
             },
@@ -346,16 +319,92 @@ export default function RegisterPage() {
       }
 
       /*
-       * Supabase peut demander une
-       * confirmation e-mail avant
-       * de créer une session.
+       * Le numéro doit être écrit dans auth.users.phone
+       * par le backend avec la Service Role Key.
+       *
+       * Cette opération nécessite une session Supabase.
+       * Si la confirmation e-mail est obligatoire, aucune
+       * session n'est disponible immédiatement : le numéro
+       * restera alors temporairement dans user_metadata et
+       * devra être synchronisé après confirmation/connexion.
+       */
+      if (data.session && data.user) {
+        const apiBaseUrl =
+          process.env.NEXT_PUBLIC_API_URL ||
+          process.env.NEXT_PUBLIC_BACKEND_URL;
+
+        if (!apiBaseUrl) {
+          console.error(
+            "NEXT_PUBLIC_API_URL / NEXT_PUBLIC_BACKEND_URL non configurée.",
+          );
+          setError(
+            "Le compte a été créé, mais la synchronisation du numéro de téléphone n'est pas configurée.",
+          );
+          return;
+        }
+
+        const phoneResponse =
+          await fetch(
+            `${apiBaseUrl.replace(/\/$/, "")}/profile/phone`,
+            {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization:
+                  `Bearer ${data.session.access_token}`,
+                "user-id": data.user.id,
+              },
+              body: JSON.stringify({
+                phone: phoneInternational,
+                country_iso2: country.iso2,
+              }),
+            },
+          );
+
+        let phoneResult: {
+          detail?: string;
+          message?: string;
+        } = {};
+
+        try {
+          phoneResult =
+            await phoneResponse.json();
+        } catch {
+          // Réponse non JSON : on utilisera le message générique.
+        }
+
+        if (!phoneResponse.ok) {
+          console.error(
+            "PHONE PROFILE SYNC ERROR:",
+            phoneResult,
+          );
+
+          setError(
+            phoneResult.detail ||
+              "Le compte a été créé, mais le numéro de téléphone n'a pas pu être enregistré.",
+          );
+          return;
+        }
+
+        window.location.href =
+          "/chat";
+
+        return;
+      }
+
+      /*
+       * Supabase peut demander une confirmation e-mail avant
+       * de créer une session. Dans ce cas, le backend ne peut
+       * pas encore écrire dans auth.users.phone via une route
+       * authentifiée. La donnée reste temporairement dans
+       * user_metadata jusqu'à la prochaine session.
        */
       if (
         data.user &&
         !data.session
       ) {
         setMessage(
-          "Compte créé avec succès. Consultez votre boîte e-mail pour confirmer votre adresse.",
+          "Compte créé avec succès. Consultez votre boîte e-mail pour confirmer votre adresse. Votre numéro sera synchronisé après confirmation.",
         );
 
         form.reset();
@@ -363,17 +412,9 @@ export default function RegisterPage() {
         return;
       }
 
-      /*
-       * Si la confirmation e-mail
-       * est désactivée, Supabase peut
-       * fournir directement une session.
-       */
-      if (data.session) {
-        window.location.href =
-          "/chat";
-
-        return;
-      }
+      setMessage(
+        "Votre compte a été créé. Vérifiez votre adresse e-mail pour continuer.",
+      );
 
       setMessage(
         "Votre compte a été créé. Vérifiez votre adresse e-mail pour continuer.",
