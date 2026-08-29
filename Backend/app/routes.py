@@ -839,57 +839,77 @@ def update_my_phone(
     ),
 ):
     """
-    Enregistre le numéro de téléphone comme donnée native
-    Supabase Auth dans `auth.users.phone`.
+    Enregistre directement le numéro de l'utilisateur authentifié
+    dans la colonne native `auth.users.phone`.
 
-    Le frontend fournit :
-        - phone : numéro national ou international ;
-        - country_iso2 : ISO2 du pays sélectionné.
+    Flux attendu :
+        register Supabase
+            -> session immédiate
+            -> PUT /profile/phone
+            -> auth.users.phone
+            -> checkout Chariow
 
-    Le user_id envoyé par le frontend n'est jamais utilisé seul :
-    `_get_authenticated_user_id()` vérifie le Bearer token et
-    confirme que le token correspond bien au user-id.
+    La confirmation e-mail doit être désactivée dans Supabase afin que
+    `signUp()` puisse retourner une session immédiatement.
 
-    La mise à jour est effectuée côté backend avec le client
-    Supabase initialisé avec SUPABASE_SERVICE_ROLE_KEY.
+    Le numéro n'est pas stocké uniquement dans
+    `raw_user_meta_data.phone` : cette route écrit explicitement dans
+    la colonne native `auth.users.phone` avec la Service Role Key.
     """
-
-    # ========================================================
-    # 1. AUTHENTIFICATION
-    # ========================================================
 
     authenticated_user_id = _get_authenticated_user_id(
         user_id=user_id,
         authorization=authorization,
     )
 
+    return _set_user_phone(
+        user_id=authenticated_user_id,
+        phone=request.phone,
+        country_iso2=request.country_iso2,
+    )
+
+
+def _set_user_phone(
+    user_id: str,
+    phone: str,
+    country_iso2: str,
+) -> dict:
+    """
+    Normalise le numéro puis l'écrit dans `auth.users.phone`.
+
+    Cette fonction utilise le client Supabase configuré avec la
+    Service Role Key. Elle ne déclenche aucune validation SMS :
+    le téléphone est une donnée de profil applicative.
+    """
+
     # ========================================================
-    # 2. VALIDATION DU PAYS
+    # 1. VALIDATION DU PAYS
     # ========================================================
 
-    country_iso2 = (
-        str(request.country_iso2)
+    normalized_country = (
+        str(country_iso2)
         .strip()
         .upper()
     )
 
     try:
         country_config = get_country_phone_config(
-            country_iso2
+            normalized_country
         )
     except Exception as error:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Pays non supporté : {country_iso2 or 'inconnu'}."
+                f"Pays non supporté : "
+                f"{normalized_country or 'inconnu'}."
             ),
         ) from error
 
     # ========================================================
-    # 3. NORMALISATION DU NUMÉRO
+    # 2. NORMALISATION DU NUMÉRO
     # ========================================================
 
-    raw_phone = str(request.phone).strip()
+    raw_phone = str(phone).strip()
 
     if not raw_phone:
         raise HTTPException(
@@ -897,7 +917,11 @@ def update_my_phone(
             detail="Le numéro de téléphone est requis.",
         )
 
-    digits = re.sub(r"\D", "", raw_phone)
+    digits = re.sub(
+        r"\D",
+        "",
+        raw_phone,
+    )
 
     if not digits:
         raise HTTPException(
@@ -911,7 +935,7 @@ def update_my_phone(
         str(country_config.calling_code),
     )
 
-    # +24161234567 -> 61234567
+    # +24177379848 -> 77379848
     if (
         calling_digits
         and digits.startswith(calling_digits)
@@ -919,7 +943,7 @@ def update_my_phone(
     ):
         digits = digits[len(calling_digits):]
 
-    # 0024161234567 -> 61234567
+    # 0024177379848 -> 77379848
     elif digits.startswith("00"):
         international_digits = digits[2:]
 
@@ -932,7 +956,7 @@ def update_my_phone(
         ):
             digits = international_digits[len(calling_digits):]
 
-    # 061234567 -> 61234567
+    # 077379848 -> 77379848
     if digits.startswith("0"):
         digits = digits[1:]
 
@@ -947,7 +971,7 @@ def update_my_phone(
     )
 
     # ========================================================
-    # 4. ÉCRITURE DANS auth.users.phone
+    # 3. ÉCRITURE DIRECTE DANS auth.users.phone
     # ========================================================
 
     try:
@@ -956,7 +980,7 @@ def update_my_phone(
             .auth
             .admin
             .update_user_by_id(
-                authenticated_user_id,
+                user_id,
                 {
                     "phone": phone_international,
                 },
@@ -966,8 +990,8 @@ def update_my_phone(
         raise HTTPException(
             status_code=500,
             detail=(
-                "Impossible d'enregistrer le numéro de "
-                f"téléphone dans Supabase : {str(error)}"
+                "Impossible d'enregistrer le numéro dans "
+                f"auth.users.phone : {str(error)}"
             ),
         ) from error
 
@@ -982,23 +1006,37 @@ def update_my_phone(
             status_code=500,
             detail=(
                 "Supabase n'a pas confirmé la mise à jour "
-                "du numéro de téléphone."
+                "de auth.users.phone."
+            ),
+        )
+
+    native_phone = getattr(
+        updated_user,
+        "phone",
+        None,
+    )
+
+    if native_phone != phone_international:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Supabase n'a pas retourné le numéro attendu "
+                f"dans auth.users.phone : {native_phone!r}."
             ),
         )
 
     return {
         "success": True,
         "message": (
-            "Numéro de téléphone enregistré "
-            "avec succès."
+            "Numéro de téléphone enregistré dans "
+            "auth.users.phone."
         ),
-        "user_id": authenticated_user_id,
+        "user_id": user_id,
         "phone": phone_international,
-        "country_iso2": country_iso2,
+        "country_iso2": normalized_country,
     }
 
 
-# ============================================================
 # HELPERS — REPOSITORY
 # ============================================================
 
