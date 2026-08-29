@@ -678,6 +678,7 @@ def checkout_payment(
         product_id=request.product_id,
         reference_id=reference,
         email=customer_email,
+        user_id=authenticated_user_id,
         first_name=first_name,
         last_name=last_name,
         phone=phone_for_chariow,

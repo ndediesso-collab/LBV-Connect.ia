@@ -370,6 +370,7 @@ def create_chariow_checkout(
     product_id: str,
     reference_id: str,
     email: str,
+    user_id: str,
     first_name: str | None = None,
     last_name: str | None = None,
     phone: str | None = None,
@@ -437,6 +438,7 @@ def create_chariow_checkout(
         "custom_metadata": {
             "lbv_product_id": normalized_product_id,
             "lbv_reference_id": reference_id,
+            "lbv_user_id": str(user_id).strip(),
         },
     }
 
