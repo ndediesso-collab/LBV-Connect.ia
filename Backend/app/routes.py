@@ -640,13 +640,18 @@ def checkout_payment(
     # 10. CRÉATION DU CHECKOUT CHARIOW
     # ========================================================
 
+    phone_for_chariow = str(phone).strip()
+
+    if not phone_for_chariow.startswith("+"):
+        phone_for_chariow = f"+{phone_for_chariow}"
+
     chariow_checkout = create_chariow_checkout(
         product_id=request.product_id,
         reference_id=reference,
         email=customer_email,
         first_name=first_name,
         last_name=last_name,
-        phone=phone,
+        phone=phone_for_chariow,
         country_iso2=country_iso2,
     )
 

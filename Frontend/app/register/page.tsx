@@ -139,8 +139,8 @@ function normalizePhoneNumber(
  *      ↓
  * +24161234567
  *
- * Le backend routes.py construit cette valeur canonique
- * avant de l'enregistrer dans auth.users.phone.
+ * C'est cette valeur qui est enregistrée
+ * dans le profil utilisateur puis synchronisé dans auth.users.phone.
  */
 function buildInternationalPhone(
   phoneNumber: string,
@@ -301,6 +301,7 @@ export default function RegisterPage() {
             data: {
               first_name: firstName,
               last_name: lastName,
+              phone: phoneInternational,
               country_iso2: country.iso2,
             },
           },
@@ -359,7 +360,7 @@ export default function RegisterPage() {
        *
        * /profile/phone
        *        ↓
-       * routes.py normalise le numéro
+       * Service Role
        *        ↓
        * auth.users.phone
        */
@@ -375,7 +376,7 @@ export default function RegisterPage() {
               "user-id": data.user.id,
             },
             body: JSON.stringify({
-              phone: phoneRaw,
+              phone: phoneInternational,
               country_iso2: country.iso2,
             }),
           },
