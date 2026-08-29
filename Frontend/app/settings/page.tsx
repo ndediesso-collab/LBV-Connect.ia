@@ -64,6 +64,12 @@ export default function SettingsPage() {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [email, setEmail] = useState("");
+  const [originalEmail, setOriginalEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [countryIso2, setCountryIso2] = useState("GA");
+
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -81,6 +87,8 @@ export default function SettingsPage() {
   const [locating, setLocating] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [resettingPassword, setResettingPassword] =
+    useState(false);
+  const [savingPassword, setSavingPassword] =
     useState(false);
   const [loggingOutOthers, setLoggingOutOthers] =
     useState(false);
@@ -126,6 +134,18 @@ export default function SettingsPage() {
     // Identité officielle Supabase
     setUserId(user.id);
     setEmail(user.email ?? "");
+    setOriginalEmail(user.email ?? "");
+    setPhone(user.phone ?? "");
+
+    const metadataCountry =
+      (user.user_metadata?.country_iso2 as string | undefined)
+      ?? (user.user_metadata?.country as string | undefined)
+      ?? "";
+
+    setCountryIso2(
+      metadataCountry.trim().toUpperCase()
+      || "GA",
+    );
 
     // Récupération du profil de l'utilisateur connecté uniquement
     const {
@@ -285,67 +305,159 @@ export default function SettingsPage() {
 
 
 async function savePersonalInformation() {
-  setSavingProfile(true);
-  clearMessages();
+    setSavingProfile(true);
+    clearMessages();
 
-  try {
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-    if (userError) {
-      throw userError;
+      if (userError) {
+        throw userError;
+      }
+
+      if (!user) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const normalizedEmail = email.trim();
+      const normalizedPhone = phone.trim();
+      const normalizedCountry = countryIso2.trim().toUpperCase();
+
+      if (!normalizedEmail) {
+        throw new Error("L'adresse e-mail est requise.");
+      }
+
+      if (!normalizedPhone) {
+        throw new Error("Le numéro de téléphone est requis.");
+      }
+
+      if (!normalizedCountry) {
+        throw new Error("Le code pays est requis.");
+      }
+
+      // ======================================================
+      // 1. PROFIL APPLICATIF
+      // ======================================================
+
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .update({
+          first_name: firstName.trim() || null,
+          last_name: lastName.trim() || null,
+        })
+        .eq("id", user.id);
+
+      if (profileError) {
+        throw profileError;
+      }
+
+      // ======================================================
+      // 2. COMPTE AUTH SUPABASE
+      // ======================================================
+      // email et téléphone sont réellement enregistrés dans
+      // auth.users via Supabase Auth.
+
+      const authChanges: {
+        email?: string;
+        phone?: string;
+      } = {};
+
+      if (normalizedEmail !== originalEmail.trim()) {
+        authChanges.email = normalizedEmail;
+      }
+
+      if (normalizedPhone !== (user.phone ?? "").trim()) {
+        authChanges.phone = normalizedPhone;
+      }
+
+      if (Object.keys(authChanges).length > 0) {
+        const {
+          data: updatedAuth,
+          error: authUpdateError,
+        } = await supabase.auth.updateUser(
+          authChanges,
+        );
+
+        if (authUpdateError) {
+          throw authUpdateError;
+        }
+
+        const updatedUser = updatedAuth.user;
+
+        setEmail(
+          updatedUser.email
+          ?? normalizedEmail,
+        );
+
+        setOriginalEmail(
+          updatedUser.email
+          ?? normalizedEmail,
+        );
+
+        setPhone(
+          updatedUser.phone
+          ?? normalizedPhone,
+        );
+      }
+
+      // ======================================================
+      // 3. PAYS DU PROFIL
+      // ======================================================
+      // Le code pays est conservé dans user_metadata afin que
+      // le backend de paiement puisse l'utiliser.
+
+      const currentCountry = String(
+        user.user_metadata?.country_iso2 ?? ""
+      ).trim().toUpperCase();
+
+      if (normalizedCountry !== currentCountry) {
+        const {
+          error: metadataError,
+        } = await supabase.auth.updateUser({
+          data: {
+            country_iso2: normalizedCountry,
+          },
+        });
+
+        if (metadataError) {
+          throw metadataError;
+        }
+      }
+
+      setProfile((current) =>
+        current
+          ? {
+              ...current,
+              first_name:
+                firstName.trim() || null,
+              last_name:
+                lastName.trim() || null,
+            }
+          : current,
+      );
+
+      setSuccessMessage(
+        "Vos informations personnelles ont été enregistrées dans Supabase.",
+      );
+    } catch (error) {
+      console.error(
+        "PROFILE UPDATE ERROR:",
+        error,
+      );
+
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Impossible d'enregistrer vos informations.",
+      );
+    } finally {
+      setSavingProfile(false);
     }
-
-    if (!user) {
-      window.location.href = "/login";
-      return;
-    }
-
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        first_name:
-          firstName.trim() || null,
-
-        last_name:
-          lastName.trim() || null,
-      })
-      .eq("id", user.id);
-
-    if (error) {
-      throw error;
-    }
-
-    setProfile((current) =>
-      current
-        ? {
-            ...current,
-            first_name:
-              firstName.trim() || null,
-            last_name:
-              lastName.trim() || null,
-          }
-        : current,
-    );
-
-    setSuccessMessage(
-      "Vos informations personnelles ont été enregistrées.",
-    );
-  } catch (error) {
-    console.error(
-      "PROFILE UPDATE ERROR:",
-      error,
-    );
-
-    setErrorMessage(
-      "Impossible d'enregistrer vos informations.",
-    );
-  } finally {
-    setSavingProfile(false);
   }
-}
 
 
 async function changeLanguage(
@@ -738,6 +850,78 @@ async function reverseGeocode(
   }
 }
 
+  async function changePassword() {
+    clearMessages();
+
+    if (!newPassword) {
+      setErrorMessage(
+        "Saisissez un nouveau mot de passe.",
+      );
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setErrorMessage(
+        "Le nouveau mot de passe doit contenir au moins 6 caractères.",
+      );
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setErrorMessage(
+        "Les deux mots de passe ne correspondent pas.",
+      );
+      return;
+    }
+
+    setSavingPassword(true);
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      if (!user) {
+        window.location.href = "/login";
+        return;
+      }
+
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      setNewPassword("");
+      setConfirmPassword("");
+
+      setSuccessMessage(
+        "Votre mot de passe a été mis à jour dans Supabase.",
+      );
+    } catch (error) {
+      console.error(
+        "PASSWORD UPDATE ERROR:",
+        error,
+      );
+
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Impossible de mettre à jour votre mot de passe.",
+      );
+    } finally {
+      setSavingPassword(false);
+    }
+  }
+
+
   async function sendPasswordReset() {
     if (!email) {
       setErrorMessage(
@@ -1000,12 +1184,45 @@ async function reverseGeocode(
                     />
                   </div>
 
-                  <div className="mt-4">
-                    <InfoField
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <InputField
                       label="Adresse e-mail"
                       value={email}
+                      onChange={setEmail}
+                      type="email"
+                    />
+
+                    <InputField
+                      label="Numéro de téléphone"
+                      value={phone}
+                      onChange={setPhone}
+                      type="tel"
+                      placeholder="+241 77 37 98 48"
                     />
                   </div>
+
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <InputField
+                      label="Code pays"
+                      value={countryIso2}
+                      onChange={(value) =>
+                        setCountryIso2(
+                          value.toUpperCase(),
+                        )
+                      }
+                      placeholder="GA"
+                    />
+
+                    <InfoField
+                      label="Identifiant utilisateur"
+                      value={userId ?? ""}
+                    />
+                  </div>
+
+                  <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
+                    L'e-mail et le téléphone sont enregistrés directement
+                    dans votre compte d'authentification Supabase.
+                  </p>
 
                   <button
                     type="button"
@@ -1074,22 +1291,62 @@ async function reverseGeocode(
                     </p>
 
                     <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-                      Recevez un lien sécurisé pour
-                      modifier votre mot de passe.
+                      Définissez directement un nouveau mot de passe
+                      pour votre compte Supabase.
                     </p>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <InputField
+                        label="Nouveau mot de passe"
+                        value={newPassword}
+                        onChange={setNewPassword}
+                        type="password"
+                        placeholder="••••••••"
+                      />
+
+                      <InputField
+                        label="Confirmer le mot de passe"
+                        value={confirmPassword}
+                        onChange={setConfirmPassword}
+                        type="password"
+                        placeholder="••••••••"
+                      />
+                    </div>
 
                     <button
                       type="button"
-                      disabled={resettingPassword}
-                      onClick={
-                        sendPasswordReset
-                      }
-                      className="mt-4 rounded-xl bg-[var(--foreground)] px-4 py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 disabled:opacity-50"
+                      disabled={savingPassword}
+                      onClick={changePassword}
+                      className="mt-4 flex items-center gap-2 rounded-xl bg-[var(--foreground)] px-4 py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 disabled:opacity-50"
                     >
-                      {resettingPassword
-                        ? "Envoi..."
-                        : "Réinitialiser mon mot de passe"}
+                      {savingPassword && (
+                        <Loader2
+                          size={14}
+                          className="animate-spin"
+                        />
+                      )}
+                      {savingPassword
+                        ? "Enregistrement..."
+                        : "Modifier le mot de passe"}
                     </button>
+
+                    <div className="mt-5 border-t border-[var(--border)] pt-4">
+                      <p className="text-xs leading-5 text-[var(--muted)]">
+                        Vous pouvez aussi demander un lien sécurisé
+                        de réinitialisation par e-mail.
+                      </p>
+
+                      <button
+                        type="button"
+                        disabled={resettingPassword}
+                        onClick={sendPasswordReset}
+                        className="mt-3 rounded-xl border border-[var(--border)] px-4 py-2.5 text-xs font-medium transition hover:bg-[var(--surface-2)] disabled:opacity-50"
+                      >
+                        {resettingPassword
+                          ? "Envoi..."
+                          : "Envoyer un lien de réinitialisation"}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
@@ -1441,10 +1698,14 @@ function InputField({
   label,
   value,
   onChange,
+  type = "text",
+  placeholder,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  type?: string;
+  placeholder?: string;
 }) {
   return (
     <div>
@@ -1453,7 +1714,9 @@ function InputField({
       </label>
 
       <input
+        type={type}
         value={value}
+        placeholder={placeholder}
         onChange={(event) =>
           onChange(event.target.value)
         }
