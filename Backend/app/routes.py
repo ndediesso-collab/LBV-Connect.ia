@@ -2,6 +2,7 @@ import re
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
+from datetime import datetime, timezone
 
 from app.config.credit_costs import CreditAction
 from app.core.supabase import supabase
@@ -1588,10 +1589,23 @@ def _chariow_value(payload: ChariowWebhookRequest, *keys):
     if isinstance(data, dict):
         raw = {**data, **raw}
 
+    # Chariow peut placer les métadonnées dans `metadata`,
+    # `custom_metadata` ou directement dans `data`.
+    metadata_sources = []
+    for source_key in ("metadata", "custom_metadata"):
+        source = raw.get(source_key)
+        if isinstance(source, dict):
+            metadata_sources.append(source)
+
     for key in keys:
         value = raw.get(key)
         if value not in (None, ""):
             return value
+
+        for source in metadata_sources:
+            value = source.get(key)
+            if value not in (None, ""):
+                return value
 
     return None
 
@@ -1620,6 +1634,7 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
         "reference_id",
         "payment_reference",
         "metadata_reference",
+        "lbv_reference_id",
     )
 
     product_id = _chariow_value(
@@ -1627,6 +1642,7 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
         "product_id",
         "product",
         "product_reference",
+        "lbv_product_id",
     )
 
     user_id = _chariow_value(
@@ -1643,6 +1659,22 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
         "email",
     )
 
+    amount = _chariow_value(
+        payload,
+        "amount",
+        "paid_amount",
+        "total_amount",
+    )
+
+    metadata = _chariow_value(
+        payload,
+        "metadata",
+        "custom_metadata",
+    )
+
+    if not isinstance(metadata, dict):
+        metadata = {}
+
     return {
         "event": event,
         "status": status,
@@ -1651,6 +1683,9 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
         "product_id": str(product_id) if product_id else None,
         "user_id": str(user_id) if user_id else None,
         "email": str(email) if email else None,
+        "amount": amount,
+        "metadata": metadata,
+        "raw_payload": payload.model_dump(exclude_none=True),
     }
 
 
@@ -1658,9 +1693,8 @@ def _is_chariow_success(event: dict) -> bool:
     """
     Détermine si le Pulse représente une vente confirmée.
 
-    Tant que Chariow n'a pas envoyé son payload réel de test,
-    on reste volontairement conservateur : seuls les statuts
-    explicitement positifs sont acceptés.
+    Seuls les statuts/événements explicitement positifs déclenchent
+    l'attribution des crédits.
     """
     success_statuses = {
         "success",
@@ -1669,6 +1703,10 @@ def _is_chariow_success(event: dict) -> bool:
         "completed",
         "complete",
         "succeeded",
+        "approved",
+        "confirmed",
+        "successful_payment",
+        "payment_successful",
     }
 
     success_events = {
@@ -1679,11 +1717,16 @@ def _is_chariow_success(event: dict) -> bool:
         "vente réussie",
         "payment_success",
         "payment_succeeded",
+        "payment_successful",
+        "purchase_success",
+        "purchase_completed",
+        "order_paid",
+        "payment_confirmed",
     }
 
     return (
-        event["status"] in success_statuses
-        or event["event"] in success_events
+        event.get("status") in success_statuses
+        or event.get("event") in success_events
     )
 
 
@@ -1693,9 +1736,9 @@ def _find_chariow_payment_transaction(
     """
     Retrouve la transaction locale créée avant le checkout Chariow.
 
-    La transaction locale est la source de vérité pour retrouver
-    l'utilisateur et le produit LBV-Connect, même si le webhook
-    Chariow ne renvoie pas directement `user_id`.
+    IMPORTANT : `payment_transactions` est la source de vérité LBV-Connect.
+    Le webhook Chariow ne peut pas créer une attribution de crédits sans
+    transaction locale correspondante.
     """
     candidates = []
 
@@ -1716,7 +1759,13 @@ def _find_chariow_payment_transaction(
                 .limit(1)
                 .execute()
             )
-        except Exception:
+        except Exception as error:
+            print(
+                "[CHARIOW WEBHOOK] "
+                f"transaction_lookup_error={str(error)!r} "
+                f"reference={reference!r}",
+                flush=True,
+            )
             continue
 
         if response is not None and response.data:
@@ -1725,36 +1774,159 @@ def _find_chariow_payment_transaction(
     return None
 
 
-def _find_chariow_user_id(event: dict) -> str:
+def _update_payment_transaction_from_chariow(
+    payment_transaction: dict,
+    event: dict,
+    success: bool,
+) -> dict:
     """
-    Retourne l'utilisateur LBV-Connect auquel attribuer l'achat.
+    Synchronise `payment_transactions` avec la confirmation Chariow.
 
-    Priorité à la transaction locale créée avant le checkout.
-    Le `user_id` du webhook reste accepté comme solution de secours.
+    Supabase reste la source de vérité :
+      Chariow -> webhook -> payment_transactions -> activation wallet.
+
+    Le `user_id`, le type d'achat, le pack/addon et le nombre de crédits
+    utilisés pour l'activation viennent donc de la transaction Supabase,
+    jamais d'un `user_id` fourni par Chariow.
     """
-    payment_transaction = _find_chariow_payment_transaction(event)
+    reference = payment_transaction.get("reference")
+    if not reference:
+        raise HTTPException(
+            status_code=400,
+            detail="Référence locale de paiement manquante.",
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    existing_metadata = payment_transaction.get("metadata")
+    if not isinstance(existing_metadata, dict):
+        existing_metadata = {}
+
+    chariow_metadata = event.get("metadata")
+    if not isinstance(chariow_metadata, dict):
+        chariow_metadata = {}
+
+    merged_metadata = {
+        **existing_metadata,
+        "chariow": {
+            "event": event.get("event"),
+            "status": event.get("status"),
+            "order_id": event.get("order_id"),
+            "product_id": event.get("product_id"),
+            "email": event.get("email"),
+            "amount": event.get("amount"),
+            "metadata": chariow_metadata,
+        },
+    }
+
+    update_payload = {
+        "status": "paid" if success else (event.get("status") or "pending"),
+        "metadata": merged_metadata,
+    }
+
+    provider_transaction_id = event.get("order_id")
+    if provider_transaction_id:
+        update_payload["provider_transaction_id"] = str(
+            provider_transaction_id
+        )
+
+    if success:
+        # `paid_at` est la confirmation temporelle de paiement reçue
+        # depuis Chariow. `created_at` n'est jamais modifié.
+        update_payload["paid_at"] = now
+
+    provider = payment_transaction.get("provider") or "chariow"
+    update_payload["provider"] = provider
+
+    amount = event.get("amount")
+    if amount not in (None, ""):
+        try:
+            update_payload["amount"] = float(amount)
+            if float(amount).is_integer():
+                update_payload["amount"] = int(float(amount))
+        except (TypeError, ValueError):
+            print(
+                "[CHARIOW WEBHOOK] "
+                f"amount_not_numeric={amount!r} "
+                f"reference={reference!r}",
+                flush=True,
+            )
 
     print(
         "[CHARIOW WEBHOOK] "
-        f"local_transaction_found={payment_transaction is not None}",
+        f"supabase_payment_update="
+        f"reference={reference!r} "
+        f"status={update_payload['status']!r} "
+        f"provider_transaction_id="
+        f"{update_payload.get('provider_transaction_id')!r} "
+        f"paid_at={update_payload.get('paid_at')!r}",
         flush=True,
     )
 
-    if payment_transaction:
-        user_id = payment_transaction.get("user_id")
-        if user_id:
-            return str(user_id)
+    try:
+        response = (
+            supabase
+            .table("payment_transactions")
+            .update(update_payload)
+            .eq("reference", reference)
+            .execute()
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Impossible de synchroniser la transaction de paiement "
+                f"dans Supabase : {str(error)}"
+            ),
+        ) from error
 
-    if event.get("user_id"):
-        return str(event["user_id"])
+    if response is None or not response.data:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Supabase n'a pas confirmé la mise à jour de "
+                "payment_transactions."
+            ),
+        )
 
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "Impossible d'identifier l'utilisateur LBV-Connect "
-            "à partir du paiement Chariow."
-        ),
-    )
+    return response.data[0]
+
+
+def _payment_activation_already_recorded(
+    repository,
+    user_id: str,
+    reference_id: str,
+) -> bool:
+    """
+    Vérifie si la référence de paiement a déjà produit une transaction
+    de crédits. Cela permet de rejouer un webhook Chariow sans doubler
+    les crédits, tout en permettant une nouvelle tentative si l'activation
+    avait échoué après la confirmation du paiement.
+    """
+    try:
+        transactions = repository.get_transactions(user_id)
+    except Exception as error:
+        print(
+            "[CHARIOW WEBHOOK] "
+            f"credit_transaction_lookup_error={str(error)!r} "
+            f"reference_id={reference_id!r}",
+            flush=True,
+        )
+        return False
+
+    for transaction in transactions or []:
+        transaction_reference = getattr(
+            transaction,
+            "reference_id",
+            None,
+        )
+        if transaction_reference is None and isinstance(transaction, dict):
+            transaction_reference = transaction.get("reference_id")
+
+        if str(transaction_reference or "") == str(reference_id):
+            return True
+
+    return False
 
 
 @router.post("/payments/chariow/webhook")
@@ -1764,30 +1936,23 @@ def chariow_webhook(
     """
     Point d'entrée Chariow pour les ventes.
 
-    Vente réussie :
-        - pack principal -> activation du pack ;
-        - complément -> ajout des crédits.
+    Architecture :
 
-    Vente échouée :
-        - aucune modification du wallet.
+        Chariow
+            -> webhook LBV-Connect
+            -> payment_transactions Supabase
+            -> lecture de la transaction confirmée
+            -> activation du wallet
 
-    IMPORTANT :
-    Le traitement final doit être protégé par l'idempotence
-    côté base de données/RPC avant la mise en production.
+    Supabase est la source de vérité pour l'identité utilisateur et
+    les informations commerciales de la commande.
+
+    Le `user_id` éventuellement présent dans le webhook Chariow est
+    volontairement ignoré pour l'attribution des crédits.
     """
-
     event = _normalize_chariow_event(payload)
+    success = _is_chariow_success(event)
 
-    # --------------------------------------------------------
-    # LOG DIAGNOSTIQUE — WEBHOOK CHARIOW
-    # --------------------------------------------------------
-    # Permet de vérifier exactement ce que Chariow envoie
-    # et de suivre la résolution transaction -> utilisateur
-    # -> produit -> attribution des crédits.
-    #
-    # IMPORTANT :
-    # - aucun token ni secret n'est journalisé ;
-    # - seules les données utiles au diagnostic du paiement sont affichées.
     print(
         "[CHARIOW WEBHOOK] "
         f"event={event.get('event')!r} "
@@ -1795,239 +1960,363 @@ def chariow_webhook(
         f"order_id={event.get('order_id')!r} "
         f"reference={event.get('reference')!r} "
         f"product_id={event.get('product_id')!r} "
-        f"user_id={event.get('user_id')!r} "
-        f"email={event.get('email')!r}",
-        flush=True,
-    )
-
-    success = _is_chariow_success(event)
-
-    print(
-        "[CHARIOW WEBHOOK] "
+        f"user_id_received={event.get('user_id')!r} "
+        f"email={event.get('email')!r} "
         f"payment_success={success}",
         flush=True,
     )
 
     # --------------------------------------------------------
-    # 1. Échec / événement non payé
+    # 1. TRANSACTION SUPABASE OBLIGATOIRE
     # --------------------------------------------------------
-
-    if not _is_chariow_success(event):
-        return {
-            "success": True,
-            "processed": False,
-            "message": "Paiement non confirmé : aucune action effectuée.",
-        }
-
-    # --------------------------------------------------------
-    # 2. Résolution de la transaction locale
-    # --------------------------------------------------------
-
     payment_transaction = _find_chariow_payment_transaction(event)
 
-    if payment_transaction:
-        user_id = payment_transaction.get("user_id")
-        reference_id = payment_transaction.get("reference")
-        product_id = (
-            payment_transaction.get("pack_id")
-            or payment_transaction.get("addon_id")
-            or event["product_id"]
-        )
-
+    if payment_transaction is None:
+        # Aucun paiement ne doit pouvoir créditer un compte sans commande
+        # locale préalable. Le webhook Chariow ne constitue donc jamais
+        # une source de vérité autonome.
         print(
             "[CHARIOW WEBHOOK] "
-            f"resolved_user_id={str(user_id) if user_id else None!r} "
-            f"resolved_reference={str(reference_id) if reference_id else None!r} "
-            f"resolved_product_id={str(product_id) if product_id else None!r} "
-            f"local_status={payment_transaction.get('status')!r}",
+            "local_transaction_found=False "
+            "action=rejected",
             flush=True,
         )
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Transaction de paiement LBV-Connect introuvable dans "
+                "Supabase. Aucun crédit ne sera attribué."
+            ),
+        )
 
-        if not user_id:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "La transaction de paiement ne contient pas "
-                    "d'identifiant utilisateur LBV-Connect."
-                ),
-            )
+    print(
+        "[CHARIOW WEBHOOK] "
+        "local_transaction_found=True "
+        f"reference={payment_transaction.get('reference')!r} "
+        f"user_id={payment_transaction.get('user_id')!r} "
+        f"payment_type={payment_transaction.get('payment_type')!r} "
+        f"pack_id={payment_transaction.get('pack_id')!r} "
+        f"addon_id={payment_transaction.get('addon_id')!r} "
+        f"credits={payment_transaction.get('credits')!r} "
+        f"amount={payment_transaction.get('amount')!r} "
+        f"status_before={payment_transaction.get('status')!r} "
+        f"created_at={payment_transaction.get('created_at')!r} "
+        f"paid_at_before={payment_transaction.get('paid_at')!r}",
+        flush=True,
+    )
 
-        if not reference_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Référence locale de paiement manquante.",
-            )
+    user_id = payment_transaction.get("user_id")
+    reference_id = payment_transaction.get("reference")
+    payment_type = payment_transaction.get("payment_type")
+    product_id = (
+        payment_transaction.get("pack_id")
+        or payment_transaction.get("addon_id")
+    )
+    transaction_credits = payment_transaction.get("credits")
 
-        if str(payment_transaction.get("status", "")).lower() in {
-            "paid",
-            "success",
-            "successful",
-            "completed",
-            "complete",
-            "succeeded",
-        }:
-            return {
-                "success": True,
-                "processed": False,
-                "message": "Paiement déjà traité.",
-                "reference_id": reference_id,
-                "user_id": str(user_id),
-            }
+    if not user_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "La transaction Supabase ne contient pas "
+                "d'identifiant utilisateur LBV-Connect."
+            ),
+        )
 
-    else:
-        user_id = _find_chariow_user_id(event)
-        reference_id = event["order_id"]
+    if not reference_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Référence locale de paiement manquante.",
+        )
 
-        if not reference_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Identifiant unique de commande Chariow manquant.",
-            )
-
-        product_id = event["product_id"]
+    if payment_type not in {"primary_pack", "addon"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Type de paiement Supabase invalide.",
+        )
 
     if not product_id:
         raise HTTPException(
             status_code=400,
-            detail="Identifiant du produit Chariow manquant.",
+            detail=(
+                "La transaction Supabase ne contient ni pack_id "
+                "ni addon_id."
+            ),
+        )
+
+    if transaction_credits in (None, ""):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "La transaction Supabase ne contient pas le nombre "
+                "de crédits à attribuer."
+            ),
+        )
+
+    try:
+        transaction_credits = int(transaction_credits)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail="Le nombre de crédits de la transaction Supabase est invalide.",
+        ) from error
+
+    if transaction_credits <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Le nombre de crédits de la transaction Supabase doit être supérieur à zéro.",
         )
 
     # --------------------------------------------------------
-    # 3. Détection du produit
+    # 2. SYNCHRONISATION CHARIOW -> SUPABASE
     # --------------------------------------------------------
+    updated_payment_transaction = _update_payment_transaction_from_chariow(
+        payment_transaction=payment_transaction,
+        event=event,
+        success=success,
+    )
+
+    if not success:
+        return {
+            "success": True,
+            "processed": False,
+            "message": "Paiement non confirmé : aucune action sur le wallet.",
+            "reference_id": reference_id,
+            "status": updated_payment_transaction.get("status"),
+        }
+
+    # --------------------------------------------------------
+    # 3. VÉRIFICATION DES DONNÉES SUPABASE APRÈS CONFIRMATION
+    # --------------------------------------------------------
+    # La décision d'activation repose sur la ligne fraîchement mise à jour,
+    # pas sur les données commerciales reçues directement de Chariow.
+    user_id = updated_payment_transaction.get("user_id")
+    payment_type = updated_payment_transaction.get("payment_type")
+    product_id = (
+        updated_payment_transaction.get("pack_id")
+        or updated_payment_transaction.get("addon_id")
+    )
+    transaction_credits = updated_payment_transaction.get("credits")
+
+    if str(updated_payment_transaction.get("status", "")).lower() != "paid":
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Le paiement Chariow a été confirmé mais Supabase "
+                "n'a pas enregistré le statut paid."
+            ),
+        )
+
+    if not updated_payment_transaction.get("paid_at"):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Le paiement Chariow a été confirmé mais Supabase "
+                "n'a pas enregistré paid_at."
+            ),
+        )
 
     print(
         "[CHARIOW WEBHOOK] "
-        f"processing_product_id={str(product_id)!r} "
-        f"for_user_id={str(user_id)!r} "
-        f"reference_id={str(reference_id)!r}",
+        "supabase_source_of_truth=True "
+        f"user_id={str(user_id)!r} "
+        f"payment_type={payment_type!r} "
+        f"product_id={product_id!r} "
+        f"credits={transaction_credits!r} "
+        f"status={updated_payment_transaction.get('status')!r} "
+        f"created_at={updated_payment_transaction.get('created_at')!r} "
+        f"paid_at={updated_payment_transaction.get('paid_at')!r}",
         flush=True,
     )
 
+    # --------------------------------------------------------
+    # 4. IDEMPOTENCE DE L'ACTIVATION
+    # --------------------------------------------------------
     repository = _get_repository()
+
+    if _payment_activation_already_recorded(
+        repository=repository,
+        user_id=str(user_id),
+        reference_id=str(reference_id),
+    ):
+        print(
+            "[CHARIOW WEBHOOK] "
+            f"activation_already_recorded=True "
+            f"reference_id={reference_id!r}",
+            flush=True,
+        )
+        return {
+            "success": True,
+            "processed": False,
+            "message": "Paiement déjà activé. Aucun crédit supplémentaire attribué.",
+            "reference_id": reference_id,
+            "user_id": str(user_id),
+            "payment_transaction": updated_payment_transaction,
+        }
+
+    # --------------------------------------------------------
+    # 5. ACTIVATION DU WALLET
+    # --------------------------------------------------------
     wallet_service = WalletService(repository)
 
     # Pack principal
-    if product_id in PRIMARY_PACKS:
+    if payment_type == "primary_pack":
+        if product_id not in PRIMARY_PACKS:
+            raise HTTPException(
+                status_code=404,
+                detail="Pack principal Supabase inconnu.",
+            )
+
         product = PRIMARY_PACKS[product_id]
+
+        # Protection contre une incohérence entre la transaction historique
+        # Supabase et la configuration actuelle du backend.
+        if int(product["credits"]) != transaction_credits:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Incohérence de crédits entre payment_transactions "
+                    "et la configuration du pack. Aucun crédit attribué."
+                ),
+            )
 
         print(
             "[CHARIOW WEBHOOK] "
             f"primary_pack_detected={product_id!r} "
-            f"credits={product.get('credits')!r}",
+            f"credits_from_supabase={transaction_credits!r}",
             flush=True,
         )
 
-        if product_id == "light_pack":
-            wallet = wallet_service.create_light_wallet(
-                user_id=user_id,
-                reference_id=reference_id,
+        try:
+            if product_id == "light_pack":
+                wallet = wallet_service.create_light_wallet(
+                    user_id=user_id,
+                    reference_id=reference_id,
+                )
+            elif product_id == "intermediate_pack":
+                wallet = wallet_service.create_intermediate_wallet(
+                    user_id=user_id,
+                    reference_id=reference_id,
+                )
+            elif product_id == "pro_pack":
+                wallet = wallet_service.create_pro_wallet(
+                    user_id=user_id,
+                    reference_id=reference_id,
+                )
+            elif product_id == "business_pack":
+                wallet = wallet_service.create_business_wallet(
+                    user_id=user_id,
+                    reference_id=reference_id,
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Pack principal non supporté.",
+                )
+        except HTTPException:
+            raise
+        except Exception as error:
+            print(
+                "[CHARIOW WEBHOOK] "
+                f"wallet_activation_error={str(error)!r} "
+                f"reference_id={reference_id!r}",
+                flush=True,
             )
-        elif product_id == "intermediate_pack":
-            wallet = wallet_service.create_intermediate_wallet(
-                user_id=user_id,
-                reference_id=reference_id,
-            )
-        elif product_id == "pro_pack":
-            wallet = wallet_service.create_pro_wallet(
-                user_id=user_id,
-                reference_id=reference_id,
-            )
-        elif product_id == "business_pack":
-            wallet = wallet_service.create_business_wallet(
-                user_id=user_id,
-                reference_id=reference_id,
-            )
-        else:
             raise HTTPException(
-                status_code=400,
-                detail="Pack principal non supporté.",
-            )
+                status_code=500,
+                detail=(
+                    "Paiement confirmé dans Supabase mais activation "
+                    f"du pack impossible : {str(error)}"
+                ),
+            ) from error
 
         print(
             "[CHARIOW WEBHOOK] "
-            f"wallet_created=True "
+            f"wallet_activated=True "
             f"user_id={str(user_id)!r} "
             f"pack_id={product_id!r} "
             f"balance={getattr(wallet, 'balance', None)!r}",
             flush=True,
         )
 
-        if payment_transaction:
-            (
-                supabase
-                .table("payment_transactions")
-                .update(
-                    {
-                        "status": "paid",
-                        "updated_at": "now()",
-                    }
-                )
-                .eq("reference", reference_id)
-                .execute()
-            )
-
         return {
             "success": True,
             "processed": True,
-            "payment_type": "primary_pack",
+            "payment_type": payment_type,
             "product_id": product_id,
             "reference_id": reference_id,
-            "credits": product["credits"],
+            "credits": transaction_credits,
+            "payment_transaction": updated_payment_transaction,
             "wallet": _wallet_response(wallet),
         }
 
     # Complément
-    if product_id in ADDON_PACKS:
+    if payment_type == "addon":
+        if product_id not in ADDON_PACKS:
+            raise HTTPException(
+                status_code=404,
+                detail="Pack complémentaire Supabase inconnu.",
+            )
+
         product = ADDON_PACKS[product_id]
 
-        wallet = repository.get_wallet(user_id)
+        if int(product["credits"]) != transaction_credits:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Incohérence de crédits entre payment_transactions "
+                    "et la configuration du complément. Aucun crédit attribué."
+                ),
+            )
 
+        wallet = repository.get_wallet(user_id)
         validate_addon_purchase(wallet)
 
-        wallet = wallet_service.recharge(
-            user_id=user_id,
-            credits=product["credits"],
-            reference_id=reference_id,
-        )
+        try:
+            wallet = wallet_service.recharge(
+                user_id=user_id,
+                credits=transaction_credits,
+                reference_id=reference_id,
+            )
+        except Exception as error:
+            print(
+                "[CHARIOW WEBHOOK] "
+                f"addon_activation_error={str(error)!r} "
+                f"reference_id={reference_id!r}",
+                flush=True,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Paiement confirmé dans Supabase mais ajout des "
+                    f"crédits impossible : {str(error)}"
+                ),
+            ) from error
 
         print(
             "[CHARIOW WEBHOOK] "
             f"addon_recharged=True "
             f"user_id={str(user_id)!r} "
             f"product_id={product_id!r} "
-            f"credits_added={product.get('credits')!r} "
+            f"credits_added_from_supabase={transaction_credits!r} "
             f"balance={getattr(wallet, 'balance', None)!r}",
             flush=True,
         )
 
-        if payment_transaction:
-            (
-                supabase
-                .table("payment_transactions")
-                .update(
-                    {
-                        "status": "paid",
-                        "updated_at": "now()",
-                    }
-                )
-                .eq("reference", reference_id)
-                .execute()
-            )
-
         return {
             "success": True,
             "processed": True,
-            "payment_type": "addon",
+            "payment_type": payment_type,
             "product_id": product_id,
             "reference_id": reference_id,
-            "credits_added": product["credits"],
+            "credits_added": transaction_credits,
+            "payment_transaction": updated_payment_transaction,
             "wallet": _wallet_response(wallet),
         }
 
     raise HTTPException(
         status_code=404,
-        detail="Produit Chariow inconnu.",
+        detail="Type de paiement Supabase inconnu.",
     )
 
 

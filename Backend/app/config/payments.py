@@ -1,21 +1,21 @@
 PRIMARY_PACKS = {
     "light_pack": {
-        "price": 6500,
+        "price": 4000,
         "credits": 3000,
     },
 
     "intermediate_pack": {
-        "price": 11500,
+        "price": 8000,
         "credits": 28500,
     },
 
     "pro_pack": {
-        "price": 17500,
+        "price": 12000,
         "credits": 45000,
     },
 
     "business_pack": {
-        "price": 25000,
+        "price": 19000,
         "credits": 96000,
     },
 }
@@ -23,7 +23,7 @@ PRIMARY_PACKS = {
 
 ADDON_PACKS = {
     "credits_1000_563": {
-        "price": 500,
+        "price": 563,
         "credits": 1000,
     },
 

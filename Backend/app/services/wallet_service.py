@@ -33,13 +33,6 @@ class WalletService:
         reference_id: str,
     ) -> CreditWallet:
 
-        existing_wallet = self.repository.get_wallet(user_id)
-
-        if existing_wallet is not None:
-            raise ValueError(
-                "Un portefeuille de crédits existe déjà pour cet utilisateur."
-            )
-
         now = datetime.now(timezone.utc)
 
         expires_at = (
