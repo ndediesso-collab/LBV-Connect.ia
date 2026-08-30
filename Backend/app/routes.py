@@ -1933,6 +1933,11 @@ def _payment_activation_already_recorded(
 def chariow_webhook(
     payload: ChariowWebhookRequest,
 ):
+    print(
+        "[CHARIOW WEBHOOK] RAW PAYLOAD:",
+        payload.model_dump(),
+        flush=True,
+    )
     """
     Point d'entrée Chariow pour les ventes.
 
