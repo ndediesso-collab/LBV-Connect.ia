@@ -2,13 +2,9 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from app.config.credit_costs import (
-    LIGHT_PACK_CREDITS,
     LIGHT_PACK_DURATION_DAYS,
-    INTERMEDIATE_PACK_CREDITS,
     INTERMEDIATE_PACK_DURATION_DAYS,
-    PRO_PACK_CREDITS,
     PRO_PACK_DURATION_DAYS,
-    BUSINESS_PACK_CREDITS,
     BUSINESS_PACK_DURATION_DAYS,
 )
 from app.models.credit import CreditWallet
@@ -32,6 +28,21 @@ class WalletService:
         duration_days: int,
         reference_id: str,
     ) -> CreditWallet:
+
+        if credits <= 0:
+            raise ValueError(
+                "Le nombre de crédits doit être supérieur à zéro."
+            )
+
+        if not user_id:
+            raise ValueError(
+                "L'identifiant utilisateur est obligatoire."
+            )
+
+        if not reference_id:
+            raise ValueError(
+                "La référence de paiement est obligatoire."
+            )
 
         now = datetime.now(timezone.utc)
 
@@ -81,6 +92,9 @@ class WalletService:
         """
         Ajoute des crédits complémentaires au portefeuille.
 
+        Les crédits fournis à cette méthode doivent provenir
+        de la transaction de paiement validée dans Supabase.
+
         La recharge :
         - ne modifie pas initial_credits ;
         - ne modifie pas pack_id ;
@@ -101,6 +115,11 @@ class WalletService:
                 "La référence de paiement est obligatoire pour une recharge."
             )
 
+        if not user_id:
+            raise ValueError(
+                "L'identifiant utilisateur est obligatoire."
+            )
+
         return self.repository.recharge_credits(
             user_id=user_id,
             amount=credits,
@@ -115,12 +134,19 @@ class WalletService:
         self,
         user_id: str,
         reference_id: str = "light_pack",
+        credits: int | None = None,
     ) -> CreditWallet:
+
+        if credits is None:
+            raise ValueError(
+                "Les crédits doivent être fournis "
+                "par la transaction de paiement Supabase."
+            )
 
         return self._create_wallet(
             user_id=user_id,
             pack_id="light_pack",
-            credits=LIGHT_PACK_CREDITS,
+            credits=credits,
             duration_days=LIGHT_PACK_DURATION_DAYS,
             reference_id=reference_id,
         )
@@ -133,12 +159,19 @@ class WalletService:
         self,
         user_id: str,
         reference_id: str = "intermediate_pack",
+        credits: int | None = None,
     ) -> CreditWallet:
+
+        if credits is None:
+            raise ValueError(
+                "Les crédits doivent être fournis "
+                "par la transaction de paiement Supabase."
+            )
 
         return self._create_wallet(
             user_id=user_id,
             pack_id="intermediate_pack",
-            credits=INTERMEDIATE_PACK_CREDITS,
+            credits=credits,
             duration_days=INTERMEDIATE_PACK_DURATION_DAYS,
             reference_id=reference_id,
         )
@@ -151,12 +184,19 @@ class WalletService:
         self,
         user_id: str,
         reference_id: str = "pro_pack",
+        credits: int | None = None,
     ) -> CreditWallet:
+
+        if credits is None:
+            raise ValueError(
+                "Les crédits doivent être fournis "
+                "par la transaction de paiement Supabase."
+            )
 
         return self._create_wallet(
             user_id=user_id,
             pack_id="pro_pack",
-            credits=PRO_PACK_CREDITS,
+            credits=credits,
             duration_days=PRO_PACK_DURATION_DAYS,
             reference_id=reference_id,
         )
@@ -169,12 +209,19 @@ class WalletService:
         self,
         user_id: str,
         reference_id: str = "business_pack",
+        credits: int | None = None,
     ) -> CreditWallet:
+
+        if credits is None:
+            raise ValueError(
+                "Les crédits doivent être fournis "
+                "par la transaction de paiement Supabase."
+            )
 
         return self._create_wallet(
             user_id=user_id,
             pack_id="business_pack",
-            credits=BUSINESS_PACK_CREDITS,
+            credits=credits,
             duration_days=BUSINESS_PACK_DURATION_DAYS,
             reference_id=reference_id,
         )

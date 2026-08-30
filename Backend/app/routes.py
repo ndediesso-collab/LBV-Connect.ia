@@ -679,7 +679,6 @@ def checkout_payment(
         product_id=request.product_id,
         reference_id=reference,
         email=customer_email,
-        user_id=authenticated_user_id,
         first_name=first_name,
         last_name=last_name,
         phone=phone_for_chariow,
@@ -1589,16 +1588,43 @@ def _chariow_value(payload, *keys):
     - le payload racine ;
     - `sale` ;
     - `data` ;
+    - `data.sale` ;
     - `metadata` ;
     - `custom_metadata` ;
+    - `sale.metadata` ;
     - `sale.custom_metadata`.
+
+    Compatible avec :
+    - dict JSON natif ;
+    - objets Pydantic / modèles disposant de `model_dump()`.
     """
 
+    # ---------------------------------------------------------
+    # 1. Normalisation du payload
+    # ---------------------------------------------------------
     if isinstance(payload, dict):
         raw = payload
-    else:
-        raw = payload.model_dump(exclude_none=True)
 
+    elif hasattr(payload, "model_dump"):
+        # IMPORTANT :
+        # Ne pas utiliser model_dump(exclude_none=True)
+        # car _RawChariowPayload implémente un model_dump()
+        # qui n'accepte pas cet argument.
+        raw = payload.model_dump()
+
+    elif hasattr(payload, "dict"):
+        # Compatibilité Pydantic plus ancienne
+        raw = payload.dict()
+
+    else:
+        return None
+
+    if not isinstance(raw, dict):
+        return None
+
+    # ---------------------------------------------------------
+    # 2. Recherche générique dans un conteneur
+    # ---------------------------------------------------------
     def search(container):
         if not isinstance(container, dict):
             return None
@@ -1606,10 +1632,11 @@ def _chariow_value(payload, *keys):
         # Recherche directe
         for key in keys:
             value = container.get(key)
+
             if value not in (None, ""):
                 return value
 
-        # Recherche dans les métadonnées
+        # Recherche dans metadata / custom_metadata
         for source_key in ("metadata", "custom_metadata"):
             source = container.get(source_key)
 
@@ -1622,12 +1649,17 @@ def _chariow_value(payload, *keys):
 
         return None
 
-    # 1. Payload racine
+    # ---------------------------------------------------------
+    # 3. Payload racine
+    # ---------------------------------------------------------
     value = search(raw)
+
     if value not in (None, ""):
         return value
 
-    # 2. Objet sale de Chariow
+    # ---------------------------------------------------------
+    # 4. Objet sale de Chariow
+    # ---------------------------------------------------------
     sale = raw.get("sale")
 
     if isinstance(sale, dict):
@@ -1636,17 +1668,9 @@ def _chariow_value(payload, *keys):
         if value not in (None, ""):
             return value
 
-        # 3. custom_metadata directement dans sale
-        custom_metadata = sale.get("custom_metadata")
-
-        if isinstance(custom_metadata, dict):
-            for key in keys:
-                value = custom_metadata.get(key)
-
-                if value not in (None, ""):
-                    return value
-
-    # 4. data
+    # ---------------------------------------------------------
+    # 5. Objet data
+    # ---------------------------------------------------------
     data = raw.get("data")
 
     if isinstance(data, dict):
@@ -1655,10 +1679,23 @@ def _chariow_value(payload, *keys):
         if value not in (None, ""):
             return value
 
+        # data.sale
         sale_data = data.get("sale")
 
         if isinstance(sale_data, dict):
             value = search(sale_data)
+
+            if value not in (None, ""):
+                return value
+
+    # ---------------------------------------------------------
+    # 6. Recherche dans product / customer si nécessaire
+    # ---------------------------------------------------------
+    for nested_key in ("product", "customer", "checkout", "affiliate", "store"):
+        nested = raw.get(nested_key)
+
+        if isinstance(nested, dict):
+            value = search(nested)
 
             if value not in (None, ""):
                 return value
@@ -1680,11 +1717,31 @@ def _normalize_chariow_event(payload) -> dict:
         sale.custom_metadata.lbv_reference_id
     """
 
-    # Le webhook reçoit désormais le JSON brut Chariow.
+    # --------------------------------------------------------
+    # 1. NORMALISATION DU PAYLOAD
+    # --------------------------------------------------------
+    # Le webhook reçoit normalement un dict JSON brut.
+    # On garde une compatibilité avec les modèles Pydantic,
+    # sans utiliser exclude_none=True afin d'éviter les erreurs
+    # avec les modèles personnalisés.
     if isinstance(payload, dict):
         raw = payload
+
+    elif hasattr(payload, "model_dump"):
+        raw = payload.model_dump()
+
+    elif hasattr(payload, "dict"):
+        raw = payload.dict()
+
     else:
-        raw = payload.model_dump(exclude_none=True)
+        raw = {}
+
+    if not isinstance(raw, dict):
+        raw = {}
+
+    # --------------------------------------------------------
+    # 2. ÉVÉNEMENT
+    # --------------------------------------------------------
 
     event = str(
         _chariow_value(
@@ -1694,6 +1751,10 @@ def _normalize_chariow_event(payload) -> dict:
         ) or ""
     ).strip().lower()
 
+    # --------------------------------------------------------
+    # 3. STATUT DU PAIEMENT
+    # --------------------------------------------------------
+
     status = str(
         _chariow_value(
             raw,
@@ -1702,12 +1763,22 @@ def _normalize_chariow_event(payload) -> dict:
         ) or ""
     ).strip().lower()
 
+    # --------------------------------------------------------
+    # 4. IDENTIFIANT CHARIOW
+    # --------------------------------------------------------
+
     order_id = _chariow_value(
         raw,
         "order_id",
         "transaction_id",
         "id",
     )
+
+    # --------------------------------------------------------
+    # 5. RÉFÉRENCE LBV-CONNECT
+    # --------------------------------------------------------
+    # Cette référence permet de retrouver la transaction
+    # créée localement AVANT le paiement.
 
     reference = _chariow_value(
         raw,
@@ -1718,12 +1789,26 @@ def _normalize_chariow_event(payload) -> dict:
         "lbv_reference_id",
     )
 
+    # --------------------------------------------------------
+    # 6. PRODUIT CHARIOW
+    # --------------------------------------------------------
+    # Conservé uniquement pour information/audit.
+    # L'activation réelle utilise payment_transactions Supabase.
+
     product_id = _chariow_value(
         raw,
         "product_id",
         "product_reference",
         "lbv_product_id",
     )
+
+    # --------------------------------------------------------
+    # 7. USER ID REÇU DE CHARIOW
+    # --------------------------------------------------------
+    # Conservé pour diagnostic uniquement.
+    # NE DOIT PAS être utilisé pour déterminer le wallet.
+    # Le webhook utilise ensuite payment_transactions.user_id
+    # comme source de vérité.
 
     user_id = _chariow_value(
         raw,
@@ -1734,11 +1819,19 @@ def _normalize_chariow_event(payload) -> dict:
         "lbv_user_id",
     )
 
+    # --------------------------------------------------------
+    # 8. EMAIL
+    # --------------------------------------------------------
+
     email = _chariow_value(
         raw,
         "customer_email",
         "email",
     )
+
+    # --------------------------------------------------------
+    # 9. MONTANT
+    # --------------------------------------------------------
 
     amount = _chariow_value(
         raw,
@@ -1746,6 +1839,10 @@ def _normalize_chariow_event(payload) -> dict:
         "paid_amount",
         "total_amount",
     )
+
+    # --------------------------------------------------------
+    # 10. MÉTADONNÉES
+    # --------------------------------------------------------
 
     metadata = _chariow_value(
         raw,
@@ -1757,7 +1854,7 @@ def _normalize_chariow_event(payload) -> dict:
         metadata = {}
 
     # --------------------------------------------------------
-    # Confirmation réelle du paiement Chariow
+    # 11. DATE DE CONFIRMATION
     # --------------------------------------------------------
 
     paid_at = _chariow_value(
@@ -1765,6 +1862,10 @@ def _normalize_chariow_event(payload) -> dict:
         "paid_at",
         "completed_at",
     )
+
+    # --------------------------------------------------------
+    # 12. IDENTIFIANT DE TRANSACTION FOURNISSEUR
+    # --------------------------------------------------------
 
     provider_transaction_id = _chariow_value(
         raw,
@@ -1774,22 +1875,57 @@ def _normalize_chariow_event(payload) -> dict:
         "id",
     )
 
+    # --------------------------------------------------------
+    # 13. RÉSULTAT NORMALISÉ
+    # --------------------------------------------------------
+
     return {
         "event": event,
         "status": status,
-        "order_id": str(order_id) if order_id else None,
-        "reference": str(reference) if reference else None,
-        "product_id": str(product_id) if product_id else None,
-        "user_id": str(user_id) if user_id else None,
-        "email": str(email) if email else None,
+
+        "order_id": (
+            str(order_id)
+            if order_id
+            else None
+        ),
+
+        "reference": (
+            str(reference)
+            if reference
+            else None
+        ),
+
+        "product_id": (
+            str(product_id)
+            if product_id
+            else None
+        ),
+
+        "user_id": (
+            str(user_id)
+            if user_id
+            else None
+        ),
+
+        "email": (
+            str(email)
+            if email
+            else None
+        ),
+
         "amount": amount,
+
         "metadata": metadata,
+
         "paid_at": paid_at,
+
         "provider_transaction_id": (
             str(provider_transaction_id)
             if provider_transaction_id
             else None
         ),
+
+        # Payload complet conservé pour audit/debug.
         "raw_payload": raw,
     }
 
@@ -2415,6 +2551,7 @@ def chariow_webhook(
     # PACK PRINCIPAL
     # ========================================================
 
+
     if payment_type == "primary_pack":
 
         if product_id not in {
@@ -2444,6 +2581,7 @@ def chariow_webhook(
                     wallet_service.create_light_wallet(
                         user_id=user_id,
                         reference_id=reference_id,
+                        credits=transaction_credits,
                     )
                 )
 
@@ -2452,6 +2590,7 @@ def chariow_webhook(
                     wallet_service.create_intermediate_wallet(
                         user_id=user_id,
                         reference_id=reference_id,
+                        credits=transaction_credits,
                     )
                 )
 
@@ -2460,6 +2599,7 @@ def chariow_webhook(
                     wallet_service.create_pro_wallet(
                         user_id=user_id,
                         reference_id=reference_id,
+                        credits=transaction_credits,
                     )
                 )
 
@@ -2468,6 +2608,7 @@ def chariow_webhook(
                     wallet_service.create_business_wallet(
                         user_id=user_id,
                         reference_id=reference_id,
+                        credits=transaction_credits,
                     )
                 )
 

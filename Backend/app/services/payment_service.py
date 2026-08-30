@@ -370,7 +370,6 @@ def create_chariow_checkout(
     product_id: str,
     reference_id: str,
     email: str,
-    user_id: str,
     first_name: str | None = None,
     last_name: str | None = None,
     phone: str | None = None,
@@ -379,13 +378,14 @@ def create_chariow_checkout(
     """
     Crée un checkout Chariow.
 
-    Chariow attend :
-    - email
-    - prénom
-    - nom
-    - téléphone
+    Chariow reçoit uniquement les informations nécessaires
+    au checkout et les métadonnées permettant à LBV-Connect
+    de retrouver sa transaction après le paiement.
 
-    directement à la racine du payload.
+    Le user_id LBV-Connect n'est jamais transmis à Chariow.
+
+    La liaison avec l'utilisateur est conservée localement
+    dans `payment_transactions` via `reference_id`.
     """
 
     api_key = os.getenv(
@@ -429,8 +429,14 @@ def create_chariow_checkout(
     )
 
     # --------------------------------------------------------
-    # PAYLOAD
+    # PAYLOAD CHARIOW
     # --------------------------------------------------------
+    # IMPORTANT :
+    # Aucun user_id LBV-Connect n'est transmis à Chariow.
+    #
+    # La seule donnée permettant de faire le rapprochement
+    # avec notre transaction locale est la référence.
+    # Le user_id reste uniquement dans Supabase.
 
     payload = {
         "product_id": chariow_product_id,
@@ -440,7 +446,7 @@ def create_chariow_checkout(
             "lbv_reference_id": reference_id,
         },
     }
-    
+
     # --------------------------------------------------------
     # PRÉNOM
     # --------------------------------------------------------
