@@ -385,27 +385,56 @@ def checkout_payment(
     """
     Alias utilisé par le frontend pour initialiser un paiement.
 
-    Cette route crée uniquement une transaction `pending`.
-    Elle ne considère jamais le paiement comme réussi.
+    Flux :
 
-    L'activation d'un pack principal ou l'ajout de crédits
-    intervient uniquement après confirmation par le webhook
-    Chariow.
+        Frontend
+            ↓
+        payment_transactions Supabase
+            ↓
+        référence locale persistée
+            ↓
+        Chariow
+            ↓
+        webhook Chariow
+            ↓
+        recherche par référence
+            ↓
+        activation du wallet
+
+    La transaction est toujours créée en `pending`.
+    L'activation du pack intervient uniquement après
+    confirmation réelle du paiement par Chariow.
     """
+
+    # ========================================================
+    # 1. AUTHENTIFICATION
+    # ========================================================
 
     authenticated_user_id = _get_authenticated_user_id(
         user_id=user_id,
         authorization=authorization,
     )
 
+    # ========================================================
+    # 2. VALIDATION FOURNISSEUR
+    # ========================================================
+
     validate_provider(
         request.provider
     )
+
+    # ========================================================
+    # 3. VALIDATION PRODUIT
+    # ========================================================
 
     product = get_payment_product(
         payment_type=request.payment_type,
         product_id=request.product_id,
     )
+
+    # ========================================================
+    # 4. REPOSITORY / WALLET
+    # ========================================================
 
     repository = _get_repository()
 
@@ -414,18 +443,7 @@ def checkout_payment(
     )
 
     # ========================================================
-    # WALLET
-    # ========================================================
-    #
-    # IMPORTANT :
-    # Un utilisateur qui achète son premier pack principal
-    # n'a pas encore de wallet. C'est normal.
-    #
-    # Le wallet sera créé par le webhook Chariow uniquement
-    # après confirmation du paiement.
-    #
-    # Seul un achat de type "addon" exige donc un wallet
-    # existant avant l'initialisation du checkout.
+    # 5. VALIDATION ADDON
     # ========================================================
 
     if request.payment_type == "addon":
@@ -445,51 +463,118 @@ def checkout_payment(
             wallet
         )
 
+    # ========================================================
+    # 6. RÉFÉRENCE UNIQUE LOCALE
+    # ========================================================
+
     reference = generate_payment_reference()
+
+    print(
+        "[PAYMENT CHECKOUT] "
+        f"reference_generated={reference!r} "
+        f"user_id={authenticated_user_id!r} "
+        f"product_id={request.product_id!r} "
+        f"payment_type={request.payment_type!r}",
+        flush=True,
+    )
+
+    # ========================================================
+    # 7. TRANSACTION SUPABASE
+    # ========================================================
 
     transaction_payload = {
         "user_id": authenticated_user_id,
+
+        # Référence principale utilisée par le webhook.
         "reference": reference,
+
         "payment_type": request.payment_type,
+
         "pack_id": (
             request.product_id
             if request.payment_type == "primary_pack"
             else None
         ),
+
         "addon_id": (
             request.product_id
             if request.payment_type == "addon"
             else None
         ),
+
         "provider": request.provider or "chariow",
+
         "amount": product["price"],
+
         "currency": "XAF",
+
         "credits": product["credits"],
+
         "status": "pending",
+
+        # IMPORTANT :
+        # On conserve également la référence dans metadata.
+        # Cela permet au webhook de disposer d'une seconde
+        # voie de correspondance si nécessaire.
         "metadata": {
             "source": "lbv_connect",
             "version": "v1",
             "endpoint": "/payments/checkout",
+
+            # Liaison explicite avec Chariow.
+            "lbv_reference_id": reference,
+
+            # Informations internes utiles au diagnostic.
+            "lbv_user_id": authenticated_user_id,
+            "lbv_product_id": request.product_id,
+            "lbv_payment_type": request.payment_type,
+            "lbv_credits": product["credits"],
         },
     }
 
+    # ========================================================
+    # 8. CRÉATION SUPABASE AVANT CHARIOW
+    # ========================================================
+
     try:
+
         response = (
             supabase
             .table("payment_transactions")
             .insert(transaction_payload)
             .execute()
         )
+
     except Exception as error:
+
+        print(
+            "[PAYMENT CHECKOUT] "
+            f"supabase_insert_error={str(error)!r} "
+            f"reference={reference!r}",
+            flush=True,
+        )
+
         raise HTTPException(
             status_code=500,
             detail=(
                 "Impossible de créer la transaction "
                 f"de paiement : {str(error)}"
             ),
-        )
+        ) from error
+
+    # ========================================================
+    # 9. VÉRIFICATION INSERT
+    # ========================================================
 
     if response is None or not response.data:
+
+        print(
+            "[PAYMENT CHECKOUT] "
+            f"supabase_insert_failed=True "
+            f"reference={reference!r}",
+            flush=True,
+        )
+
         raise HTTPException(
             status_code=500,
             detail=(
@@ -501,7 +586,46 @@ def checkout_payment(
     transaction = response.data[0]
 
     # ========================================================
-    # 8. RÉCUPÉRATION DU CLIENT AUTHENTIFIÉ
+    # 10. RÉCUPÉRATION DE LA RÉFÉRENCE RÉELLEMENT PERSISTÉE
+    # ========================================================
+
+    persisted_reference = transaction.get(
+        "reference"
+    )
+
+    if not persisted_reference:
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Supabase a créé la transaction mais "
+                "aucune référence de paiement n'a été retournée."
+            ),
+        )
+
+    # IMPORTANT :
+    # À partir de maintenant, on utilise exclusivement
+    # la référence réellement retournée par Supabase.
+    reference = str(
+        persisted_reference
+    ).strip()
+
+    print(
+        "[PAYMENT CHECKOUT] "
+        "supabase_transaction_created=True "
+        f"reference={reference!r} "
+        f"transaction_id={transaction.get('id')!r} "
+        f"user_id={transaction.get('user_id')!r} "
+        f"payment_type={transaction.get('payment_type')!r} "
+        f"pack_id={transaction.get('pack_id')!r} "
+        f"addon_id={transaction.get('addon_id')!r} "
+        f"credits={transaction.get('credits')!r} "
+        f"status={transaction.get('status')!r}",
+        flush=True,
+    )
+
+    # ========================================================
+    # 11. RÉCUPÉRATION DU CLIENT AUTHENTIFIÉ
     # ========================================================
 
     token = _extract_token(
@@ -509,10 +633,13 @@ def checkout_payment(
     )
 
     try:
+
         auth_response = supabase.auth.get_user(
             token
         )
+
     except Exception as error:
+
         raise HTTPException(
             status_code=401,
             detail=(
@@ -528,6 +655,7 @@ def checkout_payment(
     )
 
     if auth_user is None:
+
         raise HTTPException(
             status_code=401,
             detail="Utilisateur authentifié introuvable.",
@@ -540,6 +668,7 @@ def checkout_payment(
     )
 
     if not customer_email:
+
         raise HTTPException(
             status_code=400,
             detail=(
@@ -549,13 +678,9 @@ def checkout_payment(
         )
 
     # ========================================================
-    # 9. RÉCUPÉRATION DES INFORMATIONS CLIENT
+    # 12. INFORMATIONS CLIENT
     # ========================================================
 
-    # Les informations peuvent être stockées dans les
-    # métadonnées utilisateur Supabase. On accepte plusieurs
-    # variantes de noms afin de rester compatible avec le
-    # profil actuellement utilisé par le frontend.
     user_metadata = getattr(
         auth_user,
         "user_metadata",
@@ -581,19 +706,10 @@ def checkout_payment(
         or ""
     )
 
-    # --------------------------------------------------------
-    # TÉLÉPHONE
-    # --------------------------------------------------------
-    #
-    # Source de vérité moderne :
-    #     auth.users.phone
-    #
-    # Compatibilité avec les anciens comptes :
-    #     user_metadata.phone
-    #     user_metadata.phone_number
-    #     user_metadata.phoneNumber
-    #     user_metadata.telephone
-    # --------------------------------------------------------
+    # ========================================================
+    # 13. TÉLÉPHONE
+    # ========================================================
+
     auth_phone = getattr(
         auth_user,
         "phone",
@@ -609,9 +725,6 @@ def checkout_payment(
         or ""
     )
 
-    # Le pays est une donnée applicative choisie lors de l'inscription.
-    # Il détermine l'indicatif attendu par la normalisation et le code ISO
-    # envoyé à Chariow.
     country_iso2 = (
         user_metadata.get("country_iso2")
         or user_metadata.get("country")
@@ -624,6 +737,7 @@ def checkout_payment(
     country_iso2 = str(country_iso2).strip().upper()
 
     if not first_name:
+
         raise HTTPException(
             status_code=400,
             detail=(
@@ -633,6 +747,7 @@ def checkout_payment(
         )
 
     if not last_name:
+
         raise HTTPException(
             status_code=400,
             detail=(
@@ -642,6 +757,7 @@ def checkout_payment(
         )
 
     if not phone:
+
         raise HTTPException(
             status_code=400,
             detail=(
@@ -652,6 +768,7 @@ def checkout_payment(
         )
 
     if not country_iso2:
+
         raise HTTPException(
             status_code=400,
             detail=(
@@ -660,20 +777,35 @@ def checkout_payment(
             ),
         )
 
-    # Validation explicite du pays avant l'appel Chariow.
-    # Cela évite d'envoyer un code pays arbitraire.
+    # ========================================================
+    # 14. VALIDATION PAYS
+    # ========================================================
+
     get_country_phone_config(
         country_iso2
     )
 
     # ========================================================
-    # 10. CRÉATION DU CHECKOUT CHARIOW
+    # 15. CRÉATION CHECKOUT CHARIOW
     # ========================================================
 
-    phone_for_chariow = str(phone).strip()
+    phone_for_chariow = str(
+        phone
+    ).strip()
 
     if not phone_for_chariow.startswith("+"):
-        phone_for_chariow = f"+{phone_for_chariow}"
+        phone_for_chariow = (
+            f"+{phone_for_chariow}"
+        )
+
+    print(
+        "[PAYMENT CHECKOUT] "
+        "sending_to_chariow=True "
+        f"reference={reference!r} "
+        f"product_id={request.product_id!r} "
+        f"email={customer_email!r}",
+        flush=True,
+    )
 
     chariow_checkout = create_chariow_checkout(
         product_id=request.product_id,
@@ -690,13 +822,15 @@ def checkout_payment(
     ]
 
     # ========================================================
-    # 10. RÉPONSE FRONTEND
+    # 16. RÉPONSE FRONTEND
     # ========================================================
 
     return {
         "success": True,
         "message": "Checkout Chariow créé.",
+
         "transaction": transaction,
+
         "payment": {
             "reference": reference,
             "provider": request.provider or "chariow",
@@ -711,9 +845,9 @@ def checkout_payment(
                 "chariow_product_id"
             ],
         },
+
         "checkout_url": checkout_url,
     }
-
 
 # ============================================================
 # AUTHENTIFICATION
@@ -1987,20 +2121,92 @@ def _find_chariow_payment_transaction(
     """
     Retrouve la transaction locale créée avant le checkout Chariow.
 
-    IMPORTANT : `payment_transactions` est la source de vérité LBV-Connect.
-    Le webhook Chariow ne peut pas créer une attribution de crédits sans
-    transaction locale correspondante.
+    IMPORTANT :
+    `payment_transactions` reste la source de vérité LBV-Connect.
+
+    Le webhook Chariow peut transmettre la référence LBV-Connect
+    sous différentes formes / emplacements. Cette fonction essaie
+    plusieurs identifiants de correspondance sans jamais créer
+    de transaction locale à partir du webhook.
+
+    Ordre de recherche :
+        1. event.reference
+        2. event.order_id
+        3. event.metadata.lbv_reference_id
+        4. event.metadata.reference
+        5. event.metadata.reference_id
+
+    La transaction retournée provient exclusivement de
+    `payment_transactions`.
     """
+
     candidates = []
 
-    for value in (
-        event.get("reference"),
-        event.get("order_id"),
-    ):
+    def add_candidate(value):
+        if value is None:
+            return
+
+        value = str(value).strip()
+
         if value and value not in candidates:
             candidates.append(value)
 
+    # ========================================================
+    # 1. RÉFÉRENCE NORMALISÉE
+    # ========================================================
+
+    add_candidate(
+        event.get("reference")
+    )
+
+    # ========================================================
+    # 2. ID COMMANDE CHARIOW
+    # ========================================================
+
+    add_candidate(
+        event.get("order_id")
+    )
+
+    # ========================================================
+    # 3. MÉTADONNÉES CHARIOW
+    # ========================================================
+
+    metadata = event.get("metadata")
+
+    if isinstance(metadata, dict):
+
+        add_candidate(
+            metadata.get("lbv_reference_id")
+        )
+
+        add_candidate(
+            metadata.get("reference")
+        )
+
+        add_candidate(
+            metadata.get("reference_id")
+        )
+
+        add_candidate(
+            metadata.get("payment_reference")
+        )
+
+    # ========================================================
+    # 4. DIAGNOSTIC
+    # ========================================================
+
+    print(
+        "[CHARIOW WEBHOOK] "
+        f"transaction_lookup_candidates={candidates!r}",
+        flush=True,
+    )
+
+    # ========================================================
+    # 5. RECHERCHE DANS SUPABASE
+    # ========================================================
+
     for reference in candidates:
+
         try:
             response = (
                 supabase
@@ -2010,17 +2216,55 @@ def _find_chariow_payment_transaction(
                 .limit(1)
                 .execute()
             )
+
         except Exception as error:
+
             print(
                 "[CHARIOW WEBHOOK] "
                 f"transaction_lookup_error={str(error)!r} "
                 f"reference={reference!r}",
                 flush=True,
             )
+
             continue
 
         if response is not None and response.data:
-            return response.data[0]
+
+            transaction = response.data[0]
+
+            print(
+                "[CHARIOW WEBHOOK] "
+                "local_transaction_match=True "
+                f"lookup_reference={reference!r} "
+                f"local_reference="
+                f"{transaction.get('reference')!r} "
+                f"user_id="
+                f"{transaction.get('user_id')!r} "
+                f"payment_type="
+                f"{transaction.get('payment_type')!r} "
+                f"pack_id="
+                f"{transaction.get('pack_id')!r} "
+                f"addon_id="
+                f"{transaction.get('addon_id')!r} "
+                f"credits="
+                f"{transaction.get('credits')!r} "
+                f"status="
+                f"{transaction.get('status')!r}",
+                flush=True,
+            )
+
+            return transaction
+
+    # ========================================================
+    # 6. AUCUNE CORRESPONDANCE
+    # ========================================================
+
+    print(
+        "[CHARIOW WEBHOOK] "
+        "local_transaction_match=False "
+        f"candidates={candidates!r}",
+        flush=True,
+    )
 
     return None
 
@@ -2033,128 +2277,235 @@ def _update_payment_transaction_from_chariow(
     """
     Synchronise `payment_transactions` avec la confirmation Chariow.
 
-    Supabase reste la source de vérité :
-        Chariow
-            -> webhook
-            -> payment_transactions
-            -> activation wallet
+    Architecture :
 
-    Le user_id, le type d'achat, le pack/addon et les crédits
-    utilisés pour l'activation proviennent exclusivement de
-    payment_transactions.
+        Chariow
+            ↓
+        webhook
+            ↓
+        transaction locale Supabase
+            ↓
+        statut paid/pending
+            ↓
+        activation wallet
+
+    IMPORTANT :
+    - Supabase reste la source de vérité.
+    - Le webhook ne modifie jamais user_id.
+    - Le webhook ne modifie jamais credits.
+    - Le webhook ne modifie jamais pack_id/addon_id.
+    - Le montant local reste la référence commerciale.
     """
 
-    reference = payment_transaction.get("reference")
+    # ========================================================
+    # 1. RÉFÉRENCE LOCALE
+    # ========================================================
+
+    reference = payment_transaction.get(
+        "reference"
+    )
 
     if not reference:
+
         raise HTTPException(
             status_code=400,
-            detail="Référence locale de paiement manquante.",
+            detail=(
+                "Référence locale de paiement manquante."
+            ),
         )
 
-    existing_metadata = payment_transaction.get("metadata")
+    reference = str(
+        reference
+    ).strip()
 
-    if not isinstance(existing_metadata, dict):
+    # ========================================================
+    # 2. MÉTADONNÉES EXISTANTES
+    # ========================================================
+
+    existing_metadata = (
+        payment_transaction.get("metadata")
+    )
+
+    if not isinstance(
+        existing_metadata,
+        dict,
+    ):
         existing_metadata = {}
 
-    chariow_metadata = event.get("metadata")
+    chariow_metadata = (
+        event.get("metadata")
+    )
 
-    if not isinstance(chariow_metadata, dict):
+    if not isinstance(
+        chariow_metadata,
+        dict,
+    ):
         chariow_metadata = {}
+
+    # ========================================================
+    # 3. MÉTADONNÉES CHARIOW CONSERVÉES POUR AUDIT
+    # ========================================================
 
     merged_metadata = {
         **existing_metadata,
+
         "chariow": {
             "event": event.get("event"),
-            "status": event.get("status"),
-            "order_id": event.get("order_id"),
-            "provider_transaction_id": event.get(
-                "provider_transaction_id"
+
+            "status": event.get(
+                "status"
             ),
-            "product_id": event.get("product_id"),
-            "email": event.get("email"),
-            "amount": event.get("amount"),
-            "paid_at": event.get("paid_at"),
+
+            "order_id": event.get(
+                "order_id"
+            ),
+
+            "provider_transaction_id": (
+                event.get(
+                    "provider_transaction_id"
+                )
+            ),
+
+            "product_id": event.get(
+                "product_id"
+            ),
+
+            "email": event.get(
+                "email"
+            ),
+
+            "amount": event.get(
+                "amount"
+            ),
+
+            "paid_at": event.get(
+                "paid_at"
+            ),
+
             "metadata": chariow_metadata,
         },
     }
 
-    # --------------------------------------------------------
-    # STATUT
-    # --------------------------------------------------------
+    # ========================================================
+    # 4. STATUT
+    # ========================================================
 
     if success:
+
         status = "paid"
+
     else:
-        status = event.get("status") or "pending"
+
+        status = (
+            event.get("status")
+            or "pending"
+        )
+
+    # ========================================================
+    # 5. PAYLOAD DE MISE À JOUR
+    # ========================================================
 
     update_payload = {
         "status": status,
+
         "metadata": merged_metadata,
+
         "provider": (
-            payment_transaction.get("provider")
+            payment_transaction.get(
+                "provider"
+            )
             or "chariow"
         ),
     }
 
-    # --------------------------------------------------------
-    # ID TRANSACTION FOURNI PAR CHARIOW
-    # --------------------------------------------------------
+    # ========================================================
+    # 6. ID FOURNI PAR CHARIOW
+    # ========================================================
 
-    provider_transaction_id = event.get(
-        "provider_transaction_id"
+    provider_transaction_id = (
+        event.get(
+            "provider_transaction_id"
+        )
     )
 
     if provider_transaction_id:
-        update_payload["provider_transaction_id"] = str(
+
+        update_payload[
+            "provider_transaction_id"
+        ] = str(
             provider_transaction_id
         )
 
-    # --------------------------------------------------------
-    # DATE RÉELLE DE CONFIRMATION DU PAIEMENT
-    # --------------------------------------------------------
+    # ========================================================
+    # 7. DATE RÉELLE DE PAIEMENT
+    # ========================================================
 
     if success:
-        paid_at = event.get("paid_at")
+
+        paid_at = event.get(
+            "paid_at"
+        )
 
         if paid_at:
-            update_payload["paid_at"] = str(paid_at)
-        else:
-            # Fallback uniquement si Chariow ne fournit pas
-            # completed_at.
-            update_payload["paid_at"] = (
-                datetime.now(timezone.utc).isoformat()
+
+            update_payload[
+                "paid_at"
+            ] = str(
+                paid_at
             )
 
-    # --------------------------------------------------------
-    # MONTANT
-    # --------------------------------------------------------
-    # Le montant Supabase reste normalement la source de vérité.
-    # On ne l'écrase donc pas avec une valeur Chariow.
+        else:
+
+            update_payload[
+                "paid_at"
+            ] = (
+                datetime.now(
+                    timezone.utc
+                ).isoformat()
+            )
+
+    # ========================================================
+    # 8. LOG
+    # ========================================================
 
     print(
         "[CHARIOW WEBHOOK] "
-        f"supabase_payment_update="
+        "supabase_payment_update="
         f"reference={reference!r} "
         f"status={update_payload['status']!r} "
-        f"provider_transaction_id="
+        "provider_transaction_id="
         f"{update_payload.get('provider_transaction_id')!r} "
         f"paid_at={update_payload.get('paid_at')!r}",
         flush=True,
     )
 
+    # ========================================================
+    # 9. MISE À JOUR SUPABASE
+    # ========================================================
+
     try:
+
         response = (
             supabase
-            .table("payment_transactions")
-            .update(update_payload)
-            .eq("reference", reference)
+            .table(
+                "payment_transactions"
+            )
+            .update(
+                update_payload
+            )
+            .eq(
+                "reference",
+                reference,
+            )
             .execute()
         )
+
     except Exception as error:
+
         print(
             "[CHARIOW WEBHOOK] "
-            f"supabase_payment_update_error={str(error)!r} "
+            "supabase_payment_update_error="
+            f"{str(error)!r} "
             f"reference={reference!r}",
             flush=True,
         )
@@ -2162,29 +2513,47 @@ def _update_payment_transaction_from_chariow(
         raise HTTPException(
             status_code=500,
             detail=(
-                "Impossible de synchroniser la transaction de "
-                f"paiement dans Supabase : {str(error)}"
+                "Impossible de synchroniser "
+                "la transaction de paiement "
+                f"dans Supabase : {str(error)}"
             ),
         ) from error
 
-    if response is None or not response.data:
+    # ========================================================
+    # 10. VALIDATION DE LA RÉPONSE SUPABASE
+    # ========================================================
+
+    if (
+        response is None
+        or not response.data
+    ):
+
         raise HTTPException(
             status_code=500,
             detail=(
-                "Supabase n'a pas confirmé la mise à jour de "
+                "Supabase n'a pas confirmé "
+                "la mise à jour de "
                 "payment_transactions."
             ),
         )
 
-    updated_transaction = response.data[0]
+    updated_transaction = (
+        response.data[0]
+    )
+
+    # ========================================================
+    # 11. LOG FINAL
+    # ========================================================
 
     print(
         "[CHARIOW WEBHOOK] "
         "supabase_payment_updated=True "
         f"reference={reference!r} "
-        f"status={updated_transaction.get('status')!r} "
-        f"paid_at={updated_transaction.get('paid_at')!r} "
-        f"provider_transaction_id="
+        f"status="
+        f"{updated_transaction.get('status')!r} "
+        f"paid_at="
+        f"{updated_transaction.get('paid_at')!r} "
+        "provider_transaction_id="
         f"{updated_transaction.get('provider_transaction_id')!r}",
         flush=True,
     )
