@@ -1581,44 +1581,117 @@ class ChariowWebhookRequest(BaseModel):
     data: dict | None = None
 
 
-def _chariow_value(payload: ChariowWebhookRequest, *keys):
-    """Recherche une valeur dans le payload racine puis dans `data`."""
-    raw = payload.model_dump(exclude_none=True)
+def _chariow_value(payload, *keys):
+    """
+    Recherche une valeur dans le payload Chariow.
 
-    data = raw.get("data")
-    if isinstance(data, dict):
-        raw = {**data, **raw}
+    Supporte :
+    - le payload racine ;
+    - `sale` ;
+    - `data` ;
+    - `metadata` ;
+    - `custom_metadata` ;
+    - `sale.custom_metadata`.
+    """
 
-    # Chariow peut placer les métadonnées dans `metadata`,
-    # `custom_metadata` ou directement dans `data`.
-    metadata_sources = []
-    for source_key in ("metadata", "custom_metadata"):
-        source = raw.get(source_key)
-        if isinstance(source, dict):
-            metadata_sources.append(source)
+    if isinstance(payload, dict):
+        raw = payload
+    else:
+        raw = payload.model_dump(exclude_none=True)
 
-    for key in keys:
-        value = raw.get(key)
+    def search(container):
+        if not isinstance(container, dict):
+            return None
+
+        # Recherche directe
+        for key in keys:
+            value = container.get(key)
+            if value not in (None, ""):
+                return value
+
+        # Recherche dans les métadonnées
+        for source_key in ("metadata", "custom_metadata"):
+            source = container.get(source_key)
+
+            if isinstance(source, dict):
+                for key in keys:
+                    value = source.get(key)
+
+                    if value not in (None, ""):
+                        return value
+
+        return None
+
+    # 1. Payload racine
+    value = search(raw)
+    if value not in (None, ""):
+        return value
+
+    # 2. Objet sale de Chariow
+    sale = raw.get("sale")
+
+    if isinstance(sale, dict):
+        value = search(sale)
+
         if value not in (None, ""):
             return value
 
-        for source in metadata_sources:
-            value = source.get(key)
+        # 3. custom_metadata directement dans sale
+        custom_metadata = sale.get("custom_metadata")
+
+        if isinstance(custom_metadata, dict):
+            for key in keys:
+                value = custom_metadata.get(key)
+
+                if value not in (None, ""):
+                    return value
+
+    # 4. data
+    data = raw.get("data")
+
+    if isinstance(data, dict):
+        value = search(data)
+
+        if value not in (None, ""):
+            return value
+
+        sale_data = data.get("sale")
+
+        if isinstance(sale_data, dict):
+            value = search(sale_data)
+
             if value not in (None, ""):
                 return value
 
     return None
 
 
-def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
-    """Normalise les champs essentiels du Pulse Chariow."""
+def _normalize_chariow_event(payload) -> dict:
+    """
+    Normalise les champs essentiels du webhook Chariow.
+
+    Structure réelle observée :
+        sale.status
+        sale.id
+        sale.completed_at
+        sale.custom_metadata.lbv_reference_id
+        sale.custom_metadata.lbv_product_id
+    """
+
     event = str(
-        _chariow_value(payload, "event", "type") or ""
+        _chariow_value(
+            payload,
+            "event",
+            "type",
+        ) or ""
     ).strip().lower()
 
     status = str(
-        _chariow_value(payload, "status", "payment_status")
-        or ""
+        _chariow_value(
+            payload,
+            "status",
+            "payment_status",
+        ) or ""
     ).strip().lower()
 
     order_id = _chariow_value(
@@ -1640,7 +1713,6 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
     product_id = _chariow_value(
         payload,
         "product_id",
-        "product",
         "product_reference",
         "lbv_product_id",
     )
@@ -1651,6 +1723,7 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
         "customer_id",
         "client_id",
         "metadata_user_id",
+        "lbv_user_id",
     )
 
     email = _chariow_value(
@@ -1675,6 +1748,24 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
     if not isinstance(metadata, dict):
         metadata = {}
 
+    # --------------------------------------------------------
+    # Données spécifiques au paiement Chariow
+    # --------------------------------------------------------
+
+    paid_at = _chariow_value(
+        payload,
+        "paid_at",
+        "completed_at",
+    )
+
+    provider_transaction_id = _chariow_value(
+        payload,
+        "provider_transaction_id",
+        "transaction_id",
+        "payment_id",
+        "id",
+    )
+
     return {
         "event": event,
         "status": status,
@@ -1685,7 +1776,13 @@ def _normalize_chariow_event(payload: ChariowWebhookRequest) -> dict:
         "email": str(email) if email else None,
         "amount": amount,
         "metadata": metadata,
-        "raw_payload": payload.model_dump(exclude_none=True),
+        "paid_at": paid_at,
+        "provider_transaction_id": (
+            str(provider_transaction_id)
+            if provider_transaction_id
+            else None
+        ),
+        "raw_payload": raw,
     }
 
 
