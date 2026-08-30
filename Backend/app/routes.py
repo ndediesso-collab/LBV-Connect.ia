@@ -1931,11 +1931,38 @@ def _payment_activation_already_recorded(
 
 @router.post("/payments/chariow/webhook")
 def chariow_webhook(
-    payload: ChariowWebhookRequest,
+    payload: dict,
 ):
+    # Chariow peut envoyer des champs/structures qui ne figurent pas
+    # dans ChariowWebhookRequest. On conserve donc le JSON brut sans
+    # laisser Pydantic supprimer les champs inconnus.
+    class _RawChariowPayload:
+        def __init__(self, value):
+            self._value = value
+
+        def model_dump(self):
+            return self._value
+
+        def __getattr__(self, name):
+            if isinstance(self._value, dict):
+                value = self._value.get(name)
+                if isinstance(value, dict):
+                    return _RawChariowPayload(value)
+                if isinstance(value, list):
+                    return [
+                        _RawChariowPayload(item)
+                        if isinstance(item, dict)
+                        else item
+                        for item in value
+                    ]
+                return value
+            raise AttributeError(name)
+
+    raw_payload = _RawChariowPayload(payload)
+
     print(
         "[CHARIOW WEBHOOK] RAW PAYLOAD:",
-        payload.model_dump(),
+        raw_payload.model_dump(),
         flush=True,
     )
     """
@@ -1955,7 +1982,7 @@ def chariow_webhook(
     Le `user_id` éventuellement présent dans le webhook Chariow est
     volontairement ignoré pour l'attribution des crédits.
     """
-    event = _normalize_chariow_event(payload)
+    event = _normalize_chariow_event(raw_payload)
     success = _is_chariow_success(event)
 
     print(
@@ -2323,7 +2350,6 @@ def chariow_webhook(
         status_code=404,
         detail="Type de paiement Supabase inconnu.",
     )
-
 
 # ============================================================
 # CONVERSATIONS + HISTORIQUE
