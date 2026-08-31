@@ -1362,6 +1362,118 @@ def get_my_credit_transactions(
         ],
     }
 
+@router.post("/ai/authorize")
+def authorize_ai_request(
+    user_id: str | None = Header(
+        default=None,
+        alias="user-id",
+    ),
+    authorization: str | None = Header(
+        default=None,
+        alias="authorization",
+    ),
+):
+    """
+    Vérifie si l'utilisateur authentifié est autorisé
+    à effectuer une requête IA.
+
+    Cette route NE consomme PAS de crédit.
+
+    Elle vérifie uniquement :
+
+        1. identité authentifiée
+        2. wallet existant
+        3. pack actif
+        4. date d'expiration non dépassée
+        5. crédits disponibles
+
+    La consommation réelle reste effectuée par
+    /credits/me/consume via CreditService + RPC Supabase.
+    """
+
+    # ========================================================
+    # 1. AUTHENTIFICATION
+    # ========================================================
+
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    # ========================================================
+    # 2. REPOSITORY
+    # ========================================================
+
+    repository = _get_repository()
+
+    # ========================================================
+    # 3. WALLET
+    # ========================================================
+
+    wallet = repository.get_wallet(
+        authenticated_user_id
+    )
+
+    if wallet is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Aucun portefeuille de crédits "
+                "trouvé pour cet utilisateur."
+            ),
+        )
+
+    # ========================================================
+    # 4. VÉRIFICATION PACK ACTIF
+    # ========================================================
+
+    if not wallet.is_pack_active:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Votre pack de crédits est expiré "
+                "ou inactif."
+            ),
+        )
+
+    # ========================================================
+    # 5. VÉRIFICATION DATE D'ÉCHÉANCE
+    # ========================================================
+
+    if wallet.pack_expires_at is None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "La date d'expiration de votre pack "
+                "est introuvable."
+            ),
+        )
+
+    # ========================================================
+    # 6. VÉRIFICATION CRÉDITS
+    # ========================================================
+
+    if wallet.balance <= 0:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                "Vous n'avez plus de crédits disponibles."
+            ),
+        )
+
+    # ========================================================
+    # 7. AUTORISATION
+    # ========================================================
+
+    return {
+        "success": True,
+        "authorized": True,
+        "user_id": authenticated_user_id,
+        "pack_id": wallet.pack_id,
+        "balance": wallet.balance,
+        "pack_activated_at": wallet.pack_activated_at,
+        "pack_expires_at": wallet.pack_expires_at,
+    }
 
 # ============================================================
 # CONSOMMATION — UTILISATEUR CONNECTÉ
@@ -1841,7 +1953,8 @@ def _normalize_chariow_event(payload) -> dict:
     """
     Normalise les champs essentiels du webhook Chariow.
 
-    Structure réelle observée :
+    Structure Chariow observée :
+
         event
         sale.status
         sale.id
@@ -1849,15 +1962,19 @@ def _normalize_chariow_event(payload) -> dict:
         sale.custom_metadata.lbv_user_id
         sale.custom_metadata.lbv_product_id
         sale.custom_metadata.lbv_reference_id
+
+    IMPORTANT :
+    - `paid_at` provient directement de `sale.completed_at`.
+    - `reference` provient prioritairement de
+      `sale.custom_metadata.lbv_reference_id`.
+    - Les informations reçues de Chariow servent à identifier et
+      confirmer le paiement, mais ne déterminent jamais les crédits.
     """
 
-    # --------------------------------------------------------
+    # ========================================================
     # 1. NORMALISATION DU PAYLOAD
-    # --------------------------------------------------------
-    # Le webhook reçoit normalement un dict JSON brut.
-    # On garde une compatibilité avec les modèles Pydantic,
-    # sans utiliser exclude_none=True afin d'éviter les erreurs
-    # avec les modèles personnalisés.
+    # ========================================================
+
     if isinstance(payload, dict):
         raw = payload
 
@@ -1873,9 +1990,9 @@ def _normalize_chariow_event(payload) -> dict:
     if not isinstance(raw, dict):
         raw = {}
 
-    # --------------------------------------------------------
+    # ========================================================
     # 2. ÉVÉNEMENT
-    # --------------------------------------------------------
+    # ========================================================
 
     event = str(
         _chariow_value(
@@ -1885,9 +2002,9 @@ def _normalize_chariow_event(payload) -> dict:
         ) or ""
     ).strip().lower()
 
-    # --------------------------------------------------------
-    # 3. STATUT DU PAIEMENT
-    # --------------------------------------------------------
+    # ========================================================
+    # 3. STATUT
+    # ========================================================
 
     status = str(
         _chariow_value(
@@ -1897,9 +2014,9 @@ def _normalize_chariow_event(payload) -> dict:
         ) or ""
     ).strip().lower()
 
-    # --------------------------------------------------------
-    # 4. IDENTIFIANT CHARIOW
-    # --------------------------------------------------------
+    # ========================================================
+    # 4. ID CHARIOW
+    # ========================================================
 
     order_id = _chariow_value(
         raw,
@@ -1908,54 +2025,102 @@ def _normalize_chariow_event(payload) -> dict:
         "id",
     )
 
-    # --------------------------------------------------------
-    # 5. RÉFÉRENCE LBV-CONNECT
-    # --------------------------------------------------------
-    # Cette référence permet de retrouver la transaction
-    # créée localement AVANT le paiement.
+    # ========================================================
+    # 5. MÉTADONNÉES CHARIOW
+    # ========================================================
+    #
+    # On récupère explicitement les custom_metadata de la vente.
+    # C'est notamment là que Chariow transmet :
+    #
+    #   lbv_reference_id
+    #   lbv_product_id
+    #   lbv_user_id
+    #
+    # Cette extraction explicite évite de dépendre uniquement
+    # d'une recherche générique.
+    # ========================================================
 
-    reference = _chariow_value(
-        raw,
-        "reference",
-        "reference_id",
-        "payment_reference",
-        "metadata_reference",
-        "lbv_reference_id",
+    sale = raw.get("sale")
+
+    if not isinstance(sale, dict):
+        sale = {}
+
+    sale_custom_metadata = sale.get(
+        "custom_metadata"
     )
 
-    # --------------------------------------------------------
-    # 6. PRODUIT CHARIOW
-    # --------------------------------------------------------
-    # Conservé uniquement pour information/audit.
-    # L'activation réelle utilise payment_transactions Supabase.
+    if not isinstance(
+        sale_custom_metadata,
+        dict,
+    ):
+        sale_custom_metadata = {}
 
-    product_id = _chariow_value(
-        raw,
-        "product_id",
-        "product_reference",
-        "lbv_product_id",
+    # ========================================================
+    # 6. RÉFÉRENCE LBV-CONNECT
+    # ========================================================
+    #
+    # PRIORITÉ :
+    #
+    #   sale.custom_metadata.lbv_reference_id
+    #
+    # puis fallback vers les autres emplacements supportés.
+    # ========================================================
+
+    reference = (
+        sale_custom_metadata.get(
+            "lbv_reference_id"
+        )
+        or _chariow_value(
+            raw,
+            "reference",
+            "reference_id",
+            "payment_reference",
+            "metadata_reference",
+            "lbv_reference_id",
+        )
     )
 
-    # --------------------------------------------------------
-    # 7. USER ID REÇU DE CHARIOW
-    # --------------------------------------------------------
-    # Conservé pour diagnostic uniquement.
-    # NE DOIT PAS être utilisé pour déterminer le wallet.
-    # Le webhook utilise ensuite payment_transactions.user_id
-    # comme source de vérité.
+    # ========================================================
+    # 7. PRODUIT
+    # ========================================================
 
-    user_id = _chariow_value(
-        raw,
-        "user_id",
-        "customer_id",
-        "client_id",
-        "metadata_user_id",
-        "lbv_user_id",
+    product_id = (
+        sale_custom_metadata.get(
+            "lbv_product_id"
+        )
+        or _chariow_value(
+            raw,
+            "product_id",
+            "product_reference",
+            "lbv_product_id",
+        )
     )
 
-    # --------------------------------------------------------
-    # 8. EMAIL
-    # --------------------------------------------------------
+    # ========================================================
+    # 8. USER ID
+    # ========================================================
+    #
+    # Conservé uniquement pour diagnostic.
+    # Il ne sert PAS à déterminer le wallet.
+    # ========================================================
+
+    user_id = (
+        sale_custom_metadata.get(
+            "lbv_user_id"
+        )
+        or _chariow_value(
+            raw,
+            "user_id",
+            "customer_id",
+            "client_id",
+            "metadata_user_id",
+            "lbv_user_id",
+        )
+    )
+
+    # ========================================================
+    # 9. EMAIL
+    # ========================================================
 
     email = _chariow_value(
         raw,
@@ -1963,9 +2128,9 @@ def _normalize_chariow_event(payload) -> dict:
         "email",
     )
 
-    # --------------------------------------------------------
-    # 9. MONTANT
-    # --------------------------------------------------------
+    # ========================================================
+    # 10. MONTANT
+    # ========================================================
 
     amount = _chariow_value(
         raw,
@@ -1974,9 +2139,14 @@ def _normalize_chariow_event(payload) -> dict:
         "total_amount",
     )
 
-    # --------------------------------------------------------
-    # 10. MÉTADONNÉES
-    # --------------------------------------------------------
+    # ========================================================
+    # 11. MÉTADONNÉES
+    # ========================================================
+    #
+    # On conserve les métadonnées complètes pour l'audit.
+    # Si Chariow utilise custom_metadata dans sale, on les
+    # conserve également.
+    # ========================================================
 
     metadata = _chariow_value(
         raw,
@@ -1984,37 +2154,61 @@ def _normalize_chariow_event(payload) -> dict:
         "custom_metadata",
     )
 
-    if not isinstance(metadata, dict):
+    if not isinstance(
+        metadata,
+        dict,
+    ):
         metadata = {}
 
-    # --------------------------------------------------------
-    # 11. DATE DE CONFIRMATION
-    # --------------------------------------------------------
+    metadata = {
+        **metadata,
+        "sale_custom_metadata": sale_custom_metadata,
+    }
 
-    paid_at = _chariow_value(
-        raw,
-        "paid_at",
-        "completed_at",
+    # ========================================================
+    # 12. DATE RÉELLE DE CONFIRMATION
+    # ========================================================
+    #
+    # Chariow envoie actuellement :
+    #
+    #   sale.completed_at
+    #
+    # Cette valeur devient directement `paid_at`.
+    #
+    # Aucun calcul local n'est nécessaire ici.
+    # ========================================================
+
+    paid_at = (
+        sale.get("completed_at")
+        or _chariow_value(
+            raw,
+            "paid_at",
+            "completed_at",
+        )
     )
 
-    # --------------------------------------------------------
-    # 12. IDENTIFIANT DE TRANSACTION FOURNISSEUR
-    # --------------------------------------------------------
+    # ========================================================
+    # 13. ID TRANSACTION FOURNISSEUR
+    # ========================================================
 
-    provider_transaction_id = _chariow_value(
-        raw,
-        "provider_transaction_id",
-        "payment_id",
-        "transaction_id",
-        "id",
+    provider_transaction_id = (
+        sale.get("id")
+        or _chariow_value(
+            raw,
+            "provider_transaction_id",
+            "payment_id",
+            "transaction_id",
+            "id",
+        )
     )
 
-    # --------------------------------------------------------
-    # 13. RÉSULTAT NORMALISÉ
-    # --------------------------------------------------------
+    # ========================================================
+    # 14. RÉSULTAT NORMALISÉ
+    # ========================================================
 
-    return {
+    normalized = {
         "event": event,
+
         "status": status,
 
         "order_id": (
@@ -2024,7 +2218,7 @@ def _normalize_chariow_event(payload) -> dict:
         ),
 
         "reference": (
-            str(reference)
+            str(reference).strip()
             if reference
             else None
         ),
@@ -2051,7 +2245,13 @@ def _normalize_chariow_event(payload) -> dict:
 
         "metadata": metadata,
 
-        "paid_at": paid_at,
+        # IMPORTANT :
+        # valeur provenant directement de Chariow.
+        "paid_at": (
+            str(paid_at)
+            if paid_at
+            else None
+        ),
 
         "provider_transaction_id": (
             str(provider_transaction_id)
@@ -2059,9 +2259,25 @@ def _normalize_chariow_event(payload) -> dict:
             else None
         ),
 
-        # Payload complet conservé pour audit/debug.
         "raw_payload": raw,
     }
+
+    print(
+        "[CHARIOW WEBHOOK] "
+        "normalized_event="
+        f"{normalized['event']!r} "
+        "status="
+        f"{normalized['status']!r} "
+        "reference="
+        f"{normalized['reference']!r} "
+        "paid_at="
+        f"{normalized['paid_at']!r} "
+        "provider_transaction_id="
+        f"{normalized['provider_transaction_id']!r}",
+        flush=True,
+    )
+
+    return normalized
 
 
 def _is_chariow_success(event: dict) -> bool:

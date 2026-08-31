@@ -196,23 +196,17 @@ def normalize_phone_number(
 CHARIOW_API_URL = "https://api.chariow.com/v1/checkout"
 
 CHARIOW_PRODUCTS = {
-    # ========================================================
     # PACKS PRINCIPAUX
-    # ========================================================
+    "light_pack": "prd_2tjuesk8",
+    "intermediate_pack": "prd_vcyhokci",
+    "pro_pack": "prd_2cvlitcn",
+    "business_pack": "prd_cxq3ljlo",
 
-    "light_pack": "prd_v8usp6po",
-    "intermediate_pack": "prd_soqhl40l",
-    "pro_pack": "prd_o99vfrh8",
-    "business_pack": "prd_30huzdah",
-
-    # ========================================================
     # PACKS COMPLÉMENTAIRES
-    # ========================================================
-
-    "credits_1000_563": "prd_fzpye84k",
-    "credits_2000": "prd_ogtnea3w",
-    "credits_4000": "prd_dkwkowfu",
-    "credits_10000": "prd_59tc7tcl",
+    "credits_1000_563": "prd_4lgc2hbs",
+    "credits_2000": "prd_mfrpb7jz",
+    "credits_4000": "prd_ab0u0n7q",
+    "credits_10000": "prd_iapt4thh",
 }
 
 
