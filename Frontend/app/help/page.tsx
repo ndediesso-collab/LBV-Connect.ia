@@ -18,7 +18,7 @@ import { useState } from "react";
 const categories = [
   {
     title: "Premiers pas",
-    description: "Découvrez comment utiliser LBV-Connect.ia.",
+    description: "Découvrez comment utiliser Oria.",
     icon: Sparkles,
   },
   {
@@ -40,9 +40,9 @@ const categories = [
 
 const faqs = [
   {
-    question: "Qu'est-ce que LBV-Connect.ia ?",
+    question: "Qu'est-ce que Oria ?",
     answer:
-      "LBV-Connect.ia est une interface qui rassemble différentes technologies d'intelligence artificielle au même endroit.",
+      "Oria est une interface qui rassemble différentes technologies d'intelligence artificielle au même endroit.",
   },
   {
     question: "À quoi servent les crédits ?",
@@ -62,10 +62,10 @@ const faqs = [
   {
     question: "Que se passe-t-il lorsque mes crédits sont épuisés ?",
     answer:
-      "Vous pouvez acheter des crédits complémentaires afin de continuer à utiliser LBV-Connect.ia.",
+      "Vous pouvez acheter des crédits complémentaires afin de continuer à utiliser Oria.",
   },
   {
-    question: "Puis-je utiliser LBV-Connect.ia sur mobile ?",
+    question: "Puis-je utiliser Oria sur mobile ?",
     answer:
       "L'interface est conçue pour être responsive et s'adapter aux smartphones, tablettes et ordinateurs.",
   },
@@ -104,7 +104,7 @@ export default function HelpPage() {
             <div className="flex items-center gap-2">
               <Sparkles size={18} />
               <span className="font-semibold tracking-tight">
-                LBV-Connect.ia
+                Oria
               </span>
             </div>
           </div>
@@ -131,7 +131,7 @@ export default function HelpPage() {
 
           <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-neutral-500 sm:text-base">
             Retrouvez les réponses aux questions les plus fréquentes sur
-            LBV-Connect.ia.
+            Oria.
           </p>
 
           <div className="relative mx-auto mt-7 max-w-2xl">

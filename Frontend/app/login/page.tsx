@@ -71,7 +71,7 @@ export default function LoginPage() {
     }
 
     console.log(
-      "LBV-Connect.ia : accès accordé.",
+      "Oria : accès accordé.",
     );
 
     setSuccessMessage(
@@ -100,7 +100,7 @@ export default function LoginPage() {
           >
             <Sparkles size={18} />
 
-            LBV-Connect.ia
+            Oria.
           </Link>
         </div>
       </header>
@@ -134,7 +134,7 @@ export default function LoginPage() {
 
               <p className="mt-2 text-sm leading-6 text-muted">
                 Connectez-vous à votre compte
-                LBV-Connect.ia pour continuer.
+                Oria pour continuer.
               </p>
             </div>
 
@@ -323,7 +323,7 @@ export default function LoginPage() {
             En continuant, vous acceptez les
             conditions d&apos;utilisation et la
             politique de confidentialité de
-            LBV-Connect.ia.
+            Oria.
           </p>
         </div>
       </div>

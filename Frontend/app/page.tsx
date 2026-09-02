@@ -11,7 +11,7 @@ export default function Home() {
           <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-surface-secondary text-sm font-bold transition-transform duration-300 group-hover:-rotate-3">
             N
           </span>
-          <span>NKYEL</span>
+          <span>Oria</span>
         </Link>
 
         <div className="flex items-center gap-2 sm:gap-3">
@@ -66,7 +66,7 @@ export default function Home() {
             </h1>
 
             <p className="mx-auto mt-8 max-w-3xl text-base leading-8 text-muted-strong sm:text-lg">
-              NKYEL réunit plusieurs modèles d&apos;intelligence artificielle
+              Oria réunit plusieurs modèles d&apos;intelligence artificielle
               dans un seul espace pour discuter, raisonner, rechercher sur le
               Web, analyser vos fichiers et créer des images ou des vidéos.
             </p>
@@ -76,7 +76,7 @@ export default function Home() {
                 href="/packs"
                 className="w-full rounded-xl bg-foreground px-6 py-3.5 text-sm font-medium text-background transition hover:-translate-y-0.5 hover:opacity-90 sm:w-auto"
               >
-                Découvrir NKYEL
+                Découvrir Oria
               </Link>
 
               <Link

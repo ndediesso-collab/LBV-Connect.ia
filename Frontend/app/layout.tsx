@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LBV-Connect.ia",
-  description: "Votre espace intelligent LBV-Connect.ia",
+  title: "Oria",
+  description: "Votre espace intelligent Oria",
 };
 
 export default function RootLayout({

@@ -466,7 +466,7 @@ export default function RegisterPage() {
           >
             <Sparkles size={18} />
 
-            LBV-Connect.ia
+            Oria
           </Link>
         </div>
       </header>
@@ -499,7 +499,7 @@ export default function RegisterPage() {
               </h1>
 
               <p className="mt-2 text-sm leading-6 text-muted">
-                Rejoignez LBV-Connect.ia et
+                Rejoignez Oria et
                 accédez à vos outils
                 d&apos;intelligence artificielle
                 depuis un seul espace.
@@ -790,7 +790,7 @@ export default function RegisterPage() {
                   J&apos;accepte les conditions
                   d&apos;utilisation et la
                   politique de confidentialité
-                  de LBV-Connect.ia.
+                  de Oria.
                 </span>
               </label>
 

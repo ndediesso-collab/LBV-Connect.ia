@@ -590,7 +590,7 @@ export default function CreditsPage() {
               <Sparkles size={18} />
 
               <span className="font-semibold tracking-tight">
-                LBV-Connect.ia
+                Oria
               </span>
             </div>
           </div>
@@ -627,7 +627,7 @@ export default function CreditsPage() {
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
             Suivez votre solde et comprenez
             comment vos crédits sont utilisés
-            sur LBV-Connect.ia.
+            sur ORIA.
           </p>
         </div>
 

@@ -143,8 +143,8 @@ function getMediaGenerationConfig(action: string) {
   return MEDIA_GENERATION_CONFIGS.find((item) => item.action === action);
 }
 
-const NKYEL_MEDIA_MARKER_REGEX =
-  /\[\[NKYEL_MEDIA_ID:([^\]]+)\]\]/;
+const ORIA_MEDIA_MARKER_REGEX =
+  /\[\[ORIA_MEDIA_ID:([^\]]+)\]\]/;
 
 function buildMediaMessageContent(
   type: "image" | "video",
@@ -152,7 +152,7 @@ function buildMediaMessageContent(
   mediaId: string,
 ): string {
   return `${type === "image" ? "Image" : "Vidéo"} générée · ${action}
-[[NKYEL_MEDIA_ID:${mediaId}]]`;
+[[ORIA_MEDIA_ID:${mediaId}]]`;
 }
 
 function extractMediaIdFromMessage(
@@ -160,7 +160,7 @@ function extractMediaIdFromMessage(
 ): string | null {
   return (
     content.match(
-      NKYEL_MEDIA_MARKER_REGEX,
+      ORIA_MEDIA_MARKER_REGEX,
     )?.[1] ?? null
   );
 }
@@ -170,7 +170,7 @@ function getVisibleMessageContent(
 ): string {
   return content
     .replace(
-      /\s*\[\[NKYEL_MEDIA_ID:[^\]]+\]\]\s*$/g,
+      /\s*\[\[ORIA_MEDIA_ID:[^\]]+\]\]\s*$/g,
       "",
     )
     .trimEnd();
@@ -224,7 +224,7 @@ type LocalChatCache = {
 };
 
 const LOCAL_CACHE_PREFIX =
-  "nkyel_chat_cache_v1";
+  "oria_chat_cache_v1";
 
 function getLocalCacheKey(userId: string) {
   return `${LOCAL_CACHE_PREFIX}_${userId}`;
@@ -285,7 +285,7 @@ function readLocalCache(
     };
   } catch (error) {
     console.error(
-      "Erreur lecture cache NKYEL :",
+      "Erreur lecture cache Oria :",
       error,
     );
 
@@ -313,7 +313,7 @@ function writeLocalCache(
     );
   } catch (error) {
     console.error(
-      "Erreur sauvegarde cache NKYEL :",
+      "Erreur sauvegarde cache Oria :",
       error,
     );
   }
@@ -330,7 +330,7 @@ function removeLocalCache(userId: string) {
     );
   } catch (error) {
     console.error(
-      "Erreur suppression cache NKYEL :",
+      "Erreur suppression cache Oria :",
       error,
     );
   }
@@ -2113,7 +2113,7 @@ export default function ChatPage() {
 
       setGeneratedMedia(restored);
     } catch (requestError) {
-      console.error("Erreur chargement créations NKYEL :", requestError);
+      console.error("Erreur chargement créations Oria :", requestError);
     }
   }
 
@@ -2219,7 +2219,7 @@ export default function ChatPage() {
 
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = `nkyel-${media.id}.${safeExtension}`;
+      link.download = `oria-${media.id}.${safeExtension}`;
       link.rel = "noopener";
       document.body.appendChild(link);
       link.click();
@@ -2229,7 +2229,7 @@ export default function ChatPage() {
         URL.revokeObjectURL(objectUrl);
       }, 1000);
     } catch (downloadError) {
-      console.error("Erreur téléchargement média NKYEL :", downloadError);
+      console.error("Erreur téléchargement média Oria :", downloadError);
 
       // Fallback navigateur : ouvre directement l'URL publique persistée.
       window.open(media.url, "_blank", "noopener,noreferrer");
@@ -3428,7 +3428,7 @@ export default function ChatPage() {
         requestError instanceof
         Error
           ? requestError.message
-          : "Impossible de contacter NKYEL.";
+          : "Impossible de contacter Oria.";
 
       const assistantMessage:
         ChatMessage = {
@@ -3542,7 +3542,7 @@ export default function ChatPage() {
         <div className="flex h-16 items-center justify-between px-5">
           <div>
             <div className="font-semibold tracking-tight">
-              NKYEL
+              Oria
             </div>
 
             <div className="mt-0.5 text-[10px] uppercase tracking-[0.18em] text-muted">
@@ -3793,7 +3793,7 @@ export default function ChatPage() {
 
                     <div>
                       <p className="text-xs uppercase tracking-[0.18em] text-muted">
-                        NKYEL
+                        Oria
                       </p>
 
                       <p className="text-sm font-medium">
@@ -3892,7 +3892,7 @@ export default function ChatPage() {
                                 {media.type === "image" ? (
                                   <img
                                     src={media.url}
-                                    alt="Image générée par NKYEL"
+                                    alt="Image générée par Oria"
                                     className="max-h-[620px] w-auto rounded-2xl border border-border shadow-sm"
                                   />
                                 ) : (
@@ -3936,7 +3936,7 @@ export default function ChatPage() {
                             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:300ms]" />
                           </span>
 
-                          NKYEL réfléchit...
+                          Oria réfléchit...
                         </div>
                       </div>
                     </div>
@@ -4398,7 +4398,7 @@ export default function ChatPage() {
                       handleSendMessage();
                     }
                   }}
-                  placeholder={activeCapability === "Création" ? "Décrivez votre création..." : "Écrivez à NKYEL..."}
+                  placeholder={activeCapability === "Création" ? "Décrivez votre création..." : "Écrivez à Oria..."}
                   disabled={
                     isThinking
                   }

@@ -1054,7 +1054,7 @@ async function reverseGeocode(
               <Sparkles size={18} />
 
               <span className="font-semibold tracking-tight">
-                LBV-Connect.ia
+                Oria
               </span>
             </div>
           </div>
@@ -1080,7 +1080,7 @@ async function reverseGeocode(
 
           <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
             Gérez votre compte et vos préférences
-            LBV-Connect.ia.
+            Oria.
           </p>
         </div>
 
@@ -1537,7 +1537,7 @@ async function reverseGeocode(
             <SettingsSection
               icon={<Sparkles size={18} />}
               title="Abonnement"
-              description="Consultez votre accès actuel à LBV-Connect.ia."
+              description="Consultez votre accès actuel à Oria."
             >
               <SettingsRow
                 icon={<Sparkles size={17} />}
@@ -1607,7 +1607,7 @@ async function reverseGeocode(
         )}
 
         <p className="mt-8 text-center text-xs text-[var(--muted)]">
-          LBV-Connect.ia · Version 1.0
+          Oria · Version 1.0
         </p>
       </section>
     </main>

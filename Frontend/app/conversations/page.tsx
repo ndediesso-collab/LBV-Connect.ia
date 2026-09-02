@@ -254,7 +254,7 @@ export default function ConversationsPage() {
               <Sparkles size={18} />
 
               <span className="font-semibold tracking-tight">
-                LBV-Connect.ia
+                Oria
               </span>
             </div>
           </div>
@@ -293,7 +293,7 @@ export default function ConversationsPage() {
             <p className="mt-2 max-w-xl text-sm leading-6 text-neutral-500">
               Retrouvez vos conversations avec
               les différents modèles de
-              LBV-Connect.ia.
+              Oria.
             </p>
           </div>
 

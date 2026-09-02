@@ -53,7 +53,7 @@ type CreditTopUp = {
 
 /*
  * ============================================================
- * PACKS LBV-CONNECT.IA
+ * PACKS Oria
  * ============================================================
  *
  * Cette configuration correspond à la logique actuellement
@@ -110,7 +110,7 @@ const packs: Pack[] = [
     duration: "35 jours",
 
     description:
-      "L'accès essentiel à LBV-Connect.ia pour les usages courants.",
+      "L'accès essentiel à Oria pour les usages courants.",
 
     features: [
       "Chat avec Luna",
@@ -407,7 +407,7 @@ const faqs = [
       "Combien de temps mes crédits sont-ils valables ?",
 
     answer:
-      "Les crédits sont valables pendant la durée de votre pack. Tous les packs LBV-Connect.ia sont actuellement configurés pour une durée de 35 jours.",
+      "Les crédits sont valables pendant la durée de votre pack. Tous les packs Oria sont actuellement configurés pour une durée de 35 jours.",
   },
 
   {
@@ -439,7 +439,7 @@ const faqs = [
       "Puis-je acheter des crédits supplémentaires ?",
 
     answer:
-      "Oui. Vous pouvez acheter des recharges complémentaires de 1 000 crédits pour 563 XAF, 2 000 crédits pour 1 000 XAF, 4 000 crédits pour 2 000 XAF ou 10 000 crédits pour 5 000 XAF. Le paiement est lancé depuis cette page et confirmé par le système de paiement LBV-Connect.ia.",
+      "Oui. Vous pouvez acheter des recharges complémentaires de 1 000 crédits pour 563 XAF, 2 000 crédits pour 1 000 XAF, 4 000 crédits pour 2 000 XAF ou 10 000 crédits pour 5 000 XAF. Le paiement est lancé depuis cette page et confirmé par le système de paiement Oria.",
   },
 
   {
@@ -598,7 +598,7 @@ export default function PacksPage() {
               <Sparkles size={18} />
 
               <span className="font-semibold tracking-tight">
-                LBV-Connect.ia
+                Oria
               </span>
             </div>
           </div>
@@ -623,7 +623,7 @@ export default function PacksPage() {
 
         <div className="mx-auto max-w-2xl text-center">
           <p className="text-sm font-medium text-muted">
-            Packs LBV-Connect.ia
+            Packs Oria
           </p>
 
           <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-5xl">
@@ -798,7 +798,7 @@ export default function PacksPage() {
 
             <Step
               number="02"
-              title="Utilisez LBV"
+              title="Utilisez Oria"
               description="Utilisez les modèles, la recherche Web, les images, les vidéos et les autres capacités incluses dans votre pack."
             />
 

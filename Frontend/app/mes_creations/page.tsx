@@ -294,7 +294,7 @@ export default function CreationsPage() {
 
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = `nkyel-${item.id}.${extension}`;
+      link.download = `oria-${item.id}.${extension}`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -397,7 +397,7 @@ export default function CreationsPage() {
 
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-black/40">
-                  NKYEL
+                  Oria
                 </p>
                 <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
                   Mes créations
@@ -406,7 +406,7 @@ export default function CreationsPage() {
             </div>
 
             <p className="mt-3 max-w-xl text-sm leading-6 text-black/55">
-              Retrouvez ici vos images et vidéos générées avec NKYEL.
+              Retrouvez ici vos images et vidéos générées avec Oria.
             </p>
           </div>
 
@@ -518,7 +518,7 @@ export default function CreationsPage() {
             <h2 className="text-xl font-semibold">Aucune création pour le moment</h2>
 
             <p className="mt-2 max-w-md text-sm leading-6 text-black/50">
-              Vos images et vidéos générées avec NKYEL apparaîtront
+              Vos images et vidéos générées avec Oria apparaîtront
               automatiquement ici.
             </p>
 
@@ -566,7 +566,7 @@ export default function CreationsPage() {
                       type === "image" ? (
                         <img
                           src={url}
-                          alt={item.prompt || "Création générée avec NKYEL"}
+                          alt={item.prompt || "Création générée avec Oria"}
                           className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.025]"
                           loading="lazy"
                         />
@@ -728,7 +728,7 @@ export default function CreationsPage() {
                 getMediaType(selectedMedia) === "image" ? (
                   <img
                     src={normalizeMediaUrl(selectedMedia) || ""}
-                    alt={selectedMedia.prompt || "Création NKYEL"}
+                    alt={selectedMedia.prompt || "Création Oria"}
                     className="max-h-[78vh] max-w-full object-contain"
                   />
                 ) : (
