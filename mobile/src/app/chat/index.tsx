@@ -1,12 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   Image,
   KeyboardAvoidingView,
   Linking,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   SafeAreaView,
@@ -14,15 +16,18 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { VideoView, useVideoPlayer } from "expo-video";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase/client";
 import * as SecureStore from "expo-secure-store";
+import { File as ExpoFile } from "expo-file-system";
+import { fetch as expoFetch } from "expo/fetch";
 import { Ionicons } from "@expo/vector-icons";
 
 /**
@@ -46,20 +51,12 @@ import { Ionicons } from "@expo/vector-icons";
  *   POST /ai/video
  *   POST /ai/chat/stream
  *
- * Le cache navigateur localStorage est remplacé par SecureStore.
+ * Le cache utilise localStorage sur Web et SecureStore sur Android/iOS.
  */
 
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, "") ||
   "https://lbv-connect-api.onrender.com";
-
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
-
-const supabase: SupabaseClient | null =
-  SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-    : null;
 
 type Role = "user" | "assistant";
 
@@ -349,7 +346,15 @@ async function apiStreamFetch(
 ): Promise<Response> {
   const session = await getSessionOrThrow();
 
-  const response = await fetch(`${API_URL}${path}`, {
+  /*
+   * IMPORTANT MOBILE:
+   * Expo's native/WinterCG fetch expects real Blob/File objects for
+   * multipart parts. A React-Native `{ uri, type, name }` object can
+   * trigger: "Unsupported FormDataPart implementation".
+   *
+   * The files appended below are therefore Expo File instances.
+   */
+  const response = await expoFetch(`${API_URL}${path}`, {
     method: "POST",
     headers: {
       "user-id": session.user.id,
@@ -392,9 +397,29 @@ function cacheKey(userId: string) {
   return `${LOCAL_CACHE_PREFIX}_${userId}`;
 }
 
+function getWebStorage() {
+  if (Platform.OS !== "web") return null;
+
+  try {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return null;
+    }
+
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 async function readLocalCache(userId: string): Promise<LocalChatCache | null> {
   try {
-    const raw = await SecureStore.getItemAsync(cacheKey(userId));
+    const key = cacheKey(userId);
+
+    const raw =
+      Platform.OS === "web"
+        ? getWebStorage()?.getItem(key) ?? null
+        : await SecureStore.getItemAsync(key);
+
     if (!raw) return null;
 
     const parsed = JSON.parse(raw);
@@ -440,7 +465,14 @@ async function writeLocalCache(
       savedAt: new Date().toISOString(),
     };
 
-    await SecureStore.setItemAsync(cacheKey(userId), JSON.stringify(payload));
+    const key = cacheKey(userId);
+    const serialized = JSON.stringify(payload);
+
+    if (Platform.OS === "web") {
+      getWebStorage()?.setItem(key, serialized);
+    } else {
+      await SecureStore.setItemAsync(key, serialized);
+    }
   } catch (error) {
     console.error("Erreur sauvegarde cache Oria :", error);
   }
@@ -448,7 +480,13 @@ async function writeLocalCache(
 
 async function removeLocalCache(userId: string) {
   try {
-    await SecureStore.deleteItemAsync(cacheKey(userId));
+    const key = cacheKey(userId);
+
+    if (Platform.OS === "web") {
+      getWebStorage()?.removeItem(key);
+    } else {
+      await SecureStore.deleteItemAsync(key);
+    }
   } catch (error) {
     console.error("Erreur suppression cache Oria :", error);
   }
@@ -489,13 +527,222 @@ async function saveMessageRemote(
   return data as ChatMessage;
 }
 
+
+function readBalancedGroup(source: string, start: number) {
+  if (source[start] !== "{") return null;
+
+  let depth = 0;
+  for (let i = start; i < source.length; i += 1) {
+    if (source[i] === "{") depth += 1;
+    if (source[i] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          value: source.slice(start + 1, i),
+          end: i + 1,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeMathText(value: string) {
+  return value
+    .replace(/\\text\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\text\s*\[([^\]]*)\}/g, "$1")
+    .replace(/\\text\s*\[([^\]]*)\]/g, "$1")
+    .replace(/\\mathrm\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\mathbf\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\operatorname\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\left/g, "")
+    .replace(/\\right/g, "")
+    .replace(/\\cdot/g, "·")
+    .replace(/\\times/g, "×")
+    .replace(/\\div/g, "÷")
+    .replace(/\\pm/g, "±")
+    .replace(/\\mp/g, "∓")
+    .replace(/\\leq/g, "≤")
+    .replace(/\\geq/g, "≥")
+    .replace(/\\neq/g, "≠")
+    .replace(/\\approx/g, "≈")
+    .replace(/\\rightarrow/g, "→")
+    .replace(/\\to/g, "→")
+    .replace(/\\infty/g, "∞")
+    .replace(/\\pi/g, "π")
+    .replace(/\\alpha/g, "α")
+    .replace(/\\beta/g, "β")
+    .replace(/\\gamma/g, "γ")
+    .replace(/\\delta/g, "δ")
+    .replace(/\\theta/g, "θ")
+    .replace(/\\lambda/g, "λ")
+    .replace(/\\mu/g, "μ")
+    .replace(/\\sigma/g, "σ")
+    .replace(/\\sum/g, "Σ")
+    .replace(/\\prod/g, "Π")
+    .replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)")
+    .replace(/\^\{([^{}]*)\}/g, (_, exponent: string) => {
+      const superscriptMap: Record<string, string> = {
+        "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
+        "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+        "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+        "n": "ⁿ", "i": "ⁱ",
+      };
+      return exponent
+        .split("")
+        .map((char) => superscriptMap[char] ?? char)
+        .join("");
+    })
+    .replace(/_\{([^{}]*)\}/g, "$1")
+    .replace(/\\([{}])/g, "$1")
+    .replace(/[{}]/g, "")
+    .replace(/\\+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function MathInline({ value }: { value: string }) {
+  return (
+    <Text style={styles.inlineMathText}>
+      {normalizeMathText(value)}
+    </Text>
+  );
+}
+
+function MathExpression({ source }: { source: string }) {
+  const value = source.trim();
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
+
+  const pushPlain = (plain: string) => {
+    if (!plain) return;
+    const normalized = normalizeMathText(plain);
+    if (!normalized) return;
+    parts.push(
+      <Text key={`math-text-${key++}`} style={styles.mathText}>
+        {normalized}
+      </Text>,
+    );
+  };
+
+  while (cursor < value.length) {
+    const fractionIndex = value.indexOf("\\frac", cursor);
+    const sqrtIndex = value.indexOf("\\sqrt", cursor);
+
+    const candidates = [fractionIndex, sqrtIndex].filter((index) => index >= 0);
+    const commandIndex = candidates.length ? Math.min(...candidates) : -1;
+
+    if (commandIndex < 0) {
+      pushPlain(value.slice(cursor));
+      break;
+    }
+
+    pushPlain(value.slice(cursor, commandIndex));
+
+    if (commandIndex === fractionIndex) {
+      const numeratorStart = commandIndex + 5;
+      const numerator = readBalancedGroup(value, numeratorStart);
+
+      if (!numerator) {
+        pushPlain(value.slice(commandIndex, commandIndex + 5));
+        cursor = commandIndex + 5;
+        continue;
+      }
+
+      const denominator = readBalancedGroup(value, numerator.end);
+
+      if (!denominator) {
+        pushPlain(value.slice(commandIndex, numerator.end));
+        cursor = numerator.end;
+        continue;
+      }
+
+      parts.push(
+        <View key={`fraction-${key++}`} style={styles.fraction}>
+          <View style={styles.fractionPart}>
+            <Text style={styles.fractionText}>
+              {normalizeMathText(numerator.value)}
+            </Text>
+          </View>
+          <View style={styles.fractionLine} />
+          <View style={styles.fractionPart}>
+            <Text style={styles.fractionText}>
+              {normalizeMathText(denominator.value)}
+            </Text>
+          </View>
+        </View>,
+      );
+
+      cursor = denominator.end;
+      continue;
+    }
+
+    const radicand = readBalancedGroup(value, commandIndex + 5);
+    if (!radicand) {
+      pushPlain("\\sqrt");
+      cursor = commandIndex + 5;
+      continue;
+    }
+
+    parts.push(
+      <Text key={`sqrt-${key++}`} style={styles.mathText}>
+        {"√("}
+        {normalizeMathText(radicand.value)}
+        {")"}
+      </Text>,
+    );
+
+    cursor = radicand.end;
+  }
+
+  return (
+    <View style={styles.mathBlock}>
+      <View style={styles.mathExpression}>{parts}</View>
+    </View>
+  );
+}
+
+function MessageCopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await Clipboard.setStringAsync(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (error) {
+      console.warn("Copie impossible :", error);
+    }
+  }
+
+  return (
+    <Pressable
+      onPress={() => void copy()}
+      style={styles.messageCopyButton}
+      accessibilityRole="button"
+      accessibilityLabel="Copier le message"
+    >
+      <Ionicons
+        name={copied ? "checkmark" : "copy-outline"}
+        size={13}
+        color="#777771"
+      />
+      <Text style={styles.messageCopyText}>
+        {copied ? "Copié" : "Copier"}
+      </Text>
+    </Pressable>
+  );
+}
+
 function InlineMarkdown({ text }: { text: string }) {
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let index = 0;
 
   const tokenRegex =
-    /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
+    /(\\\([^\n]*?\\\)|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
 
   while (remaining.length > 0) {
     const match = remaining.match(tokenRegex);
@@ -531,6 +778,13 @@ function InlineMarkdown({ text }: { text: string }) {
         <Text key={index} style={styles.inlineCode}>
           {token.slice(1, -1)}
         </Text>,
+      );
+    } else if (token.startsWith("\\(") && token.endsWith("\\)")) {
+      parts.push(
+        <MathInline
+          key={index}
+          value={token.slice(2, -2)}
+        />,
       );
     } else if (token.startsWith("[")) {
       const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
@@ -573,7 +827,9 @@ function MarkdownMessage({ content }: { content: string }) {
   let numbered: string[] = [];
   let code: string[] = [];
   let language = "";
+  let math: string[] = [];
   let inCode = false;
+  let inMath = false;
   let index = 0;
 
   const flushParagraph = () => {
@@ -634,6 +890,21 @@ function MarkdownMessage({ content }: { content: string }) {
     flushNumbered();
   };
 
+  const flushMath = () => {
+    if (!math.length) return;
+
+    blocks.push(
+      <MathExpression
+        key={`math-${index}`}
+        source={math.join("\n")}
+      />,
+    );
+
+    index++;
+    math = [];
+    inMath = false;
+  };
+
   const flushCode = () => {
     if (!inCode) return;
 
@@ -649,6 +920,60 @@ function MarkdownMessage({ content }: { content: string }) {
 
   lines.forEach((line) => {
     const trimmed = line.trim();
+
+    const singleDisplayMath = trimmed.match(/^\\\[(.*)\\\]$/);
+    const singleDollarMath = trimmed.match(/^\$\$(.*)\$\$$/);
+
+    if (!inCode && !inMath && singleDisplayMath) {
+      flushLists();
+      flushParagraph();
+      blocks.push(
+        <MathExpression
+          key={`math-${index}`}
+          source={singleDisplayMath[1]}
+        />,
+      );
+      index++;
+      return;
+    }
+
+    if (!inCode && !inMath && singleDollarMath) {
+      flushLists();
+      flushParagraph();
+      blocks.push(
+        <MathExpression
+          key={`math-${index}`}
+          source={singleDollarMath[1]}
+        />,
+      );
+      index++;
+      return;
+    }
+
+    if (!inCode && trimmed === "\\[") {
+      flushLists();
+      flushParagraph();
+      math = [];
+      inMath = true;
+      return;
+    }
+
+    if (!inCode && trimmed === "$$") {
+      flushLists();
+      flushParagraph();
+      math = [];
+      inMath = true;
+      return;
+    }
+
+    if (inMath) {
+      if (trimmed === "\\]" || trimmed === "$$") {
+        flushMath();
+      } else {
+        math.push(line);
+      }
+      return;
+    }
 
     if (trimmed.startsWith("```")) {
       if (!inCode) {
@@ -754,6 +1079,7 @@ function MarkdownMessage({ content }: { content: string }) {
   });
 
   if (inCode) flushCode();
+  if (inMath) flushMath();
   flushLists();
   flushParagraph();
 
@@ -906,6 +1232,112 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [drawerVisible, setDrawerVisible] = useState(false);
+  const { width: screenWidth } = useWindowDimensions();
+  const drawerWidth = Math.min(290, Math.max(235, screenWidth * 0.74));
+  const drawerTranslateX = useRef(new Animated.Value(-320)).current;
+
+  const openDrawer = useCallback(() => {
+    drawerTranslateX.stopAnimation();
+    drawerTranslateX.setValue(-drawerWidth);
+    setDrawerVisible(true);
+    setSidebarOpen(true);
+
+    requestAnimationFrame(() => {
+      Animated.timing(drawerTranslateX, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }).start();
+    });
+  }, [drawerTranslateX, drawerWidth]);
+
+  const closeDrawer = useCallback(() => {
+    drawerTranslateX.stopAnimation();
+
+    Animated.timing(drawerTranslateX, {
+      toValue: -drawerWidth,
+      duration: 190,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setSidebarOpen(false);
+        setDrawerVisible(false);
+      }
+    });
+  }, [drawerTranslateX, drawerWidth]);
+
+  const edgePanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          !drawerVisible &&
+          gesture.x0 <= 28 &&
+          gesture.dx > 8 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy),
+        onPanResponderMove: (_, gesture) => {
+          drawerTranslateX.setValue(
+            Math.max(
+              -drawerWidth,
+              Math.min(0, -drawerWidth + gesture.dx),
+            ),
+          );
+        },
+        onPanResponderRelease: (_, gesture) => {
+          if (gesture.dx > drawerWidth * 0.22) {
+            openDrawer();
+          } else {
+            Animated.timing(drawerTranslateX, {
+              toValue: -drawerWidth,
+              duration: 150,
+              useNativeDriver: true,
+            }).start();
+          }
+        },
+        onPanResponderTerminate: () => {
+          Animated.timing(drawerTranslateX, {
+            toValue: -drawerWidth,
+            duration: 150,
+            useNativeDriver: true,
+          }).start();
+        },
+      }),
+    [drawerVisible, drawerTranslateX, drawerWidth, openDrawer],
+  );
+
+  const drawerPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gesture) =>
+          drawerVisible &&
+          gesture.dx < -8 &&
+          Math.abs(gesture.dx) > Math.abs(gesture.dy),
+        onPanResponderMove: (_, gesture) => {
+          drawerTranslateX.setValue(
+            Math.max(-drawerWidth, Math.min(0, gesture.dx)),
+          );
+        },
+        onPanResponderRelease: (_, gesture) => {
+          if (gesture.dx < -drawerWidth * 0.22) {
+            closeDrawer();
+          } else {
+            Animated.timing(drawerTranslateX, {
+              toValue: 0,
+              duration: 150,
+              useNativeDriver: true,
+            }).start();
+          }
+        },
+        onPanResponderTerminate: () => {
+          Animated.timing(drawerTranslateX, {
+            toValue: 0,
+            duration: 150,
+            useNativeDriver: true,
+          }).start();
+        },
+      }),
+    [drawerVisible, drawerTranslateX, drawerWidth, closeDrawer],
+  );
 
   const [mediaCapabilities, setMediaCapabilities] =
     useState<MediaCapability[]>(
@@ -1321,7 +1753,7 @@ export default function ChatPage() {
     setAttachments([]);
     setActiveCapability(null);
     setError(null);
-    setSidebarOpen(false);
+    closeDrawer();
 
     if (currentUserId) {
       const cache = await readLocalCache(currentUserId);
@@ -1365,7 +1797,7 @@ export default function ChatPage() {
 
   async function selectConversation(conversationId: string) {
     setActiveConversationId(conversationId);
-    setSidebarOpen(false);
+    closeDrawer();
     setError(null);
 
     if (currentUserId) {
@@ -1867,13 +2299,21 @@ export default function ChatPage() {
       formData.append("conversation_id", conversationId);
 
       for (const attachment of attachments) {
+        /*
+         * Do NOT append the React Native `{ uri, type, name }` shape here.
+         * Expo's multipart implementation can reject that object with:
+         * "Unsupported FormDataPart implementation".
+         *
+         * ExpoFile implements Blob and can be appended directly to FormData.
+         * DocumentPicker already copies files to the app cache and ImagePicker
+         * provides a local file URI, so both attachment types are supported.
+         */
+        const nativeFile = new ExpoFile(attachment.uri);
+
         formData.append(
           "files",
-          {
-            uri: attachment.uri,
-            type: attachment.mimeType,
-            name: attachment.name,
-          } as any,
+          nativeFile,
+          attachment.name,
         );
       }
 
@@ -2098,6 +2538,10 @@ export default function ChatPage() {
 
   function renderMessage({ item }: { item: ChatMessage }) {
     const media = findMediaForMessage(item);
+    const copyValue =
+      item.role === "assistant"
+        ? getVisibleMessageContent(item.content)
+        : item.content;
 
     return (
       <View
@@ -2121,10 +2565,19 @@ export default function ChatPage() {
               content={getVisibleMessageContent(item.content)}
             />
           ) : (
-            <Text style={styles.userText}>
-              {item.content}
-            </Text>
+            <Text style={styles.userText}>{item.content}</Text>
           )}
+        </View>
+
+        <View
+          style={[
+            styles.messageActions,
+            item.role === "user"
+              ? styles.messageActionsUser
+              : styles.messageActionsAssistant,
+          ]}
+        >
+          <MessageCopyButton value={copyValue} />
         </View>
 
         {media ? (
@@ -2150,9 +2603,7 @@ export default function ChatPage() {
                 size={15}
                 color="#ffffff"
               />
-              <Text style={styles.openMediaText}>
-                Ouvrir
-              </Text>
+              <Text style={styles.openMediaText}>Ouvrir</Text>
             </Pressable>
           </View>
         ) : null}
@@ -2168,15 +2619,16 @@ export default function ChatPage() {
 
   return (
     <SafeAreaView style={styles.safe}>
+      <Stack.Screen options={{ gestureEnabled: false }} />
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={styles.container}>
+        <View style={styles.container} {...edgePanResponder.panHandlers}>
           <View style={styles.header}>
             <Pressable
               style={styles.headerButton}
-              onPress={() => setSidebarOpen(true)}
+              onPress={openDrawer}
             >
               <Ionicons name="menu" size={22} color="#111111" />
             </Pressable>
@@ -2795,18 +3247,22 @@ export default function ChatPage() {
           </View>
 
           <Modal
-            visible={sidebarOpen}
+            visible={drawerVisible}
             transparent
-            animationType="slide"
-            onRequestClose={() => setSidebarOpen(false)}
+            animationType="none"
+            onRequestClose={closeDrawer}
           >
             <View style={styles.drawerOverlay}>
-              <Pressable
-                style={styles.drawerBackdrop}
-                onPress={() => setSidebarOpen(false)}
-              />
-
-              <View style={styles.drawer}>
+              <Animated.View
+                style={[
+                  styles.drawer,
+                  {
+                    width: drawerWidth,
+                    transform: [{ translateX: drawerTranslateX }],
+                  },
+                ]}
+                {...drawerPanResponder.panHandlers}
+              >
                 <View style={styles.drawerHeader}>
                   <View>
                     <Text style={styles.drawerBrand}>Oria</Text>
@@ -2817,7 +3273,7 @@ export default function ChatPage() {
 
                   <Pressable
                     style={styles.closeButton}
-                    onPress={() => setSidebarOpen(false)}
+                    onPress={closeDrawer}
                   >
                     <Ionicons
                       name="close"
@@ -2911,8 +3367,8 @@ export default function ChatPage() {
                   <Pressable
                     style={styles.drawerLink}
                     onPress={() => {
-                      setSidebarOpen(false);
-                      router.push("/credits"as any);
+                      closeDrawer();
+                      router.push("/credits" as any);
                     }}
                   >
                     <Ionicons
@@ -2928,7 +3384,7 @@ export default function ChatPage() {
                   <Pressable
                     style={styles.drawerLink}
                     onPress={() => {
-                      setSidebarOpen(false);
+                      closeDrawer();
                       router.push("/mes_creations" as any);
                     }}
                   >
@@ -2950,7 +3406,7 @@ export default function ChatPage() {
                   <Pressable
                     style={styles.drawerLink}
                     onPress={() => {
-                      setSidebarOpen(false);
+                      closeDrawer();
                       router.push("/settings" as any);
                     }}
                   >
@@ -2978,7 +3434,12 @@ export default function ChatPage() {
                     </Text>
                   </Pressable>
                 </View>
-              </View>
+              </Animated.View>
+
+              <Pressable
+                style={styles.drawerBackdrop}
+                onPress={closeDrawer}
+              />
             </View>
           </Modal>
         </View>
@@ -3168,6 +3629,30 @@ const styles = StyleSheet.create({
   messageRowAssistant: {
     alignItems: "flex-start",
   },
+  messageActions: {
+    marginTop: 5,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  messageActionsUser: {
+    justifyContent: "flex-end",
+  },
+  messageActionsAssistant: {
+    justifyContent: "flex-start",
+  },
+  messageCopyButton: {
+    minHeight: 28,
+    paddingHorizontal: 8,
+    borderRadius: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  messageCopyText: {
+    fontSize: 10,
+    color: "#777771",
+    fontWeight: "500",
+  },
   messageBubble: {
     maxWidth: "91%",
     borderRadius: 22,
@@ -3193,6 +3678,59 @@ const styles = StyleSheet.create({
     color: "#1b1b19",
     fontSize: 14,
     lineHeight: 22,
+  },
+  inlineMathText: {
+    color: "#1b1b19",
+    fontSize: 14,
+    lineHeight: 22,
+    fontStyle: "italic",
+  },
+  mathBlock: {
+    width: "100%",
+    marginVertical: 5,
+    paddingHorizontal: 4,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: "#f5f5f2",
+    borderWidth: 1,
+    borderColor: "#e2e2dd",
+  },
+  mathExpression: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "center",
+    columnGap: 4,
+    rowGap: 6,
+  },
+  mathText: {
+    color: "#151513",
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  fraction: {
+    minWidth: 54,
+    alignItems: "stretch",
+    justifyContent: "center",
+    marginHorizontal: 2,
+  },
+  fractionPart: {
+    minHeight: 19,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fractionText: {
+    color: "#151513",
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
+  },
+  fractionLine: {
+    height: 1,
+    backgroundColor: "#343430",
+    width: "100%",
+    minWidth: 40,
   },
   bold: {
     fontWeight: "700",
@@ -3659,20 +4197,24 @@ const styles = StyleSheet.create({
   drawerOverlay: {
     flex: 1,
     flexDirection: "row",
+    alignItems: "stretch",
   },
   drawerBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.25)",
+    backgroundColor: "rgba(0,0,0,0.22)",
   },
   drawer: {
-    width: "84%",
-    maxWidth: 340,
     backgroundColor: "#ffffff",
-    paddingHorizontal: 14,
+    paddingHorizontal: 13,
     paddingTop: 18,
     paddingBottom: 12,
-    borderTopRightRadius: 24,
-    borderBottomRightRadius: 24,
+    borderTopRightRadius: 20,
+    borderBottomRightRadius: 20,
+    shadowColor: "#000000",
+    shadowOffset: { width: 3, height: 0 },
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 10,
   },
   drawerHeader: {
     paddingHorizontal: 5,

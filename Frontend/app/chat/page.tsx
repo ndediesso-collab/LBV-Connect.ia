@@ -724,6 +724,98 @@ async function saveMessageRemote(
  * [lien](https://...)
  */
 
+function decodeLatexGroup(value: string): string {
+  return value
+    .replace(/\\text\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\mathrm\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\mathbf\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\operatorname\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\left/g, "")
+    .replace(/\\right/g, "")
+    .replace(/\\cdot/g, " · ")
+    .replace(/\\times/g, " × ")
+    .replace(/\\div/g, " ÷ ")
+    .replace(/\\pm/g, " ± ")
+    .replace(/\\mp/g, " ∓ ")
+    .replace(/\\leq/g, " ≤ ")
+    .replace(/\\geq/g, " ≥ ")
+    .replace(/\\neq/g, " ≠ ")
+    .replace(/\\approx/g, " ≈ ")
+    .replace(/\\infty/g, "∞")
+    .replace(/\\pi/g, "π")
+    .replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)")
+    .replace(/\\sqrt\s*([^\s]+)/g, "√($1)")
+    .replace(/\^\{([^{}]+)\}/g, "^($1)")
+    .replace(/_\{([^{}]+)\}/g, "_($1)")
+    .replace(/\\,/g, " ")
+    .replace(/\\;/g, " ")
+    .replace(/\\!/g, "")
+    .replace(/\\quad/g, " ")
+    .replace(/\\qquad/g, " ")
+    .replace(/\\([{}])/g, "$1")
+    .replace(/[{}]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function makeMathReadable(expression: string): string {
+  let value = expression.trim();
+
+  // Common malformed output from some models, e.g. \\text[Centre}.
+  value = value.replace(/\\text\[([^\]]+)\}/g, "$1");
+
+  // Resolve simple fractions repeatedly, including text/groups already decoded.
+  let previous = "";
+  while (previous !== value) {
+    previous = value;
+    value = value.replace(
+      /\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g,
+      "($1) ÷ ($2)",
+    );
+  }
+
+  value = decodeLatexGroup(value);
+
+  // Make powers readable without exposing LaTeX syntax.
+  const superscripts: Record<string, string> = {
+    "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
+    "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+    "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+    "n": "ⁿ", "i": "ⁱ",
+  };
+  value = value.replace(/\^\(([^)]+)\)/g, (_, exponent: string) =>
+    exponent.split("").map((char) => superscripts[char] ?? char).join(""),
+  );
+  value = value.replace(/_\(([^)]+)\)/g, (_, subscript: string) => `_${subscript}`);
+  value = value.replace(/\^([A-Za-z0-9])/g, (_, exponent: string) => superscripts[exponent] ?? exponent);
+
+  // Clean leftover commands/braces and normalize operators.
+  value = value
+    .replace(/\\text/g, "")
+    .replace(/\\frac/g, "")
+    .replace(/\\[a-zA-Z]+/g, "")
+    .replace(/[{}]/g, "")
+    .replace(/\s*([=+\-×÷±≤≥≠≈])\s*/g, " $1 ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return value;
+}
+
+function renderMathToken(expression: string, key: string) {
+  const readable = makeMathReadable(expression);
+
+  return (
+    <span
+      key={key}
+      className="mx-0.5 rounded-md bg-surface-secondary px-1.5 py-0.5 font-mono text-[0.95em]"
+      title="Expression mathématique"
+    >
+      {readable}
+    </span>
+  );
+}
+
 function renderInlineMarkdown(
   text: string,
 ) {
@@ -733,7 +825,7 @@ function renderInlineMarkdown(
   let index = 0;
 
   const tokenRegex =
-    /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
+    /(\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|\$[^$]+\$|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
 
   while (remaining.length > 0) {
     const match =
@@ -765,10 +857,29 @@ function renderInlineMarkdown(
     const token = match[0];
 
     /*
-     * GRAS
+     * MATHS INLINE
      */
 
     if (
+      (token.startsWith("\\[") && token.endsWith("\\]")) ||
+      (token.startsWith("$$") && token.endsWith("$$")) ||
+      (token.startsWith("\\(") && token.endsWith("\\)")) ||
+      (token.startsWith("$") && token.endsWith("$"))
+    ) {
+      const expression = token.startsWith("$$")
+        ? token.slice(2, -2)
+        : token.startsWith("$")
+          ? token.slice(1, -1)
+          : token.slice(2, -2);
+
+      parts.push(renderMathToken(expression, String(index)));
+    }
+
+    /*
+     * GRAS
+     */
+
+    else if (
       token.startsWith("**") &&
       token.endsWith("**")
     ) {
@@ -905,9 +1016,53 @@ function CopyButton({
       type="button"
       onClick={handleCopy}
       className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[11px] font-medium text-muted transition hover:bg-surface-tertiary hover:text-foreground"
-      aria-label="Copier le code"
-      title="Copier le code"
+      aria-label="Copier"
+      title="Copier"
     >
+      {copied ? "Copié" : "Copier"}
+    </button>
+  );
+}
+
+function MessageCopyButton({
+  value,
+}: {
+  value: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = value;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium text-muted transition hover:bg-surface-tertiary hover:text-foreground"
+      aria-label="Copier le message"
+      title="Copier le message"
+    >
+      {copied ? <Check size={13} /> : null}
       {copied ? "Copié" : "Copier"}
     </button>
   );
@@ -3521,7 +3676,7 @@ export default function ChatPage() {
         <button
           type="button"
           aria-label="Fermer le menu"
-          className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px] md:hidden"
+          className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px]"
           onClick={() =>
             setSidebarOpen(false)
           }
@@ -3533,7 +3688,7 @@ export default function ChatPage() {
           ====================================================== */}
 
       <aside
-        className={`fixed bottom-4 left-4 top-4 z-50 flex w-[260px] flex-col rounded-3xl border border-border bg-surface/95 shadow-2xl backdrop-blur-xl transition-transform duration-300 md:translate-x-0 ${
+        className={`fixed bottom-3 left-3 top-3 z-50 flex w-[min(280px,78vw)] flex-col rounded-3xl border border-border bg-surface/95 shadow-2xl backdrop-blur-xl transition-transform duration-300 ${
           sidebarOpen
             ? "translate-x-0"
             : "-translate-x-[120%]"
@@ -3558,7 +3713,7 @@ export default function ChatPage() {
               setSidebarOpen(false)
             }
           >
-            ×
+            <X size={17} />
           </button>
         </div>
 
@@ -3873,6 +4028,10 @@ export default function ChatPage() {
                               }
                             </div>
                           )}
+                        </div>
+
+                        <div className={item.role === "user" ? "mt-1 flex justify-end" : "mt-1 flex justify-start"}>
+                          <MessageCopyButton value={item.content} />
                         </div>
 
                         {(() => {

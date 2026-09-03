@@ -18,7 +18,7 @@ import {
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as SecureStore from "expo-secure-store";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase/client";
 import { AnyComponent } from "react-native-reanimated/lib/typescript/common";
 
 type Conversation = {
@@ -41,14 +41,6 @@ type ConversationResponse = {
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, "") ||
   "https://lbv-connect-api.onrender.com";
-
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "";
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
-
-const supabase =
-  SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-    : null;
 
 const CACHE_KEY = "oria_conversations_cache";
 

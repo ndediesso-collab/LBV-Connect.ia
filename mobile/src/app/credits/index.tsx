@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase/client";
 
 type PackId =
   | "light_pack"
@@ -58,14 +58,6 @@ type TransactionsResponse = { transactions: CreditTransaction[] };
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, "") ||
   "https://lbv-connect-api.onrender.com";
-
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? "";
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
-
-const supabase =
-  SUPABASE_URL && SUPABASE_ANON_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-    : null;
 
 const PACK_CONFIG: Record<
   PackId,

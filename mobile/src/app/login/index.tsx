@@ -14,18 +14,12 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { createClient } from "@supabase/supabase-js";
+
+import { supabase } from "@/lib/supabase/client";
 
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL ||
   "https://lbv-connect-api.onrender.com";
-
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
-
-function createSupabaseClient() {
-  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-}
 
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
@@ -43,7 +37,9 @@ export default function LoginPage() {
     const normalizedEmail = email.trim();
 
     if (!normalizedEmail || !password) {
-      setErrorMessage("Veuillez renseigner votre adresse e-mail et votre mot de passe.");
+      setErrorMessage(
+        "Veuillez renseigner votre adresse e-mail et votre mot de passe."
+      );
       setSuccessMessage("");
       return;
     }
@@ -53,14 +49,6 @@ export default function LoginPage() {
     setSuccessMessage("");
 
     try {
-      if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-        throw new Error(
-          "La configuration Supabase est incomplète. Vérifiez EXPO_PUBLIC_SUPABASE_URL et EXPO_PUBLIC_SUPABASE_ANON_KEY."
-        );
-      }
-
-      const supabase = createSupabaseClient();
-
       const { data, error } = await supabase.auth.signInWithPassword({
         email: normalizedEmail,
         password,
@@ -177,7 +165,11 @@ export default function LoginPage() {
 
               <View style={styles.intro}>
                 <View style={styles.lockIcon}>
-                  <Ionicons name="lock-closed-outline" size={19} color="#fff" />
+                  <Ionicons
+                    name="lock-closed-outline"
+                    size={19}
+                    color="#fff"
+                  />
                 </View>
 
                 <Text style={styles.title}>Bon retour.</Text>
@@ -259,7 +251,11 @@ export default function LoginPage() {
                       }
                     >
                       <Ionicons
-                        name={showPassword ? "eye-off-outline" : "eye-outline"}
+                        name={
+                          showPassword
+                            ? "eye-off-outline"
+                            : "eye-outline"
+                        }
                         size={19}
                         color="#777780"
                       />
@@ -327,7 +323,9 @@ export default function LoginPage() {
                 <View style={styles.googleMark}>
                   <Text style={styles.googleG}>G</Text>
                 </View>
-                <Text style={styles.googleText}>Continuer avec Google</Text>
+                <Text style={styles.googleText}>
+                  Continuer avec Google
+                </Text>
               </Pressable>
 
               <Text style={styles.registerText}>
@@ -357,18 +355,22 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#fafafa",
   },
+
   keyboardView: {
     flex: 1,
   },
+
   scrollContent: {
     flexGrow: 1,
     paddingHorizontal: 20,
     paddingVertical: 18,
   },
+
   header: {
     height: 46,
     justifyContent: "center",
   },
+
   brandButton: {
     alignSelf: "flex-start",
     flexDirection: "row",
@@ -377,12 +379,14 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingRight: 8,
   },
+
   brand: {
     color: "#17171b",
     fontSize: 15,
     fontWeight: "700",
     letterSpacing: -0.2,
   },
+
   center: {
     flex: 1,
     width: "100%",
@@ -391,6 +395,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingVertical: 28,
   },
+
   card: {
     width: "100%",
     borderWidth: 1,
@@ -404,6 +409,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 2,
   },
+
   backButton: {
     alignSelf: "flex-start",
     flexDirection: "row",
@@ -412,14 +418,17 @@ const styles = StyleSheet.create({
     marginBottom: 28,
     paddingVertical: 4,
   },
+
   backText: {
     color: "#777780",
     fontSize: 14,
     fontWeight: "500",
   },
+
   intro: {
     alignItems: "flex-start",
   },
+
   lockIcon: {
     width: 44,
     height: 44,
@@ -428,6 +437,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#17171b",
   },
+
   title: {
     marginTop: 22,
     color: "#17171b",
@@ -436,22 +446,26 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: -0.8,
   },
+
   subtitle: {
     marginTop: 7,
     color: "#777780",
     fontSize: 14,
     lineHeight: 22,
   },
+
   form: {
     marginTop: 30,
     gap: 20,
   },
+
   label: {
     marginBottom: 8,
     color: "#242429",
     fontSize: 14,
     fontWeight: "600",
   },
+
   input: {
     height: 50,
     width: "100%",
@@ -463,26 +477,32 @@ const styles = StyleSheet.create({
     color: "#17171b",
     fontSize: 14,
   },
+
   inputDisabled: {
     opacity: 0.6,
   },
+
   passwordHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 12,
   },
+
   forgotText: {
     color: "#777780",
     fontSize: 12,
     fontWeight: "600",
   },
+
   passwordContainer: {
     position: "relative",
   },
+
   passwordInput: {
     paddingRight: 52,
   },
+
   eyeButton: {
     position: "absolute",
     right: 7,
@@ -493,6 +513,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: 10,
   },
+
   errorBox: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -504,12 +525,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 13,
     paddingVertical: 11,
   },
+
   errorText: {
     flex: 1,
     color: "#b42318",
     fontSize: 13,
     lineHeight: 19,
   },
+
   successBox: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -521,12 +544,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 13,
     paddingVertical: 11,
   },
+
   successText: {
     flex: 1,
     color: "#16803c",
     fontSize: 13,
     lineHeight: 19,
   },
+
   submitButton: {
     height: 50,
     borderRadius: 13,
@@ -537,32 +562,39 @@ const styles = StyleSheet.create({
     gap: 9,
     paddingHorizontal: 16,
   },
+
   submitPressed: {
     opacity: 0.82,
   },
+
   submitDisabled: {
     opacity: 0.6,
   },
+
   submitText: {
     color: "#fff",
     fontSize: 14,
     fontWeight: "600",
   },
+
   dividerRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     marginVertical: 27,
   },
+
   divider: {
     flex: 1,
     height: 1,
     backgroundColor: "#e7e7eb",
   },
+
   dividerText: {
     color: "#9999a2",
     fontSize: 12,
   },
+
   googleButton: {
     height: 50,
     width: "100%",
@@ -575,22 +607,26 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 11,
   },
+
   googleMark: {
     width: 21,
     height: 21,
     alignItems: "center",
     justifyContent: "center",
   },
+
   googleG: {
     color: "#4285F4",
     fontSize: 17,
     fontWeight: "700",
   },
+
   googleText: {
     color: "#242429",
     fontSize: 14,
     fontWeight: "600",
   },
+
   registerText: {
     marginTop: 27,
     textAlign: "center",
@@ -598,10 +634,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
   },
+
   registerLink: {
     color: "#17171b",
     fontWeight: "700",
   },
+
   legalText: {
     marginTop: 18,
     paddingHorizontal: 10,
@@ -610,9 +648,11 @@ const styles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 18,
   },
+
   pressed: {
     opacity: 0.7,
   },
+
   disabled: {
     opacity: 0.5,
   },

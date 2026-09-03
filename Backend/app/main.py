@@ -23,14 +23,19 @@ VERCEL_PRODUCTION_ORIGIN = (
 
 
 # Previews Vercel du projet
-#
-# Exemple :
-# https://lbv-connect-xxxxx-ndediesso-collabs-projects.vercel.app
-#
-# Le domaine de production ci-dessus est géré séparément.
 VERCEL_ORIGIN_REGEX = (
     r"^https://lbv-connect-[a-z0-9-]+"
     r"-ndediesso-collabs-projects\.vercel\.app$"
+)
+
+
+# Expo Web / développement local.
+#
+# Expo peut utiliser différents ports selon le lancement
+# du serveur (8081, 8092, etc.). On autorise donc localhost
+# et 127.0.0.1 sur n'importe quel port de développement.
+LOCALHOST_ORIGIN_REGEX = (
+    r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 )
 
 
@@ -38,15 +43,23 @@ app.add_middleware(
     CORSMiddleware,
 
     # ========================================================
-    # ORIGINES AUTORISÉES
+    # ORIGINES EXACTES AUTORISÉES
     # ========================================================
 
     allow_origins=[
         VERCEL_PRODUCTION_ORIGIN,
     ],
 
-    # Previews Vercel
-    allow_origin_regex=VERCEL_ORIGIN_REGEX,
+    # ========================================================
+    # ORIGINES AUTORISÉES PAR REGEX
+    # ========================================================
+
+    # - Previews Vercel
+    # - Expo Web / localhost
+    allow_origin_regex=(
+        f"(?:{VERCEL_ORIGIN_REGEX[1:-1]})"
+        f"|(?:{LOCALHOST_ORIGIN_REGEX[1:-1]})"
+    ),
 
     # ========================================================
     # AUTHENTIFICATION
@@ -73,17 +86,9 @@ app.add_middleware(
 
 
 # ============================================================
-# ROUTES
+# ROUTES GÉNÉRALES
 # ============================================================
 
-# Routes générales :
-#
-# - crédits
-# - wallet
-# - transactions
-# - conversations
-# - historique
-# - médias / créations
 app.include_router(router)
 
 
@@ -91,15 +96,6 @@ app.include_router(router)
 # ROUTES IA
 # ============================================================
 
-# Le préfixe /ai permet d'exposer les routes définies
-# dans app.route.ai.router sous :
-#
-# - /ai/chat
-# - /ai/image
-# - /ai/video
-# - /ai/media-capabilities
-# - /ai/trials
-# - etc.
 app.include_router(
     ai_router,
     prefix="/ai",

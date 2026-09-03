@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { createClient } from "../../lib/supabase/client";
+import { supabase } from "@/lib/supabase/client";
 
 /**
  * ============================================================
@@ -523,9 +523,6 @@ export default function PacksPage() {
     if (isPaying !== null) {
       return;
     }
-
-    const supabase =
-      createClient();
 
     const {
       data: {

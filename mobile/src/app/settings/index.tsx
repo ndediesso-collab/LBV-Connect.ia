@@ -19,7 +19,7 @@ import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 
-import { createClient } from "../../lib/supabase/client";
+import { supabase } from "@/lib/supabase/client";
 
 /**
  * ============================================================
@@ -134,14 +134,6 @@ const DEFAULT_THEME: Theme = "light";
  */
 
 export default function SettingsPage() {
-  /**
-   * Client Supabase.
-   *
-   * On garde le même principe que le Web :
-   * toutes les opérations de compte passent par Supabase.
-   */
-  const supabase = createClient();
-
   /**
    * ----------------------------------------------------------
    * DONNÉES PROFIL

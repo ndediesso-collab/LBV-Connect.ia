@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { createClient } from "../../lib/supabase/client";
+import { supabase } from "../../lib/supabase/client";
 
 /**
  * Configuration d'un pays et de son indicatif téléphonique.
@@ -524,9 +524,6 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const supabase =
-        createClient();
-
       /*
        * Création du compte Supabase.
        *

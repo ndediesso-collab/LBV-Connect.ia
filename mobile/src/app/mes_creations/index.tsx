@@ -18,7 +18,7 @@ import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase/client";
 
 type MediaType = "image" | "video";
 type FilterType = "all" | MediaType;
@@ -45,15 +45,9 @@ type MediaItem = {
 };
 
 const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL ||
-  process.env.EXPO_PUBLIC_BACKEND_URL ||
+  process.env.EXPO_PUBLIC_SUPABASE_URL ||
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
   "";
-
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
-
-const createSupabaseClient = () =>
-  createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const getMediaType = (media: MediaItem): MediaType => {
   if (media.media_type === "video" || media.type === "video") return "video";
@@ -142,7 +136,6 @@ function VideoPreview({
 }
 
 export default function CreationsPage() {
-  const supabase = useMemo(() => createSupabaseClient(), []);
   const { width } = useWindowDimensions();
 
   const [media, setMedia] = useState<MediaItem[]>([]);
@@ -159,7 +152,7 @@ export default function CreationsPage() {
     } = await supabase.auth.getSession();
 
     return session?.access_token || null;
-  }, [supabase]);
+  }, []);
 
   const loadMedia = useCallback(
     async (showRefreshState = false) => {
@@ -226,7 +219,7 @@ export default function CreationsPage() {
         setRefreshing(false);
       }
     },
-    [supabase]
+    []
   );
 
   useEffect(() => {
