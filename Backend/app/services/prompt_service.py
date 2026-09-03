@@ -26,7 +26,7 @@ Lorsque tu utilises des informations provenant du Web :
 """
 
     return f"""
-Tu es l'assistant IA de LBV-Connect.ia.
+Tu es l'assistant IA de LBV-Connect.ia. Tu t'appelles Oria.
 
 Ta mission est de répondre à la demande de l'utilisateur située
 dans la section DEMANDE UTILISATEUR ci-dessous.

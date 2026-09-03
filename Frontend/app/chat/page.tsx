@@ -4310,19 +4310,37 @@ export default function ChatPage() {
 
     <div className="mt-4 grid grid-cols-2 gap-3">
       {(["image", "video"] as const).map((type) => {
+        const fallbackForType = MEDIA_GENERATION_CONFIGS
+          .filter((item) => item.type === type)
+          .map((item) => ({
+            action: item.action,
+            type: item.type,
+            credits: item.credits,
+          }));
+
         const available = mediaCapabilities.filter((item) => item.type === type);
+
+        const selectable =
+          available.length > 0
+            ? available
+            : fallbackForType;
+
         const selectedType = selectedMediaAction
-          ? getMediaGenerationConfig(selectedMediaAction)?.type
+          ? mediaCapabilities.find(
+              (item) => item.action === selectedMediaAction,
+            )?.type ??
+            getMediaGenerationConfig(selectedMediaAction)?.type
           : undefined;
 
         return (
           <button
             key={type}
             type="button"
-            disabled={available.length === 0}
+            disabled={selectable.length === 0}
             onClick={() => {
-              if (available.length > 0) {
-                setSelectedMediaAction(available[0].action);
+              if (selectable.length > 0) {
+                setSelectedMediaAction(selectable[0].action);
+                setError(null);
               }
             }}
             className={`flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border px-4 py-3 text-sm font-medium transition ${
@@ -4334,7 +4352,7 @@ export default function ChatPage() {
             {type === "image" ? <ImageIcon size={22} /> : <Video size={22} />}
             <span>{type === "image" ? "Générer une image" : "Générer une vidéo"}</span>
             <span className="text-[10px] font-normal text-muted">
-              {available.length} configuration{available.length > 1 ? "s" : ""}
+              {selectable.length} configuration{selectable.length > 1 ? "s" : ""}
             </span>
           </button>
         );
@@ -4348,12 +4366,33 @@ export default function ChatPage() {
             Configuration de génération
           </p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {mediaCapabilities
-              .filter(
-                (item) =>
-                  item.type === getMediaGenerationConfig(selectedMediaAction)?.type,
-              )
-              .map((media) => {
+            {(() => {
+              const selectedType =
+                mediaCapabilities.find(
+                  (item) => item.action === selectedMediaAction,
+                )?.type ??
+                getMediaGenerationConfig(selectedMediaAction)?.type;
+
+              const fallbackForType = selectedType
+                ? MEDIA_GENERATION_CONFIGS
+                    .filter((item) => item.type === selectedType)
+                    .map((item) => ({
+                      action: item.action,
+                      type: item.type,
+                      credits: item.credits,
+                    }))
+                : [];
+
+              const configurations =
+                mediaCapabilities.filter(
+                  (item) => item.type === selectedType,
+                ).length > 0
+                  ? mediaCapabilities.filter(
+                      (item) => item.type === selectedType,
+                    )
+                  : fallbackForType;
+
+              return configurations.map((media) => {
                 const config = getMediaGenerationConfig(media.action);
                 if (!config) return null;
 
@@ -4387,7 +4426,8 @@ export default function ChatPage() {
                     </div>
                   </button>
                 );
-              })}
+              });
+            })()}
           </div>
         </div>
 
@@ -4402,7 +4442,12 @@ export default function ChatPage() {
             }
           }}
           placeholder={
-            getMediaGenerationConfig(selectedMediaAction)?.type === "video"
+            (
+              mediaCapabilities.find(
+                (item) => item.action === selectedMediaAction,
+              )?.type ??
+              getMediaGenerationConfig(selectedMediaAction)?.type
+            ) === "video"
               ? "Décrivez précisément la vidéo à créer..."
               : "Décrivez précisément l'image à créer..."
           }
@@ -4443,7 +4488,12 @@ export default function ChatPage() {
             <Sparkles size={15} />
             {isThinking
               ? "Génération..."
-              : getMediaGenerationConfig(selectedMediaAction)?.type === "video"
+              : (
+                  mediaCapabilities.find(
+                    (item) => item.action === selectedMediaAction,
+                  )?.type ??
+                  getMediaGenerationConfig(selectedMediaAction)?.type
+                ) === "video"
                 ? "Générer la vidéo"
                 : "Générer l'image"}
           </button>

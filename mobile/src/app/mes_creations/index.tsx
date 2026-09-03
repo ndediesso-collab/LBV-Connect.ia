@@ -45,9 +45,10 @@ type MediaItem = {
 };
 
 const API_BASE_URL =
-  process.env.EXPO_PUBLIC_SUPABASE_URL ||
-  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
-  "";
+  process.env.EXPO_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_BACKEND_URL ||
+  "https://lbv-connect-api.onrender.com";
 
 const getMediaType = (media: MediaItem): MediaType => {
   if (media.media_type === "video" || media.type === "video") return "video";
@@ -187,6 +188,12 @@ export default function CreationsPage() {
           },
         });
 
+        console.log("📡 ORIA /media URL :", `${API_BASE_URL}/media`);
+        console.log("👤 ORIA user-id :", session.user.id);
+        console.log("🔐 ORIA token présent :", !!session.access_token);
+        console.log("📥 ORIA HTTP status :", response.status);
+        console.log("📥 ORIA HTTP statusText :", response.statusText);
+
         let payload: {
           media?: MediaItem[];
           detail?: string;
@@ -198,6 +205,11 @@ export default function CreationsPage() {
         } catch {
           payload = {};
         }
+
+        console.log(
+          "📦 ORIA /media payload :",
+          JSON.stringify(payload, null, 2)
+        );
 
         if (!response.ok) {
           throw new Error(

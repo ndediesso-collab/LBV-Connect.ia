@@ -1215,6 +1215,7 @@ export default function ChatPage() {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [selectedModel, setSelectedModel] = useState("luna");
   const [message, setMessage] = useState("");
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -1704,13 +1705,14 @@ export default function ChatPage() {
             : available[0]?.action ?? "",
         );
       } else {
-        setMediaCapabilities(
-          MEDIA_GENERATION_CONFIGS.map((item) => ({
-            action: item.action,
-            type: item.type,
-            credits: item.credits,
-          })),
-        );
+        const fallback = MEDIA_GENERATION_CONFIGS.map((item) => ({
+          action: item.action,
+          type: item.type,
+          credits: item.credits,
+        }));
+
+        setMediaCapabilities(fallback);
+        setSelectedMediaAction("");
       }
     } catch (requestError) {
       console.warn("Capacités média indisponibles :", requestError);
@@ -1751,6 +1753,7 @@ export default function ChatPage() {
     setMessages([]);
     setMessage("");
     setAttachments([]);
+    setComposerExpanded(false);
     setActiveCapability(null);
     setError(null);
     closeDrawer();
@@ -1863,6 +1866,52 @@ export default function ChatPage() {
           : conversation,
       ),
     );
+  }
+
+  async function pickCamera() {
+    if (attachments.length >= MAX_ATTACHMENTS) {
+      setError(
+        `Vous pouvez joindre au maximum ${MAX_ATTACHMENTS} éléments par message.`,
+      );
+      return;
+    }
+
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert(
+        "Permission requise",
+        "Autorisez l'accès à la caméra pour prendre une photo.",
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      allowsEditing: false,
+      quality: 0.9,
+    });
+
+    if (result.canceled) return;
+
+    const asset = result.assets[0];
+    if (!asset?.uri) return;
+
+    const incoming: ChatAttachment = {
+      id: uid(),
+      uri: asset.uri,
+      name: asset.fileName || `photo-${Date.now()}.jpg`,
+      mimeType: asset.mimeType || "image/jpeg",
+      kind: "image",
+      size: asset.fileSize,
+    };
+
+    setAttachments((current) => [
+      ...current,
+      incoming,
+    ].slice(0, MAX_ATTACHMENTS));
+    setError(null);
+    setComposerExpanded(true);
   }
 
   async function pickImage() {
@@ -2278,6 +2327,7 @@ export default function ChatPage() {
       userMessage,
     ]);
     setMessage("");
+    setComposerExpanded(false);
     setIsThinking(true);
     setError(null);
 
@@ -2712,11 +2762,20 @@ export default function ChatPage() {
           ) : (
             <FlatList
               ref={listRef}
+              style={styles.messageListContainer}
               data={messages}
               keyExtractor={(item) => item.id}
               renderItem={renderMessage}
               contentContainerStyle={styles.messageList}
               showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              onContentSizeChange={() => {
+                if (isThinking) {
+                  requestAnimationFrame(() => {
+                    listRef.current?.scrollToEnd({ animated: false });
+                  });
+                }
+              }}
             />
           )}
 
@@ -2850,11 +2909,28 @@ export default function ChatPage() {
 
                 <View style={styles.mediaTypeRow}>
                   {(["image", "video"] as const).map((type) => {
+                    const fallbackForType = MEDIA_GENERATION_CONFIGS.filter(
+                      (item) => item.type === type,
+                    ).map((item) => ({
+                      action: item.action,
+                      type: item.type,
+                      credits: item.credits,
+                    }));
+
                     const available = mediaCapabilities.filter(
                       (item) => item.type === type,
                     );
+
+                    const selectable =
+                      available.length > 0
+                        ? available
+                        : fallbackForType;
+
                     const selectedType = selectedMediaAction
-                      ? getMediaGenerationConfig(
+                      ? mediaCapabilities.find(
+                          (item) => item.action === selectedMediaAction,
+                        )?.type ??
+                        getMediaGenerationConfig(
                           selectedMediaAction,
                         )?.type
                       : undefined;
@@ -2862,19 +2938,18 @@ export default function ChatPage() {
                     return (
                       <Pressable
                         key={type}
-                        disabled={!available.length}
+                        disabled={selectable.length === 0}
                         onPress={() => {
-                          if (available.length) {
-                            setSelectedMediaAction(
-                              available[0].action,
-                            );
+                          if (selectable.length > 0) {
+                            setSelectedMediaAction(selectable[0].action);
+                            setError(null);
                           }
                         }}
                         style={[
                           styles.mediaTypeButton,
                           selectedType === type &&
                             styles.mediaTypeButtonActive,
-                          !available.length &&
+                          selectable.length === 0 &&
                             styles.disabled,
                         ]}
                       >
@@ -2913,13 +2988,18 @@ export default function ChatPage() {
                       contentContainerStyle={styles.horizontalOptions}
                     >
                       {mediaCapabilities
-                        .filter(
-                          (item) =>
-                            item.type ===
+                        .filter((item) => {
+                          const selectedType =
+                            mediaCapabilities.find(
+                              (capability) =>
+                                capability.action === selectedMediaAction,
+                            )?.type ??
                             getMediaGenerationConfig(
                               selectedMediaAction,
-                            )?.type,
-                        )
+                            )?.type;
+
+                          return item.type === selectedType;
+                        })
                         .map((media) => {
                           const config =
                             getMediaGenerationConfig(
@@ -2991,9 +3071,15 @@ export default function ChatPage() {
                       value={mediaPrompt}
                       onChangeText={setMediaPrompt}
                       placeholder={
-                        getMediaGenerationConfig(
-                          selectedMediaAction,
-                        )?.type === "video"
+                        (
+                          mediaCapabilities.find(
+                            (item) =>
+                              item.action === selectedMediaAction,
+                          )?.type ??
+                          getMediaGenerationConfig(
+                            selectedMediaAction,
+                          )?.type
+                        ) === "video"
                           ? "Décrivez précisément la vidéo à créer..."
                           : "Décrivez précisément l'image à créer..."
                       }
@@ -3054,9 +3140,15 @@ export default function ChatPage() {
                         <Text style={styles.generateButtonText}>
                           {isThinking
                             ? "Génération..."
-                            : getMediaGenerationConfig(
+                            : (
+                                mediaCapabilities.find(
+                                  (item) =>
+                                    item.action === selectedMediaAction,
+                                )?.type ??
+                                getMediaGenerationConfig(
                                   selectedMediaAction,
-                                )?.type === "video"
+                                )?.type
+                              ) === "video"
                               ? "Générer la vidéo"
                               : "Générer l'image"}
                         </Text>
@@ -3098,7 +3190,14 @@ export default function ChatPage() {
                 editable={!isThinking}
                 multiline
                 textAlignVertical="top"
-                style={styles.composerInput}
+                style={[
+                  styles.composerInput,
+                  composerExpanded
+                    ? styles.composerInputExpanded
+                    : styles.composerInputCompact,
+                ]}
+                onFocus={() => setComposerExpanded(true)}
+                onBlur={() => setComposerExpanded(false)}
                 onSubmitEditing={(event) => {
                   if (Platform.OS === "ios") {
                     event.preventDefault();
@@ -3148,6 +3247,20 @@ export default function ChatPage() {
                         {attachments.length}/{MAX_ATTACHMENTS}
                       </Text>
                     ) : null}
+                  </Pressable>
+
+                  <Pressable
+                    style={styles.capabilityButton}
+                    onPress={() => void pickCamera()}
+                  >
+                    <Ionicons
+                      name="camera-outline"
+                      size={17}
+                      color="#555555"
+                    />
+                    <Text style={styles.capabilityButtonText}>
+                      Caméra
+                    </Text>
                   </Pressable>
 
                   <Pressable
@@ -3614,10 +3727,13 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     color: "#7b7b76",
   },
+  messageListContainer: {
+    flex: 1,
+  },
   messageList: {
     paddingHorizontal: 14,
-    paddingVertical: 20,
-    paddingBottom: 24,
+    paddingTop: 20,
+    paddingBottom: 34,
     gap: 18,
   },
   messageRow: {
@@ -4134,14 +4250,20 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
   },
   composerInput: {
-    minHeight: 90,
-    maxHeight: 180,
     paddingHorizontal: 15,
-    paddingTop: 14,
-    paddingBottom: 10,
+    paddingTop: 11,
+    paddingBottom: 9,
     color: "#171715",
     fontSize: 14,
     lineHeight: 21,
+  },
+  composerInputCompact: {
+    minHeight: 48,
+    maxHeight: 48,
+  },
+  composerInputExpanded: {
+    minHeight: 92,
+    maxHeight: 180,
   },
   composerFooter: {
     minHeight: 54,
