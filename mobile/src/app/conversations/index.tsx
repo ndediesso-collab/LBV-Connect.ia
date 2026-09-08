@@ -8,7 +8,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -16,6 +15,7 @@ import {
   View,
 } from "react-native";
 import { router } from "expo-router";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as SecureStore from "expo-secure-store";
 import { supabase } from "@/lib/supabase/client";
@@ -225,6 +225,7 @@ function ConversationCard({
 }
 
 export default function ConversationsPage() {
+  const { bottom: safeAreaBottom } = useSafeAreaInsets();
   const [search, setSearch] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [balance, setBalance] = useState<number | null>(null);
@@ -392,7 +393,8 @@ export default function ConversationsPage() {
       <StatusBar barStyle="dark-content" />
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior="padding"
+        keyboardVerticalOffset={0}
       >
         <View style={styles.header}>
           <View style={styles.headerLeft}>

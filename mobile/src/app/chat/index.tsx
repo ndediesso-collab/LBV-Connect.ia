@@ -11,7 +11,6 @@ import {
   PanResponder,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,6 +19,7 @@ import {
   View,
 } from "react-native";
 import { Stack, useRouter } from "expo-router";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -1083,7 +1083,15 @@ function MarkdownMessage({ content }: { content: string }) {
   flushLists();
   flushParagraph();
 
-  return <View style={styles.markdown}>{blocks}</View>;
+  return (
+    <ScrollView
+      style={styles.responseScrollArea}
+      showsVerticalScrollIndicator
+      nestedScrollEnabled
+    >
+      <View style={styles.markdown}>{blocks}</View>
+    </ScrollView>
+  );
 }
 
 function CodeBlock({
@@ -1109,8 +1117,14 @@ function CodeBlock({
           <Text style={styles.copyText}>{copied ? "Copié" : "Copier"}</Text>
         </Pressable>
       </View>
-      <ScrollView horizontal>
-        <Text style={styles.codeText}>{value}</Text>
+      <ScrollView
+        style={styles.codeScrollArea}
+        showsVerticalScrollIndicator
+        nestedScrollEnabled
+      >
+        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
+          <Text style={styles.codeText}>{value}</Text>
+        </ScrollView>
       </ScrollView>
     </View>
   );
@@ -1216,6 +1230,7 @@ export default function ChatPage() {
   const [selectedModel, setSelectedModel] = useState("luna");
   const [message, setMessage] = useState("");
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [bottomAreaHeight, setBottomAreaHeight] = useState(0);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -1235,6 +1250,7 @@ export default function ChatPage() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const { width: screenWidth } = useWindowDimensions();
+  const { bottom: safeAreaBottom } = useSafeAreaInsets();
   const drawerWidth = Math.min(290, Math.max(235, screenWidth * 0.74));
   const drawerTranslateX = useRef(new Animated.Value(-320)).current;
 
@@ -1348,7 +1364,9 @@ export default function ChatPage() {
         credits: item.credits,
       })),
     );
-  const [selectedMediaAction, setSelectedMediaAction] = useState("");
+  const [selectedMediaAction, setSelectedMediaAction] = useState<string>(
+    MEDIA_GENERATION_CONFIGS[0]?.action ?? "",
+  );
   const [mediaPrompt, setMediaPrompt] = useState("");
   const [generatedMedia, setGeneratedMedia] =
     useState<GeneratedMedia[]>([]);
@@ -1360,6 +1378,8 @@ export default function ChatPage() {
     () => getSelectableModels(wallet?.pack_id ?? null, trials),
     [wallet?.pack_id, trials],
   );
+
+  const hasActivePack = Boolean(wallet?.pack_id);
 
   const remainingDays = wallet?.pack_expires_at
     ? Math.max(
@@ -1459,13 +1479,21 @@ export default function ChatPage() {
     isInitialized,
   ]);
 
+  const scrollToBottom = useCallback((animated = true) => {
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
+
   useEffect(() => {
-    if (messages.length) {
-      setTimeout(() => {
-        listRef.current?.scrollToEnd({ animated: true });
-      }, 80);
-    }
-  }, [messages.length, isThinking]);
+    if (!messages.length) return;
+
+    const frame = requestAnimationFrame(() => {
+      listRef.current?.scrollToEnd({ animated: true });
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [messages.length, isThinking, bottomAreaHeight]);
 
   async function loadWallet(
     trialState: Record<string, TrialInfo> = trials,
@@ -2012,6 +2040,10 @@ export default function ChatPage() {
   }
 
   async function handleGenerateMedia(promptOverride?: string) {
+    if (!hasActivePack) {
+      setError("La création d'images et de vidéos nécessite un pack actif.");
+      return;
+    }
     const prompt = (promptOverride ?? mediaPrompt).trim();
 
     if (!prompt || isThinking) return;
@@ -2571,7 +2603,12 @@ export default function ChatPage() {
       setActiveCapability("Création");
       setMediaMenuOpen(true);
       setError(null);
-      void loadMediaCapabilities();
+      setSelectedMediaAction((current) =>
+        current || MEDIA_GENERATION_CONFIGS[0]?.action || "",
+      );
+      if (hasActivePack) {
+        void loadMediaCapabilities();
+      }
     }
   }
 
@@ -2672,7 +2709,8 @@ export default function ChatPage() {
       <Stack.Screen options={{ gestureEnabled: false }} />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior="padding"
+        keyboardVerticalOffset={0}
       >
         <View style={styles.container} {...edgePanResponder.panHandlers}>
           <View style={styles.header}>
@@ -2766,20 +2804,37 @@ export default function ChatPage() {
               data={messages}
               keyExtractor={(item) => item.id}
               renderItem={renderMessage}
-              contentContainerStyle={styles.messageList}
+              contentContainerStyle={[
+                styles.messageList,
+                {
+                  paddingBottom: Math.max(
+                    34,
+                    bottomAreaHeight + 20,
+                  ),
+                },
+              ]}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               onContentSizeChange={() => {
                 if (isThinking) {
-                  requestAnimationFrame(() => {
-                    listRef.current?.scrollToEnd({ animated: false });
-                  });
+                  scrollToBottom(false);
                 }
               }}
             />
           )}
 
-          <View style={styles.bottomArea}>
+          <View
+            style={[
+              styles.bottomArea,
+              { bottom: safeAreaBottom },
+            ]}
+            onLayout={(event) => {
+              const height = Math.ceil(event.nativeEvent.layout.height);
+              setBottomAreaHeight((current) =>
+                current === height ? current : height,
+              );
+            }}
+          >
             {modelMenuOpen ? (
               <View style={styles.modelMenu}>
                 {availableModels.length === 0 ? (
@@ -2907,41 +2962,45 @@ export default function ChatPage() {
                   </Pressable>
                 </View>
 
+                {!hasActivePack ? (
+                  <View style={styles.mediaLockedBanner}>
+                    <Ionicons
+                      name="lock-closed-outline"
+                      size={17}
+                      color="#555555"
+                    />
+                    <View style={styles.flex}>
+                      <Text style={styles.mediaLockedTitle}>
+                        Création verrouillée
+                      </Text>
+                      <Text style={styles.mediaLockedText}>
+                        Activez un pack pour générer des images ou des vidéos.
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+
                 <View style={styles.mediaTypeRow}>
                   {(["image", "video"] as const).map((type) => {
-                    const fallbackForType = MEDIA_GENERATION_CONFIGS.filter(
-                      (item) => item.type === type,
-                    ).map((item) => ({
-                      action: item.action,
-                      type: item.type,
-                      credits: item.credits,
-                    }));
+                    const configurationsForType =
+                      MEDIA_GENERATION_CONFIGS.filter(
+                        (item) => item.type === type,
+                      );
 
-                    const available = mediaCapabilities.filter(
-                      (item) => item.type === type,
-                    );
-
-                    const selectable =
-                      available.length > 0
-                        ? available
-                        : fallbackForType;
-
-                    const selectedType = selectedMediaAction
-                      ? mediaCapabilities.find(
-                          (item) => item.action === selectedMediaAction,
-                        )?.type ??
-                        getMediaGenerationConfig(
-                          selectedMediaAction,
-                        )?.type
-                      : undefined;
+                    const selectedType =
+                      getMediaGenerationConfig(
+                        selectedMediaAction,
+                      )?.type;
 
                     return (
                       <Pressable
                         key={type}
-                        disabled={selectable.length === 0}
+                        disabled={!hasActivePack || configurationsForType.length === 0}
                         onPress={() => {
-                          if (selectable.length > 0) {
-                            setSelectedMediaAction(selectable[0].action);
+                          if (hasActivePack && configurationsForType.length > 0) {
+                            setSelectedMediaAction(
+                              configurationsForType[0].action,
+                            );
                             setError(null);
                           }
                         }}
@@ -2949,8 +3008,8 @@ export default function ChatPage() {
                           styles.mediaTypeButton,
                           selectedType === type &&
                             styles.mediaTypeButtonActive,
-                          selectable.length === 0 &&
-                            styles.disabled,
+                          (!hasActivePack || configurationsForType.length === 0) &&
+                            styles.mediaTypeButtonLocked,
                         ]}
                       >
                         <Ionicons
@@ -2968,8 +3027,8 @@ export default function ChatPage() {
                             : "Générer une vidéo"}
                         </Text>
                         <Text style={styles.smallMuted}>
-                          {available.length} configuration
-                          {available.length > 1 ? "s" : ""}
+                          {configurationsForType.length} configuration
+                          {configurationsForType.length > 1 ? "s" : ""}
                         </Text>
                       </Pressable>
                     );
@@ -2987,43 +3046,40 @@ export default function ChatPage() {
                       showsHorizontalScrollIndicator={false}
                       contentContainerStyle={styles.horizontalOptions}
                     >
-                      {mediaCapabilities
-                        .filter((item) => {
-                          const selectedType =
-                            mediaCapabilities.find(
-                              (capability) =>
-                                capability.action === selectedMediaAction,
-                            )?.type ??
+                      {MEDIA_GENERATION_CONFIGS
+                        .filter(
+                          (config) =>
+                            config.type ===
                             getMediaGenerationConfig(
                               selectedMediaAction,
-                            )?.type;
+                            )?.type,
+                        )
+                        .map((config) => {
+                          const selected =
+                            selectedMediaAction === config.action;
 
-                          return item.type === selectedType;
-                        })
-                        .map((media) => {
-                          const config =
-                            getMediaGenerationConfig(
-                              media.action,
+                          const capability =
+                            mediaCapabilities.find(
+                              (item) =>
+                                item.action === config.action,
                             );
 
-                          if (!config) return null;
-
-                          const selected =
-                            selectedMediaAction ===
-                            media.action;
+                          const credits =
+                            capability?.credits ?? config.credits;
 
                           return (
                             <Pressable
-                              key={media.action}
+                              key={config.action}
+                              disabled={!hasActivePack}
                               onPress={() =>
-                                setSelectedMediaAction(
-                                  media.action,
-                                )
+                                setSelectedMediaAction(config.action)
                               }
                               style={[
                                 styles.mediaOption,
                                 selected &&
                                   styles.mediaOptionActive,
+                                !hasActivePack &&
+                                  styles.mediaOptionLocked,
                               ]}
                             >
                               <View style={styles.rowBetween}>
@@ -3041,25 +3097,16 @@ export default function ChatPage() {
                                 ) : null}
                               </View>
 
-                              <Text
-                                style={styles.smallMuted}
-                              >
+                              <Text style={styles.smallMuted}>
                                 {config.description}
                               </Text>
 
                               <View style={styles.rowBetween}>
-                                <Text
-                                  style={styles.smallMuted}
-                                >
+                                <Text style={styles.smallMuted}>
                                   {config.configuration}
                                 </Text>
-                                <Text
-                                  style={styles.smallMuted}
-                                >
-                                  {formatCredits(
-                                    media.credits,
-                                  )}{" "}
-                                  crédits
+                                <Text style={styles.smallMuted}>
+                                  {formatCredits(credits)} crédits
                                 </Text>
                               </View>
                             </Pressable>
@@ -3072,10 +3119,6 @@ export default function ChatPage() {
                       onChangeText={setMediaPrompt}
                       placeholder={
                         (
-                          mediaCapabilities.find(
-                            (item) =>
-                              item.action === selectedMediaAction,
-                          )?.type ??
                           getMediaGenerationConfig(
                             selectedMediaAction,
                           )?.type
@@ -3084,8 +3127,11 @@ export default function ChatPage() {
                           : "Décrivez précisément l'image à créer..."
                       }
                       multiline
-                      editable={!isThinking}
-                      style={styles.mediaPrompt}
+                      editable={hasActivePack && !isThinking}
+                      style={[
+                        styles.mediaPrompt,
+                        !hasActivePack && styles.mediaPromptLocked,
+                      ]}
                     />
 
                     <View style={styles.rowBetween}>
@@ -3098,17 +3144,26 @@ export default function ChatPage() {
                                 selectedMediaAction,
                             );
 
-                          return selected ? (
+                          const localConfig =
+                            getMediaGenerationConfig(
+                              selectedMediaAction,
+                            );
+
+                          if (!localConfig && !selected) return null;
+
+                          const selectedCredits =
+                            selected?.credits ??
+                            localConfig?.credits ??
+                            0;
+
+                          return (
                             <Text style={styles.smallMuted}>
                               Coût :{" "}
                               <Text style={styles.bold}>
-                                {formatCredits(
-                                  selected.credits,
-                                )}{" "}
-                                crédits
+                                {formatCredits(selectedCredits)} crédits
                               </Text>
                             </Text>
-                          ) : null;
+                          );
                         })()}
                         <Text style={styles.smallMuted}>
                           Le backend valide le pack et le débit.
@@ -3117,6 +3172,7 @@ export default function ChatPage() {
 
                       <Pressable
                         disabled={
+                          !hasActivePack ||
                           !mediaPrompt.trim() ||
                           !selectedMediaAction ||
                           isThinking
@@ -3141,10 +3197,6 @@ export default function ChatPage() {
                           {isThinking
                             ? "Génération..."
                             : (
-                                mediaCapabilities.find(
-                                  (item) =>
-                                    item.action === selectedMediaAction,
-                                )?.type ??
                                 getMediaGenerationConfig(
                                   selectedMediaAction,
                                 )?.type
@@ -3863,6 +3915,10 @@ const styles = StyleSheet.create({
   link: {
     textDecorationLine: "underline",
   },
+  responseScrollArea: {
+    flexGrow: 0,
+    maxHeight: 430,
+  },
   markdown: {
     gap: 8,
   },
@@ -3956,6 +4012,10 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "600",
   },
+  codeScrollArea: {
+    flexGrow: 0,
+    maxHeight: 360,
+  },
   codeText: {
     color: "#f0f0ec",
     fontSize: 11,
@@ -4000,8 +4060,15 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   bottomArea: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 20,
+    elevation: 20,
     paddingHorizontal: 13,
     paddingBottom: Platform.OS === "ios" ? 6 : 10,
+    backgroundColor: "#f8f8f6",
   },
   modelMenu: {
     marginBottom: 8,
@@ -4104,6 +4171,38 @@ const styles = StyleSheet.create({
     borderColor: "#ddddda",
     backgroundColor: "#ffffff",
     marginBottom: 8,
+  },
+  mediaLockedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderRadius: 12,
+    backgroundColor: "#F3F3F1",
+    borderWidth: 1,
+    borderColor: "#E2E2DE",
+  },
+  mediaLockedTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#333333",
+  },
+  mediaLockedText: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 17,
+    color: "#777771",
+  },
+  mediaTypeButtonLocked: {
+    opacity: 0.55,
+  },
+  mediaOptionLocked: {
+    opacity: 0.55,
+  },
+  mediaPromptLocked: {
+    opacity: 0.55,
+    backgroundColor: "#F3F3F1",
   },
   mediaTypeRow: {
     flexDirection: "row",

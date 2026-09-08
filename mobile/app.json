@@ -1,52 +1,57 @@
 {
   "expo": {
-    "name": "mobile",
+    "name": "Oria",
     "slug": "lbv-connectia",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "mobile",
+    "icon": "./assets/images/oria-logo.png",
+    "scheme": "oria",
     "userInterfaceStyle": "automatic",
+
     "ios": {
-      "icon": "./assets/expo.icon"
+      "bundleIdentifier": "com.lbvconnect.oria",
+      "icon": "./assets/images/oria-logo.png"
     },
+
     "android": {
+      "package": "com.lbvconnect.oria",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/images/oria-icon-foreground.png"
       },
       "predictiveBackGestureEnabled": false
     },
+
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/oria-logo.png"
     },
+
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#000000"
         }
       ],
       "expo-secure-store",
       "expo-video",
       "expo-sharing"
     ],
+
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
+
     "extra": {
       "router": {},
       "eas": {
         "projectId": "1832348e-2837-4236-ae2d-2edbd47f2824"
       }
     },
+
     "owner": "lbv-connect"
   }
 }
