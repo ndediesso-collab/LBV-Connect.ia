@@ -8,8 +8,12 @@ export default function Home() {
           href="/"
           className="group flex items-center gap-3 text-lg font-semibold tracking-tight"
         >
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-surface-secondary text-sm font-bold transition-transform duration-300 group-hover:-rotate-3">
-            N
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-surface-secondary transition-transform duration-300 group-hover:-rotate-3">
+            <img
+              src="/icons/oria-logo.png"
+              alt="Oria"
+              className="h-7 w-7 object-contain"
+            />
           </span>
           <span>Oria</span>
         </Link>
