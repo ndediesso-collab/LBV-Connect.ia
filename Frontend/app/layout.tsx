@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
+import oriaLogo from "./oria-logo.png";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,9 +18,9 @@ export const metadata: Metadata = {
   title: "Oria",
   description: "Votre espace intelligent Oria",
   icons: {
-    icon: "/icons/oria-logo.png",
-    shortcut: "/icons/oria-logo.png",
-    apple: "/icons/oria-logo.png",
+    icon: oriaLogo.src,
+    shortcut: oriaLogo.src,
+    apple: oriaLogo.src,
   },
 };
 

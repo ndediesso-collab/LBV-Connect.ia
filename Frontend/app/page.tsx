@@ -1,4 +1,6 @@
+import Image from "next/image";
 import Link from "next/link";
+import oriaLogo from "./oria-logo.png";
 
 export default function Home() {
   return (
@@ -9,10 +11,12 @@ export default function Home() {
           className="group flex items-center gap-3 text-lg font-semibold tracking-tight"
         >
           <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-surface-secondary transition-transform duration-300 group-hover:-rotate-3">
-            <img
-              src="/icons/oria-logo.png"
+            <Image
+              src={oriaLogo}
               alt="Oria"
-              className="h-7 w-7 object-contain"
+              width={28}
+              height={28}
+              className="object-contain"
             />
           </span>
           <span>Oria</span>
