@@ -16,6 +16,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Oria",
   description: "Votre espace intelligent Oria",
+  icons: {
+    icon: "/icons/oria-logo.png",
+    shortcut: "/icons/oria-logo.png",
+    apple: "/icons/oria-logo.png",
+  },
 };
 
 export default function RootLayout({

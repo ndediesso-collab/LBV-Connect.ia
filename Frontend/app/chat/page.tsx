@@ -3683,6 +3683,18 @@ export default function ChatPage() {
         />
       )}
 
+      <button
+        type="button"
+        aria-label="Ouvrir le menu"
+        title="Ouvrir le menu"
+        className="fixed bottom-6 left-5 z-30 flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-surface shadow-lg transition hover:bg-surface-secondary"
+        onClick={() =>
+          setSidebarOpen(true)
+        }
+      >
+        <Menu size={19} />
+      </button>
+
       {/* ======================================================
           SIDEBAR
           ====================================================== */}
@@ -4012,11 +4024,21 @@ export default function ChatPage() {
                              * Les réponses IA passent maintenant
                              * par le renderer Markdown.
                              */
-                            <MarkdownMessage
-                              content={getVisibleMessageContent(
-                                item.content,
-                              )}
-                            />
+                            <>
+                              <MarkdownMessage
+                                content={getVisibleMessageContent(
+                                  item.content,
+                                )}
+                              />
+
+                              <div className="mt-3 flex justify-start">
+                                <MessageCopyButton
+                                  value={getVisibleMessageContent(
+                                    item.content,
+                                  )}
+                                />
+                              </div>
+                            </>
                           ) : (
                             /*
                              * Le message utilisateur reste simple
@@ -4028,10 +4050,6 @@ export default function ChatPage() {
                               }
                             </div>
                           )}
-                        </div>
-
-                        <div className={item.role === "user" ? "mt-1 flex justify-end" : "mt-1 flex justify-start"}>
-                          <MessageCopyButton value={item.content} />
                         </div>
 
                         {(() => {
