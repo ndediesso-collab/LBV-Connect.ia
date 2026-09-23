@@ -143,7 +143,7 @@ const packs: Pack[] = [
         available: true,
       },
       {
-        name: "GPT-5.6",
+        name: "GPT-5",
         available: false,
       },
       {
@@ -202,7 +202,7 @@ const packs: Pack[] = [
 
     features: [
       "Tout le pack Léger",
-      "GPT-5.6",
+      "GPT-5",
       "Recherche Web avec GPT-5.6",
       "Génération d'images avancée",
       "Veo Lite",
@@ -215,7 +215,7 @@ const packs: Pack[] = [
         available: true,
       },
       {
-        name: "GPT-5.6",
+        name: "GPT-5",
         available: true,
       },
       {
@@ -274,7 +274,7 @@ const packs: Pack[] = [
         available: true,
       },
       {
-        name: "GPT-5.6",
+        name: "GPT-5",
         available: true,
       },
       {
@@ -358,7 +358,7 @@ const packs: Pack[] = [
         available: true,
       },
       {
-        name: "GPT-5.6",
+        name: "GPT-5",
         available: true,
       },
       {
@@ -464,7 +464,7 @@ const faqs = [
       "Puis-je utiliser plusieurs modèles avec mon pack ?",
 
     answer:
-      "Oui. Les modèles disponibles dépendent du pack. Luna est disponible sur tous les packs, GPT-5.6 à partir de l'Intermédiaire, GPT-5.6 Terra à partir du Pro et GPT-5.6 Sol avec le Business.",
+      "Oui. Les modèles disponibles dépendent du pack. Luna est disponible sur tous les packs, GPT-5 à partir de l'Intermédiaire, GPT-5.6 Terra à partir du Pro et GPT-5.6 Sol avec le Business.",
   },
 
   {
@@ -1111,7 +1111,7 @@ export default function PacksPage() {
 
                   {[
                     "Luna",
-                    "GPT-5.6",
+                    "GPT-5",
                     "GPT-5.6 Terra",
                     "GPT-5.6 Sol",
                   ].map(
