@@ -81,7 +81,7 @@ type CreditTopUp = {
  * Léger         : 3 000 crédits  / 35 jours
  * Intermédiaire : 28 500 crédits / 35 jours
  * Pro           : 45 000 crédits / 35 jours
- * Business      : 96 000 crédits / 35 jours
+ * Business      : 100 000 crédits / 35 jours
  *
  * Les prix correspondent aux prix actuellement définis
  * pour les offres.
@@ -332,9 +332,9 @@ const packs: Pack[] = [
 
     name: "Business",
 
-    price: "19 000 XAF",
+    price: "45 000 XAF",
 
-    credits: "96 000",
+    credits: "100 000",
 
     duration: "35 jours",
 
@@ -440,7 +440,7 @@ const faqs = [
       "Les crédits sont-ils identiques entre les packs ?",
 
     answer:
-      "Non. Chaque pack possède son propre volume de crédits et ses propres capacités. Le pack Léger contient 3 000 crédits, l'Intermédiaire 28 500, le Pro 45 000 et le Business 96 000.",
+      "Non. Chaque pack possède son propre volume de crédits et ses propres capacités. Le pack Léger contient 3 000 crédits, l'Intermédiaire 28 500, le Pro 45 000 et le Business 100 000.",
   },
 
   {

@@ -154,9 +154,10 @@ class OpenAIService:
 
         attachments = attachments or []
         history = history or []
-        # Limite de contexte pour conserver la mémoire conversationnelle
-        # tout en maîtrisant la latence et le coût des requêtes.
-        history = history[-self.MAX_HISTORY_MESSAGES:]
+        # L'historique est déjà sélectionné et limité par la route IA.
+        # OpenAIService transmet donc l'historique reçu sans le tronquer
+        # afin de préserver les messages anciens pertinents ajoutés
+        # à la mémoire conversationnelle.
 
         if len(attachments) > self.MAX_ATTACHMENTS:
             raise ValueError(

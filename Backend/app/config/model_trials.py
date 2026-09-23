@@ -9,11 +9,8 @@ TRIAL_MAX_USES = 5
 # pour chaque pack inférieur.
 TRIAL_MODELS_BY_PACK = {
     "light_pack": "gpt-5",
-
     "intermediate_pack": "gpt-5.6-terra",
-
     "pro_pack": "gpt-5.6-sol",
-
     "business_pack": None,
 }
 
@@ -37,4 +34,7 @@ TRIAL_COSTS = {
         "normal": 120,
         "web": 165,
     },
+
+    # Astra est réservé au pack Business.
+    # Il n'est donc pas exposé comme modèle d'essai aux packs inférieurs.
 }

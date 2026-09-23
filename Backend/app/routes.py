@@ -20,6 +20,7 @@ from app.services.credit_service import (
     UnsupportedActionError,
 )
 from app.services.wallet_service import WalletService
+from app.services.openai_service import OpenAIService
 
 from app.config.payments import (
     ADDON_PACKS,
@@ -37,6 +38,214 @@ from app.services.payment_service import (
 
 
 router = APIRouter()
+
+
+# Limite physique de messages conservés par conversation selon le pack.
+PACK_HISTORY_LIMITS = {
+    "light_pack": 300,
+    "intermediate_pack": 500,
+    "pro_pack": 1000,
+    "business_pack": 2000,
+}
+
+
+# Mémoire longue structurée.
+# Une mise à jour est déclenchée seulement lorsqu'au moins 20 nouveaux
+# messages n'ont pas encore été intégrés à la mémoire.
+MEMORY_UPDATE_INTERVAL = 20
+
+# Garde-fou : une mise à jour ne traite pas un historique illimité d'un coup.
+# Les conversations anciennes se rattrapent progressivement.
+MEMORY_MAX_MESSAGES_PER_UPDATE = 60
+
+# Modèle interne économique utilisé pour condenser la mémoire.
+MEMORY_MODEL_ID = "gpt-5.6-luna"
+
+
+# ============================================================
+# MÉMOIRE LONGUE STRUCTURÉE
+# ============================================================
+
+
+def _build_memory_source(messages: list[dict]) -> str:
+    """Prépare les nouveaux messages à condenser."""
+    parts: list[str] = []
+
+    for row in messages:
+        role = str(row.get("role") or "").strip()
+        content = str(row.get("content") or "").strip()
+
+        if role not in {"user", "assistant"} or not content:
+            continue
+
+        parts.append(f"{role.upper()}:\n{content}")
+
+    return "\n\n".join(parts)
+
+
+def _generate_updated_conversation_memory(
+    previous_summary: str,
+    messages: list[dict],
+) -> str:
+    """
+    Produit une nouvelle mémoire compacte à partir de l'ancienne mémoire
+    et des nouveaux messages. Cet appel interne ne touche pas au wallet
+    et ne débite aucun crédit Oria à l'utilisateur.
+    """
+    source = _build_memory_source(messages)
+
+    if not source:
+        return previous_summary.strip()
+
+    previous = previous_summary.strip() or "(aucune mémoire précédente)"
+
+    prompt = f"""
+Tu maintiens la mémoire longue d'une conversation Oria.
+
+MÉMOIRE ACTUELLE :
+{previous}
+
+NOUVEAUX MESSAGES À INTÉGRER :
+{source}
+
+Réécris une mémoire consolidée, compacte et factuelle.
+
+Conserve uniquement ce qui peut être utile dans une conversation future :
+- informations importantes explicitement données par l'utilisateur ;
+- projets, objectifs et contexte durable ;
+- décisions prises ;
+- préférences et contraintes ;
+- état technique ou état d'avancement utile ;
+- tâches, questions ou problèmes encore ouverts.
+
+Règles :
+- n'invente aucune information ;
+- ne mémorise pas les banalités, salutations ou détails temporaires ;
+- si une information nouvelle remplace clairement une ancienne, garde la plus récente ;
+- ne transforme pas une supposition de l'assistant en fait utilisateur ;
+- reste concis ;
+- retourne uniquement la mémoire, sans introduction ni commentaire.
+""".strip()
+
+    service = OpenAIService()
+
+    return service.chat(
+        model=MEMORY_MODEL_ID,
+        message=prompt,
+        web=False,
+        attachments=[],
+        history=[],
+    ).strip()
+
+
+def _maybe_update_conversation_memory(
+    conversation_id: str,
+    authenticated_user_id: str,
+) -> None:
+    """
+    Met à jour conversation_memories lorsqu'au moins 20 messages nouveaux
+    sont disponibles.
+
+    IMPORTANT : cette fonction est appelée en mode best-effort par la route
+    d'enregistrement. Une erreur de mémoire ne doit jamais empêcher le chat
+    d'enregistrer un message.
+    """
+    memory_response = (
+        supabase
+        .table("conversation_memories")
+        .select("summary,last_processed_message_id")
+        .eq("conversation_id", conversation_id)
+        .eq("user_id", authenticated_user_id)
+        .limit(1)
+        .execute()
+    )
+
+    memory_row = (
+        memory_response.data[0]
+        if memory_response.data
+        else None
+    )
+
+    previous_summary = (
+        str(memory_row.get("summary") or "")
+        if memory_row
+        else ""
+    )
+    last_processed_message_id = (
+        memory_row.get("last_processed_message_id")
+        if memory_row
+        else None
+    )
+
+    messages_response = (
+        supabase
+        .table("messages")
+        .select("id,role,content,created_at")
+        .eq("conversation_id", conversation_id)
+        .eq("user_id", authenticated_user_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+
+    rows = messages_response.data or []
+    if not rows:
+        return
+
+    start_index = 0
+
+    if last_processed_message_id:
+        for index, row in enumerate(rows):
+            if str(row.get("id")) == str(last_processed_message_id):
+                start_index = index + 1
+                break
+        else:
+            # Le dernier message traité peut avoir disparu à cause de la
+            # rétention physique. Dans ce cas, on repart de l'historique
+            # encore disponible sans bloquer la mémoire.
+            start_index = 0
+
+    unprocessed = rows[start_index:]
+
+    if len(unprocessed) < MEMORY_UPDATE_INTERVAL:
+        return
+
+    # On traite par blocs raisonnables. Si une ancienne conversation a
+    # beaucoup de retard, les mises à jour suivantes finiront le rattrapage.
+    batch = unprocessed[:MEMORY_MAX_MESSAGES_PER_UPDATE]
+
+    updated_summary = _generate_updated_conversation_memory(
+        previous_summary=previous_summary,
+        messages=batch,
+    )
+
+    if not updated_summary:
+        return
+
+    last_processed_id = batch[-1].get("id")
+    if not last_processed_id:
+        return
+
+    payload = {
+        "conversation_id": conversation_id,
+        "user_id": authenticated_user_id,
+        "summary": updated_summary,
+        "last_processed_message_id": last_processed_id,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if memory_row:
+        (
+            supabase
+            .table("conversation_memories")
+            .update(payload)
+            .eq("conversation_id", conversation_id)
+            .eq("user_id", authenticated_user_id)
+            .execute()
+        )
+    else:
+        supabase.table("conversation_memories").insert(
+            payload
+        ).execute()
 
 
 # ============================================================
@@ -3633,6 +3842,77 @@ def create_conversation_message(
         raise HTTPException(
             status_code=500,
             detail="Impossible d'enregistrer le message.",
+        )
+
+    # ========================================================
+    # RÉTENTION PHYSIQUE DE L'HISTORIQUE SELON LE PACK
+    # ========================================================
+    # La limite est appliquée par conversation. Le message vient
+    # d'abord d'être enregistré avec succès, puis seuls les plus
+    # anciens messages dépassant la limite du pack sont supprimés.
+    repository = _get_repository()
+    wallet = repository.get_wallet(authenticated_user_id)
+
+    pack_id = (
+        getattr(wallet, "pack_id", None)
+        if wallet is not None
+        else None
+    )
+    history_limit = PACK_HISTORY_LIMITS.get(
+        pack_id,
+        PACK_HISTORY_LIMITS["light_pack"],
+    )
+
+    history_response = (
+        supabase
+        .table("messages")
+        .select("id,created_at")
+        .eq("conversation_id", conversation_id)
+        .eq("user_id", authenticated_user_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+
+    stored_messages = history_response.data or []
+    overflow = len(stored_messages) - history_limit
+
+    if overflow > 0:
+        oldest_message_ids = [
+            row.get("id")
+            for row in stored_messages[:overflow]
+            if row.get("id")
+        ]
+
+        for message_id in oldest_message_ids:
+            supabase.table("messages").delete().eq(
+                "id",
+                message_id,
+            ).eq(
+                "conversation_id",
+                conversation_id,
+            ).eq(
+                "user_id",
+                authenticated_user_id,
+            ).execute()
+
+    # ========================================================
+    # MÉMOIRE LONGUE — MISE À JOUR BEST-EFFORT
+    # ========================================================
+    # La mémoire est secondaire : son échec ne doit jamais transformer
+    # un message déjà sauvegardé en erreur pour l'utilisateur.
+    try:
+        _maybe_update_conversation_memory(
+            conversation_id=conversation_id,
+            authenticated_user_id=authenticated_user_id,
+        )
+    except Exception as error:
+        print(
+            "[CONVERSATION MEMORY] "
+            f"update_failed=True "
+            f"conversation_id={conversation_id!r} "
+            f"user_id={authenticated_user_id!r} "
+            f"error={str(error)!r}",
+            flush=True,
         )
 
     # Mise à jour de la date de dernière activité.

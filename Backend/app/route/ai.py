@@ -4,6 +4,8 @@ from uuid import uuid4
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from typing import Any
+import re
+import unicodedata
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -203,6 +205,11 @@ MODEL_ACTIONS = {
         "normal": CreditAction.CHAT_SOL,
         "web": CreditAction.CHAT_SOL_WEB,
     },
+
+    "gpt-6-astra": {
+        "normal": CreditAction.CHAT_ASTRA,
+        "web": CreditAction.CHAT_ASTRA_WEB,
+    },
 }
 
 
@@ -216,6 +223,7 @@ MODEL_OPENAI_IDS = {
     "gpt-5": "gpt-5",
     "gpt-5.6-terra": "gpt-5.6-terra",
     "gpt-5.6-sol": "gpt-5.6-sol",
+    "gpt-6-astra": "gpt-6-astra",
 }
 
 
@@ -241,10 +249,8 @@ PACK_ALLOWED_MODELS = {
     },
 
     "business_pack": {
-        "luna",
-        "gpt-5",
-        "gpt-5.6-terra",
         "gpt-5.6-sol",
+        "gpt-6-astra",
     },
 }
 
@@ -578,13 +584,186 @@ def _attachments_for_openai(
 # MÉMOIRE CONVERSATIONNELLE
 # ============================================================
 
-MAX_HISTORY_MESSAGES = 40
+# Nombre maximal de messages qu'une conversation peut conserver
+# selon le pack actif. Cette limite de stockage est volontairement
+# distincte du nombre de messages envoyés au modèle à chaque requête.
+PACK_HISTORY_LIMITS = {
+    "light_pack": 300,
+    "intermediate_pack": 500,
+    "pro_pack": 1000,
+    "business_pack": 2000,
+}
+
+# Contexte récent réellement transmis au modèle.
+MAX_CONTEXT_MESSAGES = 40
+
+# En complément du contexte récent, Oria peut récupérer quelques anciens
+# messages pertinents dans l'historique autorisé par le pack. Ils sont
+# ajoutés avant les messages récents afin de conserver l'ordre conversationnel.
+MAX_RETRIEVED_HISTORY_MESSAGES = 8
+MIN_RETRIEVAL_SCORE = 2
+
+# Mémoire longue structurée persistée dans Supabase.
+# Elle complète l'historique brut sans remplacer les 40 messages récents.
+STRUCTURED_MEMORY_MAX_CHARS = 12000
+
+# Mots très fréquents à ignorer lors de la recherche dans l'historique.
+_HISTORY_STOP_WORDS = {
+    "a", "ai", "au", "aux", "avec", "ce", "ces", "cette", "dans", "de",
+    "des", "du", "elle", "en", "et", "est", "il", "je", "la", "le",
+    "les", "leur", "lui", "ma", "mais", "me", "mes", "moi", "mon",
+    "ne", "nos", "notre", "nous", "on", "ou", "par", "pas", "pour",
+    "que", "qui", "sa", "se", "ses", "son", "sur", "ta", "te", "tes",
+    "toi", "ton", "tu", "un", "une", "vos", "votre", "vous", "y",
+    "the", "a", "an", "and", "are", "as", "at", "be", "by", "for",
+    "from", "in", "is", "it", "of", "on", "or", "that", "this", "to",
+    "was", "were", "with", "you", "your",
+}
+
+
+def _normalize_history_text(value: str) -> str:
+    """Normalise un texte pour la recherche légère dans l'historique."""
+    value = unicodedata.normalize("NFKD", value.lower())
+    value = "".join(char for char in value if not unicodedata.combining(char))
+    return re.sub(r"[^a-z0-9_+#.-]+", " ", value).strip()
+
+
+def _history_search_terms(message: str) -> set[str]:
+    """Extrait les termes utiles du nouveau message utilisateur."""
+    normalized = _normalize_history_text(message)
+    return {
+        term
+        for term in normalized.split()
+        if len(term) >= 3 and term not in _HISTORY_STOP_WORDS
+    }
+
+
+def _retrieve_relevant_old_messages(
+    old_rows: list[dict[str, Any]],
+    current_message: str,
+) -> list[dict[str, Any]]:
+    """
+    Recherche dans l'ancien historique les messages les plus proches du
+    message courant, sans appel IA supplémentaire et sans coût de crédits.
+
+    Cette première couche de mémoire longue est volontairement locale :
+    elle privilégie les termes, identifiants, noms de fichiers, modèles,
+    fonctions et expressions déjà employés dans la conversation.
+    """
+    query_terms = _history_search_terms(current_message)
+    if not query_terms or not old_rows:
+        return []
+
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+
+    for index, row in enumerate(old_rows):
+        content = str(row.get("content") or "").strip()
+        if not content:
+            continue
+
+        normalized_content = _normalize_history_text(content)
+        content_terms = set(normalized_content.split())
+        overlap = query_terms.intersection(content_terms)
+
+        if not overlap:
+            continue
+
+        # Les correspondances exactes de termes comptent double. Une petite
+        # prime favorise aussi les anciens messages les plus récents en cas
+        # d'égalité, sans écraser la pertinence textuelle.
+        score = len(overlap) * 2
+
+        normalized_query = _normalize_history_text(current_message)
+        if normalized_query and normalized_query in normalized_content:
+            score += 4
+
+        if score < MIN_RETRIEVAL_SCORE:
+            continue
+
+        scored.append((score, index, row))
+
+    # Sélection par pertinence, puis remise en ordre chronologique avant
+    # injection dans le contexte du modèle.
+    selected = sorted(
+        scored,
+        key=lambda item: (item[0], item[1]),
+        reverse=True,
+    )[:MAX_RETRIEVED_HISTORY_MESSAGES]
+
+    return [
+        item[2]
+        for item in sorted(selected, key=lambda item: item[1])
+    ]
+
+
+
+def _get_structured_conversation_memory(
+    conversation_id: str | None,
+    authenticated_user_id: str,
+) -> str:
+    """
+    Charge la mémoire longue structurée d'une conversation.
+
+    La mémoire reste strictement liée à la conversation et à son propriétaire.
+    Une absence de mémoire est normale pour une conversation nouvelle.
+    """
+    if not conversation_id:
+        return ""
+
+    response = (
+        supabase
+        .table("conversation_memories")
+        .select("summary")
+        .eq("conversation_id", conversation_id)
+        .eq("user_id", authenticated_user_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return ""
+
+    summary = str(response.data[0].get("summary") or "").strip()
+    if not summary:
+        return ""
+
+    # Garde-fou pour éviter qu'une mémoire anormalement volumineuse
+    # n'envahisse le contexte envoyé au modèle.
+    return summary[-STRUCTURED_MEMORY_MAX_CHARS:]
+
+
+def _structured_memory_as_history(
+    summary: str,
+) -> list[dict[str, str]]:
+    """
+    Transforme la mémoire persistée en contexte explicite pour le modèle.
+
+    Elle est injectée comme contexte système avant les messages historiques.
+    """
+    summary = summary.strip()
+    if not summary:
+        return []
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Mémoire longue de cette conversation. "
+                "Utilise ces informations uniquement comme contexte "
+                "lorsqu'elles sont pertinentes. Les messages récents "
+                "et les nouvelles instructions de l'utilisateur priment "
+                "en cas de contradiction.\n\n"
+                f"{summary}"
+            ),
+        }
+    ]
 
 
 def _get_conversation_history(
     conversation_id: str | None,
     authenticated_user_id: str,
     current_message: str,
+    pack_id: str,
 ) -> list[dict[str, str]]:
     """
     Charge l'historique persistant d'une conversation appartenant
@@ -624,6 +803,16 @@ def _get_conversation_history(
 
     rows = response.data or []
 
+    # La quantité d'historique disponible dépend du pack actif.
+    # Le nettoyage physique de Supabase sera géré par le composant
+    # responsable de l'enregistrement des messages. Ici, on borne
+    # uniquement l'historique exploitable par cette route.
+    history_limit = PACK_HISTORY_LIMITS.get(
+        pack_id,
+        PACK_HISTORY_LIMITS["light_pack"],
+    )
+    rows = rows[-history_limit:]
+
     # Le frontend sauvegarde déjà le message utilisateur avant
     # d'appeler /ai/chat ou /ai/chat/stream. On retire donc une
     # occurrence finale identique au message courant.
@@ -637,9 +826,28 @@ def _get_conversation_history(
         ):
             rows.pop()
 
+    # Les 40 derniers messages restent le contexte immédiat. Les messages
+    # plus anciens restent disponibles pour une recherche ciblée.
+    recent_rows = rows[-MAX_CONTEXT_MESSAGES:]
+    old_rows = (
+        rows[:-MAX_CONTEXT_MESSAGES]
+        if len(rows) > MAX_CONTEXT_MESSAGES
+        else []
+    )
+
+    retrieved_rows = _retrieve_relevant_old_messages(
+        old_rows=old_rows,
+        current_message=current_message,
+    )
+
+    # Les anciens messages retrouvés sont placés avant le contexte récent.
+    # Ils gardent leur rôle d'origine : aucune ancienne réponse n'est élevée
+    # artificiellement au rang de message system/developer.
+    context_rows = retrieved_rows + recent_rows
+
     history: list[dict[str, str]] = []
 
-    for row in rows[-MAX_HISTORY_MESSAGES:]:
+    for row in context_rows:
         role = row.get("role")
         content = row.get("content")
 
@@ -655,7 +863,15 @@ def _get_conversation_history(
             }
         )
 
-    return history
+    structured_memory = _get_structured_conversation_memory(
+        conversation_id=conversation_id,
+        authenticated_user_id=authenticated_user_id,
+    )
+
+    return (
+        _structured_memory_as_history(structured_memory)
+        + history
+    )
 
 
 # ============================================================
@@ -870,6 +1086,7 @@ def _prepare_chat(
         conversation_id=conversation_id,
         authenticated_user_id=authenticated_user_id,
         current_message=message,
+        pack_id=wallet.pack_id,
     )
 
     return (

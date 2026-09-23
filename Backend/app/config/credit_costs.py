@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class ComplementaryCreditPack(str, Enum):
     CREDIT_1000 = "credit_1000"
     CREDIT_2000 = "credit_2000"
@@ -31,6 +32,12 @@ class CreditAction(str, Enum):
     # ========================================================
     CHAT_SOL = "chat_sol"
     CHAT_SOL_WEB = "chat_sol_web"
+
+    # ========================================================
+    # CHAT — GPT-6 ASTRA
+    # ========================================================
+    CHAT_ASTRA = "chat_astra"
+    CHAT_ASTRA_WEB = "chat_astra_web"
 
     # ========================================================
     # IMAGES — PACK LÉGER
@@ -108,6 +115,12 @@ CREDIT_COSTS: dict[CreditAction, int] = {
     CreditAction.CHAT_SOL_WEB: 165,
 
     # --------------------------------------------------------
+    # ASTRA
+    # --------------------------------------------------------
+    CreditAction.CHAT_ASTRA: 300,
+    CreditAction.CHAT_ASTRA_WEB: 345,
+
+    # --------------------------------------------------------
     # IMAGES — LÉGER
     # --------------------------------------------------------
     CreditAction.IMAGE_480: 50,
@@ -140,6 +153,7 @@ CREDIT_COSTS: dict[CreditAction, int] = {
 
     # --------------------------------------------------------
     # IMAGES — BUSINESS
+    # À RECALCULER AVEC LES COÛTS API RÉELS
     # --------------------------------------------------------
     CreditAction.IMAGE_BUSINESS: 250,
     CreditAction.IMAGE_BUSINESS_HD: 400,
@@ -147,6 +161,7 @@ CREDIT_COSTS: dict[CreditAction, int] = {
 
     # --------------------------------------------------------
     # VIDÉOS — BUSINESS
+    # À RECALCULER AVEC LES COÛTS API RÉELS
     # --------------------------------------------------------
     CreditAction.VIDEO_BUSINESS_FAST: 2_500,
     CreditAction.VIDEO_BUSINESS_STANDARD: 5_000,
@@ -159,19 +174,7 @@ CREDIT_COSTS: dict[CreditAction, int] = {
 # ============================================================
 #
 # Ces coûts NE remplacent PAS le coût du chat.
-#
-# Exemple :
-#
-#   Luna + texte
-#       → 6 crédits
-#
-#   Luna + texte + 1 image
-#       → 6 + 1 = 7 crédits
-#
-#   Luna + texte + 1 fichier
-#       → 6 + 2 = 8 crédits
-#
-# Les coûts sont appliqués PAR élément.
+# Ils sont ajoutés au coût de base du modèle.
 #
 # Maximum frontend prévu : 3 images/fichiers par message.
 #
@@ -200,6 +203,12 @@ IMAGE_ANALYSIS_COSTS: dict[CreditAction, int] = {
     # --------------------------------------------------------
     CreditAction.CHAT_SOL: 12,
     CreditAction.CHAT_SOL_WEB: 12,
+
+    # --------------------------------------------------------
+    # ASTRA
+    # --------------------------------------------------------
+    CreditAction.CHAT_ASTRA: 30,
+    CreditAction.CHAT_ASTRA_WEB: 30,
 }
 
 
@@ -227,6 +236,12 @@ FILE_ANALYSIS_COSTS: dict[CreditAction, int] = {
     # --------------------------------------------------------
     CreditAction.CHAT_SOL: 20,
     CreditAction.CHAT_SOL_WEB: 20,
+
+    # --------------------------------------------------------
+    # ASTRA
+    # --------------------------------------------------------
+    CreditAction.CHAT_ASTRA: 50,
+    CreditAction.CHAT_ASTRA_WEB: 50,
 }
 
 
@@ -242,7 +257,7 @@ MAX_MULTIMODAL_ATTACHMENTS = 3
 # ============================================================
 
 LIGHT_PACK_CREDITS = 3_000
-LIGHT_PACK_PRICE_XAF = 4000
+LIGHT_PACK_PRICE_XAF = 4_000
 LIGHT_PACK_DURATION_DAYS = 35
 LIGHT_PACK_API_BUDGET_XAF = 2_500
 
@@ -252,7 +267,7 @@ LIGHT_PACK_API_BUDGET_XAF = 2_500
 # ============================================================
 
 INTERMEDIATE_PACK_CREDITS = 28_500
-INTERMEDIATE_PACK_PRICE_XAF = 8000
+INTERMEDIATE_PACK_PRICE_XAF = 8_000
 INTERMEDIATE_PACK_DURATION_DAYS = 35
 INTERMEDIATE_PACK_API_BUDGET_XAF = 4_500
 
@@ -262,7 +277,7 @@ INTERMEDIATE_PACK_API_BUDGET_XAF = 4_500
 # ============================================================
 
 PRO_PACK_CREDITS = 45_000
-PRO_PACK_PRICE_XAF = 12000
+PRO_PACK_PRICE_XAF = 12_000
 PRO_PACK_DURATION_DAYS = 35
 PRO_PACK_API_BUDGET_XAF = 6_000
 
@@ -271,12 +286,15 @@ PRO_PACK_API_BUDGET_XAF = 6_000
 # PACK BUSINESS
 # ============================================================
 
-BUSINESS_PACK_CREDITS = 96_000
-BUSINESS_PACK_PRICE_XAF = 19000
+BUSINESS_PACK_CREDITS = 100_000
+BUSINESS_PACK_PRICE_XAF = 45_000
 BUSINESS_PACK_DURATION_DAYS = 35
-BUSINESS_PACK_API_BUDGET_XAF = 10_000
+BUSINESS_PACK_API_BUDGET_XAF = 20_000
 
 
+# ============================================================
+# PACKS DE CRÉDITS COMPLÉMENTAIRES
+# ============================================================
 
 COMPLEMENTARY_CREDIT_PACKS = {
     ComplementaryCreditPack.CREDIT_1000: {
@@ -295,4 +313,4 @@ COMPLEMENTARY_CREDIT_PACKS = {
         "credits": 10_000,
         "price_xaf": 5_000,
     },
-}   
+}

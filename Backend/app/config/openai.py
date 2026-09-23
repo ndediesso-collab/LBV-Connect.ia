@@ -1,6 +1,8 @@
 import os
+import base64
 
 from dotenv import load_dotenv
+from fastapi import HTTPException
 
 
 load_dotenv()
@@ -11,16 +13,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_KEY")
 
 if not OPENAI_API_KEY:
     raise RuntimeError(
-        "La variable d'environnement OPENAI_API_KEY est introuvable." 
-    )#
-
-import base64
-
-from fastapi import HTTPException
+        "La variable d'environnement OPENAI_API_KEY est introuvable."
+    )
 
 
 # ============================================================
-# MODÈLES LBV-CONNECT
+# MODÈLES ORIA
 # ============================================================
 
 MODEL_OPENAI_IDS = {
@@ -28,6 +26,7 @@ MODEL_OPENAI_IDS = {
     "gpt-5": "gpt-5",
     "gpt-5.6-terra": "gpt-5.6-terra",
     "gpt-5.6-sol": "gpt-5.6-sol",
+    "gpt-6-astra": "gpt-6-astra",
 }
 
 
@@ -47,17 +46,17 @@ PACK_ALLOWED_MODELS = {
         "gpt-5.6-terra",
     },
 
+    # Refonte Business :
+    # accès uniquement à Sol + Astra.
     "business_pack": {
-        "luna",
-        "gpt-5",
-        "gpt-5.6-terra",
         "gpt-5.6-sol",
+        "gpt-6-astra",
     },
 }
 
 
 # ============================================================
-# EXÉCUTION IA LBV-CONNECT
+# EXÉCUTION IA ORIA
 # ============================================================
 
 def exec_ia(
@@ -70,16 +69,14 @@ def exec_ia(
     role_prefix: bool = False,
 ):
     """
-    Exécute une requête IA LBV-Connect.
+    Exécute une requête IA Oria.
 
     Le modèle réellement utilisé dépend :
         1. du modèle demandé par le frontend ;
         2. du pack de l'utilisateur.
 
     La recherche Web est optionnelle.
-
     L'image est optionnelle.
-
     L'API OpenAI reste entièrement côté backend.
     """
 
@@ -123,7 +120,7 @@ def exec_ia(
 
     if role_prefix:
         prefix = (
-            f"Tu es un assistant IA LBV-Connect utilisant "
+            f"Tu es un assistant IA Oria utilisant "
             f"le modèle {model}. "
             "Réponds de manière précise, structurée et "
             "adaptée à la demande de l'utilisateur.\n\n"
@@ -190,7 +187,6 @@ def exec_ia(
     # ========================================================
 
     try:
-
         response = client_openai.responses.create(
             model=openai_model,
             tools=tools,
@@ -209,7 +205,6 @@ def exec_ia(
         }
 
     except Exception as error:
-
         raise HTTPException(
             status_code=502,
             detail=f"Erreur OpenAI : {str(error)}",

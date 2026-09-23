@@ -145,17 +145,13 @@ class CreditService:
             # CHAT
             # ----------------------------
 
-            CreditAction.CHAT_LUNA: 6,
-            CreditAction.CHAT_LUNA_WEB: 8,
-
-            CreditAction.CHAT_GPT5: 60,
-            CreditAction.CHAT_GPT5_WEB: 86,
-
-            CreditAction.CHAT_TERRA: 75,
-            CreditAction.CHAT_TERRA_WEB: 105,
-
+            # Le pack Business utilise uniquement les modèles
+            # haut de gamme Sol et Astra.
             CreditAction.CHAT_SOL: 120,
             CreditAction.CHAT_SOL_WEB: 165,
+
+            CreditAction.CHAT_ASTRA: 300,
+            CreditAction.CHAT_ASTRA_WEB: 345,
 
             # ----------------------------
             # IMAGES

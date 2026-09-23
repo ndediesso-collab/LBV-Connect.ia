@@ -7,12 +7,13 @@
     "icon": "./assets/images/oria-logo.png",
     "scheme": "oria",
     "userInterfaceStyle": "automatic",
-
     "ios": {
       "bundleIdentifier": "com.lbvconnect.oria",
-      "icon": "./assets/images/oria-logo.png"
+      "icon": "./assets/images/oria-logo.png",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
-
     "android": {
       "package": "com.lbvconnect.oria",
       "adaptiveIcon": {
@@ -21,12 +22,10 @@
       },
       "predictiveBackGestureEnabled": false
     },
-
     "web": {
       "output": "static",
       "favicon": "./assets/images/oria-logo.png"
     },
-
     "plugins": [
       "expo-router",
       [
@@ -39,19 +38,16 @@
       "expo-video",
       "expo-sharing"
     ],
-
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
-
     "extra": {
       "router": {},
       "eas": {
         "projectId": "1832348e-2837-4236-ae2d-2edbd47f2824"
       }
     },
-
     "owner": "lbv-connect"
   }
 }

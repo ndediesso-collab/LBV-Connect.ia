@@ -64,7 +64,7 @@ type CreditTopUp = {
  * Léger         : 3 000 crédits  / 35 jours
  * Intermédiaire : 28 500 crédits / 35 jours
  * Pro           : 45 000 crédits / 35 jours
- * Business      : 96 000 crédits / 35 jours
+ * Business      : 100 000 crédits / 35 jours
  *
  * Les prix correspondent aux prix actuellement définis
  * pour les offres.
@@ -135,6 +135,10 @@ const packs: Pack[] = [
       },
       {
         name: "GPT-5.6 Sol",
+        available: false,
+      },
+      {
+        name: "GPT-6 Astra",
         available: false,
       },
     ],
@@ -209,6 +213,10 @@ const packs: Pack[] = [
         name: "GPT-5.6 Sol",
         available: false,
       },
+      {
+        name: "GPT-6 Astra",
+        available: false,
+      },
     ],
 
     media: [
@@ -268,6 +276,10 @@ const packs: Pack[] = [
         name: "GPT-5.6 Sol",
         available: false,
       },
+      {
+        name: "GPT-6 Astra",
+        available: false,
+      },
     ],
 
     media: [
@@ -315,19 +327,19 @@ const packs: Pack[] = [
 
     name: "Business",
 
-    price: "19 000 XAF",
+    price: "45 000 XAF",
 
-    credits: "96 000",
+    credits: "100 000",
 
     duration: "35 jours",
 
     description:
-      "L'offre la plus complète pour les usages intensifs, professionnels et créatifs.",
+      "L'offre haut de gamme d'Oria pour accéder à Sol et Astra, avec les capacités créatives Business.",
 
     features: [
-      "Tout le pack Pro",
       "GPT-5.6 Sol",
-      "Recherche Web avec Sol",
+      "GPT-6 Astra",
+      "Recherche Web avec Sol et Astra",
       "Images Business",
       "Images HD et Ultra",
       "Vidéos Business",
@@ -338,18 +350,22 @@ const packs: Pack[] = [
     models: [
       {
         name: "Luna",
-        available: true,
+        available: false,
       },
       {
         name: "GPT-5.6",
-        available: true,
+        available: false,
       },
       {
         name: "GPT-5.6 Terra",
-        available: true,
+        available: false,
       },
       {
         name: "GPT-5.6 Sol",
+        available: true,
+      },
+      {
+        name: "GPT-6 Astra",
         available: true,
       },
     ],
@@ -423,7 +439,7 @@ const faqs = [
       "Les crédits sont-ils identiques entre les packs ?",
 
     answer:
-      "Non. Chaque pack possède son propre volume de crédits et ses propres capacités. Le pack Léger contient 3 000 crédits, l'Intermédiaire 28 500, le Pro 45 000 et le Business 96 000.",
+      "Non. Chaque pack possède son propre volume de crédits et ses propres capacités. Le pack Léger contient 3 000 crédits, l'Intermédiaire 28 500, le Pro 45 000 et le Business 100 000.",
   },
 
   {
@@ -851,6 +867,7 @@ export default function PacksPage() {
                     "GPT-5.6",
                     "GPT-5.6 Terra",
                     "GPT-5.6 Sol",
+                    "GPT-6 Astra",
                   ].map(
                     (modelName) => (
                       <tr
