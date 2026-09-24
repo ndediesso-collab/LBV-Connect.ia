@@ -154,6 +154,10 @@ const packs: Pack[] = [
         name: "GPT-5.6 Sol",
         available: false,
       },
+      {
+        name: "GPT-6 Astra",
+        available: false,
+      },
     ],
 
     media: [
@@ -226,6 +230,10 @@ const packs: Pack[] = [
         name: "GPT-5.6 Sol",
         available: false,
       },
+      {
+        name: "GPT-6 Astra",
+        available: false,
+      },
     ],
 
     media: [
@@ -285,6 +293,10 @@ const packs: Pack[] = [
         name: "GPT-5.6 Sol",
         available: false,
       },
+      {
+        name: "GPT-6 Astra",
+        available: false,
+      },
     ],
 
     media: [
@@ -339,12 +351,12 @@ const packs: Pack[] = [
     duration: "35 jours",
 
     description:
-      "L'offre la plus complète pour les usages intensifs, professionnels et créatifs.",
+      "L'offre haut de gamme d'Oria pour les usages professionnels, avec Sol et Astra.",
 
     features: [
-      "Tout le pack Pro",
       "GPT-5.6 Sol",
-      "Recherche Web avec Sol",
+      "GPT-6 Astra",
+      "Recherche Web avec Sol et Astra",
       "Images Business",
       "Images HD et Ultra",
       "Vidéos Business",
@@ -355,18 +367,22 @@ const packs: Pack[] = [
     models: [
       {
         name: "Luna",
-        available: true,
+        available: false,
       },
       {
         name: "GPT-5",
-        available: true,
+        available: false,
       },
       {
         name: "GPT-5.6 Terra",
-        available: true,
+        available: false,
       },
       {
         name: "GPT-5.6 Sol",
+        available: true,
+      },
+      {
+        name: "GPT-6 Astra",
         available: true,
       },
     ],
@@ -464,7 +480,7 @@ const faqs = [
       "Puis-je utiliser plusieurs modèles avec mon pack ?",
 
     answer:
-      "Oui. Les modèles disponibles dépendent du pack. Luna est disponible sur tous les packs, GPT-5 à partir de l'Intermédiaire, GPT-5.6 Terra à partir du Pro et GPT-5.6 Sol avec le Business.",
+      "Oui. Les modèles disponibles dépendent du pack. Luna est disponible avec les packs Léger, Intermédiaire et Pro, GPT-5 avec les packs Intermédiaire et Pro, GPT-5.6 Terra avec le Pro, et le pack Business donne accès à GPT-5.6 Sol et GPT-6 Astra.",
   },
 
   {
@@ -1114,6 +1130,7 @@ export default function PacksPage() {
                     "GPT-5",
                     "GPT-5.6 Terra",
                     "GPT-5.6 Sol",
+                    "GPT-6 Astra",
                   ].map(
                     (
                       modelName,

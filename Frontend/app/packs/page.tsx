@@ -13,8 +13,147 @@ import {
   Zap,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    backToChat: "Retour au chat",
+    myCredits: "Mes crédits",
+    packsOria: "Packs Oria",
+    heroTitle: "Choisissez votre accès à l'IA.",
+    heroDescription:
+      "Chaque pack vous donne un volume de crédits utilisable pendant 35 jours. Les modèles et capacités accessibles dépendent du pack choisi.",
+    needMoreCredits: "Besoin de crédits supplémentaires ?",
+    topUpDescription:
+      "Rechargez votre solde sans changer de pack. Les crédits complémentaires sont ajoutés directement à votre portefeuille.",
+    startingAt: "À partir de 563 XAF pour 1 000 crédits",
+    buyCredits: "Acheter des crédits",
+    complementaryCredits: "Crédits complémentaires",
+    topUpBalance: "Rechargez votre solde",
+    topUpModalDescription:
+      "Choisissez une recharge. Vous serez redirigé vers Chariow pour finaliser le paiement avec les moyens disponibles.",
+    close: "Fermer",
+    credits: "crédits",
+    redirecting: "Redirection...",
+    buy: "Acheter",
+    paymentNotice:
+      "Le montant sera débité uniquement après confirmation du paiement. Moov Money et Airtel Money seront connectés à cette étape.",
+    howItWorks: "Fonctionnement",
+    simpleToUnderstand: "Simple à comprendre",
+    choosePack: "Choisissez un pack",
+    choosePackDescription:
+      "Sélectionnez le niveau de puissance, les capacités et le volume de crédits adaptés à votre utilisation.",
+    useOria: "Utilisez Oria",
+    useOriaDescription:
+      "Utilisez les modèles, la recherche Web, les images, les vidéos et les autres capacités incluses dans votre pack.",
+    trackCredits: "Suivez vos crédits",
+    trackCreditsDescription:
+      "Votre solde évolue automatiquement après chaque opération et reste consultable depuis votre espace.",
+    modelAccess: "Accès aux modèles",
+    compareAiLevels: "Comparez les niveaux d'IA",
+    model: "Modèle",
+    packQuestions: "Questions sur les packs",
+    mostChosen: "Le plus choisi",
+    pack: "Pack",
+    includedCredits: "Crédits inclus",
+    models: "Modèles",
+    locked: "Verrouillé",
+    media: "Médias",
+    generationCostNotice:
+      "Le coût affiché correspond à une génération et est déduit de votre solde de crédits.",
+    included: "Inclus",
+    choose: "Choisir",
+  },
+  en: {
+    backToChat: "Back to chat",
+    myCredits: "My credits",
+    packsOria: "Oria Packs",
+    heroTitle: "Choose your AI access.",
+    heroDescription:
+      "Each pack gives you a volume of credits usable for 35 days. Available models and capabilities depend on the pack you choose.",
+    needMoreCredits: "Need additional credits?",
+    topUpDescription:
+      "Top up your balance without changing your pack. Additional credits are added directly to your wallet.",
+    startingAt: "Starting at 563 XAF for 1,000 credits",
+    buyCredits: "Buy credits",
+    complementaryCredits: "Additional credits",
+    topUpBalance: "Top up your balance",
+    topUpModalDescription:
+      "Choose a top-up. You will be redirected to Chariow to complete payment with the available payment methods.",
+    close: "Close",
+    credits: "credits",
+    redirecting: "Redirecting...",
+    buy: "Buy",
+    paymentNotice:
+      "The amount will only be charged after payment confirmation. Moov Money and Airtel Money will be connected at this step.",
+    howItWorks: "How it works",
+    simpleToUnderstand: "Simple to understand",
+    choosePack: "Choose a pack",
+    choosePackDescription:
+      "Select the level of capability, features, and credit volume that fits your usage.",
+    useOria: "Use Oria",
+    useOriaDescription:
+      "Use the models, Web Search, images, videos, and other capabilities included in your pack.",
+    trackCredits: "Track your credits",
+    trackCreditsDescription:
+      "Your balance updates automatically after each operation and remains available from your account.",
+    modelAccess: "Model access",
+    compareAiLevels: "Compare AI levels",
+    model: "Model",
+    packQuestions: "Questions about packs",
+    mostChosen: "Most chosen",
+    pack: "Pack",
+    includedCredits: "Included credits",
+    models: "Models",
+    locked: "Locked",
+    media: "Media",
+    generationCostNotice:
+      "The displayed cost is for one generation and is deducted from your credit balance.",
+    included: "Included",
+    choose: "Choose",
+  },
+} as const;
+
+function getInitialOriaLanguage(): OriaLanguage {
+  if (typeof window === "undefined") return "fr";
+
+  const saved = window.localStorage.getItem(
+    ORIA_LANGUAGE_STORAGE_KEY,
+  );
+
+  if (saved === "fr" || saved === "en") {
+    return saved;
+  }
+
+  return window.navigator.language
+    .toLowerCase()
+    .startsWith("en")
+    ? "en"
+    : "fr";
+}
+
+function localizePaymentError(
+  message: string,
+  language: OriaLanguage,
+): string {
+  if (language === "fr") return message;
+
+  const translations: Record<string, string> = {
+    "Impossible d'initialiser le paiement.":
+      "Unable to initialize payment.",
+    "Chariow n'a fourni aucune URL de paiement.":
+      "Chariow did not provide a payment URL.",
+  };
+
+  return translations[message] ?? message;
+}
+
 type Pack = {
   id:
     | "light_pack"
@@ -50,6 +189,163 @@ type CreditTopUp = {
   price: string;
   description: string;
 };
+
+
+const PACK_TEXT_EN: Record<
+  Pack["id"],
+  {
+    name: string;
+    description: string;
+    features: string[];
+  }
+> = {
+  light_pack: {
+    name: "Light",
+    description: "Essential access to Oria for everyday use.",
+    features: [
+      "Chat with Luna",
+      "Web Search with Luna",
+      "Image generation",
+      "Short video generation",
+      "File analysis",
+    ],
+  },
+  intermediate_pack: {
+    name: "Intermediate",
+    description:
+      "A higher tier with access to more capability and features.",
+    features: [
+      "Everything in the Light pack",
+      "GPT-5",
+      "Web Search with GPT-5.6",
+      "Advanced image generation",
+      "Veo Lite",
+      "Advanced file analysis",
+    ],
+  },
+  pro_pack: {
+    name: "Pro",
+    description:
+      "For intensive users who need more capability, media, and possibilities.",
+    features: [
+      "Everything in the Intermediate pack",
+      "GPT-5.6 Terra",
+      "Advanced Web Search",
+      "Pro images",
+      "Pro videos",
+      "Video extension",
+      "Access to advanced creative capabilities",
+    ],
+  },
+  business_pack: {
+    name: "Business",
+    description:
+      "Oria's high-end offer with access to Sol and Astra, plus Business creative capabilities.",
+    features: [
+      "GPT-5.6 Sol",
+      "GPT-6 Astra",
+      "Web Search with Sol and Astra",
+      "Business images",
+      "HD and Ultra images",
+      "Business videos",
+      "Long videos",
+      "Advanced AI capabilities",
+    ],
+  },
+};
+
+const MEDIA_NAME_EN: Record<string, string> = {
+  "Images 480": "Images 480",
+  "Images 720": "Images 720",
+  "Vidéo 4 s": "Video 4 s",
+  "Vidéo 8 s": "Video 8 s",
+  "Image Pro": "Pro Image",
+  "Image Pro Standard": "Pro Image Standard",
+  "Image Pro Ultra": "Pro Image Ultra",
+  "Veo Pro Fast": "Veo Pro Fast",
+  "Veo Pro Standard": "Veo Pro Standard",
+  "Veo Pro Extension": "Veo Pro Extension",
+  "Image Business": "Business Image",
+  "Image Business HD": "Business Image HD",
+  "Image Business Ultra": "Business Image Ultra",
+  "Veo Business Fast": "Veo Business Fast",
+  "Veo Business Standard": "Veo Business Standard",
+  "Veo Business Long": "Veo Business Long",
+};
+
+function localizePack(
+  pack: Pack,
+  language: OriaLanguage,
+): Pack {
+  if (language === "fr") return pack;
+
+  const localized = PACK_TEXT_EN[pack.id];
+
+  return {
+    ...pack,
+    name: localized.name,
+    duration: pack.duration.replace("jours", "days"),
+    description: localized.description,
+    features: localized.features,
+    media: pack.media.map((media) => ({
+      ...media,
+      name: MEDIA_NAME_EN[media.name] ?? media.name,
+      unit: media.unit ? "generation" : media.unit,
+    })),
+  };
+}
+
+function getTopUpDescription(
+  credits: number,
+  language: OriaLanguage,
+): string {
+  const formatted = credits.toLocaleString(
+    language === "en" ? "en-US" : "fr-FR",
+  );
+
+  return language === "en"
+    ? `${formatted} additional credits`
+    : `${formatted} crédits supplémentaires`;
+}
+
+const FAQS_EN = [
+  {
+    question: "How long are my credits valid?",
+    answer:
+      "Credits remain valid for the duration of your pack. All Oria packs are currently configured for 35 days.",
+  },
+  {
+    question: "What happens when my pack expires?",
+    answer:
+      "The wallet linked to the pack becomes inactive on its expiration date. Any remaining credits can no longer be used from that wallet.",
+  },
+  {
+    question: "Are credits the same across all packs?",
+    answer:
+      "No. Each pack has its own credit volume and capabilities. The Light pack contains 3,000 credits, Intermediate 28,500, Pro 45,000, and Business 100,000.",
+  },
+  {
+    question: "Do all actions consume the same number of credits?",
+    answer:
+      "No. The cost depends on the model and operation performed. More advanced actions consume more credits. Image and video generation costs are displayed directly in the relevant pack.",
+  },
+  {
+    question: "Can I buy additional credits?",
+    answer:
+      "Yes. You can buy additional top-ups of 1,000 credits for 563 XAF, 2,000 credits for 1,000 XAF, 4,000 credits for 2,000 XAF, or 10,000 credits for 5,000 XAF. Payment starts from this page and is confirmed by Oria's payment system.",
+  },
+  {
+    question: "Can I use multiple models with my pack?",
+    answer:
+      "Yes. Available models depend on the pack. Luna is available on all packs, GPT-5 from Intermediate, GPT-5.6 Terra from Pro, and GPT-5.6 Sol with Business.",
+  },
+  {
+    question: "Are videos available on every pack?",
+    answer:
+      "Video capabilities vary by pack. Light includes short videos, Intermediate includes Veo Lite, Pro includes Pro video capabilities, and Business adds Business video capabilities, including long videos.",
+  },
+] as const;
+
 
 /*
  * ============================================================
@@ -482,12 +778,45 @@ const faqs = [
  */
 
 export default function PacksPage() {
+  const [language, setLanguage] =
+    useState<OriaLanguage>("fr");
+
+  useEffect(() => {
+    const syncLanguage = () => {
+      setLanguage(getInitialOriaLanguage());
+      setOpenFaq(null);
+    };
+
+    syncLanguage();
+
+    window.addEventListener("storage", syncLanguage);
+    window.addEventListener(
+      "oria-language-change",
+      syncLanguage,
+    );
+
+    return () => {
+      window.removeEventListener("storage", syncLanguage);
+      window.removeEventListener(
+        "oria-language-change",
+        syncLanguage,
+      );
+    };
+  }, []);
+
   const [openFaq, setOpenFaq] =
     useState<number | null>(null);
 
   const [showCreditTopUp, setShowCreditTopUp] =
     useState(false);
   const [isPaying, setIsPaying] = useState<string | null>(null);
+
+  const displayedPacks = packs.map((pack) =>
+    localizePack(pack, language),
+  );
+
+  const displayedFaqs =
+    language === "en" ? FAQS_EN : faqs;
 
   async function startPayment(
     target: {
@@ -604,7 +933,7 @@ export default function PacksPage() {
           <div className="flex items-center gap-3">
             <Link
               href="/chat"
-              aria-label="Retour au chat"
+              aria-label={UI[language].backToChat}
               className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
             >
               <ArrowLeft size={19} />
@@ -626,7 +955,7 @@ export default function PacksPage() {
             <CreditCard size={16} />
 
             <span className="hidden sm:inline">
-              Mes crédits
+              {UI[language].myCredits}
             </span>
           </Link>
         </div>
@@ -639,28 +968,26 @@ export default function PacksPage() {
 
         <div className="mx-auto max-w-2xl text-center">
           <p className="text-sm font-medium text-muted">
-            Packs Oria
+            {UI[language].packsOria}
           </p>
 
           <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-5xl">
-            Choisissez votre accès à l'IA.
+            {UI[language].heroTitle}
           </h1>
 
           <p className="mt-4 text-sm leading-6 text-muted sm:text-base">
-            Chaque pack vous donne un volume
-            de crédits utilisable pendant 35
-            jours. Les modèles et capacités
-            accessibles dépendent du pack choisi.
+            {UI[language].heroDescription}
           </p>
         </div>
 
         {/* Packs */}
 
         <div className="mt-10 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-          {packs.map((pack) => (
+          {displayedPacks.map((pack) => (
             <PackCard
               key={pack.id}
               pack={pack}
+              language={language}
               onSelect={handlePackSelection}
             />
           ))}
@@ -675,18 +1002,16 @@ export default function PacksPage() {
                 <Zap size={18} />
 
                 <h2 className="text-lg font-semibold">
-                  Besoin de crédits supplémentaires ?
+                  {UI[language].needMoreCredits}
                 </h2>
               </div>
 
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-                Rechargez votre solde sans changer de pack.
-                Les crédits complémentaires sont ajoutés
-                directement à votre portefeuille.
+                {UI[language].topUpDescription}
               </p>
 
               <p className="mt-3 text-sm font-medium">
-                À partir de 563 XAF pour 1 000 crédits
+                {UI[language].startingAt}
               </p>
             </div>
 
@@ -695,7 +1020,7 @@ export default function PacksPage() {
               onClick={() => setShowCreditTopUp(true)}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-medium text-accent-foreground transition hover:opacity-85"
             >
-              Acheter des crédits
+              {UI[language].buyCredits}
               <Zap size={16} />
             </button>
           </div>
@@ -719,26 +1044,25 @@ export default function PacksPage() {
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-sm font-medium text-muted">
-                    Crédits complémentaires
+                    {UI[language].complementaryCredits}
                   </p>
 
                   <h2
                     id="credit-topup-title"
                     className="mt-1 text-2xl font-semibold tracking-tight"
                   >
-                    Rechargez votre solde
+                    {UI[language].topUpBalance}
                   </h2>
 
                   <p className="mt-2 text-sm leading-6 text-muted">
-                    Choisissez une recharge. Vous serez redirigé vers
-                    Chariow pour finaliser le paiement avec les moyens disponibles.
+                    {UI[language].topUpModalDescription}
                   </p>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => setShowCreditTopUp(false)}
-                  aria-label="Fermer"
+                  aria-label={UI[language].close}
                   className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
                 >
                   <X size={18} />
@@ -753,11 +1077,17 @@ export default function PacksPage() {
                   >
                     <div>
                       <p className="text-lg font-semibold">
-                        {topUp.credits.toLocaleString("fr-FR")} crédits
+                        {topUp.credits.toLocaleString(
+                          language === "en" ? "en-US" : "fr-FR",
+                        )}{" "}
+                        {UI[language].credits}
                       </p>
 
                       <p className="mt-1 text-sm text-muted">
-                        {topUp.description}
+                        {getTopUpDescription(
+                          topUp.credits,
+                          language,
+                        )}
                       </p>
                     </div>
 
@@ -773,8 +1103,8 @@ export default function PacksPage() {
                         className="rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {isPaying === topUp.id
-                          ? "Redirection..."
-                          : "Acheter"}
+                          ? UI[language].redirecting
+                          : UI[language].buy}
                       </button>
                     </div>
                   </div>
@@ -783,9 +1113,7 @@ export default function PacksPage() {
 
               <div className="mt-5 rounded-2xl border border-border bg-surface-secondary p-4">
                 <p className="text-xs leading-5 text-muted">
-                  Le montant sera débité uniquement après confirmation
-                  du paiement. Moov Money et Airtel Money seront
-                  connectés à cette étape.
+                  {UI[language].paymentNotice}
                 </p>
               </div>
             </div>
@@ -797,31 +1125,31 @@ export default function PacksPage() {
         <section className="mt-12">
           <div className="text-center">
             <p className="text-sm font-medium text-muted">
-              Fonctionnement
+              {UI[language].howItWorks}
             </p>
 
             <h2 className="mt-1 text-2xl font-semibold tracking-tight">
-              Simple à comprendre
+              {UI[language].simpleToUnderstand}
             </h2>
           </div>
 
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
             <Step
               number="01"
-              title="Choisissez un pack"
-              description="Sélectionnez le niveau de puissance, les capacités et le volume de crédits adaptés à votre utilisation."
+              title={UI[language].choosePack}
+              description={UI[language].choosePackDescription}
             />
 
             <Step
               number="02"
-              title="Utilisez Oria"
-              description="Utilisez les modèles, la recherche Web, les images, les vidéos et les autres capacités incluses dans votre pack."
+              title={UI[language].useOria}
+              description={UI[language].useOriaDescription}
             />
 
             <Step
               number="03"
-              title="Suivez vos crédits"
-              description="Votre solde évolue automatiquement après chaque opération et reste consultable depuis votre espace."
+              title={UI[language].trackCredits}
+              description={UI[language].trackCreditsDescription}
             />
           </div>
         </section>
@@ -831,11 +1159,11 @@ export default function PacksPage() {
         <section className="mt-12">
           <div className="text-center">
             <p className="text-sm font-medium text-muted">
-              Accès aux modèles
+              {UI[language].modelAccess}
             </p>
 
             <h2 className="mt-1 text-2xl font-semibold tracking-tight">
-              Comparez les niveaux d'IA
+              {UI[language].compareAiLevels}
             </h2>
           </div>
 
@@ -845,10 +1173,10 @@ export default function PacksPage() {
                 <thead>
                   <tr className="border-b border-border bg-surface-secondary">
                     <th className="px-5 py-4 text-sm font-medium">
-                      Modèle
+                      {UI[language].model}
                     </th>
 
-                    {packs.map(
+                    {displayedPacks.map(
                       (pack) => (
                         <th
                           key={pack.id}
@@ -936,12 +1264,12 @@ export default function PacksPage() {
             <HelpCircle size={18} />
 
             <h2 className="text-lg font-semibold">
-              Questions sur les packs
+              {UI[language].packQuestions}
             </h2>
           </div>
 
           <div className="mx-auto mt-5 max-w-3xl overflow-hidden rounded-2xl border border-border">
-            {faqs.map(
+            {displayedFaqs.map(
               (faq, index) => {
                 const isOpen =
                   openFaq === index;
@@ -1006,9 +1334,11 @@ export default function PacksPage() {
 
 function PackCard({
   pack,
+  language,
   onSelect,
 }: {
   pack: Pack;
+  language: OriaLanguage;
   onSelect: (pack: Pack) => void;
 }) {
   const isPopular = Boolean(
@@ -1027,7 +1357,7 @@ function PackCard({
 
       {isPopular && (
         <div className="absolute right-5 top-5 rounded-full bg-accent-foreground px-3 py-1 text-[11px] font-semibold text-accent">
-          Le plus choisi
+          {UI[language].mostChosen}
         </div>
       )}
 
@@ -1041,7 +1371,7 @@ function PackCard({
               : "text-muted"
           }`}
         >
-          Pack
+          {UI[language].pack}
         </p>
 
         <h2 className="mt-1 text-2xl font-semibold tracking-tight">
@@ -1101,7 +1431,7 @@ function PackCard({
               : "text-muted"
           }`}
         >
-          Crédits inclus
+          {UI[language].includedCredits}
         </p>
 
         <p className="mt-1 text-3xl font-semibold tracking-tight">
@@ -1119,7 +1449,7 @@ function PackCard({
               : "text-muted"
           }`}
         >
-          Modèles
+          {UI[language].models}
         </p>
 
         <div className="mt-3 space-y-2.5">
@@ -1173,7 +1503,7 @@ function PackCard({
                         : "text-muted"
                     }`}
                   >
-                    Verrouillé
+                    {UI[language].locked}
                   </span>
                 )}
               </div>
@@ -1192,7 +1522,7 @@ function PackCard({
               : "text-muted"
           }`}
         >
-          Médias
+          {UI[language].media}
         </p>
 
         <div className="mt-3 space-y-2.5">
@@ -1245,7 +1575,10 @@ function PackCard({
                           : "text-muted"
                       }`}
                     >
-                      {media.cost.toLocaleString("fr-FR")} crédits
+                      {media.cost.toLocaleString(
+                        language === "en" ? "en-US" : "fr-FR",
+                      )}{" "}
+                      {UI[language].credits}
                       {media.unit ? ` / ${media.unit}` : ""}
                     </span>
                   )}
@@ -1262,8 +1595,7 @@ function PackCard({
               : "text-muted"
           }`}
         >
-          Le coût affiché correspond à une génération et
-          est déduit de votre solde de crédits.
+          {UI[language].generationCostNotice}
         </p>
       </div>
 
@@ -1277,7 +1609,7 @@ function PackCard({
               : "text-muted"
           }`}
         >
-          Inclus
+          {UI[language].included}
         </p>
 
         <ul className="mt-3 space-y-2.5">
@@ -1322,7 +1654,7 @@ function PackCard({
             : "bg-accent text-accent-foreground"
         }`}
       >
-        Choisir {pack.name}
+        {UI[language].choose} {pack.name}
       </button>
     </article>
   );

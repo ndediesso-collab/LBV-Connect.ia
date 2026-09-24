@@ -13,69 +13,219 @@ import {
   Zap,
 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-const categories = [
-  {
-    title: "Premiers pas",
-    description: "Découvrez comment utiliser Oria.",
-    icon: Sparkles,
-  },
-  {
-    title: "Crédits",
-    description: "Comprendre le fonctionnement et la consommation.",
-    icon: CreditCard,
-  },
-  {
-    title: "Modèles IA",
-    description: "Comprendre Standard, Raisonnement et Premium.",
-    icon: Zap,
-  },
-  {
-    title: "Compte et sécurité",
-    description: "Gérer votre compte et vos paramètres.",
-    icon: ShieldCheck,
-  },
-];
+type OriaLanguage = "fr" | "en";
 
-const faqs = [
-  {
-    question: "Qu'est-ce que Oria ?",
-    answer:
-      "Oria est une interface qui rassemble différentes technologies d'intelligence artificielle au même endroit.",
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    backToChat: "Retour au chat",
+    helpTitle: "Comment pouvons-nous vous aider ?",
+    helpDescription:
+      "Retrouvez les réponses aux questions les plus fréquentes sur Oria.",
+    searchPlaceholder: "Rechercher une question...",
+    exploreHelp: "Explorer l'aide",
+    faqTitle: "Questions fréquentes",
+    noResult: "Aucun résultat",
+    tryOtherKeywords: "Essayez avec d'autres mots-clés.",
+    supportQuestion: "Vous ne trouvez pas votre réponse ?",
+    supportDescription:
+      "Notre espace d'assistance pourra vous aider pour les problèmes liés à votre compte, vos crédits ou l'utilisation du service.",
+    contactSupport: "Contacter le support",
   },
-  {
-    question: "À quoi servent les crédits ?",
-    answer:
-      "Les crédits permettent d'utiliser les différentes fonctionnalités et modèles disponibles dans votre pack. La consommation dépend de l'opération et du modèle utilisé.",
+  en: {
+    backToChat: "Back to chat",
+    helpTitle: "How can we help you?",
+    helpDescription:
+      "Find answers to the most frequently asked questions about Oria.",
+    searchPlaceholder: "Search for a question...",
+    exploreHelp: "Explore help",
+    faqTitle: "Frequently asked questions",
+    noResult: "No results",
+    tryOtherKeywords: "Try different keywords.",
+    supportQuestion: "Can't find your answer?",
+    supportDescription:
+      "Our support space can help with issues related to your account, credits, or use of the service.",
+    contactSupport: "Contact support",
   },
-  {
-    question: "Les crédits ont-ils une durée de validité ?",
-    answer:
-      "Oui. Les crédits sont associés à un pack et restent utilisables pendant la durée de validité de celui-ci.",
-  },
-  {
-    question: "Puis-je utiliser plusieurs modèles d'IA ?",
-    answer:
-      "Oui, les modèles disponibles dépendent du pack auquel vous avez souscrit.",
-  },
-  {
-    question: "Que se passe-t-il lorsque mes crédits sont épuisés ?",
-    answer:
-      "Vous pouvez acheter des crédits complémentaires afin de continuer à utiliser Oria.",
-  },
-  {
-    question: "Puis-je utiliser Oria sur mobile ?",
-    answer:
-      "L'interface est conçue pour être responsive et s'adapter aux smartphones, tablettes et ordinateurs.",
-  },
-];
+} as const;
+
+const categories = {
+  fr: [
+    {
+      title: "Premiers pas",
+      description: "Découvrez comment utiliser Oria.",
+      icon: Sparkles,
+    },
+    {
+      title: "Crédits",
+      description: "Comprendre le fonctionnement et la consommation.",
+      icon: CreditCard,
+    },
+    {
+      title: "Modèles IA",
+      description: "Comprendre Standard, Raisonnement et Premium.",
+      icon: Zap,
+    },
+    {
+      title: "Compte et sécurité",
+      description: "Gérer votre compte et vos paramètres.",
+      icon: ShieldCheck,
+    },
+  ],
+  en: [
+    {
+      title: "Getting started",
+      description: "Learn how to use Oria.",
+      icon: Sparkles,
+    },
+    {
+      title: "Credits",
+      description: "Understand how credits work and are consumed.",
+      icon: CreditCard,
+    },
+    {
+      title: "AI models",
+      description: "Understand Standard, Reasoning, and Premium.",
+      icon: Zap,
+    },
+    {
+      title: "Account and security",
+      description: "Manage your account and settings.",
+      icon: ShieldCheck,
+    },
+  ],
+} as const;
+
+const faqs = {
+  fr: [
+    {
+      question: "Qu'est-ce que Oria ?",
+      answer:
+        "Oria est une interface qui rassemble différentes technologies d'intelligence artificielle au même endroit.",
+    },
+    {
+      question: "À quoi servent les crédits ?",
+      answer:
+        "Les crédits permettent d'utiliser les différentes fonctionnalités et modèles disponibles dans votre pack. La consommation dépend de l'opération et du modèle utilisé.",
+    },
+    {
+      question: "Les crédits ont-ils une durée de validité ?",
+      answer:
+        "Oui. Les crédits sont associés à un pack et restent utilisables pendant la durée de validité de celui-ci.",
+    },
+    {
+      question: "Puis-je utiliser plusieurs modèles d'IA ?",
+      answer:
+        "Oui, les modèles disponibles dépendent du pack auquel vous avez souscrit.",
+    },
+    {
+      question: "Que se passe-t-il lorsque mes crédits sont épuisés ?",
+      answer:
+        "Vous pouvez acheter des crédits complémentaires afin de continuer à utiliser Oria.",
+    },
+    {
+      question: "Puis-je utiliser Oria sur mobile ?",
+      answer:
+        "L'interface est conçue pour être responsive et s'adapter aux smartphones, tablettes et ordinateurs.",
+    },
+  ],
+  en: [
+    {
+      question: "What is Oria?",
+      answer:
+        "Oria is an interface that brings different artificial intelligence technologies together in one place.",
+    },
+    {
+      question: "What are credits used for?",
+      answer:
+        "Credits let you use the different features and models available in your pack. Consumption depends on the operation and model used.",
+    },
+    {
+      question: "Do credits have an expiration period?",
+      answer:
+        "Yes. Credits are linked to a pack and remain usable for the duration of that pack.",
+    },
+    {
+      question: "Can I use multiple AI models?",
+      answer:
+        "Yes. The models available to you depend on the pack you subscribed to.",
+    },
+    {
+      question: "What happens when I run out of credits?",
+      answer:
+        "You can purchase additional credits to continue using Oria.",
+    },
+    {
+      question: "Can I use Oria on mobile?",
+      answer:
+        "The interface is responsive and adapts to smartphones, tablets, and computers.",
+    },
+  ],
+} as const;
+
+function getInitialOriaLanguage(): OriaLanguage {
+  if (typeof window === "undefined") {
+    return "fr";
+  }
+
+  const saved = window.localStorage.getItem(
+    ORIA_LANGUAGE_STORAGE_KEY,
+  );
+
+  if (saved === "fr" || saved === "en") {
+    return saved;
+  }
+
+  return window.navigator.language
+    .toLowerCase()
+    .startsWith("en")
+    ? "en"
+    : "fr";
+}
 
 export default function HelpPage() {
+  const [language, setLanguage] =
+    useState<OriaLanguage>("fr");
+
   const [search, setSearch] = useState("");
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
-  const filteredFaqs = faqs.filter((faq) => {
+  useEffect(() => {
+    const syncLanguage = () => {
+      setLanguage(getInitialOriaLanguage());
+      setOpenFaq(null);
+    };
+
+    syncLanguage();
+
+    window.addEventListener(
+      "storage",
+      syncLanguage,
+    );
+    window.addEventListener(
+      "oria-language-change",
+      syncLanguage,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "storage",
+        syncLanguage,
+      );
+      window.removeEventListener(
+        "oria-language-change",
+        syncLanguage,
+      );
+    };
+  }, []);
+
+  const currentFaqs = faqs[language];
+  const currentCategories = categories[language];
+
+  const filteredFaqs = currentFaqs.filter((faq) => {
     const query = search.trim().toLowerCase();
 
     if (!query) {
@@ -95,7 +245,7 @@ export default function HelpPage() {
           <div className="flex items-center gap-3">
             <Link
               href="/chat"
-              aria-label="Retour au chat"
+              aria-label={UI[language].backToChat}
               className="rounded-xl p-2 text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
             >
               <ArrowLeft size={19} />
@@ -113,7 +263,7 @@ export default function HelpPage() {
             href="/chat"
             className="hidden rounded-xl bg-neutral-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-neutral-800 sm:inline-flex"
           >
-            Retour au chat
+            {UI[language].backToChat}
           </Link>
         </div>
       </header>
@@ -126,12 +276,11 @@ export default function HelpPage() {
           </div>
 
           <h1 className="mt-5 text-3xl font-semibold tracking-tight sm:text-4xl">
-            Comment pouvons-nous vous aider ?
+            {UI[language].helpTitle}
           </h1>
 
           <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-neutral-500 sm:text-base">
-            Retrouvez les réponses aux questions les plus fréquentes sur
-            Oria.
+            {UI[language].helpDescription}
           </p>
 
           <div className="relative mx-auto mt-7 max-w-2xl">
@@ -144,7 +293,7 @@ export default function HelpPage() {
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Rechercher une question..."
+              placeholder={UI[language].searchPlaceholder}
               className="h-13 w-full rounded-2xl border border-neutral-200 bg-neutral-50 pl-11 pr-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
             />
           </div>
@@ -153,11 +302,11 @@ export default function HelpPage() {
         {/* Categories */}
         <section className="mt-12">
           <h2 className="text-lg font-semibold">
-            Explorer l'aide
+            {UI[language].exploreHelp}
           </h2>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            {categories.map((category) => {
+            {currentCategories.map((category) => {
               const Icon = category.icon;
 
               return (
@@ -189,7 +338,7 @@ export default function HelpPage() {
           <div className="flex items-center gap-2">
             <BookOpen size={18} />
             <h2 className="text-lg font-semibold">
-              Questions fréquentes
+              {UI[language].faqTitle}
             </h2>
           </div>
 
@@ -235,11 +384,11 @@ export default function HelpPage() {
             ) : (
               <div className="px-5 py-12 text-center">
                 <p className="text-sm font-medium">
-                  Aucun résultat
+                  {UI[language].noResult}
                 </p>
 
                 <p className="mt-1 text-sm text-neutral-500">
-                  Essayez avec d'autres mots-clés.
+                  {UI[language].tryOtherKeywords}
                 </p>
               </div>
             )}
@@ -253,17 +402,16 @@ export default function HelpPage() {
           </div>
 
           <h2 className="mt-4 text-lg font-semibold">
-            Vous ne trouvez pas votre réponse ?
+            {UI[language].supportQuestion}
           </h2>
 
           <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-neutral-500">
-            Notre espace d'assistance pourra vous aider pour les problèmes
-            liés à votre compte, vos crédits ou l'utilisation du service.
+            {UI[language].supportDescription}
           </p>
 
           <button className="mt-5 inline-flex items-center gap-2 rounded-xl bg-neutral-950 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-neutral-800">
             <MessageCircle size={16} />
-            Contacter le support
+            {UI[language].contactSupport}
           </button>
         </section>
       </section>

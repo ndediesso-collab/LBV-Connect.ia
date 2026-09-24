@@ -26,6 +26,228 @@ import { useTheme } from "@/components/providers/ThemeProvider";
 type Language = "fr" | "en";
 type Theme = "light" | "dark";
 
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const SETTINGS_TEXT = {
+  fr: {
+    backToChat: "Retour au chat",
+    myCredits: "Mes crédits",
+    yourAccount: "Votre compte",
+    settings: "Paramètres",
+    settingsDescription: "Gérez votre compte et vos préférences Oria.",
+    account: "Compte",
+    accountDescription: "Informations personnelles et sécurité.",
+    personalInformation: "Informations personnelles",
+    firstName: "Prénom",
+    lastName: "Nom",
+    emailAddress: "Adresse e-mail",
+    phoneNumber: "Numéro de téléphone",
+    countryCode: "Code pays",
+    userId: "Identifiant utilisateur",
+    authInfo: "L'e-mail et le téléphone sont enregistrés directement dans votre compte d'authentification Supabase.",
+    save: "Enregistrer",
+    user: "Utilisateur",
+    security: "Sécurité",
+    securityDescription: "Mot de passe et sessions",
+    accountAddress: "Adresse du compte",
+    password: "Mot de passe",
+    passwordDescription: "Définissez directement un nouveau mot de passe pour votre compte Supabase.",
+    newPassword: "Nouveau mot de passe",
+    confirmPassword: "Confirmer le mot de passe",
+    saving: "Enregistrement...",
+    changePassword: "Modifier le mot de passe",
+    resetHelp: "Vous pouvez aussi demander un lien sécurisé de réinitialisation par e-mail.",
+    sending: "Envoi...",
+    sendResetLink: "Envoyer un lien de réinitialisation",
+    sessions: "Sessions",
+    sessionsDescription: "Fermez les sessions ouvertes sur vos autres appareils.",
+    signingOut: "Déconnexion...",
+    signOutOtherSessions: "Déconnecter les autres sessions",
+    preferences: "Préférences",
+    preferencesDescription: "Personnalisez votre expérience.",
+    language: "Langue",
+    interfaceLanguage: "Langue de l'interface",
+    region: "Région",
+    regionDescription: "Détection de votre position",
+    detecting: "Détection...",
+    refresh: "Actualiser",
+    detect: "Détecter",
+    detectedLocation: "Localisation détectée",
+    darkMode: "Mode sombre",
+    appearanceDescription: "Modifier l'apparence de l'application",
+    enableDarkMode: "Activer le mode sombre",
+    notifications: "Notifications",
+    notificationsSectionDescription: "Choisissez les informations que vous souhaitez recevoir.",
+    notificationsDescription: "Informations importantes sur votre compte et vos crédits",
+    enableNotifications: "Activer les notifications",
+    subscription: "Abonnement",
+    subscriptionDescription: "Consultez votre accès actuel à Oria.",
+    currentPack: "Pack actuel",
+    currentPackDescription: "Votre accès et votre période de validité",
+    manage: "Gérer",
+    credits: "Crédits",
+    creditsDescription: "Consulter votre solde et votre consommation",
+    view: "Consulter",
+    logout: "Se déconnecter",
+    logoutDescription: "Fermer votre session actuelle",
+    unknownCountry: "Pays inconnu",
+    locationUndetermined: "Localisation non déterminée",
+    loadSettingsError: "Impossible de charger les paramètres de votre compte.",
+    emailRequired: "L'adresse e-mail est requise.",
+    phoneRequired: "Le numéro de téléphone est requis.",
+    countryRequired: "Le code pays est requis.",
+    personalSaved: "Vos informations personnelles ont été enregistrées dans Supabase.",
+    personalSaveError: "Impossible d'enregistrer vos informations.",
+    languageActivated: "Langue française activée.",
+    languageSaveError: "Impossible d'enregistrer la langue.",
+    notificationsEnabled: "Les notifications sont activées.",
+    notificationsDisabled: "Les notifications sont désactivées.",
+    preferenceSaveError: "Impossible d'enregistrer cette préférence.",
+    darkEnabled: "Mode sombre activé.",
+    lightEnabled: "Mode clair activé.",
+    themeSaveError: "Impossible d'enregistrer le thème.",
+    geolocationUnavailable: "La géolocalisation n'est pas disponible sur cet appareil.",
+    determineLocationError: "Impossible de déterminer votre localisation.",
+    locationUpdated: "Votre localisation a été mise à jour.",
+    locationSaveError: "Impossible d'enregistrer votre localisation.",
+    locationPermissionDenied: "Vous avez refusé l'accès à votre position.",
+    locationUnavailable: "Votre position n'a pas pu être déterminée.",
+    locationTimeout: "La récupération de votre position a expiré.",
+    geolocationError: "Une erreur est survenue lors de la géolocalisation.",
+    enterNewPassword: "Saisissez un nouveau mot de passe.",
+    passwordMinSix: "Le nouveau mot de passe doit contenir au moins 6 caractères.",
+    passwordsMismatch: "Les deux mots de passe ne correspondent pas.",
+    passwordUpdated: "Votre mot de passe a été mis à jour dans Supabase.",
+    passwordUpdateError: "Impossible de mettre à jour votre mot de passe.",
+    noEmail: "Aucune adresse e-mail associée à ce compte.",
+    resetEmailSent: "L'e-mail de réinitialisation a été envoyé.",
+    resetEmailError: "Impossible d'envoyer l'e-mail de réinitialisation.",
+    otherSessionsClosed: "Les autres sessions ont été déconnectées.",
+    otherSessionsError: "Impossible de fermer les autres sessions.",
+    logoutError: "Impossible de vous déconnecter.",
+  },
+  en: {
+    backToChat: "Back to chat",
+    myCredits: "My credits",
+    yourAccount: "Your account",
+    settings: "Settings",
+    settingsDescription: "Manage your Oria account and preferences.",
+    account: "Account",
+    accountDescription: "Personal information and security.",
+    personalInformation: "Personal information",
+    firstName: "First name",
+    lastName: "Last name",
+    emailAddress: "Email address",
+    phoneNumber: "Phone number",
+    countryCode: "Country code",
+    userId: "User ID",
+    authInfo: "Your email and phone number are saved directly in your Supabase authentication account.",
+    save: "Save",
+    user: "User",
+    security: "Security",
+    securityDescription: "Password and sessions",
+    accountAddress: "Account address",
+    password: "Password",
+    passwordDescription: "Set a new password directly for your Supabase account.",
+    newPassword: "New password",
+    confirmPassword: "Confirm password",
+    saving: "Saving...",
+    changePassword: "Change password",
+    resetHelp: "You can also request a secure password reset link by email.",
+    sending: "Sending...",
+    sendResetLink: "Send reset link",
+    sessions: "Sessions",
+    sessionsDescription: "Close sessions open on your other devices.",
+    signingOut: "Signing out...",
+    signOutOtherSessions: "Sign out other sessions",
+    preferences: "Preferences",
+    preferencesDescription: "Customize your experience.",
+    language: "Language",
+    interfaceLanguage: "Interface language",
+    region: "Region",
+    regionDescription: "Location detection",
+    detecting: "Detecting...",
+    refresh: "Refresh",
+    detect: "Detect",
+    detectedLocation: "Detected location",
+    darkMode: "Dark mode",
+    appearanceDescription: "Change the application's appearance",
+    enableDarkMode: "Enable dark mode",
+    notifications: "Notifications",
+    notificationsSectionDescription: "Choose the information you want to receive.",
+    notificationsDescription: "Important information about your account and credits",
+    enableNotifications: "Enable notifications",
+    subscription: "Subscription",
+    subscriptionDescription: "View your current Oria access.",
+    currentPack: "Current pack",
+    currentPackDescription: "Your access and validity period",
+    manage: "Manage",
+    credits: "Credits",
+    creditsDescription: "View your balance and usage",
+    view: "View",
+    logout: "Sign out",
+    logoutDescription: "Close your current session",
+    unknownCountry: "Unknown country",
+    locationUndetermined: "Location not determined",
+    loadSettingsError: "Unable to load your account settings.",
+    emailRequired: "Email address is required.",
+    phoneRequired: "Phone number is required.",
+    countryRequired: "Country code is required.",
+    personalSaved: "Your personal information has been saved in Supabase.",
+    personalSaveError: "Unable to save your information.",
+    languageActivated: "English language activated.",
+    languageSaveError: "Unable to save the language.",
+    notificationsEnabled: "Notifications are enabled.",
+    notificationsDisabled: "Notifications are disabled.",
+    preferenceSaveError: "Unable to save this preference.",
+    darkEnabled: "Dark mode enabled.",
+    lightEnabled: "Light mode enabled.",
+    themeSaveError: "Unable to save the theme.",
+    geolocationUnavailable: "Geolocation is not available on this device.",
+    determineLocationError: "Unable to determine your location.",
+    locationUpdated: "Your location has been updated.",
+    locationSaveError: "Unable to save your location.",
+    locationPermissionDenied: "You denied access to your location.",
+    locationUnavailable: "Your location could not be determined.",
+    locationTimeout: "Location retrieval timed out.",
+    geolocationError: "An error occurred during geolocation.",
+    enterNewPassword: "Enter a new password.",
+    passwordMinSix: "The new password must contain at least 6 characters.",
+    passwordsMismatch: "The two passwords do not match.",
+    passwordUpdated: "Your password has been updated in Supabase.",
+    passwordUpdateError: "Unable to update your password.",
+    noEmail: "No email address is associated with this account.",
+    resetEmailSent: "The password reset email has been sent.",
+    resetEmailError: "Unable to send the password reset email.",
+    otherSessionsClosed: "Other sessions have been signed out.",
+    otherSessionsError: "Unable to close the other sessions.",
+    logoutError: "Unable to sign out.",
+  },
+} as const;
+
+function getInitialOriaLanguage(): Language {
+  if (typeof window === "undefined") return "fr";
+
+  const saved = window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY);
+
+  if (saved === "fr" || saved === "en") {
+    return saved;
+  }
+
+  return window.navigator.language.toLowerCase().startsWith("en")
+    ? "en"
+    : "fr";
+}
+
+function publishOriaLanguage(value: Language) {
+  if (typeof window === "undefined") return;
+
+  window.localStorage.setItem(ORIA_LANGUAGE_STORAGE_KEY, value);
+  window.dispatchEvent(new Event("oria-language-change"));
+}
+
+
 type Profile = {
   id: string;
 
@@ -74,9 +296,11 @@ export default function SettingsPage() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
 
-  const [language, setLanguage] = useState<Language>("fr");
+  const [language, setLanguage] =
+    useState<Language>(() => getInitialOriaLanguage());
   const [notifications, setNotifications] = useState(true);
   const { theme, setTheme } = useTheme();
+  const t = SETTINGS_TEXT[language];
 
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -101,7 +325,12 @@ export default function SettingsPage() {
 
   const [userId, setUserId] = useState<string | null>(null);
 
-  const [countryName, setCountryName] = useState("Non déterminé");
+  const [countryName, setCountryName] =
+    useState<string>(() =>
+      SETTINGS_TEXT[
+        getInitialOriaLanguage()
+      ].locationUndetermined,
+    );
   const [countryCode, setCountryCode] = useState("");
   const [cityName, setCityName] = useState("");
   const [subdivisionName, setSubdivisionName] = useState("");
@@ -234,6 +463,9 @@ export default function SettingsPage() {
     setLanguage(
       currentProfile.language,
     );
+    publishOriaLanguage(
+      currentProfile.language,
+    );
 
     setNotifications(
       currentProfile.notifications_enabled,
@@ -242,7 +474,7 @@ export default function SettingsPage() {
     // Synchronisation de la localisation
     setCountryName(
       currentProfile.country_name ??
-        "Localisation non déterminée",
+        SETTINGS_TEXT[currentProfile.language].locationUndetermined,
     );
 
     setCountryCode(
@@ -269,6 +501,7 @@ export default function SettingsPage() {
         await reverseGeocode(
           currentProfile.latitude,
           currentProfile.longitude,
+          currentProfile.language,
         );
 
       if (location) {
@@ -296,7 +529,7 @@ export default function SettingsPage() {
     );
 
     setErrorMessage(
-      "Impossible de charger les paramètres de votre compte.",
+      t.loadSettingsError,
     );
   } finally {
     setLoading(false);
@@ -328,15 +561,15 @@ async function savePersonalInformation() {
       const normalizedCountry = countryIso2.trim().toUpperCase();
 
       if (!normalizedEmail) {
-        throw new Error("L'adresse e-mail est requise.");
+        throw new Error(t.emailRequired);
       }
 
       if (!normalizedPhone) {
-        throw new Error("Le numéro de téléphone est requis.");
+        throw new Error(t.phoneRequired);
       }
 
       if (!normalizedCountry) {
-        throw new Error("Le code pays est requis.");
+        throw new Error(t.countryRequired);
       }
 
       // ======================================================
@@ -441,7 +674,7 @@ async function savePersonalInformation() {
       );
 
       setSuccessMessage(
-        "Vos informations personnelles ont été enregistrées dans Supabase.",
+        t.personalSaved,
       );
     } catch (error) {
       console.error(
@@ -452,7 +685,7 @@ async function savePersonalInformation() {
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Impossible d'enregistrer vos informations.",
+          : t.personalSaveError,
       );
     } finally {
       setSavingProfile(false);
@@ -466,6 +699,7 @@ async function changeLanguage(
   const previousLanguage = language;
 
   setLanguage(value);
+  publishOriaLanguage(value);
   setSavingLanguage(true);
   clearMessages();
 
@@ -505,10 +739,27 @@ async function changeLanguage(
     );
 
     setSuccessMessage(
-      value === "fr"
-        ? "Langue française activée."
-        : "English language activated.",
+      SETTINGS_TEXT[value].languageActivated,
     );
+
+    if (
+      profile?.latitude != null &&
+      profile?.longitude != null
+    ) {
+      const localizedLocation =
+        await reverseGeocode(
+          profile.latitude,
+          profile.longitude,
+          value,
+        );
+
+      if (localizedLocation) {
+        setCountryName(localizedLocation.countryName);
+        setCountryCode(localizedLocation.countryCode);
+        setCityName(localizedLocation.city);
+        setSubdivisionName(localizedLocation.subdivision);
+      }
+    }
   } catch (error) {
     console.error(
       "LANGUAGE UPDATE ERROR:",
@@ -516,9 +767,10 @@ async function changeLanguage(
     );
 
     setLanguage(previousLanguage);
+    publishOriaLanguage(previousLanguage);
 
     setErrorMessage(
-      "Impossible d'enregistrer la langue.",
+      SETTINGS_TEXT[previousLanguage].languageSaveError,
     );
   } finally {
     setSavingLanguage(false);
@@ -572,8 +824,8 @@ async function changeNotifications(
 
     setSuccessMessage(
       value
-        ? "Les notifications sont activées."
-        : "Les notifications sont désactivées.",
+        ? t.notificationsEnabled
+        : t.notificationsDisabled,
     );
   } catch (error) {
     console.error(
@@ -584,7 +836,7 @@ async function changeNotifications(
     setNotifications(previousValue);
 
     setErrorMessage(
-      "Impossible d'enregistrer cette préférence.",
+      t.preferenceSaveError,
     );
   } finally {
     setSavingNotifications(false);
@@ -610,14 +862,14 @@ async function changeTheme(value: Theme) {
 
     setSuccessMessage(
       value === "dark"
-        ? "Mode sombre activé."
-        : "Mode clair activé.",
+        ? t.darkEnabled
+        : t.lightEnabled,
     );
   } catch (error) {
     console.error("THEME UPDATE ERROR:", error);
 
     setErrorMessage(
-      "Impossible d'enregistrer le thème.",
+      t.themeSaveError,
     );
   } finally {
     setSavingTheme(false);
@@ -628,7 +880,7 @@ async function changeTheme(value: Theme) {
 function detectLocation() {
   if (!navigator.geolocation) {
     setErrorMessage(
-      "La géolocalisation n'est pas disponible sur cet appareil.",
+      t.geolocationUnavailable,
     );
     return;
   }
@@ -669,7 +921,7 @@ function detectLocation() {
 
         if (!location) {
           throw new Error(
-            "Impossible de déterminer votre localisation.",
+            t.determineLocationError,
           );
         }
 
@@ -749,7 +1001,7 @@ function detectLocation() {
         );
 
         setSuccessMessage(
-          "Votre localisation a été mise à jour.",
+          t.locationUpdated,
         );
       } catch (error) {
         console.error(
@@ -758,7 +1010,7 @@ function detectLocation() {
         );
 
         setErrorMessage(
-          "Impossible d'enregistrer votre localisation.",
+          t.locationSaveError,
         );
       } finally {
         setLocating(false);
@@ -775,19 +1027,19 @@ function detectLocation() {
 
       if (error.code === 1) {
         setErrorMessage(
-          "Vous avez refusé l'accès à votre position.",
+          t.locationPermissionDenied,
         );
       } else if (error.code === 2) {
         setErrorMessage(
-          "Votre position n'a pas pu être déterminée.",
+          t.locationUnavailable,
         );
       } else if (error.code === 3) {
         setErrorMessage(
-          "La récupération de votre position a expiré.",
+          t.locationTimeout,
         );
       } else {
         setErrorMessage(
-          "Une erreur est survenue lors de la géolocalisation.",
+          t.geolocationError,
         );
       }
     },
@@ -804,10 +1056,11 @@ function detectLocation() {
 async function reverseGeocode(
   latitude: number,
   longitude: number,
+  locale: Language = language,
 ): Promise<GeocodedLocation | null> {
   try {
     const response = await fetch(
-      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=${language}`,
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=${locale}`,
     );
 
     if (!response.ok) {
@@ -823,7 +1076,7 @@ async function reverseGeocode(
 
     const countryName =
       data.countryName ??
-      "Pays inconnu";
+      SETTINGS_TEXT[locale].unknownCountry;
 
     const city =
       data.city ??
@@ -855,21 +1108,21 @@ async function reverseGeocode(
 
     if (!newPassword) {
       setErrorMessage(
-        "Saisissez un nouveau mot de passe.",
+        t.enterNewPassword,
       );
       return;
     }
 
     if (newPassword.length < 6) {
       setErrorMessage(
-        "Le nouveau mot de passe doit contenir au moins 6 caractères.",
+        t.passwordMinSix,
       );
       return;
     }
 
     if (newPassword !== confirmPassword) {
       setErrorMessage(
-        "Les deux mots de passe ne correspondent pas.",
+        t.passwordsMismatch,
       );
       return;
     }
@@ -903,7 +1156,7 @@ async function reverseGeocode(
       setConfirmPassword("");
 
       setSuccessMessage(
-        "Votre mot de passe a été mis à jour dans Supabase.",
+        t.passwordUpdated,
       );
     } catch (error) {
       console.error(
@@ -914,7 +1167,7 @@ async function reverseGeocode(
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Impossible de mettre à jour votre mot de passe.",
+          : t.passwordUpdateError,
       );
     } finally {
       setSavingPassword(false);
@@ -925,7 +1178,7 @@ async function reverseGeocode(
   async function sendPasswordReset() {
     if (!email) {
       setErrorMessage(
-        "Aucune adresse e-mail associée à ce compte.",
+        t.noEmail,
       );
       return;
     }
@@ -948,7 +1201,7 @@ async function reverseGeocode(
       }
 
       setSuccessMessage(
-        "L'e-mail de réinitialisation a été envoyé.",
+        t.resetEmailSent,
       );
     } catch (error) {
       console.error(
@@ -957,7 +1210,7 @@ async function reverseGeocode(
       );
 
       setErrorMessage(
-        "Impossible d'envoyer l'e-mail de réinitialisation.",
+        t.resetEmailError,
       );
     } finally {
       setResettingPassword(false);
@@ -979,7 +1232,7 @@ async function reverseGeocode(
       }
 
       setSuccessMessage(
-        "Les autres sessions ont été déconnectées.",
+        t.otherSessionsClosed,
       );
     } catch (error) {
       console.error(
@@ -988,7 +1241,7 @@ async function reverseGeocode(
       );
 
       setErrorMessage(
-        "Impossible de fermer les autres sessions.",
+        t.otherSessionsError,
       );
     } finally {
       setLoggingOutOthers(false);
@@ -1016,7 +1269,7 @@ async function reverseGeocode(
       console.error("LOGOUT ERROR:", error);
 
       setErrorMessage(
-        "Impossible de vous déconnecter.",
+        t.logoutError,
       );
 
       setLoggingOut(false);
@@ -1031,7 +1284,7 @@ async function reverseGeocode(
   const fullName =
     [firstName, lastName]
       .filter(Boolean)
-      .join(" ") || "Utilisateur";
+      .join(" ") || t.user;
 
   const hasLocation =
   profile?.latitude != null &&
@@ -1044,7 +1297,7 @@ async function reverseGeocode(
           <div className="flex items-center gap-3">
             <Link
               href="/chat"
-              aria-label="Retour au chat"
+              aria-label={t.backToChat}
               className="rounded-xl p-2 text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--foreground)]"
             >
               <ArrowLeft size={19} />
@@ -1063,7 +1316,7 @@ async function reverseGeocode(
             href="/credits"
             className="text-sm font-medium text-[var(--muted)] transition hover:text-[var(--foreground)]"
           >
-            Mes crédits
+            {t.myCredits}
           </Link>
         </div>
       </header>
@@ -1071,16 +1324,15 @@ async function reverseGeocode(
       <section className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8 sm:py-12">
         <div>
           <p className="text-sm font-medium text-[var(--muted)]">
-            Votre compte
+            {t.yourAccount}
           </p>
 
           <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">
-            Paramètres
+            {t.settings}
           </h1>
 
           <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-            Gérez votre compte et vos préférences
-            Oria.
+            {t.settingsDescription}
           </p>
         </div>
 
@@ -1134,8 +1386,8 @@ async function reverseGeocode(
 
             <SettingsSection
               icon={<UserRound size={18} />}
-              title="Compte"
-              description="Informations personnelles et sécurité."
+              title={t.account}
+              description={t.accountDescription}
             >
               <button
                 type="button"
@@ -1150,7 +1402,7 @@ async function reverseGeocode(
 
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">
-                    Informations personnelles
+                    {t.personalInformation}
                   </p>
 
                   <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
@@ -1172,13 +1424,13 @@ async function reverseGeocode(
                 <div className="border-t border-[var(--border)] bg-[var(--surface)] p-5">
                   <div className="grid gap-4 sm:grid-cols-2">
                     <InputField
-                      label="Prénom"
+                      label={t.firstName}
                       value={firstName}
                       onChange={setFirstName}
                     />
 
                     <InputField
-                      label="Nom"
+                      label={t.lastName}
                       value={lastName}
                       onChange={setLastName}
                     />
@@ -1186,14 +1438,14 @@ async function reverseGeocode(
 
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
                     <InputField
-                      label="Adresse e-mail"
+                      label={t.emailAddress}
                       value={email}
                       onChange={setEmail}
                       type="email"
                     />
 
                     <InputField
-                      label="Numéro de téléphone"
+                      label={t.phoneNumber}
                       value={phone}
                       onChange={setPhone}
                       type="tel"
@@ -1203,7 +1455,7 @@ async function reverseGeocode(
 
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
                     <InputField
-                      label="Code pays"
+                      label={t.countryCode}
                       value={countryIso2}
                       onChange={(value) =>
                         setCountryIso2(
@@ -1214,14 +1466,13 @@ async function reverseGeocode(
                     />
 
                     <InfoField
-                      label="Identifiant utilisateur"
+                      label={t.userId}
                       value={userId ?? ""}
                     />
                   </div>
 
                   <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
-                    L'e-mail et le téléphone sont enregistrés directement
-                    dans votre compte d'authentification Supabase.
+                    {t.authInfo}
                   </p>
 
                   <button
@@ -1237,7 +1488,7 @@ async function reverseGeocode(
                       />
                     )}
 
-                    Enregistrer
+                    {t.save}
                   </button>
                 </div>
               )}
@@ -1255,11 +1506,11 @@ async function reverseGeocode(
 
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">
-                    Sécurité
+                    {t.security}
                   </p>
 
                   <p className="mt-0.5 text-xs text-[var(--muted)]">
-                    Mot de passe et sessions
+                    {t.securityDescription}
                   </p>
                 </div>
 
@@ -1277,7 +1528,7 @@ async function reverseGeocode(
                 <div className="border-t border-[var(--border)] bg-[var(--surface)] p-5">
                   <div className="rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
                     <p className="text-sm font-medium">
-                      Adresse du compte
+                      {t.accountAddress}
                     </p>
 
                     <p className="mt-1 truncate text-sm text-[var(--muted)]">
@@ -1287,17 +1538,16 @@ async function reverseGeocode(
 
                   <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
                     <p className="text-sm font-medium">
-                      Mot de passe
+                      {t.password}
                     </p>
 
                     <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-                      Définissez directement un nouveau mot de passe
-                      pour votre compte Supabase.
+                      {t.passwordDescription}
                     </p>
 
                     <div className="mt-4 grid gap-4 sm:grid-cols-2">
                       <InputField
-                        label="Nouveau mot de passe"
+                        label={t.newPassword}
                         value={newPassword}
                         onChange={setNewPassword}
                         type="password"
@@ -1305,7 +1555,7 @@ async function reverseGeocode(
                       />
 
                       <InputField
-                        label="Confirmer le mot de passe"
+                        label={t.confirmPassword}
                         value={confirmPassword}
                         onChange={setConfirmPassword}
                         type="password"
@@ -1326,14 +1576,13 @@ async function reverseGeocode(
                         />
                       )}
                       {savingPassword
-                        ? "Enregistrement..."
-                        : "Modifier le mot de passe"}
+                        ? t.saving
+                        : t.changePassword}
                     </button>
 
                     <div className="mt-5 border-t border-[var(--border)] pt-4">
                       <p className="text-xs leading-5 text-[var(--muted)]">
-                        Vous pouvez aussi demander un lien sécurisé
-                        de réinitialisation par e-mail.
+                        {t.resetHelp}
                       </p>
 
                       <button
@@ -1343,20 +1592,19 @@ async function reverseGeocode(
                         className="mt-3 rounded-xl border border-[var(--border)] px-4 py-2.5 text-xs font-medium transition hover:bg-[var(--surface-2)] disabled:opacity-50"
                       >
                         {resettingPassword
-                          ? "Envoi..."
-                          : "Envoyer un lien de réinitialisation"}
+                          ? t.sending
+                          : t.sendResetLink}
                       </button>
                     </div>
                   </div>
 
                   <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
                     <p className="text-sm font-medium">
-                      Sessions
+                      {t.sessions}
                     </p>
 
                     <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-                      Fermez les sessions ouvertes sur
-                      vos autres appareils.
+                      {t.sessionsDescription}
                     </p>
 
                     <button
@@ -1368,8 +1616,8 @@ async function reverseGeocode(
                       className="mt-4 rounded-xl border border-[var(--border)] px-4 py-2.5 text-xs font-medium transition hover:bg-[var(--surface-2)] disabled:opacity-50"
                     >
                       {loggingOutOthers
-                        ? "Déconnexion..."
-                        : "Déconnecter les autres sessions"}
+                        ? t.signingOut
+                        : t.signOutOtherSessions}
                     </button>
                   </div>
                 </div>
@@ -1382,13 +1630,13 @@ async function reverseGeocode(
 
             <SettingsSection
               icon={<Palette size={18} />}
-              title="Préférences"
-              description="Personnalisez votre expérience."
+              title={t.preferences}
+              description={t.preferencesDescription}
             >
               <SettingsRow
                 icon={<Languages size={17} />}
-                title="Langue"
-                description="Langue de l'interface"
+                title={t.language}
+                description={t.interfaceLanguage}
               >
                 <div className="flex items-center gap-2">
                   {savingLanguage && (
@@ -1420,8 +1668,8 @@ async function reverseGeocode(
 
               <SettingsRow
                 icon={<Globe size={17} />}
-                title="Région"
-                description="Détection de votre position"
+                title={t.region}
+                description={t.regionDescription}
               >
                 <button
                   type="button"
@@ -1439,17 +1687,17 @@ async function reverseGeocode(
                   )}
 
                   {locating
-                    ? "Détection..."
+                    ? t.detecting
                     : hasLocation
-                      ? "Actualiser"
-                      : "Détecter"}
+                      ? t.refresh
+                      : t.detect}
                 </button>
               </SettingsRow>
 
               {hasLocation && (
                 <div className="border-t border-[var(--border)] bg-[var(--surface)] px-5 py-3">
                   <p className="text-xs text-[var(--muted)]">
-                    Localisation détectée
+                    {t.detectedLocation}
                   </p>
 
                   <p className="mt-1 text-sm font-medium text-[var(--foreground)]">
@@ -1473,8 +1721,8 @@ async function reverseGeocode(
 
               <SettingsRow
                 icon={<Moon size={17} />}
-                title="Mode sombre"
-                description="Modifier l'apparence de l'application"
+                title={t.darkMode}
+                description={t.appearanceDescription}
               >
                 <div className="flex items-center gap-2">
                   {savingTheme && (
@@ -1491,7 +1739,7 @@ async function reverseGeocode(
                         checked ? "dark" : "light",
                       )
                     }
-                    label="Activer le mode sombre"
+                    label={t.enableDarkMode}
                   />
                 </div>
               </SettingsRow>
@@ -1503,13 +1751,13 @@ async function reverseGeocode(
 
             <SettingsSection
               icon={<Bell size={18} />}
-              title="Notifications"
-              description="Choisissez les informations que vous souhaitez recevoir."
+              title={t.notifications}
+              description={t.notificationsSectionDescription}
             >
               <SettingsRow
                 icon={<Bell size={17} />}
-                title="Notifications"
-                description="Informations importantes sur votre compte et vos crédits"
+                title={t.notifications}
+                description={t.notificationsDescription}
               >
                 <div className="flex items-center gap-2">
                   {savingNotifications && (
@@ -1524,7 +1772,7 @@ async function reverseGeocode(
                     onChange={
                       changeNotifications
                     }
-                    label="Activer les notifications"
+                    label={t.enableNotifications}
                   />
                 </div>
               </SettingsRow>
@@ -1536,33 +1784,33 @@ async function reverseGeocode(
 
             <SettingsSection
               icon={<Sparkles size={18} />}
-              title="Abonnement"
-              description="Consultez votre accès actuel à Oria."
+              title={t.subscription}
+              description={t.subscriptionDescription}
             >
               <SettingsRow
                 icon={<Sparkles size={17} />}
-                title="Pack actuel"
-                description="Votre accès et votre période de validité"
+                title={t.currentPack}
+                description={t.currentPackDescription}
               >
                 <Link
                   href="/packs"
                   className="flex items-center gap-1 text-sm font-medium hover:underline"
                 >
-                  Gérer
+                  {t.manage}
                   <ChevronRight size={15} />
                 </Link>
               </SettingsRow>
 
               <SettingsRow
                 icon={<Sparkles size={17} />}
-                title="Crédits"
-                description="Consulter votre solde et votre consommation"
+                title={t.credits}
+                description={t.creditsDescription}
               >
                 <Link
                   href="/credits"
                   className="flex items-center gap-1 text-sm font-medium hover:underline"
                 >
-                  Consulter
+                  {t.view}
                   <ChevronRight size={15} />
                 </Link>
               </SettingsRow>
@@ -1593,12 +1841,12 @@ async function reverseGeocode(
                 <div>
                   <p className="text-sm font-medium text-red-700">
                     {loggingOut
-                      ? "Déconnexion..."
-                      : "Se déconnecter"}
+                      ? t.signingOut
+                      : t.logout}
                   </p>
 
                   <p className="mt-0.5 text-xs text-red-500">
-                    Fermer votre session actuelle
+                    {t.logoutDescription}
                   </p>
                 </div>
               </button>

@@ -9,8 +9,199 @@ import {
   UserRound,
 } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    back: "Retour",
+    createAccountTitle: "Créer votre compte.",
+    createAccountDescription:
+      "Rejoignez Oria et accédez à vos outils d'intelligence artificielle depuis un seul espace.",
+    firstName: "Prénom",
+    firstNamePlaceholder: "Votre prénom",
+    lastName: "Nom",
+    lastNamePlaceholder: "Votre nom",
+    country: "Pays",
+    countryHelp:
+      "Le pays sélectionné détermine automatiquement l'indicatif utilisé pour votre numéro.",
+    phone: "Numéro de téléphone",
+    phoneHelp:
+      "Votre numéro sera enregistré comme donnée de profil et utilisé lors de vos paiements.",
+    email: "Adresse e-mail",
+    emailPlaceholder: "vous@exemple.com",
+    password: "Mot de passe",
+    passwordPlaceholder: "Créer un mot de passe",
+    hidePassword: "Masquer le mot de passe",
+    showPassword: "Afficher le mot de passe",
+    minimumEight: "Minimum 8 caractères.",
+    confirmPassword: "Confirmer le mot de passe",
+    confirmPasswordPlaceholder: "Confirmer votre mot de passe",
+    terms:
+      "J'accepte les conditions d'utilisation et la politique de confidentialité de Oria.",
+    creatingAccount: "Création du compte...",
+    createMyAccount: "Créer mon compte",
+    or: "ou",
+    continueWithGoogle: "Continuer avec Google",
+    alreadyHaveAccount: "Vous avez déjà un compte ?",
+    signIn: "Se connecter",
+    footer:
+      "Votre compte vous permettra de retrouver vos conversations, crédits et paramètres depuis tous vos appareils.",
+    phoneRequired: "Veuillez renseigner votre numéro de téléphone.",
+    invalidPhone: "Veuillez renseigner un numéro de téléphone valide.",
+    passwordsMismatch: "Les mots de passe ne correspondent pas.",
+    passwordTooShort:
+      "Le mot de passe doit contenir au moins 8 caractères.",
+    createAccountError:
+      "Impossible de créer le compte. Veuillez réessayer.",
+    accountNotCreated: "Le compte n'a pas pu être créé.",
+    noSession:
+      "Le compte a été créé, mais aucune session n'est disponible. Désactivez la confirmation e-mail dans Supabase pour permettre l'enregistrement automatique du numéro.",
+    phoneSyncNotConfigured:
+      "Le compte a été créé, mais la synchronisation du numéro de téléphone n'est pas configurée.",
+    phoneSaveError:
+      "Le compte a été créé, mais le numéro de téléphone n'a pas pu être enregistré.",
+    phoneMismatch:
+      "Le numéro enregistré ne correspond pas au numéro fourni lors de l'inscription.",
+    accountCreated:
+      "Compte créé avec succès. Votre numéro de téléphone a été enregistré.",
+    unexpectedError:
+      "Une erreur inattendue est survenue. Veuillez réessayer.",
+  },
+  en: {
+    back: "Back",
+    createAccountTitle: "Create your account.",
+    createAccountDescription:
+      "Join Oria and access your artificial intelligence tools from one place.",
+    firstName: "First name",
+    firstNamePlaceholder: "Your first name",
+    lastName: "Last name",
+    lastNamePlaceholder: "Your last name",
+    country: "Country",
+    countryHelp:
+      "The selected country automatically determines the calling code used for your number.",
+    phone: "Phone number",
+    phoneHelp:
+      "Your number will be saved as profile information and used for your payments.",
+    email: "Email address",
+    emailPlaceholder: "you@example.com",
+    password: "Password",
+    passwordPlaceholder: "Create a password",
+    hidePassword: "Hide password",
+    showPassword: "Show password",
+    minimumEight: "Minimum 8 characters.",
+    confirmPassword: "Confirm password",
+    confirmPasswordPlaceholder: "Confirm your password",
+    terms: "I accept Oria's terms of use and privacy policy.",
+    creatingAccount: "Creating account...",
+    createMyAccount: "Create my account",
+    or: "or",
+    continueWithGoogle: "Continue with Google",
+    alreadyHaveAccount: "Already have an account?",
+    signIn: "Sign in",
+    footer:
+      "Your account lets you access your conversations, credits, and settings from all your devices.",
+    phoneRequired: "Please enter your phone number.",
+    invalidPhone: "Please enter a valid phone number.",
+    passwordsMismatch: "Passwords do not match.",
+    passwordTooShort: "Password must contain at least 8 characters.",
+    createAccountError: "Unable to create the account. Please try again.",
+    accountNotCreated: "The account could not be created.",
+    noSession:
+      "The account was created, but no session is available. Disable email confirmation in Supabase to allow the phone number to be saved automatically.",
+    phoneSyncNotConfigured:
+      "The account was created, but phone number synchronization is not configured.",
+    phoneSaveError:
+      "The account was created, but the phone number could not be saved.",
+    phoneMismatch:
+      "The saved number does not match the number provided during registration.",
+    accountCreated:
+      "Account created successfully. Your phone number has been saved.",
+    unexpectedError:
+      "An unexpected error occurred. Please try again.",
+  },
+} as const;
+
+const COUNTRY_NAMES_EN: Record<string, string> = {
+  BJ: "Benin",
+  BF: "Burkina Faso",
+  BI: "Burundi",
+  CM: "Cameroon",
+  CF: "Central African Republic",
+  KM: "Comoros",
+  CG: "Congo",
+  CI: "Côte d'Ivoire",
+  DJ: "Djibouti",
+  GA: "Gabon",
+  GN: "Guinea",
+  GQ: "Equatorial Guinea",
+  MG: "Madagascar",
+  ML: "Mali",
+  NE: "Niger",
+  CD: "Democratic Republic of the Congo",
+  RW: "Rwanda",
+  SN: "Senegal",
+  TG: "Togo",
+};
+
+function getInitialOriaLanguage(): OriaLanguage {
+  if (typeof window === "undefined") return "fr";
+
+  const saved = window.localStorage.getItem(
+    ORIA_LANGUAGE_STORAGE_KEY,
+  );
+
+  if (saved === "fr" || saved === "en") {
+    return saved;
+  }
+
+  return window.navigator.language
+    .toLowerCase()
+    .startsWith("en")
+    ? "en"
+    : "fr";
+}
+
+function getCountryDisplayName(
+  country: CountryPhoneConfig,
+  language: OriaLanguage,
+): string {
+  return language === "en"
+    ? COUNTRY_NAMES_EN[country.iso2] ?? country.name
+    : country.name;
+}
+
+function localizeFrontendError(
+  message: string,
+  language: OriaLanguage,
+): string {
+  if (language === "fr") return message;
+
+  const translations: Record<string, string> = {
+    "User already registered":
+      "An account already exists with this email address.",
+    "Signup requires a valid password":
+      "Please enter a valid password.",
+    "Unable to validate email address: invalid format":
+      "Please enter a valid email address.",
+    "Impossible de créer le compte. Veuillez réessayer.":
+      UI.en.createAccountError,
+    "Le compte n'a pas pu être créé.":
+      UI.en.accountNotCreated,
+    "Le compte a été créé, mais le numéro de téléphone n'a pas pu être enregistré.":
+      UI.en.phoneSaveError,
+    "Une erreur inattendue est survenue. Veuillez réessayer.":
+      UI.en.unexpectedError,
+  };
+
+  return translations[message] ?? message;
+}
+
 
 type CountryPhoneConfig = {
   iso2: string;
@@ -167,6 +358,31 @@ function buildInternationalPhone(
 }
 
 export default function RegisterPage() {
+  const [language, setLanguage] =
+    useState<OriaLanguage>("fr");
+
+  useEffect(() => {
+    const syncLanguage = () => {
+      setLanguage(getInitialOriaLanguage());
+    };
+
+    syncLanguage();
+
+    window.addEventListener("storage", syncLanguage);
+    window.addEventListener(
+      "oria-language-change",
+      syncLanguage,
+    );
+
+    return () => {
+      window.removeEventListener("storage", syncLanguage);
+      window.removeEventListener(
+        "oria-language-change",
+        syncLanguage,
+      );
+    };
+  }, []);
+
   const [showPassword, setShowPassword] =
     useState(false);
 
@@ -242,9 +458,7 @@ export default function RegisterPage() {
      * Validation téléphone
      */
     if (!phoneNumber) {
-      setError(
-        "Veuillez renseigner votre numéro de téléphone.",
-      );
+      setError(UI[language].phoneRequired);
       return;
     }
 
@@ -252,9 +466,7 @@ export default function RegisterPage() {
       phoneNumber.length < 6 ||
       !phoneInternational
     ) {
-      setError(
-        "Veuillez renseigner un numéro de téléphone valide.",
-      );
+      setError(UI[language].invalidPhone);
       return;
     }
 
@@ -262,16 +474,12 @@ export default function RegisterPage() {
      * Validation mot de passe
      */
     if (password !== confirmPassword) {
-      setError(
-        "Les mots de passe ne correspondent pas.",
-      );
+      setError(UI[language].passwordsMismatch);
       return;
     }
 
     if (password.length < 8) {
-      setError(
-        "Le mot de passe doit contenir au moins 8 caractères.",
-      );
+      setError(UI[language].passwordTooShort);
       return;
     }
 
@@ -310,15 +518,13 @@ export default function RegisterPage() {
       if (signUpError) {
         setError(
           signUpError.message ||
-            "Impossible de créer le compte. Veuillez réessayer.",
+            UI[language].createAccountError,
         );
         return;
       }
 
       if (!data.user) {
-        setError(
-          "Le compte n'a pas pu être créé.",
-        );
+        setError(UI[language].accountNotCreated);
         return;
       }
 
@@ -334,9 +540,7 @@ export default function RegisterPage() {
           "REGISTER SESSION ABSENTE : désactivez la confirmation e-mail dans Supabase.",
         );
 
-        setError(
-          "Le compte a été créé, mais aucune session n'est disponible. Désactivez la confirmation e-mail dans Supabase pour permettre l'enregistrement automatique du numéro.",
-        );
+        setError(UI[language].noSession);
         return;
       }
 
@@ -349,9 +553,7 @@ export default function RegisterPage() {
           "NEXT_PUBLIC_API_URL / NEXT_PUBLIC_BACKEND_URL non configurée.",
         );
 
-        setError(
-          "Le compte a été créé, mais la synchronisation du numéro de téléphone n'est pas configurée.",
-        );
+        setError(UI[language].phoneSyncNotConfigured);
         return;
       }
 
@@ -404,7 +606,7 @@ export default function RegisterPage() {
 
         setError(
           phoneResult.detail ||
-            "Le compte a été créé, mais le numéro de téléphone n'a pas pu être enregistré.",
+            UI[language].phoneSaveError,
         );
         return;
       }
@@ -423,15 +625,11 @@ export default function RegisterPage() {
           phoneResult,
         );
 
-        setError(
-          "Le numéro enregistré ne correspond pas au numéro fourni lors de l'inscription.",
-        );
+        setError(UI[language].phoneMismatch);
         return;
       }
 
-      setMessage(
-        "Compte créé avec succès. Votre numéro de téléphone a été enregistré.",
-      );
+      setMessage(UI[language].accountCreated);
 
       /*
        * La session Supabase reste disponible : l'utilisateur
@@ -446,9 +644,7 @@ export default function RegisterPage() {
         error,
       );
 
-      setError(
-        "Une erreur inattendue est survenue. Veuillez réessayer.",
-      );
+      setError(UI[language].unexpectedError);
     } finally {
       setLoading(false);
     }
@@ -484,7 +680,7 @@ export default function RegisterPage() {
             >
               <ArrowLeft size={16} />
 
-              Retour
+              {UI[language].back}
             </Link>
 
             {/* Intro */}
@@ -495,14 +691,11 @@ export default function RegisterPage() {
               </div>
 
               <h1 className="mt-6 text-2xl font-semibold tracking-tight sm:text-3xl">
-                Créer votre compte.
+                {UI[language].createAccountTitle}
               </h1>
 
               <p className="mt-2 text-sm leading-6 text-muted">
-                Rejoignez Oria et
-                accédez à vos outils
-                d&apos;intelligence artificielle
-                depuis un seul espace.
+                {UI[language].createAccountDescription}
               </p>
             </div>
 
@@ -520,7 +713,7 @@ export default function RegisterPage() {
                     htmlFor="firstName"
                     className="mb-2 block text-sm font-medium"
                   >
-                    Prénom
+                    {UI[language].firstName}
                   </label>
 
                   <input
@@ -528,7 +721,7 @@ export default function RegisterPage() {
                     name="firstName"
                     type="text"
                     autoComplete="given-name"
-                    placeholder="Votre prénom"
+                    placeholder={UI[language].firstNamePlaceholder}
                     required
                     disabled={loading}
                     className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
@@ -540,7 +733,7 @@ export default function RegisterPage() {
                     htmlFor="lastName"
                     className="mb-2 block text-sm font-medium"
                   >
-                    Nom
+                    {UI[language].lastName}
                   </label>
 
                   <input
@@ -548,7 +741,7 @@ export default function RegisterPage() {
                     name="lastName"
                     type="text"
                     autoComplete="family-name"
-                    placeholder="Votre nom"
+                    placeholder={UI[language].lastNamePlaceholder}
                     required
                     disabled={loading}
                     className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
@@ -563,7 +756,7 @@ export default function RegisterPage() {
                   htmlFor="countryIso2"
                   className="mb-2 block text-sm font-medium"
                 >
-                  Pays
+                  {UI[language].country}
                 </label>
 
                 <select
@@ -582,7 +775,10 @@ export default function RegisterPage() {
                         key={country.iso2}
                         value={country.iso2}
                       >
-                        {country.name} (
+                        {getCountryDisplayName(
+                          country,
+                          language,
+                        )} (
                         {country.callingCode})
                       </option>
                     ),
@@ -590,9 +786,7 @@ export default function RegisterPage() {
                 </select>
 
                 <p className="mt-2 text-xs text-muted">
-                  Le pays sélectionné détermine
-                  automatiquement l&apos;indicatif
-                  utilisé pour votre numéro.
+                  {UI[language].countryHelp}
                 </p>
               </div>
 
@@ -603,7 +797,7 @@ export default function RegisterPage() {
                   htmlFor="phone"
                   className="mb-2 block text-sm font-medium"
                 >
-                  Numéro de téléphone
+                  {UI[language].phone}
                 </label>
 
                 <input
@@ -619,9 +813,7 @@ export default function RegisterPage() {
                 />
 
                 <p className="mt-2 text-xs text-muted">
-                  Votre numéro sera enregistré
-                  comme donnée de profil et
-                  utilisé lors de vos paiements.
+                  {UI[language].phoneHelp}
                 </p>
               </div>
 
@@ -632,7 +824,7 @@ export default function RegisterPage() {
                   htmlFor="email"
                   className="mb-2 block text-sm font-medium"
                 >
-                  Adresse e-mail
+                  {UI[language].email}
                 </label>
 
                 <input
@@ -640,7 +832,7 @@ export default function RegisterPage() {
                   name="email"
                   type="email"
                   autoComplete="email"
-                  placeholder="vous@exemple.com"
+                  placeholder={UI[language].emailPlaceholder}
                   required
                   disabled={loading}
                   className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
@@ -654,7 +846,7 @@ export default function RegisterPage() {
                   htmlFor="password"
                   className="mb-2 block text-sm font-medium"
                 >
-                  Mot de passe
+                  {UI[language].password}
                 </label>
 
                 <div className="relative">
@@ -667,7 +859,7 @@ export default function RegisterPage() {
                         : "password"
                     }
                     autoComplete="new-password"
-                    placeholder="Créer un mot de passe"
+                    placeholder={UI[language].passwordPlaceholder}
                     required
                     minLength={8}
                     disabled={loading}
@@ -678,8 +870,8 @@ export default function RegisterPage() {
                     type="button"
                     aria-label={
                       showPassword
-                        ? "Masquer le mot de passe"
-                        : "Afficher le mot de passe"
+                        ? UI[language].hidePassword
+                        : UI[language].showPassword
                     }
                     onClick={() =>
                       setShowPassword(
@@ -698,7 +890,7 @@ export default function RegisterPage() {
                 </div>
 
                 <p className="mt-2 text-xs text-muted">
-                  Minimum 8 caractères.
+                  {UI[language].minimumEight}
                 </p>
               </div>
 
@@ -709,7 +901,7 @@ export default function RegisterPage() {
                   htmlFor="confirmPassword"
                   className="mb-2 block text-sm font-medium"
                 >
-                  Confirmer le mot de passe
+                  {UI[language].confirmPassword}
                 </label>
 
                 <div className="relative">
@@ -722,7 +914,7 @@ export default function RegisterPage() {
                         : "password"
                     }
                     autoComplete="new-password"
-                    placeholder="Confirmer votre mot de passe"
+                    placeholder={UI[language].confirmPasswordPlaceholder}
                     required
                     minLength={8}
                     disabled={loading}
@@ -733,8 +925,8 @@ export default function RegisterPage() {
                     type="button"
                     aria-label={
                       showConfirmPassword
-                        ? "Masquer le mot de passe"
-                        : "Afficher le mot de passe"
+                        ? UI[language].hidePassword
+                        : UI[language].showPassword
                     }
                     onClick={() =>
                       setShowConfirmPassword(
@@ -760,7 +952,10 @@ export default function RegisterPage() {
                   role="alert"
                   className="rounded-xl border border-red-200 bg-danger-surface px-4 py-3 text-sm leading-5 text-danger dark:border-red-900/40"
                 >
-                  {error}
+                  {localizeFrontendError(
+                    error,
+                    language,
+                  )}
                 </div>
               )}
 
@@ -787,10 +982,7 @@ export default function RegisterPage() {
                 />
 
                 <span className="text-xs leading-5 text-muted">
-                  J&apos;accepte les conditions
-                  d&apos;utilisation et la
-                  politique de confidentialité
-                  de Oria.
+                  {UI[language].terms}
                 </span>
               </label>
 
@@ -808,10 +1000,10 @@ export default function RegisterPage() {
                       className="animate-spin"
                     />
 
-                    Création du compte...
+                    {UI[language].creatingAccount}
                   </>
                 ) : (
-                  "Créer mon compte"
+                  UI[language].createMyAccount
                 )}
               </button>
             </form>
@@ -822,7 +1014,7 @@ export default function RegisterPage() {
               <div className="h-px flex-1 bg-border" />
 
               <span className="text-xs text-muted">
-                ou
+                {UI[language].or}
               </span>
 
               <div className="h-px flex-1 bg-border" />
@@ -835,18 +1027,18 @@ export default function RegisterPage() {
               disabled={loading}
               className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-border bg-surface px-4 text-sm font-medium transition hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Continuer avec Google
+              {UI[language].continueWithGoogle}
             </button>
 
             {/* Login */}
 
             <p className="mt-7 text-center text-sm text-muted">
-              Vous avez déjà un compte ?{" "}
+              {UI[language].alreadyHaveAccount}{" "}
               <Link
                 href="/login"
                 className="font-medium text-foreground hover:underline"
               >
-                Se connecter
+                {UI[language].signIn}
               </Link>
             </p>
           </div>
@@ -854,10 +1046,7 @@ export default function RegisterPage() {
           {/* Footer */}
 
           <p className="mt-5 text-center text-xs leading-5 text-muted">
-            Votre compte vous permettra de
-            retrouver vos conversations, crédits
-            et paramètres depuis tous vos
-            appareils.
+            {UI[language].footer}
           </p>
         </div>
       </div>

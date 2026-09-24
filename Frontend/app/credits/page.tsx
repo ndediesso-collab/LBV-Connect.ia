@@ -65,6 +65,157 @@ const API_URL =
 
 const supabase = createClient();
 
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    backToChat: "Retour au chat",
+    getCredits: "Obtenir des crédits",
+    credits: "Crédits",
+    yourUsage: "Votre consommation",
+    myCredits: "Mes crédits",
+    creditsDescription:
+      "Suivez votre solde et comprenez comment vos crédits sont utilisés sur ORIA.",
+    loadingWallet: "Chargement de votre portefeuille...",
+    loadCreditsError: "Impossible de charger vos crédits.",
+    retry: "Réessayer",
+    availableBalance: "Solde disponible",
+    consumed: "consommés",
+    currentPack: "Pack actuel",
+    initialCredits: "Crédits initiaux",
+    expiration: "Expiration",
+    day: "jour",
+    days: "jours",
+    active: "Actif",
+    expired: "Expiré",
+    yourPack: "Votre pack",
+    packUsageUntil:
+      "Vos crédits restent utilisables jusqu'à la date d'expiration de votre pack.",
+    remaining: "restant",
+    remainings: "restants",
+    expiresOn: "Expire le",
+    viewPacks: "Voir les packs",
+    creditsConsumed: "Crédits consommés",
+    sincePackStart: "Depuis le début du pack",
+    operations: "Opérations",
+    actionsPerformed: "Actions effectuées",
+    creditsPurchased: "Crédits achetés",
+    packsAndRecharges: "Packs et recharges",
+    history: "Historique",
+    historyDescription:
+      "Les dernières opérations effectuées avec vos crédits.",
+    noHistory: "Aucun historique",
+    operationsWillAppear: "Vos opérations apparaîtront ici.",
+    noPack: "Aucun pack",
+    unknownPack: "Pack inconnu",
+    packPurchase: "Achat de pack",
+    creditUsage: "Utilisation de crédits",
+    creditRecharge: "Recharge de crédits",
+    refund: "Remboursement",
+    creditAdjustment: "Ajustement de crédits",
+    usage: "Utilisation",
+    packActivation: "Activation d'un pack",
+    refundedCredits: "Crédits remboursés",
+    balanceChange: "Modification du solde",
+  },
+  en: {
+    backToChat: "Back to chat",
+    getCredits: "Get credits",
+    credits: "Credits",
+    yourUsage: "Your usage",
+    myCredits: "My credits",
+    creditsDescription:
+      "Track your balance and understand how your credits are used on ORIA.",
+    loadingWallet: "Loading your wallet...",
+    loadCreditsError: "Unable to load your credits.",
+    retry: "Try again",
+    availableBalance: "Available balance",
+    consumed: "used",
+    currentPack: "Current pack",
+    initialCredits: "Initial credits",
+    expiration: "Expiration",
+    day: "day",
+    days: "days",
+    active: "Active",
+    expired: "Expired",
+    yourPack: "Your pack",
+    packUsageUntil:
+      "Your credits remain available until your pack expires.",
+    remaining: "remaining",
+    remainings: "remaining",
+    expiresOn: "Expires on",
+    viewPacks: "View packs",
+    creditsConsumed: "Credits used",
+    sincePackStart: "Since the start of the pack",
+    operations: "Operations",
+    actionsPerformed: "Actions performed",
+    creditsPurchased: "Credits purchased",
+    packsAndRecharges: "Packs and top-ups",
+    history: "History",
+    historyDescription:
+      "Your latest credit transactions.",
+    noHistory: "No history",
+    operationsWillAppear: "Your transactions will appear here.",
+    noPack: "No pack",
+    unknownPack: "Unknown pack",
+    packPurchase: "Pack purchase",
+    creditUsage: "Credit usage",
+    creditRecharge: "Credit top-up",
+    refund: "Refund",
+    creditAdjustment: "Credit adjustment",
+    usage: "Usage",
+    packActivation: "Pack activation",
+    refundedCredits: "Refunded credits",
+    balanceChange: "Balance adjustment",
+  },
+} as const;
+
+function getInitialOriaLanguage(): OriaLanguage {
+  if (typeof window === "undefined") {
+    return "fr";
+  }
+
+  const saved = window.localStorage.getItem(
+    ORIA_LANGUAGE_STORAGE_KEY,
+  );
+
+  if (saved === "fr" || saved === "en") {
+    return saved;
+  }
+
+  return window.navigator.language
+    .toLowerCase()
+    .startsWith("en")
+    ? "en"
+    : "fr";
+}
+
+function localizeFrontendError(
+  message: string,
+  language: OriaLanguage,
+): string {
+  if (language === "fr") {
+    return message;
+  }
+
+  const exact: Record<string, string> = {
+    "Utilisateur non authentifié.":
+      "User not authenticated.",
+    "Session expirée ou authentification invalide.":
+      "Session expired or authentication is invalid.",
+    "Une erreur est survenue avec le serveur.":
+      "A server error occurred.",
+    "Impossible de charger les crédits.":
+      UI.en.loadCreditsError,
+  };
+
+  return exact[message] ?? message;
+}
+
+
 /*
  * ============================================================
  * CONFIGURATION DES PACKS
@@ -178,12 +329,16 @@ async function apiFetch<T>(
 
 function formatCredits(
   value: number,
+  language: OriaLanguage,
 ): string {
-  return value.toLocaleString("fr-FR");
+  return value.toLocaleString(
+    language === "en" ? "en-US" : "fr-FR",
+  );
 }
 
 function formatDate(
   value: string | null,
+  language: OriaLanguage,
 ): string {
   if (!value) {
     return "—";
@@ -196,7 +351,7 @@ function formatDate(
   }
 
   return date.toLocaleDateString(
-    "fr-FR",
+    language === "en" ? "en-US" : "fr-FR",
     {
       day: "numeric",
       month: "long",
@@ -207,6 +362,7 @@ function formatDate(
 
 function formatDateTime(
   value: string,
+  language: OriaLanguage,
 ): string {
   const date = new Date(value);
 
@@ -215,7 +371,7 @@ function formatDateTime(
   }
 
   return date.toLocaleString(
-    "fr-FR",
+    language === "en" ? "en-US" : "fr-FR",
     {
       day: "numeric",
       month: "short",
@@ -252,25 +408,34 @@ function getRemainingDays(
 
 function getPackName(
   packId: PackId | null,
+  language: OriaLanguage,
 ): string {
   if (!packId) {
-    return "Aucun pack";
+    return UI[language].noPack;
   }
 
+  const packNames: Record<PackId, { fr: string; en: string }> = {
+    light_pack: { fr: "Léger", en: "Light" },
+    intermediate_pack: { fr: "Intermédiaire", en: "Intermediate" },
+    pro_pack: { fr: "Pro", en: "Pro" },
+    business_pack: { fr: "Business", en: "Business" },
+  };
+
   return (
-    PACK_CONFIG[packId]?.name ||
-    "Pack inconnu"
+    packNames[packId]?.[language] ||
+    UI[language].unknownPack
   );
 }
 
 function getTransactionTitle(
   transaction: CreditTransaction,
+  language: OriaLanguage,
 ): string {
   if (
     transaction.transaction_type ===
     "pack_purchase"
   ) {
-    return "Achat de pack";
+    return UI[language].packPurchase;
   }
 
   if (
@@ -280,29 +445,31 @@ function getTransactionTitle(
     return transaction.action
       ? getActionLabel(
           transaction.action,
+          language,
         )
-      : "Utilisation de crédits";
+      : UI[language].creditUsage;
   }
 
   if (
     transaction.transaction_type ===
     "recharge"
   ) {
-    return "Recharge de crédits";
+    return UI[language].creditRecharge;
   }
 
   if (
     transaction.transaction_type ===
     "refund"
   ) {
-    return "Remboursement";
+    return UI[language].refund;
   }
 
-  return "Ajustement de crédits";
+  return UI[language].creditAdjustment;
 }
 
 function getActionLabel(
   action: string,
+  language: OriaLanguage,
 ): string {
   const labels: Record<
     string,
@@ -325,8 +492,8 @@ function getActionLabel(
     image_480: "Image 480",
     image_720: "Image 720",
 
-    video_5s: "Vidéo 5 s",
-    video_10s: "Vidéo 10 s",
+    video_5s: language === "en" ? "Video 5 s" : "Vidéo 5 s",
+    video_10s: language === "en" ? "Video 10 s" : "Vidéo 10 s",
     video_lite: "Veo Lite",
 
     image_pro: "Image Pro",
@@ -365,16 +532,18 @@ function getActionLabel(
 
 function getTransactionDescription(
   transaction: CreditTransaction,
+  language: OriaLanguage,
 ): string {
   if (
     transaction.transaction_type ===
     "usage"
   ) {
     return transaction.action
-      ? `Utilisation · ${getActionLabel(
+      ? `${UI[language].usage} · ${getActionLabel(
           transaction.action,
+          language,
         )}`
-      : "Utilisation de crédits";
+      : UI[language].creditUsage;
   }
 
   if (
@@ -383,7 +552,7 @@ function getTransactionDescription(
   ) {
     return (
       transaction.reference_id ||
-      "Activation d'un pack"
+      UI[language].packActivation
     );
   }
 
@@ -391,17 +560,17 @@ function getTransactionDescription(
     transaction.transaction_type ===
     "recharge"
   ) {
-    return "Recharge de crédits";
+    return UI[language].creditRecharge;
   }
 
   if (
     transaction.transaction_type ===
     "refund"
   ) {
-    return "Crédits remboursés";
+    return UI[language].refundedCredits;
   }
 
-  return "Modification du solde";
+  return UI[language].balanceChange;
 }
 
 /*
@@ -411,6 +580,37 @@ function getTransactionDescription(
  */
 
 export default function CreditsPage() {
+  const [language, setLanguage] =
+    useState<OriaLanguage>("fr");
+
+  useEffect(() => {
+    const syncLanguage = () => {
+      setLanguage(getInitialOriaLanguage());
+    };
+
+    syncLanguage();
+
+    window.addEventListener(
+      "storage",
+      syncLanguage,
+    );
+    window.addEventListener(
+      "oria-language-change",
+      syncLanguage,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "storage",
+        syncLanguage,
+      );
+      window.removeEventListener(
+        "oria-language-change",
+        syncLanguage,
+      );
+    };
+  }, []);
+
   const [
     wallet,
     setWallet,
@@ -529,6 +729,7 @@ export default function CreditsPage() {
 
   const packName = getPackName(
     wallet?.pack_id || null,
+    language,
   );
 
   const isPackActive =
@@ -580,7 +781,7 @@ export default function CreditsPage() {
           <div className="flex items-center gap-3">
             <Link
               href="/chat"
-              aria-label="Retour au chat"
+              aria-label={UI[language].backToChat}
               className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
             >
               <ArrowLeft size={19} />
@@ -602,11 +803,11 @@ export default function CreditsPage() {
             <Plus size={17} />
 
             <span className="hidden sm:inline">
-              Obtenir des crédits
+              {UI[language].getCredits}
             </span>
 
             <span className="sm:hidden">
-              Crédits
+              {UI[language].credits}
             </span>
           </Link>
         </div>
@@ -617,17 +818,15 @@ export default function CreditsPage() {
       <section className="mx-auto w-full max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
         <div>
           <p className="text-sm font-medium text-muted">
-            Votre consommation
+            {UI[language].yourUsage}
           </p>
 
           <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">
-            Mes crédits
+            {UI[language].myCredits}
           </h1>
 
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-            Suivez votre solde et comprenez
-            comment vos crédits sont utilisés
-            sur ORIA.
+            {UI[language].creditsDescription}
           </p>
         </div>
 
@@ -638,7 +837,7 @@ export default function CreditsPage() {
             <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-border border-t-foreground" />
 
             <p className="mt-4 text-sm text-muted">
-              Chargement de votre portefeuille...
+              {UI[language].loadingWallet}
             </p>
           </div>
         )}
@@ -648,11 +847,11 @@ export default function CreditsPage() {
         {!isLoading && error && (
           <div className="mt-8 rounded-3xl border border-border bg-surface-secondary p-6">
             <p className="text-sm font-medium">
-              Impossible de charger vos crédits.
+              {UI[language].loadCreditsError}
             </p>
 
             <p className="mt-2 text-sm text-muted">
-              {error}
+              {localizeFrontendError(error, language)}
             </p>
 
             <button
@@ -660,7 +859,7 @@ export default function CreditsPage() {
               onClick={loadCredits}
               className="mt-5 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground"
             >
-              Réessayer
+              {UI[language].retry}
             </button>
           </div>
         )}
@@ -680,18 +879,19 @@ export default function CreditsPage() {
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-sm opacity-60">
-                        Solde disponible
+                        {UI[language].availableBalance}
                       </p>
 
                       <div className="mt-3 flex items-baseline gap-2">
                         <span className="text-4xl font-semibold tracking-tight sm:text-5xl">
                           {formatCredits(
                             wallet.balance,
+                            language,
                           )}
                         </span>
 
                         <span className="text-sm opacity-60">
-                          crédits
+                          {UI[language].credits.toLowerCase()}
                         </span>
                       </div>
                     </div>
@@ -708,8 +908,9 @@ export default function CreditsPage() {
                       <span className="opacity-60">
                         {formatCredits(
                           usedCredits,
+                          language,
                         )}{" "}
-                        consommés
+                        {UI[language].consumed}
                       </span>
 
                       <span className="opacity-60">
@@ -732,7 +933,7 @@ export default function CreditsPage() {
                   <div className="mt-6 flex flex-wrap gap-3">
                     <div className="rounded-xl bg-accent-foreground/10 px-3 py-2">
                       <p className="text-[11px] opacity-60">
-                        Pack actuel
+                        {UI[language].currentPack}
                       </p>
 
                       <p className="mt-0.5 text-sm font-medium">
@@ -742,28 +943,27 @@ export default function CreditsPage() {
 
                     <div className="rounded-xl bg-accent-foreground/10 px-3 py-2">
                       <p className="text-[11px] opacity-60">
-                        Crédits initiaux
+                        {UI[language].initialCredits}
                       </p>
 
                       <p className="mt-0.5 text-sm font-medium">
                         {formatCredits(
                           wallet.initial_credits,
+                          language,
                         )}
                       </p>
                     </div>
 
                     <div className="rounded-xl bg-accent-foreground/10 px-3 py-2">
                       <p className="text-[11px] opacity-60">
-                        Expiration
+                        {UI[language].expiration}
                       </p>
 
                       <p className="mt-0.5 text-sm font-medium">
                         {remainingDays}{" "}
-                        jour
-                        {remainingDays !==
-                        1
-                          ? "s"
-                          : ""}
+                        {remainingDays === 1
+                          ? UI[language].day
+                          : UI[language].days}
                       </p>
                     </div>
                   </div>
@@ -788,13 +988,13 @@ export default function CreditsPage() {
                       }`}
                     >
                       {isPackActive
-                        ? "Actif"
-                        : "Expiré"}
+                        ? UI[language].active
+                        : UI[language].expired}
                     </span>
                   </div>
 
                   <p className="mt-6 text-sm text-muted">
-                    Votre pack
+                    {UI[language].yourPack}
                   </p>
 
                   <h2 className="mt-1 text-2xl font-semibold tracking-tight">
@@ -802,9 +1002,7 @@ export default function CreditsPage() {
                   </h2>
 
                   <p className="mt-2 text-sm leading-6 text-muted">
-                    Vos crédits restent
-                    utilisables jusqu'à la date
-                    d'expiration de votre pack.
+                    {UI[language].packUsageUntil}
                   </p>
 
                   <div className="mt-6 space-y-3 text-sm text-muted-strong">
@@ -812,16 +1010,13 @@ export default function CreditsPage() {
                       <Clock3 size={16} />
 
                       <span>
-                        {remainingDays} jour
-                        {remainingDays !==
-                        1
-                          ? "s"
-                          : ""}{" "}
-                        restant
-                        {remainingDays !==
-                        1
-                          ? "s"
-                          : ""}
+                        {remainingDays}{" "}
+                        {remainingDays === 1
+                          ? UI[language].day
+                          : UI[language].days}{" "}
+                        {remainingDays === 1
+                          ? UI[language].remaining
+                          : UI[language].remainings}
                       </span>
                     </div>
 
@@ -829,9 +1024,10 @@ export default function CreditsPage() {
                       <CalendarDays size={16} />
 
                       <span>
-                        Expire le{" "}
+                        {UI[language].expiresOn}{" "}
                         {formatDate(
                           wallet.pack_expires_at,
+                          language,
                         )}
                       </span>
                     </div>
@@ -841,7 +1037,7 @@ export default function CreditsPage() {
                     href="/packs"
                     className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-foreground hover:underline"
                   >
-                    Voir les packs
+                    {UI[language].viewPacks}
 
                     <ArrowUpRight
                       size={15}
@@ -859,11 +1055,12 @@ export default function CreditsPage() {
                       size={18}
                     />
                   }
-                  label="Crédits consommés"
+                  label={UI[language].creditsConsumed}
                   value={formatCredits(
                     usedCredits,
+                    language,
                   )}
-                  description="Depuis le début du pack"
+                  description={UI[language].sincePackStart}
                 />
 
                 <StatCard
@@ -872,11 +1069,12 @@ export default function CreditsPage() {
                       size={18}
                     />
                   }
-                  label="Opérations"
+                  label={UI[language].operations}
                   value={formatCredits(
                     operationCount,
+                    language,
                   )}
-                  description="Actions effectuées"
+                  description={UI[language].actionsPerformed}
                 />
 
                 <StatCard
@@ -885,11 +1083,12 @@ export default function CreditsPage() {
                       size={18}
                     />
                   }
-                  label="Crédits achetés"
+                  label={UI[language].creditsPurchased}
                   value={formatCredits(
                     purchasedCredits,
+                    language,
                   )}
-                  description="Packs et recharges"
+                  description={UI[language].packsAndRecharges}
                 />
               </div>
 
@@ -902,13 +1101,12 @@ export default function CreditsPage() {
                       <History size={18} />
 
                       <h2 className="text-lg font-semibold">
-                        Historique
+                        {UI[language].history}
                       </h2>
                     </div>
 
                     <p className="mt-1 text-sm text-muted">
-                      Les dernières opérations
-                      effectuées avec vos crédits.
+                      {UI[language].historyDescription}
                     </p>
                   </div>
                 </div>
@@ -922,6 +1120,7 @@ export default function CreditsPage() {
                         index,
                       ) => (
                         <TransactionItem
+                          language={language}
                           key={
                             transaction.id
                           }
@@ -944,12 +1143,11 @@ export default function CreditsPage() {
                       />
 
                       <p className="mt-3 text-sm font-medium">
-                        Aucun historique
+                        {UI[language].noHistory}
                       </p>
 
                       <p className="mt-1 text-xs text-muted">
-                        Vos opérations apparaîtront
-                        ici.
+                        {UI[language].operationsWillAppear}
                       </p>
                     </div>
                   )}
@@ -1007,9 +1205,11 @@ function StatCard({
  */
 
 function TransactionItem({
+  language,
   transaction,
   isLast,
 }: {
+  language: OriaLanguage;
   transaction: CreditTransaction;
   isLast: boolean;
 }) {
@@ -1043,18 +1243,21 @@ function TransactionItem({
         <h3 className="truncate text-sm font-medium">
           {getTransactionTitle(
             transaction,
+            language,
           )}
         </h3>
 
         <p className="mt-0.5 truncate text-xs text-muted">
           {getTransactionDescription(
             transaction,
+            language,
           )}
         </p>
 
         <p className="mt-1 text-[11px] text-muted">
           {formatDateTime(
             transaction.created_at,
+            language,
           )}
         </p>
       </div>
@@ -1070,6 +1273,7 @@ function TransactionItem({
 
         {formatCredits(
           transaction.amount,
+          language,
         )}
       </div>
     </div>

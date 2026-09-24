@@ -43,6 +43,144 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ||
   "";
 
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    unknownDate: "Date inconnue",
+    backToChat: "Retour au chat",
+    myCreations: "Mes créations",
+    creationsDescription:
+      "Retrouvez ici vos images et vidéos générées avec Oria.",
+    refresh: "Actualiser",
+    creation: "création",
+    creations: "créations",
+    image: "image",
+    images: "images",
+    video: "vidéo",
+    videos: "vidéos",
+    all: "Toutes",
+    close: "Fermer",
+    loadingCreations: "Chargement de vos créations…",
+    noCreation: "Aucune création pour le moment",
+    noCreationDescription:
+      "Vos images et vidéos générées avec Oria apparaîtront automatiquement ici.",
+    createSomething: "Créer quelque chose",
+    noCreationInCategory: "Aucune création dans cette catégorie.",
+    openImageCreation: "Ouvrir la création image",
+    openVideoCreation: "Ouvrir la vidéo",
+    generatedWithOria: "Création générée avec Oria",
+    noDescription: "Création sans description",
+    open: "Ouvrir",
+    download: "Télécharger",
+    delete: "Supprimer",
+    oriaCreation: "Création Oria",
+    fileUnavailable: "Ce fichier n'est plus disponible.",
+    sessionExpired: "Votre session a expiré. Veuillez vous reconnecter.",
+    backendNotConfigured:
+      "L'URL du backend n'est pas configurée dans le frontend.",
+    fetchCreationsError: "Impossible de récupérer vos créations.",
+    loadingError: "Une erreur est survenue pendant le chargement.",
+    creationFileUnavailable:
+      "Le fichier de cette création n'est plus disponible.",
+    downloadError: "Téléchargement impossible.",
+    deleteConfirm: "Supprimer définitivement cette création ?",
+    deleteCreationError: "Impossible de supprimer cette création.",
+  },
+  en: {
+    unknownDate: "Unknown date",
+    backToChat: "Back to chat",
+    myCreations: "My creations",
+    creationsDescription:
+      "Find all the images and videos you generated with Oria.",
+    refresh: "Refresh",
+    creation: "creation",
+    creations: "creations",
+    image: "image",
+    images: "images",
+    video: "video",
+    videos: "videos",
+    all: "All",
+    close: "Close",
+    loadingCreations: "Loading your creations…",
+    noCreation: "No creations yet",
+    noCreationDescription:
+      "Images and videos generated with Oria will automatically appear here.",
+    createSomething: "Create something",
+    noCreationInCategory: "No creations in this category.",
+    openImageCreation: "Open image creation",
+    openVideoCreation: "Open video",
+    generatedWithOria: "Creation generated with Oria",
+    noDescription: "Creation without a description",
+    open: "Open",
+    download: "Download",
+    delete: "Delete",
+    oriaCreation: "Oria creation",
+    fileUnavailable: "This file is no longer available.",
+    sessionExpired: "Your session has expired. Please sign in again.",
+    backendNotConfigured:
+      "The backend URL is not configured in the frontend.",
+    fetchCreationsError: "Unable to retrieve your creations.",
+    loadingError: "An error occurred while loading.",
+    creationFileUnavailable:
+      "The file for this creation is no longer available.",
+    downloadError: "Download failed.",
+    deleteConfirm: "Permanently delete this creation?",
+    deleteCreationError: "Unable to delete this creation.",
+  },
+} as const;
+
+function getInitialOriaLanguage(): OriaLanguage {
+  if (typeof window === "undefined") {
+    return "fr";
+  }
+
+  const saved = window.localStorage.getItem(
+    ORIA_LANGUAGE_STORAGE_KEY,
+  );
+
+  if (saved === "fr" || saved === "en") {
+    return saved;
+  }
+
+  return window.navigator.language
+    .toLowerCase()
+    .startsWith("en")
+    ? "en"
+    : "fr";
+}
+
+function localizeFrontendError(
+  message: string,
+  language: OriaLanguage,
+): string {
+  if (language === "fr") {
+    return message;
+  }
+
+  const exact: Record<string, string> = {
+    "Votre session a expiré. Veuillez vous reconnecter.":
+      UI.en.sessionExpired,
+    "L'URL du backend n'est pas configurée dans le frontend.":
+      UI.en.backendNotConfigured,
+    "Impossible de récupérer vos créations.":
+      UI.en.fetchCreationsError,
+    "Une erreur est survenue pendant le chargement.":
+      UI.en.loadingError,
+    "Le fichier de cette création n'est plus disponible.":
+      UI.en.creationFileUnavailable,
+    "Téléchargement impossible.":
+      UI.en.downloadError,
+    "Impossible de supprimer cette création.":
+      UI.en.deleteCreationError,
+  };
+
+  return exact[message] ?? message;
+}
+
 const getMediaType = (media: MediaItem): MediaType => {
   if (media.media_type === "video" || media.type === "video") {
     return "video";
@@ -113,36 +251,45 @@ const normalizeMediaUrl = (
   }
 };
 
-const formatDate = (value?: string | null) => {
-  if (!value) return "Date inconnue";
+const formatDate = (
+  value: string | null | undefined,
+  language: OriaLanguage,
+) => {
+  if (!value) return UI[language].unknownDate;
 
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {
-    return "Date inconnue";
+    return UI[language].unknownDate;
   }
 
-  return new Intl.DateTimeFormat("fr-FR", {
+  return new Intl.DateTimeFormat(
+    language === "en" ? "en-US" : "fr-FR",
+    {
     day: "2-digit",
     month: "short",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(date);
+    },
+  ).format(date);
 };
 
-const formatSize = (value?: number | null) => {
+const formatSize = (
+  value: number | null | undefined,
+  language: OriaLanguage,
+) => {
   if (!value || value <= 0) return null;
 
   if (value < 1024) {
-    return `${value} o`;
+    return language === "en" ? `${value} B` : `${value} o`;
   }
 
   if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} Ko`;
+    return language === "en" ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024).toFixed(1)} Ko`;
   }
 
-  return `${(value / (1024 * 1024)).toFixed(1)} Mo`;
+  return language === "en" ? `${(value / (1024 * 1024)).toFixed(1)} MB` : `${(value / (1024 * 1024)).toFixed(1)} Mo`;
 };
 
 const getActionLabel = (action?: string | null) => {
@@ -154,6 +301,37 @@ const getActionLabel = (action?: string | null) => {
 };
 
 export default function CreationsPage() {
+  const [language, setLanguage] =
+    useState<OriaLanguage>("fr");
+
+  useEffect(() => {
+    const syncLanguage = () => {
+      setLanguage(getInitialOriaLanguage());
+    };
+
+    syncLanguage();
+
+    window.addEventListener(
+      "storage",
+      syncLanguage,
+    );
+    window.addEventListener(
+      "oria-language-change",
+      syncLanguage,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "storage",
+        syncLanguage,
+      );
+      window.removeEventListener(
+        "oria-language-change",
+        syncLanguage,
+      );
+    };
+  }, []);
+
   const supabase = useMemo(() => createClient(), []);
 
   const [media, setMedia] = useState<MediaItem[]>([]);
@@ -309,7 +487,7 @@ export default function CreationsPage() {
   const handleDelete = useCallback(
     async (item: MediaItem) => {
       const confirmed = window.confirm(
-        "Supprimer définitivement cette création ?"
+        UI[language].deleteConfirm
       );
 
       if (!confirmed) return;
@@ -374,7 +552,7 @@ export default function CreationsPage() {
         setDeletingId(null);
       }
     },
-    [getAccessToken]
+    [getAccessToken, language]
   );
 
   return (
@@ -387,7 +565,7 @@ export default function CreationsPage() {
               href="/chat"
               className="mb-5 inline-flex items-center text-sm font-medium text-black/55 transition hover:text-black"
             >
-              ← Retour au chat
+              ← {UI[language].backToChat}
             </Link>
 
             <div className="flex items-center gap-3">
@@ -400,13 +578,13 @@ export default function CreationsPage() {
                   Oria
                 </p>
                 <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-                  Mes créations
+                  {UI[language].myCreations}
                 </h1>
               </div>
             </div>
 
             <p className="mt-3 max-w-xl text-sm leading-6 text-black/55">
-              Retrouvez ici vos images et vidéos générées avec Oria.
+              {UI[language].creationsDescription}
             </p>
           </div>
 
@@ -419,7 +597,7 @@ export default function CreationsPage() {
             <RefreshCw
               className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
             />
-            Actualiser
+            {UI[language].refresh}
           </button>
         </header>
 
@@ -427,15 +605,24 @@ export default function CreationsPage() {
         {!loading && !error && media.length > 0 && (
           <div className="mb-6 flex flex-wrap gap-2 text-sm">
             <span className="rounded-full bg-black px-3 py-1.5 font-medium text-white">
-              {media.length} création{media.length > 1 ? "s" : ""}
+              {media.length}{" "}
+              {media.length === 1
+                ? UI[language].creation
+                : UI[language].creations}
             </span>
 
             <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
-              {imageCount} image{imageCount > 1 ? "s" : ""}
+              {imageCount}{" "}
+              {imageCount === 1
+                ? UI[language].image
+                : UI[language].images}
             </span>
 
             <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
-              {videoCount} vidéo{videoCount > 1 ? "s" : ""}
+              {videoCount}{" "}
+              {videoCount === 1
+                ? UI[language].video
+                : UI[language].videos}
             </span>
           </div>
         )}
@@ -446,17 +633,17 @@ export default function CreationsPage() {
             {[
               {
                 value: "all" as const,
-                label: "Toutes",
+                label: UI[language].all,
                 count: media.length,
               },
               {
                 value: "image" as const,
-                label: "Images",
+                label: language === "en" ? "Images" : "Images",
                 count: imageCount,
               },
               {
                 value: "video" as const,
-                label: "Vidéos",
+                label: language === "en" ? "Videos" : "Vidéos",
                 count: videoCount,
               },
             ].map((item) => {
@@ -486,12 +673,12 @@ export default function CreationsPage() {
         {/* Error */}
         {error && (
           <div className="mb-6 flex items-start justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
-            <p>{error}</p>
+            <p>{localizeFrontendError(error, language)}</p>
             <button
               type="button"
               onClick={() => setError(null)}
               className="shrink-0 rounded-lg p-1 hover:bg-red-100"
-              aria-label="Fermer"
+              aria-label={UI[language].close}
             >
               <X className="h-4 w-4" />
             </button>
@@ -503,7 +690,7 @@ export default function CreationsPage() {
           <div className="flex min-h-[360px] items-center justify-center rounded-3xl border border-black/10 bg-white">
             <div className="flex flex-col items-center gap-3 text-black/45">
               <Loader2 className="h-7 w-7 animate-spin" />
-              <p className="text-sm">Chargement de vos créations…</p>
+              <p className="text-sm">{UI[language].loadingCreations}</p>
             </div>
           </div>
         )}
@@ -515,18 +702,17 @@ export default function CreationsPage() {
               <ImageIcon className="h-7 w-7 text-black/40" />
             </div>
 
-            <h2 className="text-xl font-semibold">Aucune création pour le moment</h2>
+            <h2 className="text-xl font-semibold">{UI[language].noCreation}</h2>
 
             <p className="mt-2 max-w-md text-sm leading-6 text-black/50">
-              Vos images et vidéos générées avec Oria apparaîtront
-              automatiquement ici.
+              {UI[language].noCreationDescription}
             </p>
 
             <Link
               href="/chat"
               className="mt-6 inline-flex h-11 items-center rounded-xl bg-black px-5 text-sm font-semibold text-white transition hover:bg-black/85"
             >
-              Créer quelque chose
+              {UI[language].createSomething}
             </Link>
           </div>
         )}
@@ -535,7 +721,7 @@ export default function CreationsPage() {
         {!loading && !error && media.length > 0 && filteredMedia.length === 0 && (
           <div className="rounded-3xl border border-black/10 bg-white px-6 py-16 text-center">
             <p className="text-sm text-black/50">
-              Aucune création dans cette catégorie.
+              {UI[language].noCreationInCategory}
             </p>
           </div>
         )}
@@ -546,7 +732,10 @@ export default function CreationsPage() {
             {filteredMedia.map((item) => {
               const type = getMediaType(item);
               const url = normalizeMediaUrl(item);
-              const size = formatSize(item.size_bytes ?? item.size);
+              const size = formatSize(
+                item.size_bytes ?? item.size,
+                language,
+              );
               const action = getActionLabel(item.action);
 
               return (
@@ -560,13 +749,17 @@ export default function CreationsPage() {
                       setSelectedMedia(item);
                     }}
                     className="relative block aspect-square w-full overflow-hidden bg-black/[0.04] text-left"
-                    aria-label={`Ouvrir la ${type === "image" ? "création image" : "vidéo"}`}
+                    aria-label={
+                      type === "image"
+                        ? UI[language].openImageCreation
+                        : UI[language].openVideoCreation
+                    }
                   >
                     {url ? (
                       type === "image" ? (
                         <img
                           src={url}
-                          alt={item.prompt || "Création générée avec Oria"}
+                          alt={item.prompt || UI[language].generatedWithOria}
                           className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.025]"
                           loading="lazy"
                         />
@@ -602,18 +795,25 @@ export default function CreationsPage() {
                       ) : (
                         <Video className="h-3 w-3" />
                       )}
-                      {type === "image" ? "Image" : "Vidéo"}
+                      {type === "image"
+                        ? "Image"
+                        : language === "en"
+                          ? "Video"
+                          : "Vidéo"}
                     </span>
                   </button>
 
                   <div className="p-4">
                     <div className="min-h-[46px]">
                       <p className="line-clamp-2 text-sm font-medium leading-5 text-black/80">
-                        {item.prompt || "Création sans description"}
+                        {item.prompt || UI[language].noDescription}
                       </p>
 
                       <p className="mt-1 text-xs text-black/40">
-                        {formatDate(item.created_at)}
+                        {formatDate(
+                          item.created_at,
+                          language,
+                        )}
                       </p>
                     </div>
 
@@ -637,7 +837,7 @@ export default function CreationsPage() {
                           type="button"
                           onClick={() => setSelectedMedia(item)}
                           className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black"
-                          aria-label="Ouvrir"
+                          aria-label={UI[language].open}
                         >
                           {type === "image" ? (
                             <ImageIcon className="h-4 w-4" />
@@ -651,7 +851,7 @@ export default function CreationsPage() {
                           onClick={() => void handleDownload(item)}
                           disabled={!url}
                           className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black disabled:cursor-not-allowed disabled:opacity-30"
-                          aria-label="Télécharger"
+                          aria-label={UI[language].download}
                         >
                           <Download className="h-4 w-4" />
                         </button>
@@ -661,7 +861,7 @@ export default function CreationsPage() {
                           onClick={() => void handleDelete(item)}
                           disabled={deletingId === item.id}
                           className="rounded-lg p-2 text-black/35 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
-                          aria-label="Supprimer"
+                          aria-label={UI[language].delete}
                         >
                           {deletingId === item.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -695,10 +895,15 @@ export default function CreationsPage() {
                 <p className="text-sm font-semibold">
                   {getMediaType(selectedMedia) === "image"
                     ? "Image"
-                    : "Vidéo"}
+                    : language === "en"
+                      ? "Video"
+                      : "Vidéo"}
                 </p>
                 <p className="truncate text-xs text-black/45">
-                  {formatDate(selectedMedia.created_at)}
+                  {formatDate(
+                    selectedMedia.created_at,
+                    language,
+                  )}
                 </p>
               </div>
 
@@ -707,7 +912,7 @@ export default function CreationsPage() {
                   type="button"
                   onClick={() => void handleDownload(selectedMedia)}
                   className="rounded-lg p-2 text-black/50 transition hover:bg-black/[0.05] hover:text-black"
-                  aria-label="Télécharger"
+                  aria-label={UI[language].download}
                 >
                   <Download className="h-5 w-5" />
                 </button>
@@ -716,7 +921,7 @@ export default function CreationsPage() {
                   type="button"
                   onClick={() => setSelectedMedia(null)}
                   className="rounded-lg p-2 text-black/50 transition hover:bg-black/[0.05] hover:text-black"
-                  aria-label="Fermer"
+                  aria-label={UI[language].close}
                 >
                   <X className="h-5 w-5" />
                 </button>
@@ -728,7 +933,7 @@ export default function CreationsPage() {
                 getMediaType(selectedMedia) === "image" ? (
                   <img
                     src={normalizeMediaUrl(selectedMedia) || ""}
-                    alt={selectedMedia.prompt || "Création Oria"}
+                    alt={selectedMedia.prompt || UI[language].oriaCreation}
                     className="max-h-[78vh] max-w-full object-contain"
                   />
                 ) : (
@@ -742,7 +947,7 @@ export default function CreationsPage() {
                 )
               ) : (
                 <p className="py-20 text-sm text-white/60">
-                  Ce fichier n'est plus disponible.
+                  {UI[language].fileUnavailable}
                 </p>
               )}
             </div>

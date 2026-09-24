@@ -9,10 +9,140 @@ import {
   Sparkles,
 } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    back: "Retour",
+    welcomeBack: "Bon retour.",
+    loginDescription:
+      "Connectez-vous à votre compte Oria pour continuer.",
+    emailAddress: "Adresse e-mail",
+    emailPlaceholder: "vous@exemple.com",
+    password: "Mot de passe",
+    forgotPassword: "Mot de passe oublié ?",
+    passwordPlaceholder: "Votre mot de passe",
+    hidePassword: "Masquer le mot de passe",
+    showPassword: "Afficher le mot de passe",
+    emailNotConfirmed:
+      "Votre adresse e-mail n'est pas encore confirmée. Consultez votre boîte mail pour activer votre compte.",
+    invalidCredentials:
+      "Adresse e-mail ou mot de passe incorrect.",
+    loginSuccess: "Connexion réussie. Redirection...",
+    loggingIn: "Connexion...",
+    signIn: "Se connecter",
+    or: "ou",
+    continueWithGoogle: "Continuer avec Google",
+    noAccount: "Vous n'avez pas encore de compte ?",
+    createAccount: "Créer un compte",
+    legalNotice:
+      "En continuant, vous acceptez les conditions d'utilisation et la politique de confidentialité de Oria.",
+  },
+  en: {
+    back: "Back",
+    welcomeBack: "Welcome back.",
+    loginDescription:
+      "Sign in to your Oria account to continue.",
+    emailAddress: "Email address",
+    emailPlaceholder: "you@example.com",
+    password: "Password",
+    forgotPassword: "Forgot password?",
+    passwordPlaceholder: "Your password",
+    hidePassword: "Hide password",
+    showPassword: "Show password",
+    emailNotConfirmed:
+      "Your email address has not been confirmed yet. Check your inbox to activate your account.",
+    invalidCredentials:
+      "Incorrect email address or password.",
+    loginSuccess: "Signed in successfully. Redirecting...",
+    loggingIn: "Signing in...",
+    signIn: "Sign in",
+    or: "or",
+    continueWithGoogle: "Continue with Google",
+    noAccount: "Don't have an account yet?",
+    createAccount: "Create an account",
+    legalNotice:
+      "By continuing, you agree to Oria's terms of use and privacy policy.",
+  },
+} as const;
+
+function getInitialOriaLanguage(): OriaLanguage {
+  if (typeof window === "undefined") {
+    return "fr";
+  }
+
+  const saved = window.localStorage.getItem(
+    ORIA_LANGUAGE_STORAGE_KEY,
+  );
+
+  if (saved === "fr" || saved === "en") {
+    return saved;
+  }
+
+  return window.navigator.language
+    .toLowerCase()
+    .startsWith("en")
+    ? "en"
+    : "fr";
+}
+
+function localizeSupabaseError(
+  message: string,
+  language: OriaLanguage,
+): string {
+  if (language === "fr") {
+    return message;
+  }
+
+  const exact: Record<string, string> = {
+    "Invalid login credentials":
+      UI.en.invalidCredentials,
+    "Email not confirmed":
+      UI.en.emailNotConfirmed,
+  };
+
+  return exact[message] ?? message;
+}
+
+
 export default function LoginPage() {
+  const [language, setLanguage] =
+    useState<OriaLanguage>("fr");
+
+  useEffect(() => {
+    const syncLanguage = () => {
+      setLanguage(getInitialOriaLanguage());
+    };
+
+    syncLanguage();
+
+    window.addEventListener(
+      "storage",
+      syncLanguage,
+    );
+    window.addEventListener(
+      "oria-language-change",
+      syncLanguage,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "storage",
+        syncLanguage,
+      );
+      window.removeEventListener(
+        "oria-language-change",
+        syncLanguage,
+      );
+    };
+  }, []);
+
   const [showPassword, setShowPassword] =
     useState(false);
 
@@ -53,17 +183,22 @@ export default function LoginPage() {
         "email_not_confirmed"
       ) {
         setErrorMessage(
-          "Votre adresse e-mail n'est pas encore confirmée. Consultez votre boîte mail pour activer votre compte.",
+          UI[language].emailNotConfirmed,
         );
       } else if (
         error.code ===
         "invalid_credentials"
       ) {
         setErrorMessage(
-          "Adresse e-mail ou mot de passe incorrect.",
+          UI[language].invalidCredentials,
         );
       } else {
-        setErrorMessage(error.message);
+        setErrorMessage(
+          localizeSupabaseError(
+            error.message,
+            language,
+          ),
+        );
       }
 
       setLoading(false);
@@ -75,7 +210,7 @@ export default function LoginPage() {
     );
 
     setSuccessMessage(
-      "Connexion réussie. Redirection...",
+      UI[language].loginSuccess,
     );
 
     /*
@@ -118,7 +253,7 @@ export default function LoginPage() {
             >
               <ArrowLeft size={16} />
 
-              Retour
+              {UI[language].back}
             </Link>
 
             {/* Intro */}
@@ -159,7 +294,7 @@ export default function LoginPage() {
                   name="email"
                   type="email"
                   autoComplete="email"
-                  placeholder="vous@exemple.com"
+                  placeholder={UI[language].emailPlaceholder}
                   required
                   value={email}
                   onChange={(event) =>
@@ -201,7 +336,7 @@ export default function LoginPage() {
                         : "password"
                     }
                     autoComplete="current-password"
-                    placeholder="Votre mot de passe"
+                    placeholder={UI[language].passwordPlaceholder}
                     required
                     value={password}
                     onChange={(event) =>
@@ -287,7 +422,7 @@ export default function LoginPage() {
               <div className="h-px flex-1 bg-border" />
 
               <span className="text-xs text-muted">
-                ou
+                {UI[language].or}
               </span>
 
               <div className="h-px flex-1 bg-border" />
@@ -320,10 +455,7 @@ export default function LoginPage() {
           {/* Legal */}
 
           <p className="mt-5 text-center text-xs leading-5 text-muted">
-            En continuant, vous acceptez les
-            conditions d&apos;utilisation et la
-            politique de confidentialité de
-            Oria.
+            {UI[language].legalNotice}
           </p>
         </div>
       </div>
