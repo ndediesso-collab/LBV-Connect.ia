@@ -4,6 +4,7 @@ import {
   Alert,
   Image,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -17,8 +18,9 @@ import { VideoView, useVideoPlayer } from "expo-video";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { supabase } from "@/lib/supabase/client";
+import * as SecureStore from "expo-secure-store";
 
 type MediaType = "image" | "video";
 type FilterType = "all" | MediaType;
@@ -49,6 +51,140 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_BACKEND_URL ||
   "https://lbv-connect-api.onrender.com";
+
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    unknownDate: "Date inconnue",
+    sessionExpired: "Votre session a expiré. Veuillez vous reconnecter.",
+    backendMissing: "L'URL du backend n'est pas configurée dans l'application mobile.",
+    loadFailed: "Impossible de récupérer vos créations.",
+    loadError: "Une erreur est survenue pendant le chargement.",
+    fileUnavailable: "Le fichier de cette création n'est plus disponible.",
+    tempStorageUnavailable: "Espace de stockage temporaire indisponible.",
+    downloadImpossible: "Téléchargement impossible.",
+    saveOrShare: "Enregistrer ou partager votre création",
+    downloadedTitle: "Création téléchargée",
+    downloadedMessage: "Le fichier a été téléchargé dans l'espace local de l'application.",
+    downloadTitle: "Téléchargement",
+    downloadFailed: "Impossible de télécharger cette création.",
+    deleteTitle: "Supprimer la création",
+    deleteQuestion: "Supprimer définitivement cette création ?",
+    cancel: "Annuler",
+    delete: "Supprimer",
+    deleteFailed: "Impossible de supprimer cette création.",
+    backToChat: "Retour au chat",
+    myCreations: "Mes créations",
+    description: "Retrouvez ici vos images et vidéos générées avec Oria.",
+    refresh: "Actualiser",
+    creationSingular: "création",
+    creationPlural: "créations",
+    imageSingular: "image",
+    imagePlural: "images",
+    videoSingular: "vidéo",
+    videoPlural: "vidéos",
+    all: "Toutes",
+    images: "Images",
+    videos: "Vidéos",
+    loading: "Chargement de vos créations…",
+    emptyTitle: "Aucune création pour le moment",
+    emptyDescription: "Vos images et vidéos générées avec Oria apparaîtront automatiquement ici.",
+    createSomething: "Créer quelque chose",
+    emptyFilter: "Aucune création dans cette catégorie.",
+    generatedCreation: "Création générée avec Oria",
+    image: "Image",
+    video: "Vidéo",
+    noDescription: "Création sans description",
+    open: "Ouvrir",
+    download: "Télécharger",
+    close: "Fermer",
+    unavailable: "Ce fichier n'est plus disponible.",
+    byte: "o",
+    kilobyte: "Ko",
+    megabyte: "Mo",
+  },
+  en: {
+    unknownDate: "Unknown date",
+    sessionExpired: "Your session has expired. Please sign in again.",
+    backendMissing: "The backend URL is not configured in the mobile application.",
+    loadFailed: "Unable to retrieve your creations.",
+    loadError: "An error occurred while loading.",
+    fileUnavailable: "The file for this creation is no longer available.",
+    tempStorageUnavailable: "Temporary storage is unavailable.",
+    downloadImpossible: "Download failed.",
+    saveOrShare: "Save or share your creation",
+    downloadedTitle: "Creation downloaded",
+    downloadedMessage: "The file was downloaded to the app's local storage.",
+    downloadTitle: "Download",
+    downloadFailed: "Unable to download this creation.",
+    deleteTitle: "Delete creation",
+    deleteQuestion: "Permanently delete this creation?",
+    cancel: "Cancel",
+    delete: "Delete",
+    deleteFailed: "Unable to delete this creation.",
+    backToChat: "Back to chat",
+    myCreations: "My creations",
+    description: "Find your images and videos generated with Oria here.",
+    refresh: "Refresh",
+    creationSingular: "creation",
+    creationPlural: "creations",
+    imageSingular: "image",
+    imagePlural: "images",
+    videoSingular: "video",
+    videoPlural: "videos",
+    all: "All",
+    images: "Images",
+    videos: "Videos",
+    loading: "Loading your creations…",
+    emptyTitle: "No creations yet",
+    emptyDescription: "Your images and videos generated with Oria will automatically appear here.",
+    createSomething: "Create something",
+    emptyFilter: "No creations in this category.",
+    generatedCreation: "Creation generated with Oria",
+    image: "Image",
+    video: "Video",
+    noDescription: "Creation without a description",
+    open: "Open",
+    download: "Download",
+    close: "Close",
+    unavailable: "This file is no longer available.",
+    byte: "B",
+    kilobyte: "KB",
+    megabyte: "MB",
+  },
+} as const;
+
+async function readOriaLanguage(): Promise<OriaLanguage> {
+  try {
+    if (Platform.OS === "web") {
+      const saved =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY)
+          : null;
+
+      if (saved === "fr" || saved === "en") return saved;
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.language.toLowerCase().startsWith("en")
+      ) {
+        return "en";
+      }
+
+      return "fr";
+    }
+
+    const saved = await SecureStore.getItemAsync(ORIA_LANGUAGE_STORAGE_KEY);
+    return saved === "en" ? "en" : "fr";
+  } catch {
+    return "fr";
+  }
+}
+
 
 const getMediaType = (media: MediaItem): MediaType => {
   if (media.media_type === "video" || media.type === "video") return "video";
@@ -83,13 +219,16 @@ const normalizeMediaUrl = (media: MediaItem): string | null => {
   }
 };
 
-const formatDate = (value?: string | null) => {
-  if (!value) return "Date inconnue";
+const formatDate = (
+  value: string | null | undefined,
+  language: OriaLanguage,
+) => {
+  if (!value) return UI[language].unknownDate;
 
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Date inconnue";
+  if (Number.isNaN(date.getTime())) return UI[language].unknownDate;
 
-  return new Intl.DateTimeFormat("fr-FR", {
+  return new Intl.DateTimeFormat(language === "en" ? "en-US" : "fr-FR", {
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -98,11 +237,16 @@ const formatDate = (value?: string | null) => {
   }).format(date);
 };
 
-const formatSize = (value?: number | null) => {
+const formatSize = (
+  value: number | null | undefined,
+  language: OriaLanguage,
+) => {
   if (!value || value <= 0) return null;
-  if (value < 1024) return `${value} o`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} Ko`;
-  return `${(value / (1024 * 1024)).toFixed(1)} Mo`;
+  if (value < 1024) return `${value} ${UI[language].byte}`;
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} ${UI[language].kilobyte}`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} ${UI[language].megabyte}`;
 };
 
 const getActionLabel = (action?: string | null) => {
@@ -138,6 +282,22 @@ function VideoPreview({
 
 export default function CreationsPage() {
   const { width } = useWindowDimensions();
+  const [language, setLanguage] = useState<OriaLanguage>("fr");
+  const t = UI[language];
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      void readOriaLanguage().then((savedLanguage) => {
+        if (active) setLanguage(savedLanguage);
+      });
+
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [filter, setFilter] = useState<FilterType>("all");
@@ -169,13 +329,13 @@ export default function CreationsPage() {
 
         if (!session?.user) {
           setMedia([]);
-          setError("Votre session a expiré. Veuillez vous reconnecter.");
+          setError(t.sessionExpired);
           return;
         }
 
         if (!API_BASE_URL) {
           throw new Error(
-            "L'URL du backend n'est pas configurée dans l'application mobile."
+            t.backendMissing
           );
         }
 
@@ -215,7 +375,7 @@ export default function CreationsPage() {
           throw new Error(
             payload.detail ||
               payload.message ||
-              "Impossible de récupérer vos créations."
+              t.loadFailed
           );
         }
 
@@ -224,14 +384,14 @@ export default function CreationsPage() {
         setError(
           err instanceof Error
             ? err.message
-            : "Une erreur est survenue pendant le chargement."
+            : t.loadError
         );
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
     },
-    []
+    [t.backendMissing, t.loadError, t.loadFailed, t.sessionExpired]
   );
 
   useEffect(() => {
@@ -257,7 +417,7 @@ export default function CreationsPage() {
     const url = normalizeMediaUrl(item);
 
     if (!url) {
-      setError("Le fichier de cette création n'est plus disponible.");
+      setError(t.fileUnavailable);
       return;
     }
 
@@ -270,14 +430,14 @@ export default function CreationsPage() {
       const baseDir =  FileSystem.Paths.cache;
 
       if (!baseDir) {
-        throw new Error("Espace de stockage temporaire indisponible.");
+        throw new Error(t.tempStorageUnavailable);
       }
 
       const target = `${baseDir}${filename}`;
       const result = await FileSystem.downloadAsync(url, target);
 
       if (result.status < 200 || result.status >= 300) {
-        throw new Error("Téléchargement impossible.");
+        throw new Error(t.downloadImpossible);
       }
 
       if (await Sharing.isAvailableAsync()) {
@@ -285,33 +445,42 @@ export default function CreationsPage() {
           mimeType:
             item.mime_type ||
             (getMediaType(item) === "video" ? "video/mp4" : "image/png"),
-          dialogTitle: "Enregistrer ou partager votre création",
+          dialogTitle: t.saveOrShare,
         });
       } else {
         Alert.alert(
-          "Création téléchargée",
-          "Le fichier a été téléchargé dans l'espace local de l'application."
+          t.downloadedTitle,
+          t.downloadedMessage
         );
       }
     } catch (err) {
       Alert.alert(
-        "Téléchargement",
+        t.downloadTitle,
         err instanceof Error
           ? err.message
-          : "Impossible de télécharger cette création."
+          : t.downloadFailed
       );
     }
-  }, []);
+  }, [
+    t.downloadFailed,
+    t.downloadImpossible,
+    t.downloadTitle,
+    t.downloadedMessage,
+    t.downloadedTitle,
+    t.fileUnavailable,
+    t.saveOrShare,
+    t.tempStorageUnavailable,
+  ]);
 
   const handleDelete = useCallback(
     async (item: MediaItem) => {
       Alert.alert(
-        "Supprimer la création",
-        "Supprimer définitivement cette création ?",
+        t.deleteTitle,
+        t.deleteQuestion,
         [
-          { text: "Annuler", style: "cancel" },
+          { text: t.cancel, style: "cancel" },
           {
-            text: "Supprimer",
+            text: t.delete,
             style: "destructive",
             onPress: async () => {
               setDeletingId(item.id);
@@ -322,13 +491,13 @@ export default function CreationsPage() {
 
                 if (!token) {
                   throw new Error(
-                    "Votre session a expiré. Veuillez vous reconnecter."
+                    t.sessionExpired
                   );
                 }
 
                 if (!API_BASE_URL) {
                   throw new Error(
-                    "L'URL du backend n'est pas configurée dans l'application mobile."
+                    t.backendMissing
                   );
                 }
 
@@ -355,7 +524,7 @@ export default function CreationsPage() {
                   throw new Error(
                     payload.detail ||
                       payload.message ||
-                      "Impossible de supprimer cette création."
+                      t.deleteFailed
                   );
                 }
 
@@ -369,7 +538,7 @@ export default function CreationsPage() {
                 setError(
                   err instanceof Error
                     ? err.message
-                    : "Impossible de supprimer cette création."
+                    : t.deleteFailed
                 );
               } finally {
                 setDeletingId(null);
@@ -379,7 +548,16 @@ export default function CreationsPage() {
         ]
       );
     },
-    [getAccessToken]
+    [
+      getAccessToken,
+      t.backendMissing,
+      t.cancel,
+      t.delete,
+      t.deleteFailed,
+      t.deleteQuestion,
+      t.deleteTitle,
+      t.sessionExpired,
+    ]
   );
 
   const columns = width >= 850 ? 3 : width >= 520 ? 2 : 1;
@@ -405,7 +583,7 @@ export default function CreationsPage() {
               style={styles.backLink}
             >
               <Ionicons name="arrow-back" size={16} color="#6f6f77" />
-              <Text style={styles.backText}>Retour au chat</Text>
+              <Text style={styles.backText}>{t.backToChat}</Text>
             </Pressable>
 
             <View style={styles.titleRow}>
@@ -415,12 +593,12 @@ export default function CreationsPage() {
 
               <View>
                 <Text style={styles.eyebrow}>Oria</Text>
-                <Text style={styles.title}>Mes créations</Text>
+                <Text style={styles.title}>{t.myCreations}</Text>
               </View>
             </View>
 
             <Text style={styles.description}>
-              Retrouvez ici vos images et vidéos générées avec Oria.
+              {t.description}
             </Text>
           </View>
 
@@ -438,7 +616,7 @@ export default function CreationsPage() {
               size={17}
               color="#17171b"
             />
-            <Text style={styles.refreshText}>Actualiser</Text>
+            <Text style={styles.refreshText}>{t.refresh}</Text>
           </Pressable>
         </View>
 
@@ -446,19 +624,19 @@ export default function CreationsPage() {
           <View style={styles.stats}>
             <View style={styles.statDark}>
               <Text style={styles.statDarkText}>
-                {media.length} création{media.length > 1 ? "s" : ""}
+                {media.length} {media.length > 1 ? t.creationPlural : t.creationSingular}
               </Text>
             </View>
 
             <View style={styles.statLight}>
               <Text style={styles.statLightText}>
-                {imageCount} image{imageCount > 1 ? "s" : ""}
+                {imageCount} {imageCount > 1 ? t.imagePlural : t.imageSingular}
               </Text>
             </View>
 
             <View style={styles.statLight}>
               <Text style={styles.statLightText}>
-                {videoCount} vidéo{videoCount > 1 ? "s" : ""}
+                {videoCount} {videoCount > 1 ? t.videoPlural : t.videoSingular}
               </Text>
             </View>
           </View>
@@ -467,15 +645,15 @@ export default function CreationsPage() {
         {!loading && media.length > 0 && (
           <View style={styles.filters}>
             {[
-              { value: "all" as const, label: "Toutes", count: media.length },
+              { value: "all" as const, label: t.all, count: media.length },
               {
                 value: "image" as const,
-                label: "Images",
+                label: t.images,
                 count: imageCount,
               },
               {
                 value: "video" as const,
-                label: "Vidéos",
+                label: t.videos,
                 count: videoCount,
               },
             ].map((item) => {
@@ -528,7 +706,7 @@ export default function CreationsPage() {
           <View style={styles.loadingBox}>
             <ActivityIndicator size="large" color="#17171b" />
             <Text style={styles.loadingText}>
-              Chargement de vos créations…
+              {t.loading}
             </Text>
           </View>
         )}
@@ -544,12 +722,11 @@ export default function CreationsPage() {
             </View>
 
             <Text style={styles.emptyTitle}>
-              Aucune création pour le moment
+              {t.emptyTitle}
             </Text>
 
             <Text style={styles.emptyDescription}>
-              Vos images et vidéos générées avec Oria apparaîtront
-              automatiquement ici.
+              {t.emptyDescription}
             </Text>
 
             <Pressable
@@ -557,7 +734,7 @@ export default function CreationsPage() {
               style={styles.createButton}
             >
               <Text style={styles.createButtonText}>
-                Créer quelque chose
+                {t.createSomething}
               </Text>
             </Pressable>
           </View>
@@ -566,7 +743,7 @@ export default function CreationsPage() {
         {!loading && !error && media.length > 0 && filteredMedia.length === 0 && (
           <View style={styles.filterEmpty}>
             <Text style={styles.filterEmptyText}>
-              Aucune création dans cette catégorie.
+              {t.emptyFilter}
             </Text>
           </View>
         )}
@@ -576,7 +753,7 @@ export default function CreationsPage() {
             {filteredMedia.map((item) => {
               const type = getMediaType(item);
               const url = normalizeMediaUrl(item);
-              const size = formatSize(item.size_bytes ?? item.size);
+              const size = formatSize(item.size_bytes ?? item.size, language);
               const action = getActionLabel(item.action);
 
               return (
@@ -599,7 +776,7 @@ export default function CreationsPage() {
                           resizeMode="cover"
                           accessibilityLabel={
                             item.prompt ||
-                            "Création générée avec Oria"
+                            t.generatedCreation
                           }
                         />
                       ) : (
@@ -641,18 +818,18 @@ export default function CreationsPage() {
                         color="#fff"
                       />
                       <Text style={styles.typeBadgeText}>
-                        {type === "image" ? "Image" : "Vidéo"}
+                        {type === "image" ? t.image : t.video}
                       </Text>
                     </View>
                   </Pressable>
 
                   <View style={styles.cardBody}>
                     <Text style={styles.prompt} numberOfLines={2}>
-                      {item.prompt || "Création sans description"}
+                      {item.prompt || t.noDescription}
                     </Text>
 
                     <Text style={styles.date}>
-                      {formatDate(item.created_at)}
+                      {formatDate(item.created_at, language)}
                     </Text>
 
                     <View style={styles.cardFooter}>
@@ -679,7 +856,7 @@ export default function CreationsPage() {
                         <Pressable
                           onPress={() => setSelectedMedia(item)}
                           style={styles.actionButton}
-                          accessibilityLabel="Ouvrir"
+                          accessibilityLabel={t.open}
                         >
                           <Ionicons
                             name={
@@ -699,7 +876,7 @@ export default function CreationsPage() {
                             styles.actionButton,
                             !url && styles.disabled,
                           ]}
-                          accessibilityLabel="Télécharger"
+                          accessibilityLabel={t.download}
                         >
                           <Ionicons
                             name="download-outline"
@@ -715,7 +892,7 @@ export default function CreationsPage() {
                             styles.actionButton,
                             deletingId === item.id && styles.disabled,
                           ]}
-                          accessibilityLabel="Supprimer"
+                          accessibilityLabel={t.delete}
                         >
                           {deletingId === item.id ? (
                             <ActivityIndicator
@@ -753,11 +930,11 @@ export default function CreationsPage() {
                 <Text style={styles.modalTitle}>
                   {selectedMedia &&
                   getMediaType(selectedMedia) === "image"
-                    ? "Image"
-                    : "Vidéo"}
+                    ? t.image
+                    : t.video}
                 </Text>
                 <Text style={styles.modalDate}>
-                  {formatDate(selectedMedia?.created_at)}
+                  {formatDate(selectedMedia?.created_at, language)}
                 </Text>
               </View>
 
@@ -766,7 +943,7 @@ export default function CreationsPage() {
                   <Pressable
                     onPress={() => void handleDownload(selectedMedia)}
                     style={styles.modalButton}
-                    accessibilityLabel="Télécharger"
+                    accessibilityLabel={t.download}
                   >
                     <Ionicons
                       name="download-outline"
@@ -779,7 +956,7 @@ export default function CreationsPage() {
                 <Pressable
                   onPress={() => setSelectedMedia(null)}
                   style={styles.modalButton}
-                  accessibilityLabel="Fermer"
+                  accessibilityLabel={t.close}
                 >
                   <Ionicons name="close" size={22} color="#55555d" />
                 </Pressable>
@@ -806,7 +983,7 @@ export default function CreationsPage() {
                 )
               ) : (
                 <Text style={styles.unavailableText}>
-                  Ce fichier n'est plus disponible.
+                  {t.unavailable}
                 </Text>
               )}
             </View>

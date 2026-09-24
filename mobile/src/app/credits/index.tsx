@@ -13,9 +13,10 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "@/lib/supabase/client";
+import * as SecureStore from "expo-secure-store";
 
 type PackId =
   | "light_pack"
@@ -73,6 +74,154 @@ const PACK_CONFIG: Record<
   business_pack: { name: "Business", credits: 96000, durationDays: 35 },
 };
 
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    getCredits: "Obtenir des crédits",
+    consumption: "VOTRE CONSOMMATION",
+    myCredits: "Mes crédits",
+    description:
+      "Suivez votre solde et comprenez comment vos crédits sont utilisés sur ORIA.",
+    loadingWallet: "Chargement de votre portefeuille...",
+    creditsLoadError: "Impossible de charger vos crédits.",
+    retry: "Réessayer",
+    availableBalance: "Solde disponible",
+    credits: "crédits",
+    consumed: "consommés",
+    currentPack: "Pack actuel",
+    initialCredits: "Crédits initiaux",
+    expiration: "Expiration",
+    active: "Actif",
+    expired: "Expiré",
+    yourPack: "Votre pack",
+    packDescription:
+      "Vos crédits restent utilisables jusqu'à la date d'expiration de votre pack.",
+    remainingDay: "jour restant",
+    remainingDays: "jours restants",
+    expiresOn: "Expire le",
+    viewPacks: "Voir les packs",
+    creditsConsumed: "Crédits consommés",
+    sincePackStart: "Depuis le début du pack",
+    operations: "Opérations",
+    actionsPerformed: "Actions effectuées",
+    creditsPurchased: "Crédits achetés",
+    packsAndTopups: "Packs et recharges",
+    history: "Historique",
+    historyDescription:
+      "Les dernières opérations effectuées avec vos crédits.",
+    noHistory: "Aucun historique",
+    operationsAppearHere: "Vos opérations apparaîtront ici.",
+    noPack: "Aucun pack",
+    unknownPack: "Pack inconnu",
+    packPurchase: "Achat de pack",
+    creditUsage: "Utilisation de crédits",
+    creditTopup: "Recharge de crédits",
+    refund: "Remboursement",
+    adjustment: "Ajustement de crédits",
+    usage: "Utilisation",
+    packActivation: "Activation d'un pack",
+    refundedCredits: "Crédits remboursés",
+    balanceChange: "Modification du solde",
+    sessionExpired: "Session expirée ou authentification invalide.",
+    serverError: "Une erreur est survenue avec le serveur.",
+    loadFallback: "Impossible de charger les crédits.",
+    packNames: {
+      light_pack: "Léger",
+      intermediate_pack: "Intermédiaire",
+      pro_pack: "Pro",
+      business_pack: "Business",
+    },
+  },
+  en: {
+    getCredits: "Get credits",
+    consumption: "YOUR USAGE",
+    myCredits: "My credits",
+    description:
+      "Track your balance and understand how your credits are used on ORIA.",
+    loadingWallet: "Loading your wallet...",
+    creditsLoadError: "Unable to load your credits.",
+    retry: "Try again",
+    availableBalance: "Available balance",
+    credits: "credits",
+    consumed: "used",
+    currentPack: "Current pack",
+    initialCredits: "Initial credits",
+    expiration: "Expiration",
+    active: "Active",
+    expired: "Expired",
+    yourPack: "Your pack",
+    packDescription:
+      "Your credits remain usable until your pack's expiration date.",
+    remainingDay: "day remaining",
+    remainingDays: "days remaining",
+    expiresOn: "Expires on",
+    viewPacks: "View packs",
+    creditsConsumed: "Credits used",
+    sincePackStart: "Since the start of the pack",
+    operations: "Operations",
+    actionsPerformed: "Actions performed",
+    creditsPurchased: "Credits purchased",
+    packsAndTopups: "Packs and top-ups",
+    history: "History",
+    historyDescription:
+      "Your latest credit transactions.",
+    noHistory: "No history",
+    operationsAppearHere: "Your transactions will appear here.",
+    noPack: "No pack",
+    unknownPack: "Unknown pack",
+    packPurchase: "Pack purchase",
+    creditUsage: "Credit usage",
+    creditTopup: "Credit top-up",
+    refund: "Refund",
+    adjustment: "Credit adjustment",
+    usage: "Usage",
+    packActivation: "Pack activation",
+    refundedCredits: "Refunded credits",
+    balanceChange: "Balance change",
+    sessionExpired: "Session expired or authentication invalid.",
+    serverError: "A server error occurred.",
+    loadFallback: "Unable to load credits.",
+    packNames: {
+      light_pack: "Light",
+      intermediate_pack: "Intermediate",
+      pro_pack: "Pro",
+      business_pack: "Business",
+    },
+  },
+} as const;
+
+async function readOriaLanguage(): Promise<OriaLanguage> {
+  try {
+    if (Platform.OS === "web") {
+      const saved =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY)
+          : null;
+
+      if (saved === "fr" || saved === "en") return saved;
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.language.toLowerCase().startsWith("en")
+      ) {
+        return "en";
+      }
+
+      return "fr";
+    }
+
+    const saved = await SecureStore.getItemAsync(ORIA_LANGUAGE_STORAGE_KEY);
+    return saved === "en" ? "en" : "fr";
+  } catch {
+    return "fr";
+  }
+}
+
+
 async function apiFetch<T>(
   path: string,
   options?: RequestInit
@@ -116,27 +265,27 @@ async function apiFetch<T>(
   return response.json();
 }
 
-function formatCredits(value: number) {
-  return value.toLocaleString("fr-FR");
+function formatCredits(value: number, language: OriaLanguage) {
+  return value.toLocaleString(language === "en" ? "en-US" : "fr-FR");
 }
 
-function formatDate(value: string | null) {
+function formatDate(value: string | null, language: OriaLanguage) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
 
-  return date.toLocaleDateString("fr-FR", {
+  return date.toLocaleDateString(language === "en" ? "en-US" : "fr-FR", {
     day: "numeric",
     month: "long",
     year: "numeric",
   });
 }
 
-function formatDateTime(value: string) {
+function formatDateTime(value: string, language: OriaLanguage) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
 
-  return date.toLocaleString("fr-FR", {
+  return date.toLocaleString(language === "en" ? "en-US" : "fr-FR", {
     day: "numeric",
     month: "short",
     hour: "2-digit",
@@ -153,12 +302,12 @@ function getRemainingDays(expirationDate: string | null) {
   return Math.ceil(difference / (1000 * 60 * 60 * 24));
 }
 
-function getPackName(packId: PackId | null) {
-  if (!packId) return "Aucun pack";
-  return PACK_CONFIG[packId]?.name || "Pack inconnu";
+function getPackName(packId: PackId | null, language: OriaLanguage) {
+  if (!packId) return UI[language].noPack;
+  return UI[language].packNames[packId] || UI[language].unknownPack;
 }
 
-function getActionLabel(action: string) {
+function getActionLabel(action: string, language: OriaLanguage) {
   const labels: Record<string, string> = {
     chat_luna: "Luna",
     chat_luna_web: "Luna + Web",
@@ -170,8 +319,8 @@ function getActionLabel(action: string) {
     chat_sol_web: "GPT-5.6 Sol + Web",
     image_480: "Image 480",
     image_720: "Image 720",
-    video_5s: "Vidéo 5 s",
-    video_10s: "Vidéo 10 s",
+    video_5s: language === "en" ? "Video 5 s" : "Vidéo 5 s",
+    video_10s: language === "en" ? "Video 10 s" : "Vidéo 10 s",
     video_lite: "Veo Lite",
     image_pro: "Image Pro",
     image_pro_standard: "Image Pro Standard",
@@ -190,43 +339,45 @@ function getActionLabel(action: string) {
   return labels[action] || action;
 }
 
-function getTransactionTitle(transaction: CreditTransaction) {
+function getTransactionTitle(transaction: CreditTransaction, language: OriaLanguage) {
+  const t = UI[language];
   switch (transaction.transaction_type) {
     case "pack_purchase":
-      return "Achat de pack";
+      return t.packPurchase;
     case "usage":
       return transaction.action
-        ? getActionLabel(transaction.action)
-        : "Utilisation de crédits";
+        ? getActionLabel(transaction.action, language)
+        : t.creditUsage;
     case "recharge":
-      return "Recharge de crédits";
+      return t.creditTopup;
     case "refund":
-      return "Remboursement";
+      return t.refund;
     default:
-      return "Ajustement de crédits";
+      return t.adjustment;
   }
 }
 
-function getTransactionDescription(transaction: CreditTransaction) {
+function getTransactionDescription(transaction: CreditTransaction, language: OriaLanguage) {
+  const t = UI[language];
   if (transaction.transaction_type === "usage") {
     return transaction.action
-      ? `Utilisation · ${getActionLabel(transaction.action)}`
-      : "Utilisation de crédits";
+      ? `${t.usage} · ${getActionLabel(transaction.action, language)}`
+      : t.creditUsage;
   }
 
   if (transaction.transaction_type === "pack_purchase") {
-    return transaction.reference_id || "Activation d'un pack";
+    return transaction.reference_id || t.packActivation;
   }
 
   if (transaction.transaction_type === "recharge") {
-    return "Recharge de crédits";
+    return t.creditTopup;
   }
 
   if (transaction.transaction_type === "refund") {
-    return "Crédits remboursés";
+    return t.refundedCredits;
   }
 
-  return "Modification du solde";
+  return t.balanceChange;
 }
 
 function StatCard({
@@ -254,8 +405,10 @@ function StatCard({
 
 function TransactionItem({
   transaction,
+  language,
 }: {
   transaction: CreditTransaction;
+  language: OriaLanguage;
 }) {
   const isPositive = transaction.amount > 0;
 
@@ -275,13 +428,13 @@ function TransactionItem({
 
       <View style={styles.transactionContent}>
         <Text style={styles.transactionTitle} numberOfLines={1}>
-          {getTransactionTitle(transaction)}
+          {getTransactionTitle(transaction, language)}
         </Text>
         <Text style={styles.transactionDescription} numberOfLines={1}>
-          {getTransactionDescription(transaction)}
+          {getTransactionDescription(transaction, language)}
         </Text>
         <Text style={styles.transactionDate}>
-          {formatDateTime(transaction.created_at)}
+          {formatDateTime(transaction.created_at, language)}
         </Text>
       </View>
 
@@ -292,7 +445,7 @@ function TransactionItem({
         ]}
       >
         {isPositive ? "+" : ""}
-        {formatCredits(transaction.amount)}
+        {formatCredits(transaction.amount, language)}
       </Text>
     </View>
   );
@@ -300,6 +453,23 @@ function TransactionItem({
 
 export default function CreditsPage() {
   const { top: safeAreaTop, bottom: safeAreaBottom } = useSafeAreaInsets();
+  const [language, setLanguage] = useState<OriaLanguage>("fr");
+  const t = UI[language];
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      void readOriaLanguage().then((savedLanguage) => {
+        if (active) setLanguage(savedLanguage);
+      });
+
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
+
   const [wallet, setWallet] = useState<CreditWallet | null>(null);
   const [transactions, setTransactions] = useState<CreditTransaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -329,7 +499,7 @@ export default function CreditsPage() {
     } finally {
       if (showLoader) setIsLoading(false);
     }
-  }, []);
+  }, [t.loadFallback]);
 
   useEffect(() => {
     loadCredits();
@@ -360,7 +530,7 @@ export default function CreditsPage() {
     [wallet]
   );
 
-  const packName = getPackName(wallet?.pack_id || null);
+  const packName = getPackName(wallet?.pack_id || null, language);
 
   const isPackActive = Boolean(
     wallet?.pack_expires_at &&
@@ -407,7 +577,7 @@ export default function CreditsPage() {
           onPress={() => router.push("/packs" as any)}
         >
           <Ionicons name="add" size={17} color="#fff" />
-          <Text style={styles.buyButtonText}>Obtenir des crédits</Text>
+          <Text style={styles.buyButtonText}>{t.getCredits}</Text>
         </Pressable>
       </View>
 
@@ -423,11 +593,10 @@ export default function CreditsPage() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.intro}>
-          <Text style={styles.overline}>VOTRE CONSOMMATION</Text>
-          <Text style={styles.pageTitle}>Mes crédits</Text>
+          <Text style={styles.overline}>{t.consumption}</Text>
+          <Text style={styles.pageTitle}>{t.myCredits}</Text>
           <Text style={styles.pageDescription}>
-            Suivez votre solde et comprenez comment vos crédits sont utilisés
-            sur ORIA.
+            {t.description}
           </Text>
         </View>
 
@@ -435,7 +604,7 @@ export default function CreditsPage() {
           <View style={styles.loadingBox}>
             <ActivityIndicator color="#111114" />
             <Text style={styles.loadingText}>
-              Chargement de votre portefeuille...
+              {t.loadingWallet}
             </Text>
           </View>
         ) : error ? (
@@ -446,11 +615,11 @@ export default function CreditsPage() {
               color="#62626b"
             />
             <Text style={styles.errorTitle}>
-              Impossible de charger vos crédits.
+              {t.creditsLoadError}
             </Text>
             <Text style={styles.errorText}>{error}</Text>
             <Pressable style={styles.retryButton} onPress={() => loadCredits()}>
-              <Text style={styles.retryButtonText}>Réessayer</Text>
+              <Text style={styles.retryButtonText}>{t.retry}</Text>
             </Pressable>
           </View>
         ) : wallet ? (
@@ -458,12 +627,12 @@ export default function CreditsPage() {
             <View style={styles.balanceCard}>
               <View style={styles.balanceTop}>
                 <View>
-                  <Text style={styles.balanceLabel}>Solde disponible</Text>
+                  <Text style={styles.balanceLabel}>{t.availableBalance}</Text>
                   <View style={styles.balanceRow}>
                     <Text style={styles.balanceValue}>
-                      {formatCredits(wallet.balance)}
+                      {formatCredits(wallet.balance, language)}
                     </Text>
-                    <Text style={styles.balanceUnit}>crédits</Text>
+                    <Text style={styles.balanceUnit}>{t.credits}</Text>
                   </View>
                 </View>
 
@@ -475,7 +644,7 @@ export default function CreditsPage() {
               <View style={styles.progressSection}>
                 <View style={styles.progressHeader}>
                   <Text style={styles.progressText}>
-                    {formatCredits(usedCredits)} consommés
+                    {formatCredits(usedCredits, language)} {t.consumed}
                   </Text>
                   <Text style={styles.progressText}>
                     {usagePercentage} %
@@ -494,21 +663,24 @@ export default function CreditsPage() {
 
               <View style={styles.packInfoRow}>
                 <View style={styles.packInfo}>
-                  <Text style={styles.packInfoLabel}>Pack actuel</Text>
+                  <Text style={styles.packInfoLabel}>{t.currentPack}</Text>
                   <Text style={styles.packInfoValue}>{packName}</Text>
                 </View>
 
                 <View style={styles.packInfo}>
-                  <Text style={styles.packInfoLabel}>Crédits initiaux</Text>
+                  <Text style={styles.packInfoLabel}>{t.initialCredits}</Text>
                   <Text style={styles.packInfoValue}>
-                    {formatCredits(wallet.initial_credits)}
+                    {formatCredits(wallet.initial_credits, language)}
                   </Text>
                 </View>
 
                 <View style={styles.packInfo}>
-                  <Text style={styles.packInfoLabel}>Expiration</Text>
+                  <Text style={styles.packInfoLabel}>{t.expiration}</Text>
                   <Text style={styles.packInfoValue}>
-                    {remainingDays} jour{remainingDays !== 1 ? "s" : ""}
+                    {remainingDays}{" "}
+                    {remainingDays === 1
+                      ? language === "en" ? "day" : "jour"
+                      : language === "en" ? "days" : "jours"}
                   </Text>
                 </View>
               </View>
@@ -529,24 +701,23 @@ export default function CreditsPage() {
                   ]}
                 >
                   <Text style={styles.statusText}>
-                    {isPackActive ? "Actif" : "Expiré"}
+                    {isPackActive ? t.active : t.expired}
                   </Text>
                 </View>
               </View>
 
-              <Text style={styles.mutedLabel}>Votre pack</Text>
+              <Text style={styles.mutedLabel}>{t.yourPack}</Text>
               <Text style={styles.packTitle}>{packName}</Text>
               <Text style={styles.packDescription}>
-                Vos crédits restent utilisables jusqu'à la date d'expiration
-                de votre pack.
+{t.packDescription}
               </Text>
 
               <View style={styles.packDetails}>
                 <View style={styles.detailRow}>
                   <Ionicons name="time-outline" size={16} color="#66666f" />
                   <Text style={styles.detailText}>
-                    {remainingDays} jour{remainingDays !== 1 ? "s" : ""} restant
-                    {remainingDays !== 1 ? "s" : ""}
+                    {remainingDays}{" "}
+                    {remainingDays === 1 ? t.remainingDay : t.remainingDays}
                   </Text>
                 </View>
 
@@ -557,7 +728,7 @@ export default function CreditsPage() {
                     color="#66666f"
                   />
                   <Text style={styles.detailText}>
-                    Expire le {formatDate(wallet.pack_expires_at)}
+                    {t.expiresOn} {formatDate(wallet.pack_expires_at, language)}
                   </Text>
                 </View>
               </View>
@@ -566,7 +737,7 @@ export default function CreditsPage() {
                 style={styles.packsLink}
                 onPress={() => router.push("/packs" as any)}
               >
-                <Text style={styles.packsLinkText}>Voir les packs</Text>
+                <Text style={styles.packsLinkText}>{t.viewPacks}</Text>
                 <Ionicons name="arrow-forward" size={15} color="#202025" />
               </Pressable>
             </View>
@@ -574,21 +745,21 @@ export default function CreditsPage() {
             <View style={styles.statsGrid}>
               <StatCard
                 icon="bar-chart-outline"
-                label="Crédits consommés"
-                value={formatCredits(usedCredits)}
-                description="Depuis le début du pack"
+                label={t.creditsConsumed}
+                value={formatCredits(usedCredits, language)}
+                description={t.sincePackStart}
               />
               <StatCard
                 icon="sparkles-outline"
-                label="Opérations"
-                value={formatCredits(operationCount)}
-                description="Actions effectuées"
+                label={t.operations}
+                value={formatCredits(operationCount, language)}
+                description={t.actionsPerformed}
               />
               <StatCard
                 icon="card-outline"
-                label="Crédits achetés"
-                value={formatCredits(purchasedCredits)}
-                description="Packs et recharges"
+                label={t.creditsPurchased}
+                value={formatCredits(purchasedCredits, language)}
+                description={t.packsAndTopups}
               />
             </View>
 
@@ -598,9 +769,9 @@ export default function CreditsPage() {
                   <Ionicons name="time-outline" size={18} color="#4f4f58" />
                 </View>
                 <View style={styles.historyHeaderText}>
-                  <Text style={styles.historyTitle}>Historique</Text>
+                  <Text style={styles.historyTitle}>{t.history}</Text>
                   <Text style={styles.historyDescription}>
-                    Les dernières opérations effectuées avec vos crédits.
+                    {t.historyDescription}
                   </Text>
                 </View>
               </View>
@@ -611,6 +782,7 @@ export default function CreditsPage() {
                     <TransactionItem
                       key={transaction.id}
                       transaction={transaction}
+                      language={language}
                     />
                   ))
                 ) : (
@@ -621,10 +793,10 @@ export default function CreditsPage() {
                       color="#888891"
                     />
                     <Text style={styles.noTransactionsTitle}>
-                      Aucun historique
+                      {t.noHistory}
                     </Text>
                     <Text style={styles.noTransactionsText}>
-                      Vos opérations apparaîtront ici.
+                      {t.operationsAppearHere}
                     </Text>
                   </View>
                 )}

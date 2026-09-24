@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,16 +13,157 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 
 import { supabase } from "@/lib/supabase/client";
+import * as SecureStore from "expo-secure-store";
 
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL ||
   "https://lbv-connect-api.onrender.com";
 
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    homeAccessibility: "Retour à l'accueil",
+    back: "Retour",
+    welcomeBack: "Bon retour.",
+    subtitle: "Connectez-vous à votre compte Oria pour continuer.",
+    email: "Adresse e-mail",
+    emailPlaceholder: "vous@exemple.com",
+    password: "Mot de passe",
+    forgotPassword: "Mot de passe oublié ?",
+    passwordPlaceholder: "Votre mot de passe",
+    hidePassword: "Masquer le mot de passe",
+    showPassword: "Afficher le mot de passe",
+    signingIn: "Connexion...",
+    signIn: "Se connecter",
+    or: "ou",
+    continueGoogle: "Continuer avec Google",
+    noAccount: "Vous n'avez pas encore de compte ?",
+    createAccount: "Créer un compte",
+    legal:
+      "En continuant, vous acceptez les conditions d'utilisation et la politique de confidentialité de Oria.",
+    missingCredentials:
+      "Veuillez renseigner votre adresse e-mail et votre mot de passe.",
+    emailNotConfirmed:
+      "Votre adresse e-mail n'est pas encore confirmée. Consultez votre boîte mail pour activer votre compte.",
+    invalidCredentials: "Adresse e-mail ou mot de passe incorrect.",
+    sessionMissing:
+      "La connexion n'a pas pu être établie. Veuillez réessayer.",
+    success: "Connexion réussie. Redirection...",
+    loginError: "Une erreur est survenue pendant la connexion.",
+    forgotTitle: "Mot de passe oublié",
+    forgotUnavailable:
+      "La page de récupération du mot de passe sera disponible prochainement.",
+    googleTitle: "Google",
+    googleUnavailable:
+      "La connexion avec Google sera activée lors de l'intégration OAuth.",
+  },
+  en: {
+    homeAccessibility: "Back to home",
+    back: "Back",
+    welcomeBack: "Welcome back.",
+    subtitle: "Sign in to your Oria account to continue.",
+    email: "Email address",
+    emailPlaceholder: "you@example.com",
+    password: "Password",
+    forgotPassword: "Forgot password?",
+    passwordPlaceholder: "Your password",
+    hidePassword: "Hide password",
+    showPassword: "Show password",
+    signingIn: "Signing in...",
+    signIn: "Sign in",
+    or: "or",
+    continueGoogle: "Continue with Google",
+    noAccount: "Don't have an account yet?",
+    createAccount: "Create an account",
+    legal:
+      "By continuing, you agree to Oria's terms of use and privacy policy.",
+    missingCredentials: "Please enter your email address and password.",
+    emailNotConfirmed:
+      "Your email address has not been confirmed yet. Check your inbox to activate your account.",
+    invalidCredentials: "Incorrect email address or password.",
+    sessionMissing:
+      "The connection could not be established. Please try again.",
+    success: "Signed in successfully. Redirecting...",
+    loginError: "An error occurred while signing in.",
+    forgotTitle: "Forgot password",
+    forgotUnavailable:
+      "The password recovery page will be available soon.",
+    googleTitle: "Google",
+    googleUnavailable:
+      "Google sign-in will be enabled when OAuth integration is added.",
+  },
+} as const;
+
+async function readOriaLanguage(): Promise<OriaLanguage> {
+  try {
+    if (Platform.OS === "web") {
+      const saved =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY)
+          : null;
+
+      if (saved === "fr" || saved === "en") return saved;
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.language.toLowerCase().startsWith("en")
+      ) {
+        return "en";
+      }
+
+      return "fr";
+    }
+
+    const saved = await SecureStore.getItemAsync(ORIA_LANGUAGE_STORAGE_KEY);
+    return saved === "en" ? "en" : "fr";
+  } catch {
+    return "fr";
+  }
+}
+
+function localizeAuthError(message: string, language: OriaLanguage) {
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("invalid login credentials") ||
+    normalized.includes("invalid credentials")
+  ) {
+    return UI[language].invalidCredentials;
+  }
+
+  if (normalized.includes("email not confirmed")) {
+    return UI[language].emailNotConfirmed;
+  }
+
+  return message;
+}
+
 export default function LoginPage() {
+  const [language, setLanguage] = useState<OriaLanguage>("fr");
   const [showPassword, setShowPassword] = useState(false);
+
+  const t = UI[language];
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      void readOriaLanguage().then((savedLanguage) => {
+        if (active) setLanguage(savedLanguage);
+      });
+
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -38,7 +179,7 @@ export default function LoginPage() {
 
     if (!normalizedEmail || !password) {
       setErrorMessage(
-        "Veuillez renseigner votre adresse e-mail et votre mot de passe."
+        t.missingCredentials
       );
       setSuccessMessage("");
       return;
@@ -59,12 +200,12 @@ export default function LoginPage() {
 
         if (error.code === "email_not_confirmed") {
           setErrorMessage(
-            "Votre adresse e-mail n'est pas encore confirmée. Consultez votre boîte mail pour activer votre compte."
+            t.emailNotConfirmed
           );
         } else if (error.code === "invalid_credentials") {
-          setErrorMessage("Adresse e-mail ou mot de passe incorrect.");
+          setErrorMessage(t.invalidCredentials);
         } else {
-          setErrorMessage(error.message);
+          setErrorMessage(localizeAuthError(error.message, language));
         }
 
         return;
@@ -72,14 +213,14 @@ export default function LoginPage() {
 
       if (!data.session) {
         setErrorMessage(
-          "La connexion n'a pas pu être établie. Veuillez réessayer."
+          t.sessionMissing
         );
         return;
       }
 
       console.log("Oria : accès accordé.");
 
-      setSuccessMessage("Connexion réussie. Redirection...");
+      setSuccessMessage(t.success);
 
       // On laisse Supabase terminer la persistance de session avant d'ouvrir le chat.
       setTimeout(() => {
@@ -90,8 +231,8 @@ export default function LoginPage() {
 
       setErrorMessage(
         error instanceof Error
-          ? error.message
-          : "Une erreur est survenue pendant la connexion."
+          ? localizeAuthError(error.message, language)
+          : t.loginError
       );
     } finally {
       setLoading(false);
@@ -101,20 +242,14 @@ export default function LoginPage() {
   function handleForgotPassword() {
     // La page /forgot-password n'est pas encore présente dans le projet mobile.
     // On conserve l'action prête pour la future page.
-    Alert.alert(
-      "Mot de passe oublié",
-      "La page de récupération du mot de passe sera disponible prochainement."
-    );
+    Alert.alert(t.forgotTitle, t.forgotUnavailable);
   }
 
   function handleGoogleLogin() {
     // Le code Web d'origine affichait ce bouton sans implémenter
     // de logique OAuth Google. On conserve donc le bouton sans
     // inventer un flux différent.
-    Alert.alert(
-      "Google",
-      "La connexion avec Google sera activée lors de l'intégration OAuth."
-    );
+    Alert.alert(t.googleTitle, t.googleUnavailable);
   }
 
   function goHome() {
@@ -141,7 +276,7 @@ export default function LoginPage() {
               onPress={goHome}
               style={styles.brandButton}
               accessibilityRole="button"
-              accessibilityLabel="Retour à l'accueil"
+              accessibilityLabel={t.homeAccessibility}
             >
               <Ionicons name="sparkles" size={18} color="#17171b" />
               <Text style={styles.brand}>Oria.</Text>
@@ -160,7 +295,7 @@ export default function LoginPage() {
                 ]}
               >
                 <Ionicons name="arrow-back" size={17} color="#777780" />
-                <Text style={styles.backText}>Retour</Text>
+                <Text style={styles.backText}>{t.back}</Text>
               </Pressable>
 
               <View style={styles.intro}>
@@ -172,15 +307,15 @@ export default function LoginPage() {
                   />
                 </View>
 
-                <Text style={styles.title}>Bon retour.</Text>
+                <Text style={styles.title}>{t.welcomeBack}</Text>
                 <Text style={styles.subtitle}>
-                  Connectez-vous à votre compte Oria pour continuer.
+                  {t.subtitle}
                 </Text>
               </View>
 
               <View style={styles.form}>
                 <View>
-                  <Text style={styles.label}>Adresse e-mail</Text>
+                  <Text style={styles.label}>{t.email}</Text>
                   <TextInput
                     value={email}
                     onChangeText={(value) => {
@@ -193,7 +328,7 @@ export default function LoginPage() {
                     keyboardType="email-address"
                     autoComplete="email"
                     textContentType="emailAddress"
-                    placeholder="vous@exemple.com"
+                    placeholder={t.emailPlaceholder}
                     placeholderTextColor="#9999a2"
                     style={[styles.input, loading && styles.inputDisabled]}
                     returnKeyType="next"
@@ -202,7 +337,7 @@ export default function LoginPage() {
 
                 <View>
                   <View style={styles.passwordHeader}>
-                    <Text style={styles.label}>Mot de passe</Text>
+                    <Text style={styles.label}>{t.password}</Text>
 
                     <Pressable
                       onPress={handleForgotPassword}
@@ -210,7 +345,7 @@ export default function LoginPage() {
                       hitSlop={8}
                     >
                       <Text style={styles.forgotText}>
-                        Mot de passe oublié ?
+                        {t.forgotPassword}
                       </Text>
                     </Pressable>
                   </View>
@@ -228,7 +363,7 @@ export default function LoginPage() {
                       autoCorrect={false}
                       autoComplete="password"
                       textContentType="password"
-                      placeholder="Votre mot de passe"
+                      placeholder={t.passwordPlaceholder}
                       placeholderTextColor="#9999a2"
                       style={[
                         styles.input,
@@ -246,8 +381,8 @@ export default function LoginPage() {
                       accessibilityRole="button"
                       accessibilityLabel={
                         showPassword
-                          ? "Masquer le mot de passe"
-                          : "Afficher le mot de passe"
+                          ? t.hidePassword
+                          : t.showPassword
                       }
                     >
                       <Ionicons
@@ -297,17 +432,17 @@ export default function LoginPage() {
                   {loading ? (
                     <>
                       <ActivityIndicator size="small" color="#fff" />
-                      <Text style={styles.submitText}>Connexion...</Text>
+                      <Text style={styles.submitText}>{t.signingIn}</Text>
                     </>
                   ) : (
-                    <Text style={styles.submitText}>Se connecter</Text>
+                    <Text style={styles.submitText}>{t.signIn}</Text>
                   )}
                 </Pressable>
               </View>
 
               <View style={styles.dividerRow}>
                 <View style={styles.divider} />
-                <Text style={styles.dividerText}>ou</Text>
+                <Text style={styles.dividerText}>{t.or}</Text>
                 <View style={styles.divider} />
               </View>
 
@@ -324,24 +459,23 @@ export default function LoginPage() {
                   <Text style={styles.googleG}>G</Text>
                 </View>
                 <Text style={styles.googleText}>
-                  Continuer avec Google
+                  {t.continueGoogle}
                 </Text>
               </Pressable>
 
               <Text style={styles.registerText}>
-                Vous n'avez pas encore de compte ?{" "}
+                {t.noAccount}{" "}
                 <Text
                   onPress={loading ? undefined : goRegister}
                   style={styles.registerLink}
                 >
-                  Créer un compte
+                  {t.createAccount}
                 </Text>
               </Text>
             </View>
 
             <Text style={styles.legalText}>
-              En continuant, vous acceptez les conditions d'utilisation et la
-              politique de confidentialité de Oria.
+              {t.legal}
             </Text>
           </View>
         </ScrollView>

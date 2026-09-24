@@ -20,6 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 
 import { supabase } from "@/lib/supabase/client";
+import * as SecureStore from "expo-secure-store";
 
 /**
  * ============================================================
@@ -127,6 +128,265 @@ const DEFAULT_LANGUAGE: Language = "fr";
 
 const DEFAULT_THEME: Theme = "light";
 
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const SETTINGS_TEXT = {
+  fr: {
+    backToChat: "Retour au chat",
+    myCredits: "Mes crédits",
+    yourAccount: "Votre compte",
+    settings: "Paramètres",
+    pageDescription: "Gérez votre compte et vos préférences Oria.",
+    loadingSettings: "Chargement de vos paramètres...",
+    account: "Compte",
+    accountDescription: "Informations personnelles et sécurité.",
+    personalInformation: "Informations personnelles",
+    firstName: "Prénom",
+    lastName: "Nom",
+    email: "Adresse e-mail",
+    phone: "Numéro de téléphone",
+    countryCode: "Code pays",
+    userId: "Identifiant utilisateur",
+    authInfo:
+      "L'e-mail et le téléphone sont enregistrés directement dans votre compte d'authentification Supabase.",
+    save: "Enregistrer",
+    security: "Sécurité",
+    securityDescription: "Mot de passe et sessions",
+    accountAddress: "Adresse du compte",
+    password: "Mot de passe",
+    passwordDescription:
+      "Définissez directement un nouveau mot de passe pour votre compte Supabase.",
+    newPassword: "Nouveau mot de passe",
+    confirmPassword: "Confirmer le mot de passe",
+    changePassword: "Modifier le mot de passe",
+    resetDescription:
+      "Vous pouvez aussi demander un lien sécurisé de réinitialisation par e-mail.",
+    sendResetLink: "Envoyer un lien de réinitialisation",
+    sessions: "Sessions",
+    sessionsDescription: "Fermez les sessions ouvertes sur vos autres appareils.",
+    signOutOtherSessions: "Déconnecter les autres sessions",
+    preferences: "Préférences",
+    preferencesDescription: "Personnalisez votre expérience.",
+    language: "Langue",
+    interfaceLanguage: "Langue de l'interface",
+    french: "Français",
+    english: "English",
+    region: "Région",
+    locationDetection: "Détection de votre position",
+    detecting: "Détection...",
+    refresh: "Actualiser",
+    detect: "Détecter",
+    detectedLocation: "Localisation détectée",
+    locationUndetermined: "Localisation non déterminée",
+    unknownCountry: "Pays inconnu",
+    darkMode: "Mode sombre",
+    darkModeDescription: "Modifier l'apparence de l'application",
+    enableDarkMode: "Activer le mode sombre",
+    notifications: "Notifications",
+    notificationsSectionDescription:
+      "Choisissez les informations que vous souhaitez recevoir.",
+    notificationsDescription:
+      "Informations importantes sur votre compte et vos crédits",
+    enableNotifications: "Activer les notifications",
+    subscription: "Abonnement",
+    subscriptionDescription: "Consultez votre accès actuel à Oria.",
+    currentPack: "Pack actuel",
+    currentPackDescription: "Votre accès et votre période de validité",
+    manage: "Gérer",
+    credits: "Crédits",
+    creditsDescription: "Consulter votre solde et votre consommation",
+    view: "Consulter",
+    logout: "Se déconnecter",
+    loggingOut: "Déconnexion...",
+    logoutDescription: "Fermer votre session actuelle",
+    chooseLanguage: "Choisir une langue",
+    close: "Fermer",
+    closeMessage: "Fermer le message",
+    saving: "Enregistrement...",
+    sending: "Envoi...",
+    userFallback: "Utilisateur",
+
+    loadSettingsError: "Impossible de charger les paramètres de votre compte.",
+    emailRequired: "L'adresse e-mail est requise.",
+    phoneRequired: "Le numéro de téléphone est requis.",
+    countryRequired: "Le code pays est requis.",
+    personalSaved:
+      "Vos informations personnelles ont été enregistrées dans Supabase.",
+    personalSaveError: "Impossible d'enregistrer vos informations.",
+    frenchActivated: "Langue française activée.",
+    englishActivated: "English language activated.",
+    languageSaveError: "Impossible d'enregistrer la langue.",
+    notificationsEnabled: "Les notifications sont activées.",
+    notificationsDisabled: "Les notifications sont désactivées.",
+    preferenceSaveError: "Impossible d'enregistrer cette préférence.",
+    darkActivated: "Mode sombre activé.",
+    lightActivated: "Mode clair activé.",
+    themeSaveError: "Impossible d'enregistrer le thème.",
+    locationPermissionDenied: "Vous avez refusé l'accès à votre position.",
+    locationDetermineError: "Impossible de déterminer votre localisation.",
+    locationUpdated: "Votre localisation a été mise à jour.",
+    locationSaveError: "Impossible d'enregistrer votre localisation.",
+    enterNewPassword: "Saisissez un nouveau mot de passe.",
+    passwordMin: "Le nouveau mot de passe doit contenir au moins 6 caractères.",
+    passwordsMismatch: "Les deux mots de passe ne correspondent pas.",
+    passwordUpdated: "Votre mot de passe a été mis à jour dans Supabase.",
+    passwordUpdateError: "Impossible de mettre à jour votre mot de passe.",
+    noAccountEmail: "Aucune adresse e-mail associée à ce compte.",
+    resetEmailSent: "L'e-mail de réinitialisation a été envoyé.",
+    resetEmailError: "Impossible d'envoyer l'e-mail de réinitialisation.",
+    otherSessionsSignedOut: "Les autres sessions ont été déconnectées.",
+    otherSessionsError: "Impossible de fermer les autres sessions.",
+    logoutError: "Impossible de vous déconnecter.",
+  },
+  en: {
+    backToChat: "Back to chat",
+    myCredits: "My credits",
+    yourAccount: "Your account",
+    settings: "Settings",
+    pageDescription: "Manage your Oria account and preferences.",
+    loadingSettings: "Loading your settings...",
+    account: "Account",
+    accountDescription: "Personal information and security.",
+    personalInformation: "Personal information",
+    firstName: "First name",
+    lastName: "Last name",
+    email: "Email address",
+    phone: "Phone number",
+    countryCode: "Country code",
+    userId: "User ID",
+    authInfo:
+      "Your email and phone number are stored directly in your Supabase authentication account.",
+    save: "Save",
+    security: "Security",
+    securityDescription: "Password and sessions",
+    accountAddress: "Account address",
+    password: "Password",
+    passwordDescription:
+      "Set a new password directly for your Supabase account.",
+    newPassword: "New password",
+    confirmPassword: "Confirm password",
+    changePassword: "Change password",
+    resetDescription:
+      "You can also request a secure password reset link by email.",
+    sendResetLink: "Send password reset link",
+    sessions: "Sessions",
+    sessionsDescription: "Close sessions open on your other devices.",
+    signOutOtherSessions: "Sign out other sessions",
+    preferences: "Preferences",
+    preferencesDescription: "Customize your experience.",
+    language: "Language",
+    interfaceLanguage: "Interface language",
+    french: "Français",
+    english: "English",
+    region: "Region",
+    locationDetection: "Detect your location",
+    detecting: "Detecting...",
+    refresh: "Refresh",
+    detect: "Detect",
+    detectedLocation: "Detected location",
+    locationUndetermined: "Location not determined",
+    unknownCountry: "Unknown country",
+    darkMode: "Dark mode",
+    darkModeDescription: "Change the application's appearance",
+    enableDarkMode: "Enable dark mode",
+    notifications: "Notifications",
+    notificationsSectionDescription:
+      "Choose the information you want to receive.",
+    notificationsDescription:
+      "Important information about your account and credits",
+    enableNotifications: "Enable notifications",
+    subscription: "Subscription",
+    subscriptionDescription: "Review your current Oria access.",
+    currentPack: "Current pack",
+    currentPackDescription: "Your access and validity period",
+    manage: "Manage",
+    credits: "Credits",
+    creditsDescription: "View your balance and usage",
+    view: "View",
+    logout: "Sign out",
+    loggingOut: "Signing out...",
+    logoutDescription: "Close your current session",
+    chooseLanguage: "Choose a language",
+    close: "Close",
+    closeMessage: "Close message",
+    saving: "Saving...",
+    sending: "Sending...",
+    userFallback: "User",
+
+    loadSettingsError: "Unable to load your account settings.",
+    emailRequired: "Email address is required.",
+    phoneRequired: "Phone number is required.",
+    countryRequired: "Country code is required.",
+    personalSaved: "Your personal information has been saved in Supabase.",
+    personalSaveError: "Unable to save your information.",
+    frenchActivated: "Langue française activée.",
+    englishActivated: "English language activated.",
+    languageSaveError: "Unable to save the language.",
+    notificationsEnabled: "Notifications are enabled.",
+    notificationsDisabled: "Notifications are disabled.",
+    preferenceSaveError: "Unable to save this preference.",
+    darkActivated: "Dark mode enabled.",
+    lightActivated: "Light mode enabled.",
+    themeSaveError: "Unable to save the theme.",
+    locationPermissionDenied: "You denied access to your location.",
+    locationDetermineError: "Unable to determine your location.",
+    locationUpdated: "Your location has been updated.",
+    locationSaveError: "Unable to save your location.",
+    enterNewPassword: "Enter a new password.",
+    passwordMin: "The new password must contain at least 6 characters.",
+    passwordsMismatch: "The two passwords do not match.",
+    passwordUpdated: "Your password has been updated in Supabase.",
+    passwordUpdateError: "Unable to update your password.",
+    noAccountEmail: "No email address is associated with this account.",
+    resetEmailSent: "The password reset email has been sent.",
+    resetEmailError: "Unable to send the password reset email.",
+    otherSessionsSignedOut: "Other sessions have been signed out.",
+    otherSessionsError: "Unable to close the other sessions.",
+    logoutError: "Unable to sign you out.",
+  },
+} as const;
+
+async function readStoredOriaLanguage(): Promise<Language> {
+  try {
+    if (Platform.OS === "web") {
+      const saved =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY)
+          : null;
+
+      if (saved === "fr" || saved === "en") return saved;
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.language.toLowerCase().startsWith("en")
+      ) {
+        return "en";
+      }
+
+      return DEFAULT_LANGUAGE;
+    }
+
+    const saved = await SecureStore.getItemAsync(ORIA_LANGUAGE_STORAGE_KEY);
+    return saved === "en" ? "en" : "fr";
+  } catch {
+    return DEFAULT_LANGUAGE;
+  }
+}
+
+async function publishOriaLanguage(value: Language) {
+  if (Platform.OS === "web") {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(ORIA_LANGUAGE_STORAGE_KEY, value);
+      window.dispatchEvent(new Event("oria-language-change"));
+    }
+    return;
+  }
+
+  await SecureStore.setItemAsync(ORIA_LANGUAGE_STORAGE_KEY, value);
+}
+
+
 /**
  * ============================================================
  * PAGE PRINCIPALE
@@ -210,6 +470,8 @@ export default function SettingsPage() {
   ] = useState<Language>(
     DEFAULT_LANGUAGE,
   );
+
+  const t = SETTINGS_TEXT[language];
 
   const [
     notifications,
@@ -328,8 +590,8 @@ export default function SettingsPage() {
   const [
     countryName,
     setCountryName,
-  ] = useState(
-    "Non déterminé",
+  ] = useState<string>(
+    SETTINGS_TEXT[language].locationUndetermined,
   );
 
   const [
@@ -365,6 +627,12 @@ export default function SettingsPage() {
    */
 
   useEffect(() => {
+    void readStoredOriaLanguage().then(
+      (storedLanguage) => {
+        setLanguage(storedLanguage);
+      },
+    );
+
     void loadSettings();
   }, []);
 
@@ -590,6 +858,10 @@ export default function SettingsPage() {
         currentProfile.language,
       );
 
+      await publishOriaLanguage(
+        currentProfile.language,
+      );
+
       setNotifications(
         currentProfile.notifications_enabled,
       );
@@ -606,7 +878,7 @@ export default function SettingsPage() {
 
       setCountryName(
         currentProfile.country_name ??
-          "Localisation non déterminée",
+          SETTINGS_TEXT[currentProfile.language].locationUndetermined,
       );
 
       setCountryCode(
@@ -643,6 +915,7 @@ export default function SettingsPage() {
           await reverseGeocode(
             currentProfile.latitude,
             currentProfile.longitude,
+            currentProfile.language,
           );
 
         if (location) {
@@ -670,7 +943,7 @@ export default function SettingsPage() {
       );
 
       setErrorMessage(
-        "Impossible de charger les paramètres de votre compte.",
+        t.loadSettingsError,
       );
     } finally {
       setLoading(false);
@@ -729,19 +1002,19 @@ export default function SettingsPage() {
        */
       if (!normalizedEmail) {
         throw new Error(
-          "L'adresse e-mail est requise.",
+          t.emailRequired,
         );
       }
 
       if (!normalizedPhone) {
         throw new Error(
-          "Le numéro de téléphone est requis.",
+          t.phoneRequired,
         );
       }
 
       if (!normalizedCountry) {
         throw new Error(
-          "Le code pays est requis.",
+          t.countryRequired,
         );
       }
 
@@ -912,7 +1185,7 @@ export default function SettingsPage() {
       );
 
       setSuccessMessage(
-        "Vos informations personnelles ont été enregistrées dans Supabase.",
+        t.personalSaved,
       );
     } catch (error) {
       console.error(
@@ -923,7 +1196,7 @@ export default function SettingsPage() {
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Impossible d'enregistrer vos informations.",
+          : t.personalSaveError,
       );
     } finally {
       setSavingProfile(
@@ -957,6 +1230,9 @@ export default function SettingsPage() {
     );
 
     try {
+      await publishOriaLanguage(
+        value,
+      );
       const {
         data: {
           user,
@@ -1002,10 +1278,41 @@ export default function SettingsPage() {
             : current,
       );
 
+      if (
+        profile?.latitude != null &&
+        profile?.longitude != null
+      ) {
+        const localizedLocation =
+          await reverseGeocode(
+            profile.latitude,
+            profile.longitude,
+            value,
+          );
+
+        if (localizedLocation) {
+          setCountryName(
+            localizedLocation.countryName,
+          );
+          setCountryCode(
+            localizedLocation.countryCode,
+          );
+          setCityName(
+            localizedLocation.city,
+          );
+          setSubdivisionName(
+            localizedLocation.subdivision,
+          );
+        }
+      } else {
+        setCountryName(
+          SETTINGS_TEXT[value].locationUndetermined,
+        );
+      }
+
       setSuccessMessage(
         value === "fr"
-          ? "Langue française activée."
-          : "English language activated.",
+          ? SETTINGS_TEXT.fr.frenchActivated
+          : SETTINGS_TEXT.en.englishActivated,
       );
     } catch (error) {
       console.error(
@@ -1017,8 +1324,16 @@ export default function SettingsPage() {
         previousLanguage,
       );
 
+      try {
+        await publishOriaLanguage(
+          previousLanguage,
+        );
+      } catch {
+        // The Supabase error remains the primary user-facing error.
+      }
+
       setErrorMessage(
-        "Impossible d'enregistrer la langue.",
+        SETTINGS_TEXT[previousLanguage].languageSaveError,
       );
     } finally {
       setSavingLanguage(
@@ -1098,8 +1413,8 @@ export default function SettingsPage() {
 
       setSuccessMessage(
         value
-          ? "Les notifications sont activées."
-          : "Les notifications sont désactivées.",
+          ? t.notificationsEnabled
+          : t.notificationsDisabled,
       );
     } catch (error) {
       console.error(
@@ -1112,7 +1427,7 @@ export default function SettingsPage() {
       );
 
       setErrorMessage(
-        "Impossible d'enregistrer cette préférence.",
+        t.preferenceSaveError,
       );
     } finally {
       setSavingNotifications(
@@ -1197,8 +1512,8 @@ export default function SettingsPage() {
 
       setSuccessMessage(
         value === "dark"
-          ? "Mode sombre activé."
-          : "Mode clair activé.",
+          ? t.darkActivated
+          : t.lightActivated,
       );
     } catch (error) {
       console.error(
@@ -1207,7 +1522,7 @@ export default function SettingsPage() {
       );
 
       setErrorMessage(
-        "Impossible d'enregistrer le thème.",
+        t.themeSaveError,
       );
     } finally {
       setSavingTheme(false);
@@ -1250,7 +1565,7 @@ export default function SettingsPage() {
         Location.PermissionStatus.GRANTED
       ) {
         setErrorMessage(
-          "Vous avez refusé l'accès à votre position.",
+          t.locationPermissionDenied,
         );
 
         return;
@@ -1320,7 +1635,7 @@ export default function SettingsPage() {
 
       if (!location) {
         throw new Error(
-          "Impossible de déterminer votre localisation.",
+          t.locationDetermineError,
         );
       }
 
@@ -1434,7 +1749,7 @@ export default function SettingsPage() {
       );
 
       setSuccessMessage(
-        "Votre localisation a été mise à jour.",
+        t.locationUpdated,
       );
     } catch (error) {
       console.error(
@@ -1447,11 +1762,11 @@ export default function SettingsPage() {
         error.message
       ) {
         setErrorMessage(
-          "Impossible d'enregistrer votre localisation.",
+          t.locationSaveError,
         );
       } else {
         setErrorMessage(
-          "Impossible d'enregistrer votre localisation.",
+          t.locationSaveError,
         );
       }
     } finally {
@@ -1471,6 +1786,7 @@ export default function SettingsPage() {
   async function reverseGeocode(
     latitude: number,
     longitude: number,
+    locale: Language = language,
   ): Promise<
     GeocodedLocation | null
   > {
@@ -1482,7 +1798,7 @@ export default function SettingsPage() {
           )}&longitude=${encodeURIComponent(
             String(longitude),
           )}&localityLanguage=${encodeURIComponent(
-            language,
+            locale,
           )}`,
         );
 
@@ -1501,7 +1817,7 @@ export default function SettingsPage() {
 
       const countryName =
         data.countryName ??
-        "Pays inconnu";
+        SETTINGS_TEXT[locale].unknownCountry;
 
       const city =
         data.city ??
@@ -1545,7 +1861,7 @@ export default function SettingsPage() {
      */
     if (!newPassword) {
       setErrorMessage(
-        "Saisissez un nouveau mot de passe.",
+        t.enterNewPassword,
       );
 
       return;
@@ -1559,7 +1875,7 @@ export default function SettingsPage() {
       6
     ) {
       setErrorMessage(
-        "Le nouveau mot de passe doit contenir au moins 6 caractères.",
+        t.passwordMin,
       );
 
       return;
@@ -1573,7 +1889,7 @@ export default function SettingsPage() {
       confirmPassword
     ) {
       setErrorMessage(
-        "Les deux mots de passe ne correspondent pas.",
+        t.passwordsMismatch,
       );
 
       return;
@@ -1627,7 +1943,7 @@ export default function SettingsPage() {
       setConfirmPassword("");
 
       setSuccessMessage(
-        "Votre mot de passe a été mis à jour dans Supabase.",
+        t.passwordUpdated,
       );
     } catch (error) {
       console.error(
@@ -1638,7 +1954,7 @@ export default function SettingsPage() {
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : "Impossible de mettre à jour votre mot de passe.",
+          : t.passwordUpdateError,
       );
     } finally {
       setSavingPassword(
@@ -1656,7 +1972,7 @@ export default function SettingsPage() {
   async function sendPasswordReset() {
     if (!email) {
       setErrorMessage(
-        "Aucune adresse e-mail associée à ce compte.",
+        t.noAccountEmail,
       );
 
       return;
@@ -1696,7 +2012,7 @@ export default function SettingsPage() {
       }
 
       setSuccessMessage(
-        "L'e-mail de réinitialisation a été envoyé.",
+        t.resetEmailSent,
       );
     } catch (error) {
       console.error(
@@ -1705,7 +2021,7 @@ export default function SettingsPage() {
       );
 
       setErrorMessage(
-        "Impossible d'envoyer l'e-mail de réinitialisation.",
+        t.resetEmailError,
       );
     } finally {
       setResettingPassword(
@@ -1742,7 +2058,7 @@ export default function SettingsPage() {
       }
 
       setSuccessMessage(
-        "Les autres sessions ont été déconnectées.",
+        t.otherSessionsSignedOut,
       );
     } catch (error) {
       console.error(
@@ -1751,7 +2067,7 @@ export default function SettingsPage() {
       );
 
       setErrorMessage(
-        "Impossible de fermer les autres sessions.",
+        t.otherSessionsError,
       );
     } finally {
       setLoggingOutOthers(
@@ -1795,7 +2111,7 @@ export default function SettingsPage() {
       );
 
       setErrorMessage(
-        "Impossible de vous déconnecter.",
+        t.logoutError,
       );
 
       setLoggingOut(false);
@@ -1827,7 +2143,7 @@ export default function SettingsPage() {
     ]
       .filter(Boolean)
       .join(" ") ||
-    "Utilisateur";
+    t.userFallback;
 
   const hasLocation =
     profile?.latitude !=
@@ -1895,7 +2211,7 @@ export default function SettingsPage() {
                   )
                 }
                 accessibilityRole="button"
-                accessibilityLabel="Retour au chat"
+                accessibilityLabel={t.backToChat}
                 style={({ pressed }) => [
                   styles.headerBackButton,
                   pressed &&
@@ -1977,7 +2293,7 @@ export default function SettingsPage() {
                     styles.textMutedDark,
                 ]}
               >
-                Mes crédits
+                {t.myCredits}
               </Text>
             </Pressable>
           </View>
@@ -2015,7 +2331,7 @@ export default function SettingsPage() {
                     styles.textMutedDark,
                 ]}
               >
-                Votre compte
+                {t.yourAccount}
               </Text>
 
               <Text
@@ -2026,7 +2342,7 @@ export default function SettingsPage() {
                     styles.textDark,
                 ]}
               >
-                Paramètres
+                {t.settings}
               </Text>
 
               <Text
@@ -2037,9 +2353,7 @@ export default function SettingsPage() {
                     styles.textMutedDark,
                 ]}
               >
-                Gérez votre compte
-                et vos préférences
-                Oria.
+                  {t.pageDescription}
               </Text>
             </View>
 
@@ -2074,8 +2388,7 @@ export default function SettingsPage() {
                       styles.textMutedDark,
                   ]}
                 >
-                  Chargement de vos
-                  paramètres...
+                    {t.loadingSettings}
                 </Text>
               </View>
             ) : null}
@@ -2096,6 +2409,7 @@ export default function SettingsPage() {
                     "",
                   )
                 }
+                closeLabel={t.closeMessage}
               />
             ) : null}
 
@@ -2115,6 +2429,7 @@ export default function SettingsPage() {
                     "",
                   )
                 }
+                closeLabel={t.closeMessage}
               />
             ) : null}
 
@@ -2130,8 +2445,8 @@ export default function SettingsPage() {
 
                 <SettingsSection
                   iconName="person-outline"
-                  title="Compte"
-                  description="Informations personnelles et sécurité."
+                  title={t.account}
+                  description={t.accountDescription}
                   theme={theme}
                 >
                   {/* ===============================================
@@ -2140,7 +2455,7 @@ export default function SettingsPage() {
 
                   <SettingsActionRow
                     iconName="person-outline"
-                    title="Informations personnelles"
+                    title={t.personalInformation}
                     description={`${fullName} · ${email}`}
                     theme={theme}
                     expanded={
@@ -2167,7 +2482,7 @@ export default function SettingsPage() {
                       ------------------------------------------- */}
 
                       <InputField
-                        label="Prénom"
+                        label={t.firstName}
                         value={
                           firstName
                         }
@@ -2185,7 +2500,7 @@ export default function SettingsPage() {
                       ------------------------------------------- */}
 
                       <InputField
-                        label="Nom"
+                        label={t.lastName}
                         value={
                           lastName
                         }
@@ -2203,7 +2518,7 @@ export default function SettingsPage() {
                       ------------------------------------------- */}
 
                       <InputField
-                        label="Adresse e-mail"
+                        label={t.email}
                         value={
                           email
                         }
@@ -2225,7 +2540,7 @@ export default function SettingsPage() {
                       ------------------------------------------- */}
 
                       <InputField
-                        label="Numéro de téléphone"
+                        label={t.phone}
                         value={
                           phone
                         }
@@ -2244,7 +2559,7 @@ export default function SettingsPage() {
                       ------------------------------------------- */}
 
                       <InputField
-                        label="Code pays"
+                        label={t.countryCode}
                         value={
                           countryIso2
                         }
@@ -2271,7 +2586,7 @@ export default function SettingsPage() {
                       ------------------------------------------- */}
 
                       <InfoField
-                        label="Identifiant utilisateur"
+                        label={t.userId}
                         value={
                           userId ??
                           ""
@@ -2293,14 +2608,7 @@ export default function SettingsPage() {
                             styles.textMutedDark,
                         ]}
                       >
-                        L'e-mail et le
-                        téléphone sont
-                        enregistrés
-                        directement
-                        dans votre
-                        compte
-                        d'authentification
-                        Supabase.
+                            {t.authInfo}
                       </Text>
 
                       {/* -------------------------------------------
@@ -2308,7 +2616,8 @@ export default function SettingsPage() {
                       ------------------------------------------- */}
 
                       <PrimaryActionButton
-                        title="Enregistrer"
+                    language={language}
+                        title={t.save}
                         loading={
                           savingProfile
                         }
@@ -2331,8 +2640,8 @@ export default function SettingsPage() {
 
                   <SettingsActionRow
                     iconName="shield-checkmark-outline"
-                    title="Sécurité"
-                    description="Mot de passe et sessions"
+                    title={t.security}
+                    description={t.securityDescription}
                     theme={theme}
                     expanded={
                       securityOpen
@@ -2373,8 +2682,7 @@ export default function SettingsPage() {
                               styles.textDark,
                           ]}
                         >
-                          Adresse du
-                          compte
+                          {t.accountAddress}
                         </Text>
 
                         <Text
@@ -2412,7 +2720,7 @@ export default function SettingsPage() {
                               styles.textDark,
                           ]}
                         >
-                          Mot de passe
+                          {t.password}
                         </Text>
 
                         <Text
@@ -2423,19 +2731,13 @@ export default function SettingsPage() {
                               styles.textMutedDark,
                           ]}
                         >
-                          Définissez
-                          directement
-                          un nouveau
-                          mot de passe
-                          pour votre
-                          compte
-                          Supabase.
+                          {t.passwordDescription}
                         </Text>
 
                         {/* Nouveau mot de passe */}
 
                         <InputField
-                          label="Nouveau mot de passe"
+                          label={t.newPassword}
                           value={
                             newPassword
                           }
@@ -2456,7 +2758,7 @@ export default function SettingsPage() {
                         {/* Confirmation */}
 
                         <InputField
-                          label="Confirmer le mot de passe"
+                          label={t.confirmPassword}
                           value={
                             confirmPassword
                           }
@@ -2475,7 +2777,8 @@ export default function SettingsPage() {
                         />
 
                         <PrimaryActionButton
-                          title="Modifier le mot de passe"
+                    language={language}
+                          title={t.changePassword}
                           loading={
                             savingPassword
                           }
@@ -2509,17 +2812,12 @@ export default function SettingsPage() {
                               styles.textMutedDark,
                           ]}
                         >
-                          Vous pouvez
-                          aussi
-                          demander un
-                          lien sécurisé
-                          de
-                          réinitialisation
-                          par e-mail.
+                          {t.resetDescription}
                         </Text>
 
                         <SecondaryActionButton
-                          title="Envoyer un lien de réinitialisation"
+                    language={language}
+                          title={t.sendResetLink}
                           loading={
                             resettingPassword
                           }
@@ -2555,7 +2853,7 @@ export default function SettingsPage() {
                               styles.textDark,
                           ]}
                         >
-                          Sessions
+                          {t.sessions}
                         </Text>
 
                         <Text
@@ -2566,15 +2864,12 @@ export default function SettingsPage() {
                               styles.textMutedDark,
                           ]}
                         >
-                          Fermez les
-                          sessions
-                          ouvertes sur
-                          vos autres
-                          appareils.
+                          {t.sessionsDescription}
                         </Text>
 
                         <SecondaryActionButton
-                          title="Déconnecter les autres sessions"
+                    language={language}
+                          title={t.signOutOtherSessions}
                           loading={
                             loggingOutOthers
                           }
@@ -2599,8 +2894,8 @@ export default function SettingsPage() {
 
                 <SettingsSection
                   iconName="color-palette-outline"
-                  title="Préférences"
-                  description="Personnalisez votre expérience."
+                  title={t.preferences}
+                  description={t.preferencesDescription}
                   theme={theme}
                 >
                   {/* -----------------------------------------------
@@ -2609,8 +2904,8 @@ export default function SettingsPage() {
 
                   <SettingsPreferenceRow
                     iconName="language-outline"
-                    title="Langue"
-                    description="Langue de l'interface"
+                    title={t.language}
+                    description={t.interfaceLanguage}
                     theme={theme}
                   >
                     <View
@@ -2656,8 +2951,8 @@ export default function SettingsPage() {
                         >
                           {language ===
                           "fr"
-                            ? "Français"
-                            : "English"}
+                            ? t.french
+                    : t.english}
                         </Text>
 
                         <Ionicons
@@ -2680,8 +2975,8 @@ export default function SettingsPage() {
 
                   <SettingsPreferenceRow
                     iconName="globe-outline"
-                    title="Région"
-                    description="Détection de votre position"
+                    title={t.region}
+                    description={t.locationDetection}
                     theme={theme}
                   >
                     <Pressable
@@ -2734,10 +3029,10 @@ export default function SettingsPage() {
                         ]}
                       >
                         {locating
-                          ? "Détection..."
-                          : hasLocation
-                            ? "Actualiser"
-                            : "Détecter"}
+                          ? t.detecting
+                    : hasLocation
+                      ? t.refresh
+                      : t.detect}
                       </Text>
                     </Pressable>
                   </SettingsPreferenceRow>
@@ -2763,8 +3058,7 @@ export default function SettingsPage() {
                             styles.textMutedDark,
                         ]}
                       >
-                        Localisation
-                        détectée
+                          {t.detectedLocation}
                       </Text>
 
                       <Text
@@ -2818,8 +3112,8 @@ export default function SettingsPage() {
 
                   <SettingsPreferenceRow
                     iconName="moon-outline"
-                    title="Mode sombre"
-                    description="Modifier l'apparence de l'application"
+                    title={t.darkMode}
+                    description={t.darkModeDescription}
                     theme={theme}
                   >
                     <View
@@ -2869,7 +3163,7 @@ export default function SettingsPage() {
                             : "#ffffff"
                         }
                         ios_backgroundColor="#d4d4d8"
-                        accessibilityLabel="Activer le mode sombre"
+                        accessibilityLabel={t.enableDarkMode}
                       />
                     </View>
                   </SettingsPreferenceRow>
@@ -2881,14 +3175,14 @@ export default function SettingsPage() {
 
                 <SettingsSection
                   iconName="notifications-outline"
-                  title="Notifications"
-                  description="Choisissez les informations que vous souhaitez recevoir."
+                  title={t.notifications}
+                  description={t.notificationsSectionDescription}
                   theme={theme}
                 >
                   <SettingsPreferenceRow
                     iconName="notifications-outline"
-                    title="Notifications"
-                    description="Informations importantes sur votre compte et vos crédits"
+                    title={t.notifications}
+                    description={t.notificationsDescription}
                     theme={theme}
                   >
                     <View
@@ -2930,7 +3224,7 @@ export default function SettingsPage() {
                         }}
                         thumbColor="#ffffff"
                         ios_backgroundColor="#d4d4d8"
-                        accessibilityLabel="Activer les notifications"
+                        accessibilityLabel={t.enableNotifications}
                       />
                     </View>
                   </SettingsPreferenceRow>
@@ -2942,15 +3236,15 @@ export default function SettingsPage() {
 
                 <SettingsSection
                   iconName="sparkles-outline"
-                  title="Abonnement"
-                  description="Consultez votre accès actuel à Oria."
+                  title={t.subscription}
+                  description={t.subscriptionDescription}
                   theme={theme}
                 >
                   <SettingsNavigationRow
                     iconName="sparkles-outline"
-                    title="Pack actuel"
-                    description="Votre accès et votre période de validité"
-                    actionText="Gérer"
+                    title={t.currentPack}
+                    description={t.currentPackDescription}
+                    actionText={t.manage}
                     theme={theme}
                     onPress={() =>
                       router.push(
@@ -2961,9 +3255,9 @@ export default function SettingsPage() {
 
                   <SettingsNavigationRow
                     iconName="sparkles-outline"
-                    title="Crédits"
-                    description="Consulter votre solde et votre consommation"
-                    actionText="Consulter"
+                    title={t.credits}
+                    description={t.creditsDescription}
+                    actionText={t.view}
                     theme={theme}
                     onPress={() =>
                       router.push(
@@ -3027,8 +3321,8 @@ export default function SettingsPage() {
                         }
                       >
                         {loggingOut
-                          ? "Déconnexion..."
-                          : "Se déconnecter"}
+                          ? t.loggingOut
+                    : t.logout}
                       </Text>
 
                       <Text
@@ -3036,9 +3330,7 @@ export default function SettingsPage() {
                           styles.logoutDescription
                         }
                       >
-                        Fermer votre
-                        session
-                        actuelle
+                    {t.logoutDescription}
                       </Text>
                     </View>
                   </Pressable>
@@ -3128,7 +3420,7 @@ export default function SettingsPage() {
                       styles.textMutedDark,
                   ]}
                 >
-                  Préférences
+                  {t.preferences}
                 </Text>
 
                 <Text
@@ -3139,7 +3431,7 @@ export default function SettingsPage() {
                       styles.textDark,
                   ]}
                 >
-                  Choisir une langue
+                  {t.chooseLanguage}
                 </Text>
               </View>
 
@@ -3153,7 +3445,7 @@ export default function SettingsPage() {
                   styles.modalClose
                 }
                 accessibilityRole="button"
-                accessibilityLabel="Fermer"
+                accessibilityLabel={t.close}
               >
                 <Ionicons
                   name="close"
@@ -3174,7 +3466,7 @@ export default function SettingsPage() {
               }
             >
               <LanguageOption
-                title="Français"
+                title={t.french}
                 code="FR"
                 selected={
                   language ===
@@ -3191,7 +3483,7 @@ export default function SettingsPage() {
               />
 
               <LanguageOption
-                title="English"
+                title={t.english}
                 code="EN"
                 selected={
                   language ===
@@ -3224,6 +3516,7 @@ function MessageBanner({
   type,
   message,
   onClose,
+  closeLabel,
 }: {
   type:
     | "error"
@@ -3232,6 +3525,8 @@ function MessageBanner({
   message: string;
 
   onClose: () => void;
+
+  closeLabel: string;
 }) {
   const isError =
     type === "error";
@@ -3276,7 +3571,7 @@ function MessageBanner({
           styles.messageClose
         }
         accessibilityRole="button"
-        accessibilityLabel="Fermer le message"
+        accessibilityLabel={closeLabel}
       >
         <Ionicons
           name="close"
@@ -3671,6 +3966,7 @@ function IconBox({
     | keyof typeof Ionicons.glyphMap;
 
   theme: Theme;
+
 }) {
   return (
     <View
@@ -3866,6 +4162,7 @@ function PrimaryActionButton({
   disabled,
   onPress,
   theme,
+  language,
 }: {
   title: string;
 
@@ -3876,6 +4173,8 @@ function PrimaryActionButton({
   onPress: () => void;
 
   theme: Theme;
+
+  language: Language;
 }) {
   return (
     <Pressable
@@ -3905,7 +4204,7 @@ function PrimaryActionButton({
         }
       >
         {loading
-          ? "Enregistrement..."
+          ? SETTINGS_TEXT[language].saving
           : title}
       </Text>
     </Pressable>
@@ -3924,6 +4223,7 @@ function SecondaryActionButton({
   disabled,
   onPress,
   theme,
+  language,
 }: {
   title: string;
 
@@ -3934,6 +4234,8 @@ function SecondaryActionButton({
   onPress: () => void;
 
   theme: Theme;
+
+  language: Language;
 }) {
   return (
     <Pressable
@@ -3971,7 +4273,7 @@ function SecondaryActionButton({
         ]}
       >
         {loading
-          ? "Envoi..."
+          ? SETTINGS_TEXT[language].sending
           : title}
       </Text>
     </Pressable>

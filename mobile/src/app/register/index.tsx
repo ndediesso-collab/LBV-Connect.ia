@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -14,8 +14,9 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { supabase } from "../../lib/supabase/client";
+import * as SecureStore from "expo-secure-store";
 
 /**
  * Configuration d'un pays et de son indicatif téléphonique.
@@ -131,6 +132,193 @@ const COUNTRY_PHONE_CONFIGS: CountryPhoneConfig[] = [
     callingCode: "+228",
   },
 ];
+
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    back: "Retour",
+    title: "Créer votre compte.",
+    description: "Rejoignez Oria et accédez à vos outils d'intelligence artificielle depuis un seul espace.",
+    firstName: "Prénom",
+    firstNamePlaceholder: "Votre prénom",
+    lastName: "Nom",
+    lastNamePlaceholder: "Votre nom",
+    country: "Pays",
+    countryHelper: "Le pays sélectionné détermine automatiquement l'indicatif utilisé pour votre numéro.",
+    phone: "Numéro de téléphone",
+    phoneHelper: "Votre numéro sera enregistré comme donnée de profil et utilisé lors de vos paiements.",
+    email: "Adresse e-mail",
+    emailPlaceholder: "vous@exemple.com",
+    password: "Mot de passe",
+    passwordPlaceholder: "Créer un mot de passe",
+    hidePassword: "Masquer le mot de passe",
+    showPassword: "Afficher le mot de passe",
+    passwordMinimum: "Minimum 8 caractères.",
+    confirmPassword: "Confirmer le mot de passe",
+    confirmPasswordPlaceholder: "Confirmer votre mot de passe",
+    terms: "J'accepte les conditions d'utilisation et la politique de confidentialité de Oria.",
+    creating: "Création du compte...",
+    createAccount: "Créer mon compte",
+    or: "ou",
+    continueGoogle: "Continuer avec Google",
+    alreadyAccount: "Vous avez déjà un compte ?",
+    signIn: "Se connecter",
+    footer: "Votre compte vous permettra de retrouver vos conversations, crédits et paramètres depuis tous vos appareils.",
+    chooseCountry: "Choisir votre pays",
+    countryModalSubtitle: "L'indicatif sera utilisé pour votre numéro.",
+    missingFirstName: "Veuillez renseigner votre prénom.",
+    missingLastName: "Veuillez renseigner votre nom.",
+    missingEmail: "Veuillez renseigner votre adresse e-mail.",
+    missingPhone: "Veuillez renseigner votre numéro de téléphone.",
+    invalidPhone: "Veuillez renseigner un numéro de téléphone valide.",
+    passwordMismatch: "Les mots de passe ne correspondent pas.",
+    shortPassword: "Le mot de passe doit contenir au moins 8 caractères.",
+    termsRequired: "Veuillez accepter les conditions d'utilisation et la politique de confidentialité.",
+    accountCreationFailed: "Impossible de créer le compte. Veuillez réessayer.",
+    accountNotCreated: "Le compte n'a pas pu être créé.",
+    sessionMissing: "Le compte a été créé, mais aucune session n'est disponible. Désactivez la confirmation e-mail dans Supabase pour permettre l'enregistrement automatique du numéro.",
+    phoneSyncMissing: "Le compte a été créé, mais la synchronisation du numéro de téléphone n'est pas configurée.",
+    phoneSaveFailed: "Le compte a été créé, mais le numéro de téléphone n'a pas pu être enregistré.",
+    phoneMismatch: "Le numéro enregistré ne correspond pas au numéro fourni lors de l'inscription.",
+    success: "Compte créé avec succès. Votre numéro de téléphone a été enregistré.",
+    unexpectedError: "Une erreur inattendue est survenue. Veuillez réessayer.",
+    googleUnavailable: "La connexion avec Google n'est pas encore configurée.",
+  },
+  en: {
+    back: "Back",
+    title: "Create your account.",
+    description: "Join Oria and access your artificial intelligence tools from one place.",
+    firstName: "First name",
+    firstNamePlaceholder: "Your first name",
+    lastName: "Last name",
+    lastNamePlaceholder: "Your last name",
+    country: "Country",
+    countryHelper: "The selected country automatically determines the calling code used for your number.",
+    phone: "Phone number",
+    phoneHelper: "Your number will be saved as profile data and used for your payments.",
+    email: "Email address",
+    emailPlaceholder: "you@example.com",
+    password: "Password",
+    passwordPlaceholder: "Create a password",
+    hidePassword: "Hide password",
+    showPassword: "Show password",
+    passwordMinimum: "Minimum 8 characters.",
+    confirmPassword: "Confirm password",
+    confirmPasswordPlaceholder: "Confirm your password",
+    terms: "I accept Oria's terms of use and privacy policy.",
+    creating: "Creating account...",
+    createAccount: "Create my account",
+    or: "or",
+    continueGoogle: "Continue with Google",
+    alreadyAccount: "Already have an account?",
+    signIn: "Sign in",
+    footer: "Your account lets you access your conversations, credits and settings across your devices.",
+    chooseCountry: "Choose your country",
+    countryModalSubtitle: "The calling code will be used for your number.",
+    missingFirstName: "Please enter your first name.",
+    missingLastName: "Please enter your last name.",
+    missingEmail: "Please enter your email address.",
+    missingPhone: "Please enter your phone number.",
+    invalidPhone: "Please enter a valid phone number.",
+    passwordMismatch: "The passwords do not match.",
+    shortPassword: "The password must contain at least 8 characters.",
+    termsRequired: "Please accept the terms of use and privacy policy.",
+    accountCreationFailed: "Unable to create the account. Please try again.",
+    accountNotCreated: "The account could not be created.",
+    sessionMissing: "The account was created, but no session is available. Disable email confirmation in Supabase to allow automatic phone registration.",
+    phoneSyncMissing: "The account was created, but phone number synchronization is not configured.",
+    phoneSaveFailed: "The account was created, but the phone number could not be saved.",
+    phoneMismatch: "The saved number does not match the number provided during registration.",
+    success: "Account created successfully. Your phone number has been saved.",
+    unexpectedError: "An unexpected error occurred. Please try again.",
+    googleUnavailable: "Google sign-in is not configured yet.",
+  },
+} as const;
+
+const COUNTRY_NAMES_EN: Record<string, string> = {
+  BJ: "Benin",
+  BF: "Burkina Faso",
+  BI: "Burundi",
+  CM: "Cameroon",
+  CF: "Central African Republic",
+  KM: "Comoros",
+  CG: "Congo",
+  CI: "Côte d'Ivoire",
+  DJ: "Djibouti",
+  GA: "Gabon",
+  GN: "Guinea",
+  GQ: "Equatorial Guinea",
+  MG: "Madagascar",
+  ML: "Mali",
+  NE: "Niger",
+  CD: "Democratic Republic of the Congo",
+  RW: "Rwanda",
+  SN: "Senegal",
+  TG: "Togo",
+};
+
+async function readOriaLanguage(): Promise<OriaLanguage> {
+  try {
+    if (Platform.OS === "web") {
+      const saved = typeof window !== "undefined"
+        ? window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY)
+        : null;
+
+      if (saved === "fr" || saved === "en") return saved;
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.language.toLowerCase().startsWith("en")
+      ) {
+        return "en";
+      }
+
+      return "fr";
+    }
+
+    const saved = await SecureStore.getItemAsync(ORIA_LANGUAGE_STORAGE_KEY);
+    return saved === "en" ? "en" : "fr";
+  } catch {
+    return "fr";
+  }
+}
+
+function getCountryDisplayName(
+  country: CountryPhoneConfig,
+  language: OriaLanguage,
+) {
+  return language === "en"
+    ? COUNTRY_NAMES_EN[country.iso2] ?? country.name
+    : country.name;
+}
+
+function localizeRegisterError(
+  message: string,
+  language: OriaLanguage,
+) {
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("user already registered") ||
+    normalized.includes("already registered")
+  ) {
+    return language === "en"
+      ? "An account already exists with this email address."
+      : "Un compte existe déjà avec cette adresse e-mail.";
+  }
+
+  if (normalized.includes("invalid email")) {
+    return language === "en"
+      ? "Please enter a valid email address."
+      : "Veuillez renseigner une adresse e-mail valide.";
+  }
+
+  return message;
+}
 
 const DEFAULT_COUNTRY_ISO2 = "GA";
 
@@ -288,6 +476,23 @@ function buildInternationalPhone(
  * restent séparées et explicites.
  */
 export default function RegisterPage() {
+  const [language, setLanguage] = useState<OriaLanguage>("fr");
+  const t = UI[language];
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      void readOriaLanguage().then((savedLanguage) => {
+        if (active) setLanguage(savedLanguage);
+      });
+
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
+
   const [
     firstName,
     setFirstName,
@@ -437,7 +642,7 @@ export default function RegisterPage() {
      */
     if (!normalizedFirstName) {
       setError(
-        "Veuillez renseigner votre prénom.",
+        t.missingFirstName,
       );
 
       return;
@@ -445,7 +650,7 @@ export default function RegisterPage() {
 
     if (!normalizedLastName) {
       setError(
-        "Veuillez renseigner votre nom.",
+        t.missingLastName,
       );
 
       return;
@@ -453,7 +658,7 @@ export default function RegisterPage() {
 
     if (!normalizedEmail) {
       setError(
-        "Veuillez renseigner votre adresse e-mail.",
+        t.missingEmail,
       );
 
       return;
@@ -464,7 +669,7 @@ export default function RegisterPage() {
      */
     if (!phoneNumber) {
       setError(
-        "Veuillez renseigner votre numéro de téléphone.",
+        t.missingPhone,
       );
 
       return;
@@ -475,7 +680,7 @@ export default function RegisterPage() {
       !phoneInternational
     ) {
       setError(
-        "Veuillez renseigner un numéro de téléphone valide.",
+        t.invalidPhone,
       );
 
       return;
@@ -489,7 +694,7 @@ export default function RegisterPage() {
       confirmPasswordValue
     ) {
       setError(
-        "Les mots de passe ne correspondent pas.",
+        t.passwordMismatch,
       );
 
       return;
@@ -499,7 +704,7 @@ export default function RegisterPage() {
       passwordValue.length < 8
     ) {
       setError(
-        "Le mot de passe doit contenir au moins 8 caractères.",
+        t.shortPassword,
       );
 
       return;
@@ -515,7 +720,7 @@ export default function RegisterPage() {
      */
     if (!termsAccepted) {
       setError(
-        "Veuillez accepter les conditions d'utilisation et la politique de confidentialité.",
+        t.termsRequired,
       );
 
       return;
@@ -565,8 +770,7 @@ export default function RegisterPage() {
 
       if (signUpError) {
         setError(
-          signUpError.message ||
-            "Impossible de créer le compte. Veuillez réessayer.",
+          localizeRegisterError(signUpError.message || t.accountCreationFailed, language),
         );
 
         return;
@@ -574,7 +778,7 @@ export default function RegisterPage() {
 
       if (!data.user) {
         setError(
-          "Le compte n'a pas pu être créé.",
+          t.accountNotCreated,
         );
 
         return;
@@ -594,7 +798,7 @@ export default function RegisterPage() {
         );
 
         setError(
-          "Le compte a été créé, mais aucune session n'est disponible. Désactivez la confirmation e-mail dans Supabase pour permettre l'enregistrement automatique du numéro.",
+          t.sessionMissing,
         );
 
         return;
@@ -621,7 +825,7 @@ export default function RegisterPage() {
         );
 
         setError(
-          "Le compte a été créé, mais la synchronisation du numéro de téléphone n'est pas configurée.",
+          t.phoneSyncMissing,
         );
 
         return;
@@ -690,8 +894,7 @@ export default function RegisterPage() {
         );
 
         setError(
-          phoneResult.detail ||
-            "Le compte a été créé, mais le numéro de téléphone n'a pas pu être enregistré.",
+          phoneResult.detail || t.phoneSaveFailed,
         );
 
         return;
@@ -720,14 +923,14 @@ export default function RegisterPage() {
         );
 
         setError(
-          "Le numéro enregistré ne correspond pas au numéro fourni lors de l'inscription.",
+          t.phoneMismatch,
         );
 
         return;
       }
 
       setMessage(
-        "Compte créé avec succès. Votre numéro de téléphone a été enregistré.",
+        t.success,
       );
 
       /*
@@ -749,7 +952,7 @@ export default function RegisterPage() {
       );
 
       setError(
-        "Une erreur inattendue est survenue. Veuillez réessayer.",
+        t.unexpectedError,
       );
     } finally {
       setLoading(false);
@@ -810,10 +1013,7 @@ export default function RegisterPage() {
       return;
     }
 
-    Alert.alert(
-      "Google",
-      "La connexion avec Google n'est pas encore configurée.",
-    );
+    Alert.alert("Google", t.googleUnavailable);
   }
 
   return (
@@ -904,7 +1104,7 @@ export default function RegisterPage() {
                     styles.backText
                   }
                 >
-                  Retour
+                  {t.back}
                 </Text>
               </Pressable>
 
@@ -926,7 +1126,7 @@ export default function RegisterPage() {
                 <Text
                   style={styles.title}
                 >
-                  Créer votre compte.
+                  {t.title}
                 </Text>
 
                 <Text
@@ -934,11 +1134,7 @@ export default function RegisterPage() {
                     styles.description
                   }
                 >
-                  Rejoignez Oria et
-                  accédez à vos outils
-                  d'intelligence
-                  artificielle depuis un
-                  seul espace.
+                  {t.description}
                 </Text>
               </View>
 
@@ -964,7 +1160,7 @@ export default function RegisterPage() {
                         styles.label
                       }
                     >
-                      Prénom
+                      {t.firstName}
                     </Text>
 
                     <TextInput
@@ -974,7 +1170,7 @@ export default function RegisterPage() {
                       onChangeText={
                         setFirstName
                       }
-                      placeholder="Votre prénom"
+                      placeholder={t.firstNamePlaceholder}
                       placeholderTextColor="#a1a1aa"
                       autoCapitalize="words"
                       autoCorrect={false}
@@ -998,7 +1194,7 @@ export default function RegisterPage() {
                         styles.label
                       }
                     >
-                      Nom
+                      {t.lastName}
                     </Text>
 
                     <TextInput
@@ -1008,7 +1204,7 @@ export default function RegisterPage() {
                       onChangeText={
                         setLastName
                       }
-                      placeholder="Votre nom"
+                      placeholder={t.lastNamePlaceholder}
                       placeholderTextColor="#a1a1aa"
                       autoCapitalize="words"
                       autoCorrect={false}
@@ -1031,7 +1227,7 @@ export default function RegisterPage() {
                       styles.label
                     }
                   >
-                    Pays
+                    {t.country}
                   </Text>
 
                   <Pressable
@@ -1060,7 +1256,10 @@ export default function RegisterPage() {
                         }
                       >
                         {
-                          country.name
+                          getCountryDisplayName(
+                            country,
+                            language,
+                          )
                         }{" "}
                         (
                         {
@@ -1082,11 +1281,7 @@ export default function RegisterPage() {
                       styles.helperText
                     }
                   >
-                    Le pays sélectionné
-                    détermine
-                    automatiquement
-                    l'indicatif utilisé pour
-                    votre numéro.
+                    {t.countryHelper}
                   </Text>
                 </View>
 
@@ -1098,7 +1293,7 @@ export default function RegisterPage() {
                       styles.label
                     }
                   >
-                    Numéro de téléphone
+                    {t.phone}
                   </Text>
 
                   <View
@@ -1146,11 +1341,7 @@ export default function RegisterPage() {
                       styles.helperText
                     }
                   >
-                    Votre numéro sera
-                    enregistré comme
-                    donnée de profil et
-                    utilisé lors de vos
-                    paiements.
+                    {t.phoneHelper}
                   </Text>
                 </View>
 
@@ -1162,7 +1353,7 @@ export default function RegisterPage() {
                       styles.label
                     }
                   >
-                    Adresse e-mail
+                    {t.email}
                   </Text>
 
                   <TextInput
@@ -1170,7 +1361,7 @@ export default function RegisterPage() {
                     onChangeText={
                       setEmail
                     }
-                    placeholder="vous@exemple.com"
+                    placeholder={t.emailPlaceholder}
                     placeholderTextColor="#a1a1aa"
                     keyboardType="email-address"
                     autoCapitalize="none"
@@ -1193,7 +1384,7 @@ export default function RegisterPage() {
                       styles.label
                     }
                   >
-                    Mot de passe
+                    {t.password}
                   </Text>
 
                   <View
@@ -1208,7 +1399,7 @@ export default function RegisterPage() {
                       onChangeText={
                         setPassword
                       }
-                      placeholder="Créer un mot de passe"
+                      placeholder={t.passwordPlaceholder}
                       placeholderTextColor="#a1a1aa"
                       secureTextEntry={
                         !showPassword
@@ -1235,8 +1426,8 @@ export default function RegisterPage() {
                       accessibilityRole="button"
                       accessibilityLabel={
                         showPassword
-                          ? "Masquer le mot de passe"
-                          : "Afficher le mot de passe"
+                          ? t.hidePassword
+                          : t.showPassword
                       }
                       style={({ pressed }) => [
                         styles.eyeButton,
@@ -1263,7 +1454,7 @@ export default function RegisterPage() {
                       styles.helperText
                     }
                   >
-                    Minimum 8 caractères.
+                    {t.passwordMinimum}
                   </Text>
                 </View>
 
@@ -1275,7 +1466,7 @@ export default function RegisterPage() {
                       styles.label
                     }
                   >
-                    Confirmer le mot de passe
+                    {t.confirmPassword}
                   </Text>
 
                   <View
@@ -1290,7 +1481,7 @@ export default function RegisterPage() {
                       onChangeText={
                         setConfirmPassword
                       }
-                      placeholder="Confirmer votre mot de passe"
+                      placeholder={t.confirmPasswordPlaceholder}
                       placeholderTextColor="#a1a1aa"
                       secureTextEntry={
                         !showConfirmPassword
@@ -1317,8 +1508,8 @@ export default function RegisterPage() {
                       accessibilityRole="button"
                       accessibilityLabel={
                         showConfirmPassword
-                          ? "Masquer le mot de passe"
-                          : "Afficher le mot de passe"
+                          ? t.hidePassword
+                          : t.showPassword
                       }
                       style={({ pressed }) => [
                         styles.eyeButton,
@@ -1427,11 +1618,7 @@ export default function RegisterPage() {
                       styles.termsText
                     }
                   >
-                    J'accepte les conditions
-                    d'utilisation et la
-                    politique de
-                    confidentialité de
-                    Oria.
+                    {t.terms}
                   </Text>
                 </Pressable>
 
@@ -1467,7 +1654,7 @@ export default function RegisterPage() {
                           styles.submitText
                         }
                       >
-                        Création du compte...
+                        {t.creating}
                       </Text>
                     </View>
                   ) : (
@@ -1476,7 +1663,7 @@ export default function RegisterPage() {
                         styles.submitText
                       }
                     >
-                      Créer mon compte
+                      {t.createAccount}
                     </Text>
                   )}
                 </Pressable>
@@ -1500,7 +1687,7 @@ export default function RegisterPage() {
                     styles.dividerText
                   }
                 >
-                  ou
+                  {t.or}
                 </Text>
 
                 <View
@@ -1544,7 +1731,7 @@ export default function RegisterPage() {
                     styles.googleText
                   }
                 >
-                  Continuer avec Google
+                  {t.continueGoogle}
                 </Text>
               </Pressable>
 
@@ -1560,7 +1747,7 @@ export default function RegisterPage() {
                     styles.loginText
                   }
                 >
-                  Vous avez déjà un compte ?
+                  {t.alreadyAccount}
                 </Text>
 
                 <Pressable
@@ -1580,7 +1767,7 @@ export default function RegisterPage() {
                       styles.loginLink
                     }
                   >
-                    Se connecter
+                    {t.signIn}
                   </Text>
                 </Pressable>
               </View>
@@ -1593,10 +1780,7 @@ export default function RegisterPage() {
                 styles.footerText
               }
             >
-              Votre compte vous permettra de
-              retrouver vos conversations,
-              crédits et paramètres depuis tous
-              vos appareils.
+              {t.footer}
             </Text>
           </View>
         </ScrollView>
@@ -1654,7 +1838,7 @@ export default function RegisterPage() {
                     styles.modalTitle
                   }
                 >
-                  Choisir votre pays
+                  {t.chooseCountry}
                 </Text>
 
                 <Text
@@ -1662,8 +1846,7 @@ export default function RegisterPage() {
                     styles.modalSubtitle
                   }
                 >
-                  L'indicatif sera utilisé
-                  pour votre numéro.
+                  {t.countryModalSubtitle}
                 </Text>
               </View>
 
@@ -1732,7 +1915,7 @@ export default function RegisterPage() {
                               styles.countryNameSelected,
                           ]}
                         >
-                          {item.name}
+                          {getCountryDisplayName(item, language)}
                         </Text>
 
                         <Text

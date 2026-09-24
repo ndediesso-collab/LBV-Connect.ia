@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -9,37 +10,222 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import * as SecureStore from "expo-secure-store";
 
-const categories = [
-  { title: "Premiers pas", description: "Découvrez comment utiliser Oria.", icon: "sparkles-outline" as const },
-  { title: "Crédits", description: "Comprendre le fonctionnement et la consommation.", icon: "card-outline" as const },
-  { title: "Modèles IA", description: "Comprendre Standard, Raisonnement et Premium.", icon: "flash-outline" as const },
-  { title: "Compte et sécurité", description: "Gérer votre compte et vos paramètres.", icon: "shield-checkmark-outline" as const },
-];
+type OriaLanguage = "fr" | "en";
 
-const faqs = [
-  { question: "Qu'est-ce que Oria ?", answer: "Oria est une interface qui rassemble différentes technologies d'intelligence artificielle au même endroit." },
-  { question: "À quoi servent les crédits ?", answer: "Les crédits permettent d'utiliser les différentes fonctionnalités et modèles disponibles dans votre pack. La consommation dépend de l'opération et du modèle utilisé." },
-  { question: "Les crédits ont-ils une durée de validité ?", answer: "Oui. Les crédits sont associés à un pack et restent utilisables pendant la durée de validité de celui-ci." },
-  { question: "Puis-je utiliser plusieurs modèles d'IA ?", answer: "Oui, les modèles disponibles dépendent du pack auquel vous avez souscrit." },
-  { question: "Que se passe-t-il lorsque mes crédits sont épuisés ?", answer: "Vous pouvez acheter des crédits complémentaires afin de continuer à utiliser Oria." },
-  { question: "Puis-je utiliser Oria sur mobile ?", answer: "L'interface est conçue pour être responsive et s'adapter aux smartphones, tablettes et ordinateurs." },
-];
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    backToChat: "Retour au chat",
+    heroTitle: "Comment pouvons-nous vous aider ?",
+    heroDescription:
+      "{t.heroDescription}",
+    searchPlaceholder: "Rechercher une question...",
+    exploreHelp: "Explorer l'aide",
+    faqTitle: "Questions fréquentes",
+    noResults: "Aucun résultat",
+    noResultsText: "Essayez avec d'autres mots-clés.",
+    supportTitle: "Vous ne trouvez pas votre réponse ?",
+    supportDescription:
+      "{t.supportDescription}",
+    contactSupport: "Contacter le support",
+  },
+  en: {
+    backToChat: "Back to chat",
+    heroTitle: "How can we help you?",
+    heroDescription:
+      "Find answers to the most frequently asked questions about Oria.",
+    searchPlaceholder: "Search for a question...",
+    exploreHelp: "Explore help",
+    faqTitle: "Frequently asked questions",
+    noResults: "No results",
+    noResultsText: "Try using different keywords.",
+    supportTitle: "Can't find your answer?",
+    supportDescription:
+      "Our support team can help with issues related to your account, credits, or use of the service.",
+    contactSupport: "Contact support",
+  },
+} as const;
+
+const categories = {
+  fr: [
+    {
+      title: "Premiers pas",
+      description: "Découvrez comment utiliser Oria.",
+      icon: "sparkles-outline" as const,
+    },
+    {
+      title: "Crédits",
+      description: "Comprendre le fonctionnement et la consommation.",
+      icon: "card-outline" as const,
+    },
+    {
+      title: "Modèles IA",
+      description: "Comprendre Standard, Raisonnement et Premium.",
+      icon: "flash-outline" as const,
+    },
+    {
+      title: "Compte et sécurité",
+      description: "Gérer votre compte et vos paramètres.",
+      icon: "shield-checkmark-outline" as const,
+    },
+  ],
+  en: [
+    {
+      title: "Getting started",
+      description: "Learn how to use Oria.",
+      icon: "sparkles-outline" as const,
+    },
+    {
+      title: "Credits",
+      description: "Understand how credits work and are used.",
+      icon: "card-outline" as const,
+    },
+    {
+      title: "AI models",
+      description: "Understand Standard, Reasoning and Premium.",
+      icon: "flash-outline" as const,
+    },
+    {
+      title: "Account and security",
+      description: "Manage your account and settings.",
+      icon: "shield-checkmark-outline" as const,
+    },
+  ],
+} as const;
+
+const faqs = {
+  fr: [
+    {
+      question: "Qu'est-ce que Oria ?",
+      answer:
+        "Oria est une interface qui rassemble différentes technologies d'intelligence artificielle au même endroit.",
+    },
+    {
+      question: "À quoi servent les crédits ?",
+      answer:
+        "Les crédits permettent d'utiliser les différentes fonctionnalités et modèles disponibles dans votre pack. La consommation dépend de l'opération et du modèle utilisé.",
+    },
+    {
+      question: "Les crédits ont-ils une durée de validité ?",
+      answer:
+        "Oui. Les crédits sont associés à un pack et restent utilisables pendant la durée de validité de celui-ci.",
+    },
+    {
+      question: "Puis-je utiliser plusieurs modèles d'IA ?",
+      answer:
+        "Oui, les modèles disponibles dépendent du pack auquel vous avez souscrit.",
+    },
+    {
+      question: "Que se passe-t-il lorsque mes crédits sont épuisés ?",
+      answer:
+        "Vous pouvez acheter des crédits complémentaires afin de continuer à utiliser Oria.",
+    },
+    {
+      question: "Puis-je utiliser Oria sur mobile ?",
+      answer:
+        "L'interface est conçue pour être responsive et s'adapter aux smartphones, tablettes et ordinateurs.",
+    },
+  ],
+  en: [
+    {
+      question: "What is Oria?",
+      answer:
+        "Oria is an interface that brings different artificial intelligence technologies together in one place.",
+    },
+    {
+      question: "What are credits used for?",
+      answer:
+        "Credits let you use the different features and models available in your pack. Usage depends on the operation and the model used.",
+    },
+    {
+      question: "Do credits expire?",
+      answer:
+        "Yes. Credits are linked to a pack and remain usable for the duration of that pack.",
+    },
+    {
+      question: "Can I use multiple AI models?",
+      answer:
+        "Yes. The models available to you depend on the pack you subscribed to.",
+    },
+    {
+      question: "What happens when I run out of credits?",
+      answer:
+        "You can purchase additional credits to continue using Oria.",
+    },
+    {
+      question: "Can I use Oria on mobile?",
+      answer:
+        "The interface is designed to adapt to smartphones, tablets and computers.",
+    },
+  ],
+} as const;
+
+async function readOriaLanguage(): Promise<OriaLanguage> {
+  try {
+    if (Platform.OS === "web") {
+      const saved =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY)
+          : null;
+
+      if (saved === "fr" || saved === "en") return saved;
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.language.toLowerCase().startsWith("en")
+      ) {
+        return "en";
+      }
+
+      return "fr";
+    }
+
+    const saved = await SecureStore.getItemAsync(ORIA_LANGUAGE_STORAGE_KEY);
+    return saved === "en" ? "en" : "fr";
+  } catch {
+    return "fr";
+  }
+}
 
 export default function HelpPage() {
+  const [language, setLanguage] = useState<OriaLanguage>("fr");
   const [search, setSearch] = useState("");
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
+  const t = UI[language];
+  const currentCategories = categories[language];
+  const currentFaqs = faqs[language];
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      void readOriaLanguage().then((savedLanguage) => {
+        if (active) {
+          setLanguage(savedLanguage);
+          setOpenFaq(null);
+        }
+      });
+
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
+
   const filteredFaqs = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return faqs;
-    return faqs.filter((faq) =>
+    if (!query) return currentFaqs;
+    return currentFaqs.filter((faq) =>
       faq.question.toLowerCase().includes(query) ||
       faq.answer.toLowerCase().includes(query)
     );
-  }, [search]);
+  }, [search, currentFaqs]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -55,7 +241,7 @@ export default function HelpPage() {
           <Text style={styles.brandText}>ORIA</Text>
         </View>
         <Pressable style={styles.headerChatButton} onPress={() => router.push("/chat" as any)}>
-          <Text style={styles.headerChatButtonText}>Retour au chat</Text>
+          <Text style={styles.headerChatButtonText}>{t.backToChat}</Text>
         </Pressable>
       </View>
 
@@ -64,7 +250,7 @@ export default function HelpPage() {
           <View style={styles.heroIcon}>
             <Ionicons name="help-circle-outline" size={23} color="#fff" />
           </View>
-          <Text style={styles.heroTitle}>Comment pouvons-nous vous aider ?</Text>
+          <Text style={styles.heroTitle}>{t.heroTitle}</Text>
           <Text style={styles.heroDescription}>
             Retrouvez les réponses aux questions les plus fréquentes sur Oria.
           </Text>
@@ -73,7 +259,7 @@ export default function HelpPage() {
             <TextInput
               value={search}
               onChangeText={setSearch}
-              placeholder="Rechercher une question..."
+              placeholder={t.searchPlaceholder}
               placeholderTextColor="#9999a2"
               style={styles.searchInput}
               returnKeyType="search"
@@ -87,9 +273,9 @@ export default function HelpPage() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Explorer l'aide</Text>
+          <Text style={styles.sectionTitle}>{t.exploreHelp}</Text>
           <View style={styles.categoryGrid}>
-            {categories.map((category) => (
+            {currentCategories.map((category) => (
               <Pressable key={category.title} style={({ pressed }) => [styles.categoryCard, pressed && styles.categoryCardPressed]}>
                 <View style={styles.categoryIcon}>
                   <Ionicons name={category.icon} size={18} color="#606069" />
@@ -108,12 +294,12 @@ export default function HelpPage() {
             <View style={styles.faqHeadingIcon}>
               <Ionicons name="book-outline" size={18} color="#4f4f58" />
             </View>
-            <Text style={styles.sectionTitle}>Questions fréquentes</Text>
+            <Text style={styles.sectionTitle}>{t.faqTitle}</Text>
           </View>
 
           <View style={styles.faqContainer}>
             {filteredFaqs.length > 0 ? filteredFaqs.map((faq) => {
-              const index = faqs.findIndex((item) => item.question === faq.question);
+              const index = currentFaqs.findIndex((item) => item.question === faq.question);
               const isOpen = openFaq === index;
               return (
                 <View key={faq.question} style={styles.faqItem}>
@@ -133,8 +319,8 @@ export default function HelpPage() {
                 <View style={styles.noResultsIcon}>
                   <Ionicons name="search-outline" size={21} color="#777780" />
                 </View>
-                <Text style={styles.noResultsTitle}>Aucun résultat</Text>
-                <Text style={styles.noResultsText}>Essayez avec d'autres mots-clés.</Text>
+                <Text style={styles.noResultsTitle}>{t.noResults}</Text>
+                <Text style={styles.noResultsText}>{t.noResultsText}</Text>
               </View>
             )}
           </View>
@@ -144,13 +330,13 @@ export default function HelpPage() {
           <View style={styles.supportIcon}>
             <Ionicons name="chatbubble-ellipses-outline" size={19} color="#606069" />
           </View>
-          <Text style={styles.supportTitle}>Vous ne trouvez pas votre réponse ?</Text>
+          <Text style={styles.supportTitle}>{t.supportTitle}</Text>
           <Text style={styles.supportDescription}>
             Notre espace d'assistance pourra vous aider pour les problèmes liés à votre compte, vos crédits ou l'utilisation du service.
           </Text>
           <Pressable style={({ pressed }) => [styles.supportButton, pressed && styles.supportButtonPressed]}>
             <Ionicons name="chatbubble-outline" size={16} color="#fff" />
-            <Text style={styles.supportButtonText}>Contacter le support</Text>
+            <Text style={styles.supportButtonText}>{t.contactSupport}</Text>
           </Pressable>
         </View>
       </ScrollView>

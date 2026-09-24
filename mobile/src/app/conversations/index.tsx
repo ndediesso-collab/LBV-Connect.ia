@@ -14,7 +14,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as SecureStore from "expo-secure-store";
@@ -44,11 +44,113 @@ const API_URL =
 
 const CACHE_KEY = "oria_conversations_cache";
 
-function formatDate(value?: string) {
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const UI = {
+  fr: {
+    yesterday: "Hier",
+    newConversation: "Nouvelle conversation",
+    noPreview: "Aucun aperçu disponible.",
+    aiModel: "Modèle IA",
+    credits: "Crédits",
+    workspace: "VOTRE ESPACE",
+    conversations: "Conversations",
+    description:
+      "Retrouvez vos conversations avec les différents modèles d'Oria.",
+    searchPlaceholder: "Rechercher une conversation...",
+    retry: "Réessayer",
+    loading: "Chargement de vos conversations...",
+    noSearchResult: "Aucune conversation trouvée",
+    noConversation: "Aucune conversation",
+    tryAnotherSearch: "Essayez avec un autre terme de recherche.",
+    conversationsAppearHere: "Vos conversations apparaîtront ici.",
+    startConversation: "Commencer une conversation",
+    conversation: "Conversation",
+    open: "Ouvrir",
+    delete: "Supprimer",
+    cancel: "Annuler",
+    deleteTitle: "Supprimer la conversation",
+    deleteMessage: "Cette conversation sera définitivement supprimée.",
+    loadError: "Impossible de charger vos conversations.",
+    deleteError: "Impossible de supprimer la conversation.",
+  },
+  en: {
+    yesterday: "Yesterday",
+    newConversation: "New conversation",
+    noPreview: "No preview available.",
+    aiModel: "AI model",
+    credits: "Credits",
+    workspace: "YOUR WORKSPACE",
+    conversations: "Conversations",
+    description:
+      "Find your conversations with Oria's different models.",
+    searchPlaceholder: "Search conversations...",
+    retry: "Try again",
+    loading: "Loading your conversations...",
+    noSearchResult: "No conversations found",
+    noConversation: "No conversations",
+    tryAnotherSearch: "Try another search term.",
+    conversationsAppearHere: "Your conversations will appear here.",
+    startConversation: "Start a conversation",
+    conversation: "Conversation",
+    open: "Open",
+    delete: "Delete",
+    cancel: "Cancel",
+    deleteTitle: "Delete conversation",
+    deleteMessage: "This conversation will be permanently deleted.",
+    loadError: "Unable to load your conversations.",
+    deleteError: "Unable to delete the conversation.",
+  },
+} as const;
+
+async function readOriaLanguage(): Promise<OriaLanguage> {
+  try {
+    if (Platform.OS === "web") {
+      const saved =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY)
+          : null;
+
+      if (saved === "fr" || saved === "en") return saved;
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.language.toLowerCase().startsWith("en")
+      ) {
+        return "en";
+      }
+
+      return "fr";
+    }
+
+    const saved = await SecureStore.getItemAsync(ORIA_LANGUAGE_STORAGE_KEY);
+    return saved === "en" ? "en" : "fr";
+  } catch {
+    return "fr";
+  }
+}
+
+function getDisplayConversationTitle(
+  title: string | undefined,
+  language: OriaLanguage,
+) {
+  if (!title || title === "Nouvelle conversation") {
+    return UI[language].newConversation;
+  }
+
+  return title;
+}
+
+
+function formatDate(value: string | undefined, language: OriaLanguage) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
+  const locale = language === "en" ? "en-US" : "fr-FR";
   const now = new Date();
   const sameDay =
     date.getFullYear() === now.getFullYear() &&
@@ -56,7 +158,7 @@ function formatDate(value?: string) {
     date.getDate() === now.getDate();
 
   if (sameDay) {
-    return date.toLocaleTimeString("fr-FR", {
+    return date.toLocaleTimeString(locale, {
       hour: "2-digit",
       minute: "2-digit",
     });
@@ -70,9 +172,9 @@ function formatDate(value?: string) {
     date.getMonth() === yesterday.getMonth() &&
     date.getDate() === yesterday.getDate();
 
-  if (isYesterday) return "Hier";
+  if (isYesterday) return UI[language].yesterday;
 
-  return date.toLocaleDateString("fr-FR", {
+  return date.toLocaleDateString(locale, {
     day: "2-digit",
     month: "short",
     year: date.getFullYear() === now.getFullYear() ? undefined : "numeric",
@@ -142,11 +244,13 @@ function ConversationCard({
   isDeleting,
   onDelete,
   onOptions,
+  language,
 }: {
   conversation: Conversation;
   isDeleting: boolean;
   onDelete: (id: string) => void;
   onOptions: (conversation: Conversation) => void;
+  language: OriaLanguage;
 }) {
   return (
     <Pressable
@@ -168,22 +272,22 @@ function ConversationCard({
       <View style={styles.cardContent}>
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitle} numberOfLines={1}>
-            {conversation.title || "Nouvelle conversation"}
+            {getDisplayConversationTitle(conversation.title, language)}
           </Text>
           <Text style={styles.cardDate}>
             {conversation.date ||
-              formatDate(conversation.updatedAt) ||
+              formatDate(conversation.updatedAt, language) ||
               ""}
           </Text>
         </View>
 
         <Text style={styles.cardPreview} numberOfLines={2}>
-          {conversation.preview || "Aucun aperçu disponible."}
+          {conversation.preview || UI[language].noPreview}
         </Text>
 
         <View style={styles.modelBadge}>
           <Text style={styles.modelBadgeText}>
-            {conversation.model || "Modèle IA"}
+            {conversation.model || UI[language].aiModel}
           </Text>
         </View>
       </View>
@@ -226,6 +330,23 @@ function ConversationCard({
 
 export default function ConversationsPage() {
   const { bottom: safeAreaBottom } = useSafeAreaInsets();
+  const [language, setLanguage] = useState<OriaLanguage>("fr");
+  const t = UI[language];
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      void readOriaLanguage().then((savedLanguage) => {
+        if (active) setLanguage(savedLanguage);
+      });
+
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
+
   const [search, setSearch] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [balance, setBalance] = useState<number | null>(null);
@@ -270,7 +391,7 @@ export default function ConversationsPage() {
     } finally {
       if (showLoader) setIsLoading(false);
     }
-  }, []);
+  }, [t.loadError]);
 
   useEffect(() => {
     loadData();
@@ -303,12 +424,12 @@ export default function ConversationsPage() {
       if (deletingConversationId) return;
 
       Alert.alert(
-        "Supprimer la conversation",
-        "Cette conversation sera définitivement supprimée.",
+        t.deleteTitle,
+        t.deleteMessage,
         [
-          { text: "Annuler", style: "cancel" },
+          { text: t.cancel, style: "cancel" },
           {
-            text: "Supprimer",
+            text: t.delete,
             style: "destructive",
             onPress: async () => {
               setDeletingConversationId(conversationId);
@@ -354,7 +475,7 @@ export default function ConversationsPage() {
         ]
       );
     },
-    [deletingConversationId]
+    [deletingConversationId, t]
   );
 
   const openOptions = (conversation: Conversation) => {
@@ -417,9 +538,9 @@ export default function ConversationsPage() {
             style={styles.creditPill}
             onPress={() => router.push("/credits" as any)}
           >
-            <Text style={styles.creditLabel}>Crédits</Text>
+            <Text style={styles.creditLabel}>{t.credits}</Text>
             <Text style={styles.creditValue}>
-              {balance === null ? "..." : balance.toLocaleString("fr-FR")}
+              {balance === null ? "..." : balance.toLocaleString(language === "en" ? "en-US" : "fr-FR")}
             </Text>
           </Pressable>
         </View>
@@ -444,11 +565,10 @@ export default function ConversationsPage() {
             <View>
               <View style={styles.pageHeader}>
                 <View style={styles.pageHeaderText}>
-                  <Text style={styles.overline}>VOTRE ESPACE</Text>
-                  <Text style={styles.pageTitle}>Conversations</Text>
+                  <Text style={styles.overline}>{t.workspace}</Text>
+                  <Text style={styles.pageTitle}>{t.conversations}</Text>
                   <Text style={styles.pageDescription}>
-                    Retrouvez vos conversations avec les différents
-                    modèles d&apos;Oria.
+{t.description}
                   </Text>
                 </View>
 
@@ -461,7 +581,7 @@ export default function ConversationsPage() {
                 >
                   <Ionicons name="add" size={18} color="#fff" />
                   <Text style={styles.newButtonText}>
-                    Nouvelle conversation
+                    {t.newConversation}
                   </Text>
                 </Pressable>
               </View>
@@ -476,7 +596,7 @@ export default function ConversationsPage() {
                 <TextInput
                   value={search}
                   onChangeText={setSearch}
-                  placeholder="Rechercher une conversation..."
+                  placeholder={t.searchPlaceholder}
                   placeholderTextColor="#9999a2"
                   style={styles.searchInput}
                   editable={!isLoading}
@@ -505,7 +625,7 @@ export default function ConversationsPage() {
                   />
                   <Text style={styles.errorText}>{error}</Text>
                   <Pressable onPress={() => loadData()}>
-                    <Text style={styles.retryText}>Réessayer</Text>
+                    <Text style={styles.retryText}>{t.retry}</Text>
                   </Pressable>
                 </View>
               ) : null}
@@ -514,7 +634,7 @@ export default function ConversationsPage() {
                 <View style={styles.loadingBox}>
                   <ActivityIndicator size="small" color="#111114" />
                   <Text style={styles.loadingText}>
-                    Chargement de vos conversations...
+                    {t.loading}
                   </Text>
                 </View>
               ) : null}
@@ -526,6 +646,7 @@ export default function ConversationsPage() {
               isDeleting={deletingConversationId === item.id}
               onDelete={deleteConversation}
               onOptions={openOptions}
+              language={language}
             />
           )}
           ListEmptyComponent={
@@ -541,14 +662,14 @@ export default function ConversationsPage() {
 
                 <Text style={styles.emptyTitle}>
                   {search.trim()
-                    ? "Aucune conversation trouvée"
-                    : "Aucune conversation"}
+                    ? t.noSearchResult
+                    : t.noConversation}
                 </Text>
 
                 <Text style={styles.emptyDescription}>
                   {search.trim()
-                    ? "Essayez avec un autre terme de recherche."
-                    : "Vos conversations apparaîtront ici."}
+                    ? t.tryAnotherSearch
+                    : t.conversationsAppearHere}
                 </Text>
 
                 {!search.trim() ? (
@@ -557,7 +678,7 @@ export default function ConversationsPage() {
                     onPress={startNewConversation}
                   >
                     <Text style={styles.emptyButtonText}>
-                      Commencer une conversation
+                      {t.startConversation}
                     </Text>
                     <Ionicons
                       name="arrow-forward"
@@ -582,7 +703,7 @@ export default function ConversationsPage() {
               <View style={styles.sheetHandle} />
 
               <Text style={styles.sheetTitle} numberOfLines={1}>
-                {selectedConversation?.title || "Conversation"}
+                {getDisplayConversationTitle(selectedConversation?.title, language) || t.conversation}
               </Text>
 
               <Pressable
@@ -596,7 +717,7 @@ export default function ConversationsPage() {
                     color="#33333a"
                   />
                 </View>
-                <Text style={styles.sheetActionText}>Ouvrir</Text>
+                <Text style={styles.sheetActionText}>{t.open}</Text>
               </Pressable>
 
               <Pressable
@@ -611,7 +732,7 @@ export default function ConversationsPage() {
                   />
                 </View>
                 <Text style={[styles.sheetActionText, styles.deleteText]}>
-                  Supprimer
+                  {t.delete}
                 </Text>
               </Pressable>
 
@@ -619,7 +740,7 @@ export default function ConversationsPage() {
                 style={styles.cancelButton}
                 onPress={closeOptions}
               >
-                <Text style={styles.cancelButtonText}>Annuler</Text>
+                <Text style={styles.cancelButtonText}>{t.cancel}</Text>
               </Pressable>
             </Pressable>
           </Pressable>

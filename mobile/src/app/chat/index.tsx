@@ -18,7 +18,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
@@ -57,6 +57,315 @@ import { Ionicons } from "@expo/vector-icons";
 const API_URL =
   process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, "") ||
   "https://lbv-connect-api.onrender.com";
+
+
+type OriaLanguage = "fr" | "en";
+
+const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
+
+const CHAT_TEXT = {
+  fr: {
+    newConversation: "Nouvelle conversation",
+    copyMessage: "Copier le message",
+    copied: "Copié",
+    copy: "Copier",
+    trial: "Essai",
+    higherModelTrial: "Modèle supérieur · 5 essais maximum",
+    image: "Image",
+    file: "Fichier",
+    open: "Ouvrir",
+    model: "Modèle",
+    noModel: "Aucun modèle disponible avec ce pack.",
+    welcomeHeading: "Comment puis-je\nvous aider ?",
+    welcomeDescription:
+      "Discutez avec les modèles disponibles et utilisez la recherche Web directement depuis votre espace.",
+    webSearchEnabled: "Recherche Web activée",
+    webSearchNext: "Active pour les prochains messages.",
+    mediaCreation: "Création média",
+    mediaCreationDescription:
+      "Choisissez Image ou Vidéo, puis la configuration.",
+    creationLocked: "Création verrouillée",
+    creationLockedDescription:
+      "Activez un pack pour générer des images ou des vidéos.",
+    generateImage: "Générer une image",
+    generateVideo: "Générer une vidéo",
+    configuration: "configuration",
+    configurations: "configurations",
+    generationConfiguration: "Configuration de génération",
+    credits: "crédits",
+    videoPrompt: "Décrivez précisément la vidéo à créer...",
+    imagePrompt: "Décrivez précisément l'image à créer...",
+    cost: "Coût",
+    backendValidation: "Le backend valide le pack et le débit.",
+    generating: "Génération...",
+    generateTheVideo: "Générer la vidéo",
+    generateTheImage: "Générer l'image",
+    creationPrompt: "Décrivez votre création...",
+    messagePrompt: "Écrivez à Oria...",
+    camera: "Caméra",
+    webSearch: "Recherche Web",
+    creation: "Création",
+    attachmentDisclaimer:
+      "Jusqu'à {max} fichiers ou images peuvent être joints. Les créations image et vidéo dépendent du pack actif.",
+    history: "Historique",
+    loading: "Chargement...",
+    noConversation: "Aucune conversation pour le moment.",
+    availableCredits: "Crédits disponibles",
+    daysRemaining: "{days} jours restants",
+    durationUnavailable: "Durée indisponible",
+    myCredits: "Mes crédits",
+    myCreations: "Mes créations",
+    settings: "Paramètres",
+    logout: "Déconnexion",
+    permissionRequired: "Permission requise",
+    cameraPermission:
+      "Autorisez l'accès à la caméra pour prendre une photo.",
+    photosPermission:
+      "Autorisez l'accès aux photos pour joindre une image.",
+    maxAttachments:
+      "Vous pouvez joindre au maximum {max} éléments par message.",
+    unsupportedFile: "Format de fichier non pris en charge.",
+    activePackRequired:
+      "La création d'images et de vidéos nécessite un pack actif.",
+    noCreationOption: "Aucune option de création n'est disponible.",
+    creationOptionMissing: "Cette option de création n'existe pas.",
+    mediaGenerationFailed: "La génération du média a échoué.",
+    mediaUrlMissing:
+      "Le serveur a généré le média mais n'a retourné aucune URL exploitable.",
+    mediaIdMissing:
+      "Le serveur a généré le média mais n'a retourné aucun identifiant.",
+    mediaCreationFailed: "La création média a échoué.",
+    freeTrialsExhausted: "Les essais gratuits de ce modèle sont épuisés.",
+    localConversationPending:
+      "Conversation créée localement. Synchronisation cloud en attente.",
+    localMessagesRemain: "Les messages locaux restent affichés.",
+    cloudMessagesFailed: "Impossible de charger les messages cloud.",
+    localDataRemain: "Les données locales restent disponibles.",
+    serverUnavailableLocal:
+      "Serveur indisponible. Les données locales restent disponibles.",
+    localConversationRetry:
+      "Conversation sauvegardée localement. La synchronisation cloud sera réessayée.",
+    aiStreamingError: "Erreur pendant le streaming IA.",
+    noAiContent: "Le service IA n'a retourné aucun contenu.",
+    cannotContactOria: "Impossible de contacter Oria.",
+    errorPrefix: "Erreur",
+    attachmentsSummary: "Pièces jointes",
+    mediaPromptPrefix: "Création",
+    generated: "générée",
+    video: "Vidéo",
+    seconds: "secondes",
+    modelDescriptions: {
+      luna: "Modèle économique · Rapide pour les échanges courants",
+      "gpt-5": "Modèle polyvalent · Pour les tâches plus avancées",
+      "gpt-5.6-terra": "Raisonnement avancé · Pour les problèmes complexes",
+      "gpt-5.6-sol": "Puissance maximale · Pour les tâches les plus exigeantes",
+    },
+    mediaDescriptions: {
+      image_480: "Génération image légère",
+      image_720: "Génération image légère",
+      image_pro: "Génération image professionnelle",
+      image_pro_standard: "Qualité professionnelle standard",
+      image_pro_ultra: "Qualité professionnelle maximale",
+      image_business: "Génération business",
+      image_business_hd: "Génération business haute définition",
+      image_business_ultra: "Génération business maximale",
+      video_4s: "Génération vidéo légère",
+      video_8s: "Génération vidéo légère",
+      video_lite: "Génération vidéo intermédiaire",
+      video_pro_fast: "Génération vidéo professionnelle rapide",
+      video_pro_standard: "Génération vidéo professionnelle standard",
+      video_pro_extension: "Extension d'une génération vidéo Pro",
+      video_business_fast: "Génération vidéo business rapide",
+      video_business_standard: "Génération vidéo business standard",
+      video_business_long: "Génération vidéo business longue",
+    },
+  },
+  en: {
+    newConversation: "New conversation",
+    copyMessage: "Copy message",
+    copied: "Copied",
+    copy: "Copy",
+    trial: "Trial",
+    higherModelTrial: "Higher-tier model · 5 trials maximum",
+    image: "Image",
+    file: "File",
+    open: "Open",
+    model: "Model",
+    noModel: "No model available with this pack.",
+    welcomeHeading: "How can I\nhelp you?",
+    welcomeDescription:
+      "Chat with the available models and use Web Search directly from your workspace.",
+    webSearchEnabled: "Web Search enabled",
+    webSearchNext: "Active for upcoming messages.",
+    mediaCreation: "Media creation",
+    mediaCreationDescription:
+      "Choose Image or Video, then select the configuration.",
+    creationLocked: "Creation locked",
+    creationLockedDescription:
+      "Activate a pack to generate images or videos.",
+    generateImage: "Generate an image",
+    generateVideo: "Generate a video",
+    configuration: "configuration",
+    configurations: "configurations",
+    generationConfiguration: "Generation configuration",
+    credits: "credits",
+    videoPrompt: "Describe the video you want to create...",
+    imagePrompt: "Describe the image you want to create...",
+    cost: "Cost",
+    backendValidation: "The backend validates the pack and credit charge.",
+    generating: "Generating...",
+    generateTheVideo: "Generate video",
+    generateTheImage: "Generate image",
+    creationPrompt: "Describe your creation...",
+    messagePrompt: "Message Oria...",
+    camera: "Camera",
+    webSearch: "Web Search",
+    creation: "Creation",
+    attachmentDisclaimer:
+      "Up to {max} files or images can be attached. Image and video creation depends on the active pack.",
+    history: "History",
+    loading: "Loading...",
+    noConversation: "No conversations yet.",
+    availableCredits: "Available credits",
+    daysRemaining: "{days} days remaining",
+    durationUnavailable: "Duration unavailable",
+    myCredits: "My credits",
+    myCreations: "My creations",
+    settings: "Settings",
+    logout: "Sign out",
+    permissionRequired: "Permission required",
+    cameraPermission:
+      "Allow camera access to take a photo.",
+    photosPermission:
+      "Allow photo access to attach an image.",
+    maxAttachments:
+      "You can attach up to {max} items per message.",
+    unsupportedFile: "Unsupported file format.",
+    activePackRequired:
+      "Image and video creation requires an active pack.",
+    noCreationOption: "No creation option is available.",
+    creationOptionMissing: "This creation option does not exist.",
+    mediaGenerationFailed: "Media generation failed.",
+    mediaUrlMissing:
+      "The server generated the media but did not return a usable URL.",
+    mediaIdMissing:
+      "The server generated the media but did not return an ID.",
+    mediaCreationFailed: "Media creation failed.",
+    freeTrialsExhausted: "The free trials for this model have been used up.",
+    localConversationPending:
+      "Conversation created locally. Cloud sync is pending.",
+    localMessagesRemain: "Local messages remain displayed.",
+    cloudMessagesFailed: "Unable to load cloud messages.",
+    localDataRemain: "Local data remains available.",
+    serverUnavailableLocal:
+      "Server unavailable. Local data remains available.",
+    localConversationRetry:
+      "Conversation saved locally. Cloud sync will be retried.",
+    aiStreamingError: "Error while streaming the AI response.",
+    noAiContent: "The AI service returned no content.",
+    cannotContactOria: "Unable to contact Oria.",
+    errorPrefix: "Error",
+    attachmentsSummary: "Attachments",
+    mediaPromptPrefix: "Creation",
+    generated: "generated",
+    video: "Video",
+    seconds: "seconds",
+    modelDescriptions: {
+      luna: "Economical model · Fast for everyday conversations",
+      "gpt-5": "Versatile model · For more advanced tasks",
+      "gpt-5.6-terra": "Advanced reasoning · For complex problems",
+      "gpt-5.6-sol": "Maximum power · For the most demanding tasks",
+    },
+    mediaDescriptions: {
+      image_480: "Lightweight image generation",
+      image_720: "Lightweight image generation",
+      image_pro: "Professional image generation",
+      image_pro_standard: "Standard professional quality",
+      image_pro_ultra: "Maximum professional quality",
+      image_business: "Business image generation",
+      image_business_hd: "High-definition business generation",
+      image_business_ultra: "Maximum business generation",
+      video_4s: "Lightweight video generation",
+      video_8s: "Lightweight video generation",
+      video_lite: "Intermediate video generation",
+      video_pro_fast: "Fast professional video generation",
+      video_pro_standard: "Standard professional video generation",
+      video_pro_extension: "Extend a Pro video generation",
+      video_business_fast: "Fast business video generation",
+      video_business_standard: "Standard business video generation",
+      video_business_long: "Long business video generation",
+    },
+  },
+} as const;
+
+async function readOriaLanguage(): Promise<OriaLanguage> {
+  try {
+    if (Platform.OS === "web") {
+      const saved = getWebStorage()?.getItem(ORIA_LANGUAGE_STORAGE_KEY);
+      if (saved === "fr" || saved === "en") return saved;
+
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.language.toLowerCase().startsWith("en")
+      ) {
+        return "en";
+      }
+
+      return "fr";
+    }
+
+    const saved = await SecureStore.getItemAsync(
+      ORIA_LANGUAGE_STORAGE_KEY,
+    );
+
+    return saved === "en" ? "en" : "fr";
+  } catch {
+    return "fr";
+  }
+}
+
+function interpolate(
+  value: string,
+  variables: Record<string, string | number>,
+) {
+  return Object.entries(variables).reduce(
+    (result, [key, replacement]) =>
+      result.replace(`{${key}}`, String(replacement)),
+    value,
+  );
+}
+
+function getDisplayConversationTitle(
+  title: string,
+  language: OriaLanguage,
+) {
+  return title === "Nouvelle conversation"
+    ? CHAT_TEXT[language].newConversation
+    : title;
+}
+
+function getModelDescription(
+  model: ModelDefinition,
+  language: OriaLanguage,
+) {
+  return (
+    CHAT_TEXT[language].modelDescriptions[
+      model.id as keyof typeof CHAT_TEXT.fr.modelDescriptions
+    ] ?? model.description
+  );
+}
+
+function getMediaDescription(
+  action: string,
+  fallback: string,
+  language: OriaLanguage,
+) {
+  return (
+    CHAT_TEXT[language].mediaDescriptions[
+      action as keyof typeof CHAT_TEXT.fr.mediaDescriptions
+    ] ?? fallback
+  );
+}
 
 type Role = "user" | "assistant";
 
@@ -267,8 +576,13 @@ function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function formatCredits(value: number) {
-  return value.toLocaleString("fr-FR");
+function formatCredits(
+  value: number,
+  language: OriaLanguage = "fr",
+) {
+  return value.toLocaleString(
+    language === "en" ? "en-US" : "fr-FR",
+  );
 }
 
 async function getSessionOrThrow() {
@@ -704,7 +1018,13 @@ function MathExpression({ source }: { source: string }) {
   );
 }
 
-function MessageCopyButton({ value }: { value: string }) {
+function MessageCopyButton({
+  value,
+  language,
+}: {
+  value: string;
+  language: OriaLanguage;
+}) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -722,7 +1042,7 @@ function MessageCopyButton({ value }: { value: string }) {
       onPress={() => void copy()}
       style={styles.messageCopyButton}
       accessibilityRole="button"
-      accessibilityLabel="Copier le message"
+      accessibilityLabel={CHAT_TEXT[language].copyMessage}
     >
       <Ionicons
         name={copied ? "checkmark" : "copy-outline"}
@@ -730,7 +1050,7 @@ function MessageCopyButton({ value }: { value: string }) {
         color="#777771"
       />
       <Text style={styles.messageCopyText}>
-        {copied ? "Copié" : "Copier"}
+        {copied ? CHAT_TEXT[language].copied : CHAT_TEXT[language].copy}
       </Text>
     </Pressable>
   );
@@ -817,7 +1137,13 @@ function InlineMarkdown({ text }: { text: string }) {
   return <Text>{parts}</Text>;
 }
 
-function MarkdownMessage({ content }: { content: string }) {
+function MarkdownMessage({
+  content,
+  language: uiLanguage,
+}: {
+  content: string;
+  language: OriaLanguage;
+}) {
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = normalized.split("\n");
 
@@ -826,7 +1152,7 @@ function MarkdownMessage({ content }: { content: string }) {
   let bullets: string[] = [];
   let numbered: string[] = [];
   let code: string[] = [];
-  let language = "";
+  let codeLanguage = "";
   let math: string[] = [];
   let inCode = false;
   let inMath = false;
@@ -909,12 +1235,12 @@ function MarkdownMessage({ content }: { content: string }) {
     if (!inCode) return;
 
     blocks.push(
-      <CodeBlock key={`code-${index}`} language={language} value={code.join("\n")} />,
+      <CodeBlock key={`code-${index}`} language={codeLanguage} value={code.join("\n")} uiLanguage={uiLanguage} />,
     );
 
     index++;
     code = [];
-    language = "";
+    codeLanguage = "";
     inCode = false;
   };
 
@@ -980,7 +1306,7 @@ function MarkdownMessage({ content }: { content: string }) {
         flushLists();
         flushParagraph();
         inCode = true;
-        language = trimmed.slice(3).trim();
+        codeLanguage = trimmed.slice(3).trim();
       } else {
         flushCode();
       }
@@ -1097,9 +1423,11 @@ function MarkdownMessage({ content }: { content: string }) {
 function CodeBlock({
   language,
   value,
+  uiLanguage,
 }: {
   language: string;
   value: string;
+  uiLanguage: OriaLanguage;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -1114,7 +1442,7 @@ function CodeBlock({
       <View style={styles.codeHeader}>
         <Text style={styles.codeLanguage}>{language || "Code"}</Text>
         <Pressable onPress={copy} style={styles.copyButton}>
-          <Text style={styles.copyText}>{copied ? "Copié" : "Copier"}</Text>
+          <Text style={styles.copyText}>{copied ? CHAT_TEXT[uiLanguage].copied : CHAT_TEXT[uiLanguage].copy}</Text>
         </Pressable>
       </View>
       <ScrollView
@@ -1151,12 +1479,14 @@ function ModelOption({
   trial,
   disabled,
   onPress,
+  language,
 }: {
   model: ModelDefinition;
   active: boolean;
   trial?: TrialInfo;
   disabled: boolean;
   onPress: () => void;
+  language: OriaLanguage;
 }) {
   return (
     <Pressable
@@ -1172,13 +1502,13 @@ function ModelOption({
         <Text style={styles.modelName}>{model.name}</Text>
         {trial ? (
           <Text style={styles.trialBadge}>
-            Essai · {trial.remaining}/{trial.max}
+            {CHAT_TEXT[language].trial} · {trial.remaining}/{trial.max}
           </Text>
         ) : active ? (
           <Ionicons name="checkmark" size={17} color="#111111" />
         ) : null}
       </View>
-      <Text style={styles.modelDescription}>{model.description}</Text>
+      <Text style={styles.modelDescription}>{getModelDescription(model, language)}</Text>
       {trial ? (
         <Text style={styles.smallMuted}>
           Modèle supérieur · 5 essais maximum
@@ -1191,9 +1521,11 @@ function ModelOption({
 function AttachmentCard({
   attachment,
   onRemove,
+  language,
 }: {
   attachment: ChatAttachment;
   onRemove: () => void;
+  language: OriaLanguage;
 }) {
   return (
     <View style={styles.attachmentCard}>
@@ -1210,7 +1542,7 @@ function AttachmentCard({
           {attachment.name}
         </Text>
         <Text style={styles.smallMuted}>
-          {attachment.kind === "image" ? "Image" : "Fichier"}
+          {attachment.kind === "image" ? CHAT_TEXT[language].image : CHAT_TEXT[language].file}
         </Text>
       </View>
 
@@ -1224,6 +1556,23 @@ function AttachmentCard({
 export default function ChatPage() {
   const router = useRouter();
   const listRef = useRef<FlatList<ChatMessage>>(null);
+
+  const [language, setLanguage] = useState<OriaLanguage>("fr");
+  const t = CHAT_TEXT[language];
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+
+      void readOriaLanguage().then((savedLanguage) => {
+        if (active) setLanguage(savedLanguage);
+      });
+
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
@@ -1821,7 +2170,7 @@ export default function ChatPage() {
         requestError,
       );
       setError(
-        "Conversation créée localement. Synchronisation cloud en attente.",
+        t.localConversationPending,
       );
     }
   }
@@ -1867,8 +2216,8 @@ export default function ChatPage() {
       console.error("Erreur chargement messages :", requestError);
       setError(
         requestError instanceof Error
-          ? `${requestError.message} Les messages locaux restent affichés.`
-          : "Impossible de charger les messages cloud.",
+          ? `${requestError.message} ${t.localMessagesRemain}`
+          : t.cloudMessagesFailed,
       );
     }
   }
@@ -1899,7 +2248,7 @@ export default function ChatPage() {
   async function pickCamera() {
     if (attachments.length >= MAX_ATTACHMENTS) {
       setError(
-        `Vous pouvez joindre au maximum ${MAX_ATTACHMENTS} éléments par message.`,
+        interpolate(t.maxAttachments, { max: MAX_ATTACHMENTS }),
       );
       return;
     }
@@ -1908,8 +2257,8 @@ export default function ChatPage() {
 
     if (!permission.granted) {
       Alert.alert(
-        "Permission requise",
-        "Autorisez l'accès à la caméra pour prendre une photo.",
+        t.permissionRequired,
+        t.cameraPermission,
       );
       return;
     }
@@ -1945,7 +2294,7 @@ export default function ChatPage() {
   async function pickImage() {
     if (attachments.length >= MAX_ATTACHMENTS) {
       setError(
-        `Vous pouvez joindre au maximum ${MAX_ATTACHMENTS} éléments par message.`,
+        interpolate(t.maxAttachments, { max: MAX_ATTACHMENTS }),
       );
       return;
     }
@@ -1955,8 +2304,8 @@ export default function ChatPage() {
 
     if (!permission.granted) {
       Alert.alert(
-        "Permission requise",
-        "Autorisez l'accès aux photos pour joindre une image.",
+        t.permissionRequired,
+        t.photosPermission,
       );
       return;
     }
@@ -1988,7 +2337,7 @@ export default function ChatPage() {
   async function pickFiles() {
     if (attachments.length >= MAX_ATTACHMENTS) {
       setError(
-        `Vous pouvez joindre au maximum ${MAX_ATTACHMENTS} éléments par message.`,
+        interpolate(t.maxAttachments, { max: MAX_ATTACHMENTS }),
       );
       return;
     }
@@ -2015,7 +2364,7 @@ export default function ChatPage() {
         !ACCEPTED_FILE_TYPES.includes(mime) &&
         !ACCEPTED_IMAGE_TYPES.includes(mime)
       ) {
-        setError("Format de fichier non pris en charge.");
+        setError(t.unsupportedFile);
         continue;
       }
 
@@ -2041,7 +2390,7 @@ export default function ChatPage() {
 
   async function handleGenerateMedia(promptOverride?: string) {
     if (!hasActivePack) {
-      setError("La création d'images et de vidéos nécessite un pack actif.");
+      setError(t.activePackRequired);
       return;
     }
     const prompt = (promptOverride ?? mediaPrompt).trim();
@@ -2049,7 +2398,7 @@ export default function ChatPage() {
     if (!prompt || isThinking) return;
 
     if (!selectedMediaAction) {
-      setError("Aucune option de création n'est disponible.");
+      setError(t.noCreationOption);
       return;
     }
 
@@ -2069,7 +2418,7 @@ export default function ChatPage() {
       })();
 
     if (!capability) {
-      setError("Cette option de création n'existe pas.");
+      setError(t.creationOptionMissing);
       return;
     }
 
@@ -2167,7 +2516,7 @@ export default function ChatPage() {
       });
 
       if (!response.success) {
-        throw new Error("La génération du média a échoué.");
+        throw new Error(t.mediaGenerationFailed);
       }
 
       const url = (
@@ -2179,7 +2528,7 @@ export default function ChatPage() {
 
       if (!url) {
         throw new Error(
-          "Le serveur a généré le média mais n'a retourné aucune URL exploitable.",
+          t.mediaUrlMissing,
         );
       }
 
@@ -2187,7 +2536,7 @@ export default function ChatPage() {
 
       if (!mediaId) {
         throw new Error(
-          "Le serveur a généré le média mais n'a retourné aucun identifiant.",
+          t.mediaIdMissing,
         );
       }
 
@@ -2253,7 +2602,7 @@ export default function ChatPage() {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "La création média a échoué.",
+          : t.mediaCreationFailed,
       );
     } finally {
       setIsThinking(false);
@@ -2265,7 +2614,7 @@ export default function ChatPage() {
     const selectedTrial = trials[selectedModel];
 
     if (selectedTrial && selectedTrial.remaining <= 0) {
-      setError("Les essais gratuits de ce modèle sont épuisés.");
+      setError(t.freeTrialsExhausted);
       return;
     }
 
@@ -2326,7 +2675,7 @@ export default function ChatPage() {
         );
 
         setError(
-          "Conversation sauvegardée localement. La synchronisation cloud sera réessayée.",
+          t.localConversationRetry,
         );
       }
     } else {
@@ -2341,7 +2690,7 @@ export default function ChatPage() {
 
     const attachmentSummary =
       attachments.length > 0
-        ? `\n\n[Pièces jointes : ${attachments
+        ? `\n\n[${t.attachmentsSummary} : ${attachments
             .map((attachment) => attachment.name)
             .join(", ")}]`
         : "";
@@ -2496,7 +2845,7 @@ export default function ChatPage() {
               throw new Error(
                 typeof eventData.detail === "string"
                   ? eventData.detail
-                  : "Erreur pendant le streaming IA.",
+                  : t.aiStreamingError,
               );
             }
 
@@ -2513,7 +2862,7 @@ export default function ChatPage() {
 
       if (!assistantContent.trim()) {
         throw new Error(
-          "Le service IA n'a retourné aucun contenu.",
+          t.noAiContent,
         );
       }
 
@@ -2561,13 +2910,13 @@ export default function ChatPage() {
       const errorMessage =
         requestError instanceof Error
           ? requestError.message
-          : "Impossible de contacter Oria.";
+          : t.cannotContactOria;
 
       const assistantMessage: ChatMessage = {
         id: uid(),
         conversationId,
         role: "assistant",
-        content: `Erreur : ${errorMessage}`,
+        content: `${t.errorPrefix} : ${errorMessage}`,
         createdAt: new Date().toISOString(),
       };
 
@@ -2650,6 +2999,7 @@ export default function ChatPage() {
           {item.role === "assistant" ? (
             <MarkdownMessage
               content={getVisibleMessageContent(item.content)}
+              language={language}
             />
           ) : (
             <Text style={styles.userText}>{item.content}</Text>
@@ -2664,7 +3014,7 @@ export default function ChatPage() {
               : styles.messageActionsAssistant,
           ]}
         >
-          <MessageCopyButton value={copyValue} />
+          <MessageCopyButton value={copyValue} language={language} />
         </View>
 
         {media ? (
@@ -2690,7 +3040,7 @@ export default function ChatPage() {
                 size={15}
                 color="#ffffff"
               />
-              <Text style={styles.openMediaText}>Ouvrir</Text>
+              <Text style={styles.openMediaText}>{t.open}</Text>
             </Pressable>
           </View>
         ) : null}
@@ -2698,11 +3048,13 @@ export default function ChatPage() {
     );
   }
 
-  const activeTitle =
+  const activeTitle = getDisplayConversationTitle(
     conversations.find(
       (conversation) =>
         conversation.id === activeConversationId,
-    )?.title || "Nouvelle conversation";
+    )?.title || "Nouvelle conversation",
+    language,
+  );
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -2789,12 +3141,11 @@ export default function ChatPage() {
               </View>
 
               <Text style={styles.emptyHeading}>
-                Comment puis-je{"\n"}vous aider ?
+                {t.welcomeHeading}
               </Text>
 
               <Text style={styles.emptyDescription}>
-                Discutez avec les modèles disponibles et utilisez
-                la recherche Web directement depuis votre espace.
+                {t.welcomeDescription}
               </Text>
             </View>
           ) : (
@@ -2839,7 +3190,7 @@ export default function ChatPage() {
               <View style={styles.modelMenu}>
                 {availableModels.length === 0 ? (
                   <Text style={styles.emptyMenuText}>
-                    Aucun modèle disponible avec ce pack.
+                    {t.noModel}
                   </Text>
                 ) : (
                   availableModels.map((model) => (
@@ -2852,6 +3203,7 @@ export default function ChatPage() {
                         Boolean(trials[model.id]) &&
                         trials[model.id].remaining <= 0
                       }
+                      language={language}
                       onPress={() => {
                         if (
                           trials[model.id] &&
@@ -2885,12 +3237,12 @@ export default function ChatPage() {
               <Text style={styles.modelSelectorText}>
                 {models.find(
                   (model) => model.id === selectedModel,
-                )?.name || "Modèle"}
+)?.name || t.model}
               </Text>
 
               {trials[selectedModel] ? (
                 <Text style={styles.trialBadge}>
-                  Essai · {trials[selectedModel].remaining}/
+                  {t.trial} · {trials[selectedModel].remaining}/
                   {trials[selectedModel].max}
                 </Text>
               ) : null}
@@ -2917,10 +3269,10 @@ export default function ChatPage() {
                 </View>
                 <View style={styles.flex}>
                   <Text style={styles.capabilityTitle}>
-                    Recherche Web activée
+                    {t.webSearchEnabled}
                   </Text>
                   <Text style={styles.capabilityDescription}>
-                    Active pour les prochains messages.
+                    {t.webSearchNext}
                   </Text>
                 </View>
                 <Pressable
@@ -2940,10 +3292,10 @@ export default function ChatPage() {
                 <View style={styles.rowBetween}>
                   <View style={styles.flex}>
                     <Text style={styles.capabilityTitle}>
-                      Création média
+                      {t.mediaCreation}
                     </Text>
                     <Text style={styles.capabilityDescription}>
-                      Choisissez Image ou Vidéo, puis la configuration.
+                      {t.mediaCreationDescription}
                     </Text>
                   </View>
                   <Pressable
@@ -2971,10 +3323,10 @@ export default function ChatPage() {
                     />
                     <View style={styles.flex}>
                       <Text style={styles.mediaLockedTitle}>
-                        Création verrouillée
+                        {t.creationLocked}
                       </Text>
                       <Text style={styles.mediaLockedText}>
-                        Activez un pack pour générer des images ou des vidéos.
+                        {t.creationLockedDescription}
                       </Text>
                     </View>
                   </View>
@@ -3023,12 +3375,14 @@ export default function ChatPage() {
                         />
                         <Text style={styles.mediaTypeText}>
                           {type === "image"
-                            ? "Générer une image"
-                            : "Générer une vidéo"}
+                            ? t.generateImage
+                            : t.generateVideo}
                         </Text>
                         <Text style={styles.smallMuted}>
-                          {configurationsForType.length} configuration
-                          {configurationsForType.length > 1 ? "s" : ""}
+                          {configurationsForType.length}{" "}
+                          {configurationsForType.length > 1
+                            ? t.configurations
+                            : t.configuration}
                         </Text>
                       </Pressable>
                     );
@@ -3038,7 +3392,7 @@ export default function ChatPage() {
                 {selectedMediaAction ? (
                   <>
                     <Text style={styles.mediaSectionLabel}>
-                      Configuration de génération
+                      {t.generationConfiguration}
                     </Text>
 
                     <ScrollView
@@ -3098,7 +3452,11 @@ export default function ChatPage() {
                               </View>
 
                               <Text style={styles.smallMuted}>
-                                {config.description}
+                                {getMediaDescription(
+                                  config.action,
+                                  config.description,
+                                  language,
+                                )}
                               </Text>
 
                               <View style={styles.rowBetween}>
@@ -3106,7 +3464,7 @@ export default function ChatPage() {
                                   {config.configuration}
                                 </Text>
                                 <Text style={styles.smallMuted}>
-                                  {formatCredits(credits)} crédits
+                                  {formatCredits(credits)} {t.credits}
                                 </Text>
                               </View>
                             </Pressable>
@@ -3123,8 +3481,8 @@ export default function ChatPage() {
                             selectedMediaAction,
                           )?.type
                         ) === "video"
-                          ? "Décrivez précisément la vidéo à créer..."
-                          : "Décrivez précisément l'image à créer..."
+                          ? t.videoPrompt
+                          : t.imagePrompt
                       }
                       multiline
                       editable={hasActivePack && !isThinking}
@@ -3158,15 +3516,15 @@ export default function ChatPage() {
 
                           return (
                             <Text style={styles.smallMuted}>
-                              Coût :{" "}
+                              {t.cost} :{" "}
                               <Text style={styles.bold}>
-                                {formatCredits(selectedCredits)} crédits
+                                {formatCredits(selectedCredits)} {t.credits}
                               </Text>
                             </Text>
                           );
                         })()}
                         <Text style={styles.smallMuted}>
-                          Le backend valide le pack et le débit.
+                          {t.backendValidation}
                         </Text>
                       </View>
 
@@ -3195,14 +3553,14 @@ export default function ChatPage() {
                         />
                         <Text style={styles.generateButtonText}>
                           {isThinking
-                            ? "Génération..."
+                            ? t.generating
                             : (
                                 getMediaGenerationConfig(
                                   selectedMediaAction,
                                 )?.type
                               ) === "video"
-                              ? "Générer la vidéo"
-                              : "Générer l'image"}
+                              ? t.generateTheVideo
+                              : t.generateTheImage}
                         </Text>
                       </Pressable>
                     </View>
@@ -3222,6 +3580,7 @@ export default function ChatPage() {
                     <AttachmentCard
                       key={attachment.id}
                       attachment={attachment}
+                      language={language}
                       onRemove={() =>
                         removeAttachment(attachment.id)
                       }
@@ -3235,8 +3594,8 @@ export default function ChatPage() {
                 onChangeText={setMessage}
                 placeholder={
                   activeCapability === "Création"
-                    ? "Décrivez votre création..."
-                    : "Écrivez à Oria..."
+                    ? t.creationPrompt
+                    : t.messagePrompt
                 }
                 placeholderTextColor="#999999"
                 editable={!isThinking}
@@ -3273,7 +3632,7 @@ export default function ChatPage() {
                       color="#555555"
                     />
                     <Text style={styles.capabilityButtonText}>
-                      Fichier
+                      {t.file}
                     </Text>
                     {attachments.length > 0 ? (
                       <Text style={styles.smallMuted}>
@@ -3292,7 +3651,7 @@ export default function ChatPage() {
                       color="#555555"
                     />
                     <Text style={styles.capabilityButtonText}>
-                      Image
+                      {t.image}
                     </Text>
                     {attachments.length > 0 ? (
                       <Text style={styles.smallMuted}>
@@ -3311,7 +3670,7 @@ export default function ChatPage() {
                       color="#555555"
                     />
                     <Text style={styles.capabilityButtonText}>
-                      Caméra
+                      {t.camera}
                     </Text>
                   </Pressable>
 
@@ -3341,7 +3700,7 @@ export default function ChatPage() {
                           styles.capabilityActiveText,
                       ]}
                     >
-                      Recherche Web
+                      {t.webSearch}
                     </Text>
                   </Pressable>
 
@@ -3371,7 +3730,7 @@ export default function ChatPage() {
                           styles.capabilityActiveText,
                       ]}
                     >
-                      Création
+                      {t.creation}
                     </Text>
                   </Pressable>
                 </ScrollView>
@@ -3406,8 +3765,9 @@ export default function ChatPage() {
             </View>
 
             <Text style={styles.disclaimer}>
-              Jusqu'à {MAX_ATTACHMENTS} fichiers ou images peuvent être
-              joints. Les créations image et vidéo dépendent du pack actif.
+              {interpolate(t.attachmentDisclaimer, {
+                max: MAX_ATTACHMENTS,
+              })}
             </Text>
           </View>
 
@@ -3459,14 +3819,14 @@ export default function ChatPage() {
                       color="#ffffff"
                     />
                     <Text style={styles.newConversationText}>
-                      Nouvelle conversation
+                      {t.newConversation}
                     </Text>
                   </View>
                   <Text style={styles.plusText}>+</Text>
                 </Pressable>
 
                 <Text style={styles.historyLabel}>
-                  Historique
+                  {t.history}
                 </Text>
 
                 <FlatList
@@ -3476,8 +3836,8 @@ export default function ChatPage() {
                   ListEmptyComponent={
                     <Text style={styles.smallMuted}>
                       {isLoadingConversations
-                        ? "Chargement..."
-                        : "Aucune conversation pour le moment."}
+                        ? t.loading
+                        : t.noConversation}
                     </Text>
                   }
                   renderItem={({ item }) => (
@@ -3495,7 +3855,10 @@ export default function ChatPage() {
                         numberOfLines={1}
                         style={styles.conversationTitle}
                       >
-                        {item.title}
+                        {getDisplayConversationTitle(
+                          item.title,
+                          language,
+                        )}
                       </Text>
                     </Pressable>
                   )}
@@ -3504,7 +3867,7 @@ export default function ChatPage() {
                 <View style={styles.walletCard}>
                   <View style={styles.rowBetween}>
                     <Text style={styles.smallMuted}>
-                      Crédits disponibles
+                      {t.availableCredits}
                     </Text>
                     <Ionicons
                       name="wallet-outline"
@@ -3523,8 +3886,8 @@ export default function ChatPage() {
 
                   <Text style={styles.smallMuted}>
                     {remainingDays !== null
-                      ? `${remainingDays} jours restants`
-                      : "Durée indisponible"}
+                      ? interpolate(t.daysRemaining, { days: remainingDays })
+                      : t.durationUnavailable}
                   </Text>
                 </View>
 
@@ -3542,7 +3905,7 @@ export default function ChatPage() {
                       color="#555555"
                     />
                     <Text style={styles.drawerLinkText}>
-                      Mes crédits
+                      {t.myCredits}
                     </Text>
                   </Pressable>
 
@@ -3559,7 +3922,7 @@ export default function ChatPage() {
                       color="#555555"
                     />
                     <Text style={styles.drawerLinkText}>
-                      Mes créations
+                      {t.myCreations}
                     </Text>
                     {generatedMedia.length > 0 ? (
                       <Text style={styles.drawerCount}>
@@ -3581,7 +3944,7 @@ export default function ChatPage() {
                       color="#555555"
                     />
                     <Text style={styles.drawerLinkText}>
-                      Paramètres
+                      {t.settings}
                     </Text>
                   </Pressable>
 
@@ -3595,7 +3958,7 @@ export default function ChatPage() {
                       color="#555555"
                     />
                     <Text style={styles.drawerLinkText}>
-                      Déconnexion
+                      {t.logout}
                     </Text>
                   </Pressable>
                 </View>
