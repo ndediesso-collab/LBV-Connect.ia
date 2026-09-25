@@ -60,7 +60,7 @@ MEMORY_UPDATE_INTERVAL = 20
 MEMORY_MAX_MESSAGES_PER_UPDATE = 60
 
 # Modèle interne économique utilisé pour condenser la mémoire.
-MEMORY_MODEL_ID = "gpt-5.6-luna"
+MEMORY_MODEL_ID = "gpt-6-luna"
 
 
 # ============================================================

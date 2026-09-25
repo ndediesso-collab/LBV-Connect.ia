@@ -15,7 +15,7 @@ PRIMARY_PACKS = {
     },
 
     "business_pack": {
-        "price": 19000,
+        "price": 45000,
         "credits": 160000,
     },
 }
