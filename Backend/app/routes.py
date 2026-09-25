@@ -21,6 +21,7 @@ from app.services.credit_service import (
 )
 from app.services.wallet_service import WalletService
 from app.services.openai_service import OpenAIService
+from app.services.media_service import media_service
 
 from app.config.payments import (
     ADDON_PACKS,
@@ -129,13 +130,24 @@ Règles :
 
     service = OpenAIService()
 
-    return service.chat(
+    result = service.chat(
         model=MEMORY_MODEL_ID,
         message=prompt,
         web=False,
         attachments=[],
         history=[],
-    ).strip()
+    )
+
+    if isinstance(result, dict):
+        return str(
+            result.get("message")
+            or result.get("output_text")
+            or ""
+        ).strip()
+
+    # Compatibilité défensive avec une ancienne implémentation
+    # qui retournerait encore directement une chaîne.
+    return str(result or "").strip()
 
 
 def _maybe_update_conversation_memory(
@@ -1596,8 +1608,12 @@ def authorize_ai_request(
         4. date d'expiration non dépassée
         5. crédits disponibles
 
-    La consommation réelle reste effectuée par
-    /credits/me/consume via CreditService + RPC Supabase.
+    La consommation réelle est effectuée par la route IA
+    responsable de l'action via le flux dynamique :
+
+        estimation -> reserve -> exécution -> settle/release.
+
+    Cette route reste uniquement un contrôle général de disponibilité.
     """
 
     # ========================================================
@@ -1704,18 +1720,15 @@ def consume_my_credits(
     ),
 ):
     """
-    Consomme des crédits pour l'utilisateur authentifié.
+    Endpoint legacy réservé aux éventuelles actions à coût fixe.
 
-    Le débit réel est effectué atomiquement par la RPC Supabase
-    `consume_credits` via SupabaseCreditRepository.
+    Le Chat, les images et les vidéos utilisent désormais leur propre
+    facturation dynamique :
 
-    IMPORTANT :
-    - le frontend ne fournit jamais le montant des crédits ;
-    - le coût est déterminé côté backend ;
-    - les requêtes multimodales peuvent fournir un `cost_override`
-      calculé côté backend ;
-    - aucune mise à jour manuelle du wallet ni transaction
-      supplémentaire n'est effectuée après la RPC.
+        estimation -> reserve -> exécution -> settle/release.
+
+    Ces actions sont donc explicitement refusées ici afin d'éviter
+    un double débit ou un contournement du coût réel fournisseur.
     """
 
     # ========================================================
@@ -1728,6 +1741,28 @@ def consume_my_credits(
             authorization=authorization,
         )
     )
+
+    action_value = (
+        request.action.value
+        if hasattr(request.action, "value")
+        else str(request.action)
+    )
+
+    if action_value.startswith(
+        (
+            "chat_",
+            "image_",
+            "video_",
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cette action utilise la facturation dynamique Oria "
+                "(reserve -> exécution -> settle/release) et ne peut "
+                "plus être débitée via /credits/me/consume."
+            ),
+        )
 
     # ========================================================
     # 2. REPOSITORY
@@ -4001,173 +4036,76 @@ def delete_conversation(
 # ============================================================
 # MÉDIAS — MES CRÉATIONS
 # ============================================================
-
-def _build_media_public_url(storage_path: str | None) -> str | None:
-    """
-    Construit l'URL publique canonique d'un média Supabase Storage.
-
-    `storage_path` est la source de vérité :
-        <user_id>/images/<media_id>.png
-        <user_id>/videos/<media_id>.mp4
-
-    Le bucket `generated-media` doit être public.
-    """
-    if not storage_path:
-        return None
-
-    try:
-        response = (
-            supabase.storage
-            .from_("generated-media")
-            .get_public_url(storage_path)
-        )
-    except Exception:
-        return None
-
-    public_url = None
-
-    if isinstance(response, str):
-        public_url = response
-    elif isinstance(response, dict):
-        data = response.get("data", response)
-        if isinstance(data, dict):
-            public_url = (
-                data.get("publicUrl")
-                or data.get("public_url")
-                or data.get("url")
-            )
-    else:
-        data = getattr(response, "data", None)
-        if isinstance(data, dict):
-            public_url = (
-                data.get("publicUrl")
-                or data.get("public_url")
-                or data.get("url")
-            )
-
-    if not public_url:
-        return None
-
-    public_url = str(public_url).strip()
-
-    # Même si un client/SDK renvoie une URL signée, on normalise vers
-    # l'endpoint public et on retire le token d'expiration.
-    public_url = public_url.replace(
-        "/storage/v1/object/sign/",
-        "/storage/v1/object/public/",
-    )
-
-    try:
-        from urllib.parse import urlsplit, urlunsplit
-
-        parsed = urlsplit(public_url)
-        public_url = urlunsplit(
-            (
-                parsed.scheme,
-                parsed.netloc,
-                parsed.path,
-                "",
-                "",
-            )
-        )
-    except Exception:
-        pass
-
-    return public_url
 #
-# Les créations générées sont persistées dans Supabase.
-# Ces routes utilisent la même authentification que les autres
-# ressources protégées : le token Supabase est vérifié puis
-# comparé au user-id transmis par le frontend.
+# Source de vérité :
+#     media_service
+#         -> MediaService
+#             -> SupabaseMediaRepository
+#                 -> Supabase Storage + generated_media
 #
-# Table Supabase attendue :
-#     generated_media
-#
-# Colonnes utilisées :
-#     id
-#     user_id
-#     media_type
-#     prompt
-#     storage_path
-#     public_url
-#     mime_type
-#     size_bytes
-#     metadata
-#     created_at
-#     updated_at
-#
-# Le frontend peut utiliser `public_url` pour afficher la création
-# et laisser le navigateur gérer son téléchargement / "Enregistrer sous".
+# Ce routeur ne manipule plus directement la table generated_media
+# et ne reconstruit plus lui-même les URLs Storage.
 # ============================================================
-
-
-class MediaCreateRequest(BaseModel):
-    media_type: str
-    prompt: str | None = None
-    storage_path: str | None = None
-    public_url: str | None = None
-    mime_type: str | None = None
-    size_bytes: int | None = None
-    metadata: dict | None = None
-
-
-def _validate_media_type(media_type: str) -> str:
-    normalized_media_type = media_type.strip().lower()
-
-    if normalized_media_type not in {"image", "video"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Type de média invalide. Utilisez 'image' ou 'video'.",
-        )
-
-    return normalized_media_type
 
 
 def _media_response(media: dict) -> dict:
     """
-    Normalise une création média pour le frontend.
+    Normalise une création média pour les frontends Web/Mobile.
 
-    `storage_path` est la source de vérité pour l'URL.
-    `url`, `media_url` et `public_url` sont exposés ensemble afin
-    que les différents frontends puissent utiliser le même contrat.
+    MediaService fournit déjà l'URL publique canonique.
+    Les alias historiques sont conservés pour compatibilité frontend.
     """
-    storage_path = media.get("storage_path")
-
-    public_url = _build_media_public_url(
-        str(storage_path)
-        if storage_path
-        else None
+    public_url = (
+        media.get("url")
+        or media.get("media_url")
+        or media.get("public_url")
     )
 
-    # Fallback uniquement si storage_path n'est pas disponible.
-    if not public_url:
-        persisted_url = (
-            media.get("url")
-            or media.get("public_url")
-            or media.get("media_url")
-        )
-        if persisted_url:
-            public_url = str(persisted_url).strip()
+    media_type = (
+        media.get("type")
+        or media.get("media_type")
+    )
+
+    size_value = (
+        media.get("size")
+        if media.get("size") is not None
+        else media.get("size_bytes")
+    )
 
     return {
         "id": media.get("id"),
         "user_id": media.get("user_id"),
-        "media_type": (
-            media.get("media_type")
-            or media.get("type")
-        ),
-        "type": (
-            media.get("type")
-            or media.get("media_type")
-        ),
+        "conversation_id": media.get("conversation_id"),
+
+        "media_type": media_type,
+        "type": media_type,
+
         "prompt": media.get("prompt"),
-        "storage_path": storage_path,
+        "action": media.get("action"),
+        "model": media.get("model"),
+        "credits_cost": media.get("credits_cost", 0),
+
+        "storage_path": media.get("storage_path"),
+
         "url": public_url,
         "media_url": public_url,
         "public_url": public_url,
+
         "mime_type": media.get("mime_type"),
-        "size_bytes": media.get("size_bytes"),
+
+        # Nouveau schéma + compatibilité avec l'ancien frontend.
+        "size": size_value,
+        "size_bytes": size_value,
+
+        "width": media.get("width"),
+        "height": media.get("height"),
+
+        "video_id": media.get("video_id"),
+        "seconds": media.get("seconds"),
+
+        # Certaines anciennes lignes peuvent encore contenir metadata.
         "metadata": media.get("metadata") or {},
+
         "created_at": media.get("created_at"),
         "updated_at": media.get("updated_at"),
     }
@@ -4189,13 +4127,7 @@ def get_my_media(
         alias="authorization",
     ),
 ):
-    """
-    Retourne toutes les créations média de l'utilisateur authentifié.
-
-    Cette route constitue l'endpoint principal de la page
-    "Mes créations". Le frontend peut l'appeler automatiquement
-    au chargement de la page.
-    """
+    """Retourne toutes les créations média de l'utilisateur."""
 
     authenticated_user_id = _get_authenticated_user_id(
         user_id=user_id,
@@ -4203,21 +4135,20 @@ def get_my_media(
     )
 
     try:
-        response = (
-            supabase
-            .table("generated_media")
-            .select("*")
-            .eq("user_id", authenticated_user_id)
-            .order("created_at", desc=True)
-            .execute()
+        media = media_service.list_user_media(
+            user_id=authenticated_user_id,
+            media_type=None,
+            limit=100,
+            offset=0,
         )
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"Impossible de récupérer les créations média : {str(error)}",
-        )
-
-    media = response.data or []
+            detail=(
+                "Impossible de récupérer les créations média : "
+                f"{str(error)}"
+            ),
+        ) from error
 
     return {
         "success": True,
@@ -4246,9 +4177,7 @@ def get_my_images(
         alias="authorization",
     ),
 ):
-    """
-    Retourne uniquement les images générées par l'utilisateur.
-    """
+    """Retourne uniquement les images générées par l'utilisateur."""
 
     authenticated_user_id = _get_authenticated_user_id(
         user_id=user_id,
@@ -4256,22 +4185,20 @@ def get_my_images(
     )
 
     try:
-        response = (
-            supabase
-            .table("generated_media")
-            .select("*")
-            .eq("user_id", authenticated_user_id)
-            .eq("media_type", "image")
-            .order("created_at", desc=True)
-            .execute()
+        media = media_service.list_user_media(
+            user_id=authenticated_user_id,
+            media_type="image",
+            limit=100,
+            offset=0,
         )
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"Impossible de récupérer les images : {str(error)}",
-        )
-
-    media = response.data or []
+            detail=(
+                "Impossible de récupérer les images : "
+                f"{str(error)}"
+            ),
+        ) from error
 
     return {
         "success": True,
@@ -4300,9 +4227,7 @@ def get_my_videos(
         alias="authorization",
     ),
 ):
-    """
-    Retourne uniquement les vidéos générées par l'utilisateur.
-    """
+    """Retourne uniquement les vidéos générées par l'utilisateur."""
 
     authenticated_user_id = _get_authenticated_user_id(
         user_id=user_id,
@@ -4310,22 +4235,20 @@ def get_my_videos(
     )
 
     try:
-        response = (
-            supabase
-            .table("generated_media")
-            .select("*")
-            .eq("user_id", authenticated_user_id)
-            .eq("media_type", "video")
-            .order("created_at", desc=True)
-            .execute()
+        media = media_service.list_user_media(
+            user_id=authenticated_user_id,
+            media_type="video",
+            limit=100,
+            offset=0,
         )
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"Impossible de récupérer les vidéos : {str(error)}",
-        )
-
-    media = response.data or []
+            detail=(
+                "Impossible de récupérer les vidéos : "
+                f"{str(error)}"
+            ),
+        ) from error
 
     return {
         "success": True,
@@ -4355,10 +4278,7 @@ def get_my_media_by_id(
         alias="authorization",
     ),
 ):
-    """
-    Retourne une création média précise appartenant
-    à l'utilisateur authentifié.
-    """
+    """Retourne une création média précise de l'utilisateur."""
 
     authenticated_user_id = _get_authenticated_user_id(
         user_id=user_id,
@@ -4366,22 +4286,20 @@ def get_my_media_by_id(
     )
 
     try:
-        response = (
-            supabase
-            .table("generated_media")
-            .select("*")
-            .eq("id", media_id)
-            .eq("user_id", authenticated_user_id)
-            .limit(1)
-            .execute()
+        media = media_service.get_user_media(
+            media_id=media_id,
+            user_id=authenticated_user_id,
         )
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"Impossible de récupérer la création média : {str(error)}",
-        )
+            detail=(
+                "Impossible de récupérer la création média : "
+                f"{str(error)}"
+            ),
+        ) from error
 
-    if not response.data:
+    if media is None:
         raise HTTPException(
             status_code=404,
             detail="Création média introuvable.",
@@ -4389,7 +4307,7 @@ def get_my_media_by_id(
 
     return {
         "success": True,
-        "media": _media_response(response.data[0]),
+        "media": _media_response(media),
     }
 
 
@@ -4411,12 +4329,10 @@ def delete_my_media(
     ),
 ):
     """
-    Supprime une création média appartenant à l'utilisateur.
+    Supprime une création de l'utilisateur ainsi que son fichier Storage.
 
-    La suppression de la ligne de métadonnées ne supprime pas
-    automatiquement le fichier du Storage. La suppression du
-    fichier Storage reste donc une responsabilité du service
-    média / repository si elle est implémentée.
+    La vérification de propriété est effectuée via user_id dans
+    MediaService/SupabaseMediaRepository.
     """
 
     authenticated_user_id = _get_authenticated_user_id(
@@ -4425,28 +4341,31 @@ def delete_my_media(
     )
 
     try:
-        response = (
-            supabase
-            .table("generated_media")
-            .delete()
-            .eq("id", media_id)
-            .eq("user_id", authenticated_user_id)
-            .execute()
+        deleted = media_service.delete_user_media(
+            media_id=media_id,
+            user_id=authenticated_user_id,
         )
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"Impossible de supprimer la création média : {str(error)}",
-        )
+            detail=(
+                "Impossible de supprimer la création média : "
+                f"{str(error)}"
+            ),
+        ) from error
 
-    if not response.data:
+    if not deleted:
         raise HTTPException(
             status_code=404,
-            detail="Création média introuvable ou déjà supprimée.",
+            detail=(
+                "Création média introuvable ou déjà supprimée."
+            ),
         )
 
     return {
         "success": True,
         "media_id": media_id,
-        "message": "Création média supprimée.",
+        "message": (
+            "Création média et fichier Storage supprimés."
+        ),
     }

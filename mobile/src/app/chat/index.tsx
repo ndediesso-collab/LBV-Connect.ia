@@ -95,8 +95,8 @@ const CHAT_TEXT = {
     credits: "crédits",
     videoPrompt: "Décrivez précisément la vidéo à créer...",
     imagePrompt: "Décrivez précisément l'image à créer...",
-    cost: "Coût",
-    backendValidation: "Le backend valide le pack et le débit.",
+    cost: "Réservation estimée",
+    backendValidation: "Oria réserve une estimation, puis facture uniquement le coût réel de la génération.",
     generating: "Génération...",
     generateTheVideo: "Générer la vidéo",
     generateTheImage: "Générer l'image",
@@ -158,7 +158,8 @@ const CHAT_TEXT = {
       luna: "Modèle économique · Rapide pour les échanges courants",
       "gpt-5": "Modèle polyvalent · Pour les tâches plus avancées",
       "gpt-5.6-terra": "Raisonnement avancé · Pour les problèmes complexes",
-      "gpt-5.6-sol": "Puissance maximale · Pour les tâches les plus exigeantes",
+      "gpt-6-sol": "Puissance avancée · Pour les tâches les plus exigeantes",
+      "gpt-6-astra": "Modèle haut de gamme · Pour les usages les plus avancés",
     },
     mediaDescriptions: {
       image_480: "Génération image légère",
@@ -211,8 +212,8 @@ const CHAT_TEXT = {
     credits: "credits",
     videoPrompt: "Describe the video you want to create...",
     imagePrompt: "Describe the image you want to create...",
-    cost: "Cost",
-    backendValidation: "The backend validates the pack and credit charge.",
+    cost: "Estimated reservation",
+    backendValidation: "Oria reserves an estimate, then charges only the actual generation cost.",
     generating: "Generating...",
     generateTheVideo: "Generate video",
     generateTheImage: "Generate image",
@@ -274,7 +275,8 @@ const CHAT_TEXT = {
       luna: "Economical model · Fast for everyday conversations",
       "gpt-5": "Versatile model · For more advanced tasks",
       "gpt-5.6-terra": "Advanced reasoning · For complex problems",
-      "gpt-5.6-sol": "Maximum power · For the most demanding tasks",
+      "gpt-6-sol": "Advanced capability · For the most demanding tasks",
+      "gpt-6-astra": "High-end model · For the most advanced use cases",
     },
     mediaDescriptions: {
       image_480: "Lightweight image generation",
@@ -407,7 +409,20 @@ type TrialResponse = {
 type MediaCapability = {
   action: string;
   type: "image" | "video";
-  credits: number;
+  estimated_credits?: number | null;
+  credits?: number | null; // compatibilité temporaire avec l'ancien format API
+  model?: string | null;
+  quality?: string | null;
+  seconds?: number | string | null;
+  size?: string | null;
+};
+
+type MediaCapabilitiesResponse = {
+  success: boolean;
+  pack_id?: string | null;
+  images?: string[];
+  videos?: string[];
+  media?: Array<string | MediaCapability>;
 };
 
 type GeneratedMedia = {
@@ -466,37 +481,173 @@ const ACCEPTED_IMAGE_TYPES = [
 ];
 
 const MEDIA_GENERATION_CONFIGS = [
-  { action: "image_480", type: "image", label: "Image 480", description: "Génération image légère", configuration: "480 px", credits: 50 },
-  { action: "image_720", type: "image", label: "Image 720", description: "Génération image légère", configuration: "720 px", credits: 75 },
-  { action: "image_pro", type: "image", label: "Image Pro", description: "Génération image professionnelle", configuration: "Pro", credits: 100 },
-  { action: "image_pro_standard", type: "image", label: "Image Pro Standard", description: "Qualité professionnelle standard", configuration: "Standard", credits: 180 },
-  { action: "image_pro_ultra", type: "image", label: "Image Pro Ultra", description: "Qualité professionnelle maximale", configuration: "Ultra", credits: 270 },
-  { action: "image_business", type: "image", label: "Image Business", description: "Génération business", configuration: "Business", credits: 250 },
-  { action: "image_business_hd", type: "image", label: "Image Business HD", description: "Génération business haute définition", configuration: "HD", credits: 400 },
-  { action: "image_business_ultra", type: "image", label: "Image Business Ultra", description: "Génération business maximale", configuration: "Ultra", credits: 600 },
-  { action: "video_4s", type: "video", label: "Vidéo 4 s", description: "Génération vidéo légère", configuration: "4 secondes", credits: 500 },
-  { action: "video_8s", type: "video", label: "Vidéo 8 s", description: "Génération vidéo légère", configuration: "8 secondes", credits: 1000 },
-  { action: "video_lite", type: "video", label: "Vidéo Lite", description: "Génération vidéo intermédiaire", configuration: "Lite", credits: 1500 },
-  { action: "video_pro_fast", type: "video", label: "Vidéo Pro Fast", description: "Génération vidéo professionnelle rapide", configuration: "Fast", credits: 1500 },
-  { action: "video_pro_standard", type: "video", label: "Vidéo Pro Standard", description: "Génération vidéo professionnelle standard", configuration: "Standard", credits: 3000 },
-  { action: "video_pro_extension", type: "video", label: "Vidéo Pro Extension", description: "Extension d'une génération vidéo Pro", configuration: "Extension", credits: 1500 },
-  { action: "video_business_fast", type: "video", label: "Vidéo Business Fast", description: "Génération vidéo business rapide", configuration: "Fast", credits: 2500 },
-  { action: "video_business_standard", type: "video", label: "Vidéo Business Standard", description: "Génération vidéo business standard", configuration: "Standard", credits: 5000 },
-  { action: "video_business_long", type: "video", label: "Vidéo Business Long", description: "Génération vidéo business longue", configuration: "Long", credits: 10000 },
+  {
+    action: "image_480",
+    type: "image",
+    label: "Image Essentielle",
+    description: "Génération rapide avec GPT Image 2",
+    configuration: "Qualité basse",
+    packs: ["light_pack", "intermediate_pack"],
+    model: "GPT Image 2",
+  },
+  {
+    action: "image_720",
+    type: "image",
+    label: "Image Plus",
+    description: "Génération équilibrée avec GPT Image 2",
+    configuration: "Qualité moyenne",
+    packs: ["light_pack", "intermediate_pack"],
+    model: "GPT Image 2",
+  },
+  {
+    action: "image_pro",
+    type: "image",
+    label: "Image Pro",
+    description: "Génération professionnelle avec GPT Image 2.5 Flare",
+    configuration: "Qualité basse",
+    packs: ["pro_pack"],
+    model: "GPT Image 2.5 Flare",
+  },
+  {
+    action: "image_pro_standard",
+    type: "image",
+    label: "Image Pro HD",
+    description: "Rendu professionnel détaillé",
+    configuration: "Qualité haute",
+    packs: ["pro_pack"],
+    model: "GPT Image 2.5 Flare",
+  },
+  {
+    action: "image_pro_ultra",
+    type: "image",
+    label: "Image Pro Ultra",
+    description: "Rendu professionnel très haute qualité",
+    configuration: "Qualité XHigh",
+    packs: ["pro_pack"],
+    model: "GPT Image 2.5 Flare",
+  },
+  {
+    action: "image_business",
+    type: "image",
+    label: "Image Business",
+    description: "Création premium avec GPT Image 2.5 Sunburst",
+    configuration: "Qualité moyenne",
+    packs: ["business_pack"],
+    model: "GPT Image 2.5 Sunburst",
+  },
+  {
+    action: "image_business_hd",
+    type: "image",
+    label: "Image Business HD",
+    description: "Création premium haute définition",
+    configuration: "Qualité XHigh",
+    packs: ["business_pack"],
+    model: "GPT Image 2.5 Sunburst",
+  },
+  {
+    action: "image_business_ultra",
+    type: "image",
+    label: "Image Business Max",
+    description: "Qualité maximale pour les créations exigeantes",
+    configuration: "Qualité Max",
+    packs: ["business_pack"],
+    model: "GPT Image 2.5 Sunburst",
+  },
+  {
+    action: "video_4s",
+    type: "video",
+    label: "Vidéo 4 s",
+    description: "Génération vidéo OpenAI courte",
+    configuration: "4 secondes · 720p",
+    packs: ["light_pack"],
+    model: "Sora 2",
+  },
+  {
+    action: "video_8s",
+    type: "video",
+    label: "Vidéo 8 s",
+    description: "Génération vidéo OpenAI étendue",
+    configuration: "8 secondes · 720p",
+    packs: ["light_pack"],
+    model: "Sora 2",
+  },
+  {
+    action: "video_lite",
+    type: "video",
+    label: "Vidéo Lite",
+    description: "Génération vidéo intermédiaire",
+    configuration: "4 secondes · 720p",
+    packs: ["intermediate_pack"],
+    model: "Sora 2",
+  },
+  {
+    action: "video_pro_fast",
+    type: "video",
+    label: "Vidéo Pro Fast",
+    description: "Génération professionnelle rapide",
+    configuration: "4 secondes · 720p",
+    packs: ["pro_pack"],
+    model: "Sora 2",
+  },
+  {
+    action: "video_pro_standard",
+    type: "video",
+    label: "Vidéo Pro Standard",
+    description: "Génération professionnelle standard",
+    configuration: "8 secondes · 720p",
+    packs: ["pro_pack"],
+    model: "Sora 2",
+  },
+  {
+    action: "video_pro_extension",
+    type: "video",
+    label: "Vidéo Pro Extension",
+    description: "Extension d'une génération Pro",
+    configuration: "4 secondes · 720p",
+    packs: ["pro_pack"],
+    model: "Sora 2",
+  },
+  {
+    action: "video_business_fast",
+    type: "video",
+    label: "Vidéo Business Fast",
+    description: "Génération premium rapide",
+    configuration: "4 secondes",
+    packs: ["business_pack"],
+    model: "Sora 2 Pro",
+  },
+  {
+    action: "video_business_standard",
+    type: "video",
+    label: "Vidéo Business Standard",
+    description: "Génération premium standard",
+    configuration: "8 secondes",
+    packs: ["business_pack"],
+    model: "Sora 2 Pro",
+  },
+  {
+    action: "video_business_long",
+    type: "video",
+    label: "Vidéo Business Long",
+    description: "Génération premium longue",
+    configuration: "12 secondes",
+    packs: ["business_pack"],
+    model: "Sora 2 Pro",
+  },
 ] as const;
 
 const models: ModelDefinition[] = [
   {
     id: "luna",
-    name: "Luna",
+    name: "GPT-6 Luna",
     description: "Modèle économique · Rapide pour les échanges courants",
-    packs: ["light_pack", "intermediate_pack", "pro_pack", "business_pack"],
+    packs: ["light_pack", "intermediate_pack", "pro_pack"],
   },
   {
     id: "gpt-5",
     name: "GPT-5",
     description: "Modèle polyvalent · Pour les tâches plus avancées",
-    packs: ["intermediate_pack", "pro_pack", "business_pack"],
+    packs: ["intermediate_pack"],
   },
   {
     id: "gpt-5.6-terra",
@@ -505,9 +656,15 @@ const models: ModelDefinition[] = [
     packs: ["pro_pack", "business_pack"],
   },
   {
-    id: "gpt-5.6-sol",
-    name: "GPT-5.6 Sol",
-    description: "Puissance maximale · Pour les tâches les plus exigeantes",
+    id: "gpt-6-sol",
+    name: "GPT-6 Sol",
+    description: "Puissance avancée · Pour les tâches les plus exigeantes",
+    packs: ["pro_pack", "business_pack"],
+  },
+  {
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
+    description: "Modèle haut de gamme · Pour les usages les plus avancés",
     packs: ["business_pack"],
   },
 ];
@@ -515,7 +672,7 @@ const models: ModelDefinition[] = [
 const TRIAL_MODEL_BY_PACK: Record<string, string> = {
   light_pack: "gpt-5",
   intermediate_pack: "gpt-5.6-terra",
-  pro_pack: "gpt-5.6-sol",
+  pro_pack: "gpt-6-astra",
 };
 
 const ORIA_MEDIA_MARKER_REGEX = /\[\[ORIA_MEDIA_ID:([^\]]+)\]\]/;
@@ -540,6 +697,46 @@ function extractMediaIdFromMessage(content: string) {
 
 function getMediaGenerationConfig(action: string) {
   return MEDIA_GENERATION_CONFIGS.find((item) => item.action === action);
+}
+
+function getLocalMediaCapabilities(packId: string | null): MediaCapability[] {
+  if (!packId) return [];
+
+  return MEDIA_GENERATION_CONFIGS
+    .filter((item) => (item.packs as readonly string[]).includes(packId))
+    .map((item) => ({
+      action: item.action,
+      type: item.type,
+      model: item.model,
+    }));
+}
+
+function normalizeMediaCapability(
+  item: string | MediaCapability,
+): MediaCapability | null {
+  if (typeof item === "string") {
+    const config = getMediaGenerationConfig(item);
+    return config
+      ? {
+          action: config.action,
+          type: config.type,
+          model: config.model,
+        }
+      : null;
+  }
+
+  if (!item?.action) return null;
+
+  const config = getMediaGenerationConfig(item.action);
+  if (!config && item.type !== "image" && item.type !== "video") {
+    return null;
+  }
+
+  return {
+    ...item,
+    type: item.type ?? config!.type,
+    model: item.model ?? config?.model ?? null,
+  };
 }
 
 function getAvailableModels(packId: string | null) {
@@ -1706,16 +1903,9 @@ export default function ChatPage() {
   );
 
   const [mediaCapabilities, setMediaCapabilities] =
-    useState<MediaCapability[]>(
-      MEDIA_GENERATION_CONFIGS.map((item) => ({
-        action: item.action,
-        type: item.type,
-        credits: item.credits,
-      })),
-    );
-  const [selectedMediaAction, setSelectedMediaAction] = useState<string>(
-    MEDIA_GENERATION_CONFIGS[0]?.action ?? "",
-  );
+    useState<MediaCapability[]>([]);
+  const [selectedMediaAction, setSelectedMediaAction] =
+    useState<string>("");
   const [mediaPrompt, setMediaPrompt] = useState("");
   const [generatedMedia, setGeneratedMedia] =
     useState<GeneratedMedia[]>([]);
@@ -2067,39 +2257,38 @@ export default function ChatPage() {
     try {
       setIsLoadingMediaCapabilities(true);
 
-      const data =
-        await apiFetch<{ success: boolean; media: MediaCapability[] }>(
-          "/ai/media-capabilities",
-        );
+      const data = await apiFetch<MediaCapabilitiesResponse>(
+        "/ai/media-capabilities",
+      );
 
-      const available = Array.isArray(data.media) ? data.media : [];
+      const rawMedia =
+        Array.isArray(data.media) && data.media.length > 0
+          ? data.media
+          : [
+              ...(Array.isArray(data.images) ? data.images : []),
+              ...(Array.isArray(data.videos) ? data.videos : []),
+            ];
 
-      if (available.length) {
-        setMediaCapabilities(available);
-        setSelectedMediaAction((current) =>
-          current && available.some((item) => item.action === current)
-            ? current
-            : available[0]?.action ?? "",
-        );
-      } else {
-        const fallback = MEDIA_GENERATION_CONFIGS.map((item) => ({
-          action: item.action,
-          type: item.type,
-          credits: item.credits,
-        }));
+      const normalized = rawMedia
+        .map(normalizeMediaCapability)
+        .filter((item): item is MediaCapability => item !== null);
 
-        setMediaCapabilities(fallback);
-        setSelectedMediaAction("");
-      }
+      const fallback = getLocalMediaCapabilities(
+        data.pack_id ?? wallet?.pack_id ?? null,
+      );
+
+      const available = normalized.length > 0 ? normalized : fallback;
+
+      setMediaCapabilities(available);
+      setSelectedMediaAction((current) =>
+        current && available.some((item) => item.action === current)
+          ? current
+          : available[0]?.action ?? "",
+      );
     } catch (requestError) {
       console.warn("Capacités média indisponibles :", requestError);
 
-      const fallback = MEDIA_GENERATION_CONFIGS.map((item) => ({
-        action: item.action,
-        type: item.type,
-        credits: item.credits,
-      }));
-
+      const fallback = getLocalMediaCapabilities(wallet?.pack_id ?? null);
       setMediaCapabilities(fallback);
       setSelectedMediaAction((current) =>
         current && fallback.some((item) => item.action === current)
@@ -2412,7 +2601,7 @@ export default function ChatPage() {
           ? {
               action: config.action,
               type: config.type,
-              credits: config.credits,
+              model: config.model,
             }
           : undefined;
       })();
@@ -2953,7 +3142,9 @@ export default function ChatPage() {
       setMediaMenuOpen(true);
       setError(null);
       setSelectedMediaAction((current) =>
-        current || MEDIA_GENERATION_CONFIGS[0]?.action || "",
+        current ||
+        getLocalMediaCapabilities(wallet?.pack_id ?? null)[0]?.action ||
+        "",
       );
       if (hasActivePack) {
         void loadMediaCapabilities();
@@ -3335,7 +3526,7 @@ export default function ChatPage() {
                 <View style={styles.mediaTypeRow}>
                   {(["image", "video"] as const).map((type) => {
                     const configurationsForType =
-                      MEDIA_GENERATION_CONFIGS.filter(
+                      mediaCapabilities.filter(
                         (item) => item.type === type,
                       );
 
@@ -3400,26 +3591,27 @@ export default function ChatPage() {
                       showsHorizontalScrollIndicator={false}
                       contentContainerStyle={styles.horizontalOptions}
                     >
-                      {MEDIA_GENERATION_CONFIGS
+                      {mediaCapabilities
                         .filter(
-                          (config) =>
-                            config.type ===
+                          (item) =>
+                            item.type ===
                             getMediaGenerationConfig(
                               selectedMediaAction,
                             )?.type,
                         )
-                        .map((config) => {
+                        .map((capability) => {
+                          const config = getMediaGenerationConfig(
+                            capability.action,
+                          );
+
+                          if (!config) return null;
+
                           const selected =
                             selectedMediaAction === config.action;
 
-                          const capability =
-                            mediaCapabilities.find(
-                              (item) =>
-                                item.action === config.action,
-                            );
-
-                          const credits =
-                            capability?.credits ?? config.credits;
+                          const estimate =
+                            capability.estimated_credits ??
+                            capability.credits;
 
                           return (
                             <Pressable
@@ -3464,9 +3656,15 @@ export default function ChatPage() {
                                   {config.configuration}
                                 </Text>
                                 <Text style={styles.smallMuted}>
-                                  {formatCredits(credits)} {t.credits}
+                                  {capability.model || config.model}
                                 </Text>
                               </View>
+
+                              {estimate != null ? (
+                                <Text style={styles.smallMuted}>
+                                  {t.cost} : {formatCredits(estimate, language)} {t.credits}
+                                </Text>
+                              ) : null}
                             </Pressable>
                           );
                         })}
@@ -3498,28 +3696,23 @@ export default function ChatPage() {
                           const selected =
                             mediaCapabilities.find(
                               (item) =>
-                                item.action ===
-                                selectedMediaAction,
+                                item.action === selectedMediaAction,
                             );
 
-                          const localConfig =
-                            getMediaGenerationConfig(
-                              selectedMediaAction,
-                            );
-
-                          if (!localConfig && !selected) return null;
-
-                          const selectedCredits =
-                            selected?.credits ??
-                            localConfig?.credits ??
-                            0;
+                          const estimate =
+                            selected?.estimated_credits ??
+                            selected?.credits;
 
                           return (
                             <Text style={styles.smallMuted}>
-                              {t.cost} :{" "}
-                              <Text style={styles.bold}>
-                                {formatCredits(selectedCredits)} {t.credits}
-                              </Text>
+                              {estimate != null
+                                ? `${t.cost} : ${formatCredits(
+                                    estimate,
+                                    language,
+                                  )} ${t.credits}`
+                                : language === "en"
+                                  ? "Dynamic cost · calculated from actual API usage"
+                                  : "Coût dynamique · calculé selon l'utilisation réelle de l'API"}
                             </Text>
                           );
                         })()}

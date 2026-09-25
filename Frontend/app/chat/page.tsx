@@ -65,7 +65,13 @@ type ChatResponse = {
 type MediaCapability = {
   action: string;
   type: "image" | "video";
-  credits: number;
+  // Le backend peut exposer une estimation, mais le coût final est dynamique.
+  estimated_credits?: number | null;
+  credits?: number | null; // compatibilité temporaire avec une ancienne réponse API
+  model?: string | null;
+  quality?: string | null;
+  seconds?: number | string | null;
+  size?: string | null;
 };
 
 type MediaCapabilitiesResponse = {
@@ -178,7 +184,7 @@ const UI = {
     configurations: "configurations",
     preciseVideo: "Décrivez précisément la vidéo à créer...",
     preciseImage: "Décrivez précisément l'image à créer...",
-    backendValidation: "Le backend valide le pack et le débit avant la génération.",
+    backendValidation: "Oria réserve une estimation, puis facture uniquement le coût réel de la génération.",
   },
   en: {
     file: "File",
@@ -236,7 +242,7 @@ const UI = {
     configurations: "configurations",
     preciseVideo: "Describe the video you want to create...",
     preciseImage: "Describe the image you want to create...",
-    backendValidation: "The backend validates your pack and credit charge before generation.",
+    backendValidation: "Oria reserves an estimate, then charges only the actual generation cost.",
   },
 } as const;
 
@@ -298,7 +304,7 @@ function getModelDescription(modelId: string, language: OriaLanguage): string {
       fr: "Raisonnement avancé · Pour les problèmes complexes",
       en: "Advanced reasoning · For complex problems",
     },
-    "gpt-5.6-sol": {
+    "gpt-6-sol": {
       fr: "Puissance maximale · Pour les tâches les plus exigeantes",
       en: "Maximum capability · For the most demanding tasks",
     },
@@ -347,25 +353,105 @@ function getMediaLabel(action: string, language: OriaLanguage, fallback: string)
 
 
 const MEDIA_GENERATION_CONFIGS = [
-  { action: "image_480", type: "image", label: "Image 480", description: "Génération image légère", configuration: "480 px", credits: 50 },
-  { action: "image_720", type: "image", label: "Image 720", description: "Génération image légère", configuration: "720 px", credits: 75 },
-  { action: "image_pro", type: "image", label: "Image Pro", description: "Génération image professionnelle", configuration: "Pro", credits: 100 },
-  { action: "image_pro_standard", type: "image", label: "Image Pro Standard", description: "Qualité professionnelle standard", configuration: "Standard", credits: 180 },
-  { action: "image_pro_ultra", type: "image", label: "Image Pro Ultra", description: "Qualité professionnelle maximale", configuration: "Ultra", credits: 270 },
-  { action: "image_business", type: "image", label: "Image Business", description: "Génération business", configuration: "Business", credits: 250 },
-  { action: "image_business_hd", type: "image", label: "Image Business HD", description: "Génération business haute définition", configuration: "HD", credits: 400 },
-  { action: "image_business_ultra", type: "image", label: "Image Business Ultra", description: "Génération business maximale", configuration: "Ultra", credits: 600 },
+  {
+    action: "image_480", type: "image", label: "Image Essentielle",
+    description: "Génération rapide avec GPT Image 2", configuration: "Qualité basse",
+    packs: ["light_pack"], model: "GPT Image 2",
+  },
+  {
+    action: "image_720", type: "image", label: "Image Plus",
+    description: "Génération équilibrée avec GPT Image 2", configuration: "Qualité moyenne",
+    packs: ["light_pack", "intermediate_pack"], model: "GPT Image 2",
+  },
+  {
+    action: "image_pro", type: "image", label: "Image Pro",
+    description: "Génération professionnelle avec GPT Image 2.5 Flare", configuration: "Qualité basse",
+    packs: ["pro_pack"], model: "GPT Image 2.5 Flare",
+  },
+  {
+    action: "image_pro_standard", type: "image", label: "Image Pro HD",
+    description: "Rendu professionnel détaillé", configuration: "Qualité haute",
+    packs: ["pro_pack"], model: "GPT Image 2.5 Flare",
+  },
+  {
+    action: "image_pro_ultra", type: "image", label: "Image Pro Ultra",
+    description: "Rendu professionnel très haute qualité", configuration: "Qualité XHigh",
+    packs: ["pro_pack"], model: "GPT Image 2.5 Flare",
+  },
+  {
+    action: "image_business", type: "image", label: "Image Business",
+    description: "Création premium avec GPT Image 2.5 Sunburst", configuration: "Qualité moyenne",
+    packs: ["business_pack"], model: "GPT Image 2.5 Sunburst",
+  },
+  {
+    action: "image_business_hd", type: "image", label: "Image Business HD",
+    description: "Création premium haute définition", configuration: "Qualité XHigh",
+    packs: ["business_pack"], model: "GPT Image 2.5 Sunburst",
+  },
+  {
+    action: "image_business_ultra", type: "image", label: "Image Business Max",
+    description: "Qualité maximale pour les créations exigeantes", configuration: "Qualité Max",
+    packs: ["business_pack"], model: "GPT Image 2.5 Sunburst",
+  },
 
-  { action: "video_4s", type: "video", label: "Vidéo 4 s", description: "Génération vidéo légère", configuration: "4 secondes", credits: 500 },
-  { action: "video_8s", type: "video", label: "Vidéo 8 s", description: "Génération vidéo légère", configuration: "8 secondes", credits: 1000 },
-  { action: "video_lite", type: "video", label: "Vidéo Lite", description: "Génération vidéo intermédiaire", configuration: "Lite", credits: 1500 },
-  { action: "video_pro_fast", type: "video", label: "Vidéo Pro Fast", description: "Génération vidéo professionnelle rapide", configuration: "Fast", credits: 1500 },
-  { action: "video_pro_standard", type: "video", label: "Vidéo Pro Standard", description: "Génération vidéo professionnelle standard", configuration: "Standard", credits: 3000 },
-  { action: "video_pro_extension", type: "video", label: "Vidéo Pro Extension", description: "Extension d'une génération vidéo Pro", configuration: "Extension", credits: 1500 },
-  { action: "video_business_fast", type: "video", label: "Vidéo Business Fast", description: "Génération vidéo business rapide", configuration: "Fast", credits: 2500 },
-  { action: "video_business_standard", type: "video", label: "Vidéo Business Standard", description: "Génération vidéo business standard", configuration: "Standard", credits: 5000 },
-  { action: "video_business_long", type: "video", label: "Vidéo Business Long", description: "Génération vidéo business longue", configuration: "Long", credits: 10000 },
+  {
+    action: "video_4s", type: "video", label: "Vidéo 4 s",
+    description: "Génération vidéo OpenAI courte", configuration: "4 secondes · 720p",
+    packs: ["light_pack"], model: "Sora 2",
+  },
+  {
+    action: "video_8s", type: "video", label: "Vidéo 8 s",
+    description: "Génération vidéo OpenAI étendue", configuration: "8 secondes · 720p",
+    packs: ["light_pack"], model: "Sora 2",
+  },
+  {
+    action: "video_lite", type: "video", label: "Vidéo Lite",
+    description: "Génération vidéo intermédiaire", configuration: "4 secondes · 720p",
+    packs: ["intermediate_pack"], model: "Sora 2",
+  },
+  {
+    action: "video_pro_fast", type: "video", label: "Vidéo Pro Fast",
+    description: "Génération professionnelle rapide", configuration: "4 secondes · 720p",
+    packs: ["pro_pack"], model: "Sora 2",
+  },
+  {
+    action: "video_pro_standard", type: "video", label: "Vidéo Pro Standard",
+    description: "Génération professionnelle standard", configuration: "8 secondes · 720p",
+    packs: ["pro_pack"], model: "Sora 2",
+  },
+  {
+    action: "video_pro_extension", type: "video", label: "Vidéo Pro Extension",
+    description: "Extension d'une génération Pro", configuration: "4 secondes · 720p",
+    packs: ["pro_pack"], model: "Sora 2",
+  },
+  {
+    action: "video_business_fast", type: "video", label: "Vidéo Business Fast",
+    description: "Génération premium rapide", configuration: "4 secondes",
+    packs: ["business_pack"], model: "Sora 2 Pro",
+  },
+  {
+    action: "video_business_standard", type: "video", label: "Vidéo Business Standard",
+    description: "Génération premium standard", configuration: "8 secondes",
+    packs: ["business_pack"], model: "Sora 2 Pro",
+  },
+  {
+    action: "video_business_long", type: "video", label: "Vidéo Business Long",
+    description: "Génération premium longue", configuration: "12 secondes",
+    packs: ["business_pack"], model: "Sora 2 Pro",
+  },
 ] as const;
+
+function getLocalMediaCapabilities(packId: string | null): MediaCapability[] {
+  if (!packId) return [];
+
+  return MEDIA_GENERATION_CONFIGS
+    .filter((item) => item.packs.includes(packId as never))
+    .map((item) => ({
+      action: item.action,
+      type: item.type,
+      model: item.model,
+    }));
+}
 
 type MediaGenerationType = (typeof MEDIA_GENERATION_CONFIGS)[number]["type"];
 
@@ -623,42 +709,32 @@ type TrialResponse = {
 const models: ModelDefinition[] = [
   {
     id: "luna",
-    name: "Luna",
-    description:
-      "Modèle économique · Rapide pour les échanges courants",
-    packs: [
-      "light_pack",
-      "intermediate_pack",
-      "pro_pack",
-      "business_pack",
-    ],
+    name: "GPT-6 Luna",
+    description: "Modèle économique · Rapide pour les échanges courants",
+    packs: ["light_pack", "intermediate_pack", "pro_pack"],
   },
   {
     id: "gpt-5",
     name: "GPT-5",
-    description:
-      "Modèle polyvalent · Pour les tâches plus avancées",
-    packs: [
-      "intermediate_pack",
-      "pro_pack",
-      "business_pack",
-    ],
+    description: "Modèle polyvalent · Pour les tâches plus avancées",
+    packs: ["intermediate_pack"],
   },
   {
     id: "gpt-5.6-terra",
     name: "GPT-5.6 Terra",
-    description:
-      "Raisonnement avancé · Pour les problèmes complexes",
-    packs: [
-      "pro_pack",
-      "business_pack",
-    ],
+    description: "Raisonnement avancé · Pour les problèmes complexes",
+    packs: ["pro_pack", "business_pack"],
   },
   {
-    id: "gpt-5.6-sol",
-    name: "GPT-5.6 Sol",
-    description:
-      "Puissance maximale · Pour les tâches les plus exigeantes",
+    id: "gpt-6-sol",
+    name: "GPT-6 Sol",
+    description: "Puissance avancée · Pour les tâches les plus exigeantes",
+    packs: ["pro_pack", "business_pack"],
+  },
+  {
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
+    description: "Modèle haut de gamme · Pour les usages les plus avancés",
     packs: ["business_pack"],
   },
 ];
@@ -676,11 +752,9 @@ function getAvailableModels(
 }
 
 const TRIAL_MODEL_BY_PACK: Record<string, string> = {
-  // Le pack inférieur peut essayer gratuitement le modèle
-  // immédiatement supérieur, jusqu'à 5 utilisations.
   light_pack: "gpt-5",
   intermediate_pack: "gpt-5.6-terra",
-  pro_pack: "gpt-5.6-sol",
+  pro_pack: "gpt-6-astra",
 };
 
 function getSelectableModels(
@@ -1823,13 +1897,7 @@ export default function ChatPage() {
   // de rester immédiatement utilisable. Le backend reste l'autorité
   // finale pour le pack, les droits, le coût et le débit.
   const [mediaCapabilities, setMediaCapabilities] =
-    useState<MediaCapability[]>(() =>
-      MEDIA_GENERATION_CONFIGS.map((item) => ({
-        action: item.action,
-        type: item.type,
-        credits: item.credits,
-      })),
-    );
+    useState<MediaCapability[]>([]);
 
   const [selectedMediaAction, setSelectedMediaAction] =
     useState<string>("");
@@ -2656,80 +2724,28 @@ export default function ChatPage() {
         "/ai/media-capabilities",
       );
 
-      const available = Array.isArray(data.media)
-        ? data.media
-        : [];
+      const available = Array.isArray(data.media) ? data.media : [];
+      const fallback = getLocalMediaCapabilities(
+        data.pack_id ?? wallet?.pack_id ?? null,
+      );
+      const next = available.length > 0 ? available : fallback;
 
-      // Le backend reste l'autorité finale lors de la génération,
-      // mais une réponse vide/temporairement indisponible ne doit pas
-      // verrouiller l'interface « Création ».
-      //
-      // On conserve toujours les configurations locales lorsqu'aucune
-      // capacité exploitable n'est retournée.
-      if (available.length > 0) {
-        setMediaCapabilities(available);
-
-        setSelectedMediaAction((current) => {
-          if (
-            current &&
-            available.some(
-              (item) => item.action === current,
-            )
-          ) {
-            return current;
-          }
-
-          return available[0]?.action ?? "";
-        });
-      } else {
-        setMediaCapabilities(
-          MEDIA_GENERATION_CONFIGS.map(
-            (item) => ({
-              action: item.action,
-              type: item.type,
-              credits: item.credits,
-            }),
-          ),
-        );
-
-        setSelectedMediaAction((current) => {
-          if (
-            current &&
-            MEDIA_GENERATION_CONFIGS.some(
-              (item) => item.action === current,
-            )
-          ) {
-            return current;
-          }
-
-          return MEDIA_GENERATION_CONFIGS[0]?.action ?? "";
-        });
-      }
+      setMediaCapabilities(next);
+      setSelectedMediaAction((current) =>
+        current && next.some((item) => item.action === current)
+          ? current
+          : next[0]?.action ?? "",
+      );
     } catch (requestError) {
-      // Un compte sans wallet/pack peut légitimement recevoir un 404.
-      // Cela ne doit pas polluer l'interface ni transformer le bouton
-      // "Création" en erreur globale du chat.
       console.warn(
         "Capacités média indisponibles pour le compte courant :",
         requestError,
       );
-      // Secours local : le backend reste l'autorité finale sur les
-      // droits et le coût. Cela permet au mode Création de rester
-      // utilisable même si /ai/media-capabilities est momentanément
-      // indisponible ou renvoie 404.
-      const fallback = MEDIA_GENERATION_CONFIGS.map((item) => ({
-        action: item.action,
-        type: item.type,
-        credits: item.credits,
-      }));
 
+      const fallback = getLocalMediaCapabilities(wallet?.pack_id ?? null);
       setMediaCapabilities(fallback);
-
       setSelectedMediaAction((current) =>
-        current &&
-        fallback.some(
-          (item) => item.action === current,
-        )
+        current && fallback.some((item) => item.action === current)
           ? current
           : fallback[0]?.action ?? "",
       );
@@ -2921,7 +2937,7 @@ export default function ChatPage() {
           ? {
               action: localConfig.action,
               type: localConfig.type,
-              credits: localConfig.credits,
+              model: localConfig.model,
             }
           : undefined;
       })();
@@ -4573,13 +4589,8 @@ export default function ChatPage() {
 
     <div className="mt-4 grid grid-cols-2 gap-3">
       {(["image", "video"] as const).map((type) => {
-        const fallbackForType = MEDIA_GENERATION_CONFIGS
-          .filter((item) => item.type === type)
-          .map((item) => ({
-            action: item.action,
-            type: item.type,
-            credits: item.credits,
-          }));
+        const fallbackForType = getLocalMediaCapabilities(wallet?.pack_id ?? null)
+          .filter((item) => item.type === type);
 
         const available = mediaCapabilities.filter((item) => item.type === type);
 
@@ -4637,13 +4648,8 @@ export default function ChatPage() {
                 getMediaGenerationConfig(selectedMediaAction)?.type;
 
               const fallbackForType = selectedType
-                ? MEDIA_GENERATION_CONFIGS
+                ? getLocalMediaCapabilities(wallet?.pack_id ?? null)
                     .filter((item) => item.type === selectedType)
-                    .map((item) => ({
-                      action: item.action,
-                      type: item.type,
-                      credits: item.credits,
-                    }))
                 : [];
 
               const configurations =
@@ -4681,12 +4687,19 @@ export default function ChatPage() {
                       </div>
                       {selected && <Check size={15} className="shrink-0" />}
                     </div>
-                    <div className="mt-3 flex items-center justify-between text-[10px] text-muted">
+                    <div className="mt-3 flex items-center justify-between gap-3 text-[10px] text-muted">
                       <span>{config.configuration}</span>
-                      <span>
-                        {media.credits.toLocaleString(language === "en" ? "en-US" : "fr-FR")} {UI[language].creditsUnit}
-                      </span>
+                      <span className="text-right">{media.model || config.model}</span>
                     </div>
+                    {(media.estimated_credits ?? media.credits) != null && (
+                      <p className="mt-1 text-[10px] text-muted">
+                        {language === "en" ? "Estimated reservation" : "Réservation estimée"} :{" "}
+                        {(media.estimated_credits ?? media.credits)!.toLocaleString(
+                          language === "en" ? "en-US" : "fr-FR",
+                        )}{" "}
+                        {UI[language].creditsUnit}
+                      </p>
+                    )}
                   </button>
                 );
               });
@@ -4711,8 +4724,8 @@ export default function ChatPage() {
               )?.type ??
               getMediaGenerationConfig(selectedMediaAction)?.type
             ) === "video"
-              ? "Décrivez précisément la vidéo à créer..."
-              : "Décrivez précisément l'image à créer..."
+              ? UI[language].preciseVideo
+              : UI[language].preciseImage
           }
           disabled={isThinking}
           className="mt-4 w-full resize-none rounded-xl border border-border bg-transparent px-4 py-3 text-sm leading-6 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
@@ -4724,18 +4737,23 @@ export default function ChatPage() {
               const selected = mediaCapabilities.find(
                 (item) => item.action === selectedMediaAction,
               );
-              return selected ? (
-                <p className="text-[10px] text-muted">
-                  Coût :{" "}
-                  <span className="font-medium">
-                    {selected.credits.toLocaleString("fr-FR")} crédits
-                  </span>
-                </p>
-              ) : null;
+              const estimate = selected?.estimated_credits ?? selected?.credits;
+
+              return (
+                <>
+                  <p className="text-[10px] text-muted">
+                    {estimate != null
+                      ? `${language === "en" ? "Estimated reservation" : "Réservation estimée"} : ${estimate.toLocaleString(language === "en" ? "en-US" : "fr-FR")} ${UI[language].creditsUnit}`
+                      : language === "en"
+                        ? "Dynamic cost · calculated from actual API usage"
+                        : "Coût dynamique · calculé selon l'utilisation réelle de l'API"}
+                  </p>
+                  <p className="mt-0.5 text-[10px] text-muted">
+                    {UI[language].backendValidation}
+                  </p>
+                </>
+              );
             })()}
-            <p className="mt-0.5 text-[10px] text-muted">
-              {UI[language].backendValidation}
-            </p>
           </div>
 
           <button

@@ -243,7 +243,7 @@ class SupabaseCreditRepository(CreditRepository):
                     "p_user_id": user_id,
                     "p_amount": amount,
                     "p_action": action.value,
-                    "p_reference_id": reference_id,
+                    "p_reservation_id": reference_id,
                 },
             )
             .execute()
@@ -277,6 +277,154 @@ class SupabaseCreditRepository(CreditRepository):
     # ========================================================
     # RECHARGE ATOMIQUE
     # ========================================================
+
+
+    # ========================================================
+    # RÉSERVATION / SETTLE DES CRÉDITS
+    # ========================================================
+
+    def reserve_credits(
+        self,
+        user_id: str,
+        amount: int,
+        action: CreditAction,
+        reference_id: str,
+    ) -> CreditWallet:
+        """Réserve atomiquement des crédits avant l'appel IA."""
+        if amount <= 0:
+            raise ValueError("Le montant à réserver doit être supérieur à zéro.")
+        if not reference_id:
+            raise ValueError("La référence de réservation est obligatoire.")
+
+        response = (
+            self.supabase
+            .rpc(
+                "reserve_credits",
+                {
+                    "p_user_id": user_id,
+                    "p_amount": amount,
+                    "p_action": action.value,
+                    "p_reservation_id": reference_id,
+                },
+            )
+            .execute()
+        )
+
+        if not response or not response.data:
+            raise RuntimeError("Impossible de réserver les crédits.")
+
+        data = response.data
+        if isinstance(data, list):
+            if not data:
+                raise RuntimeError(
+                    "La RPC reserve_credits n'a retourné aucun portefeuille."
+                )
+            data = data[0]
+
+        if not isinstance(data, dict):
+            raise RuntimeError("Réponse inattendue de la RPC reserve_credits.")
+
+        wallet_data = data.get("wallet")
+        if not isinstance(wallet_data, dict):
+            raise RuntimeError(
+                "La RPC de réservation n'a retourné aucun wallet exploitable."
+            )
+
+        return self._wallet_from_data(wallet_data)
+
+    def settle_credit_reservation(
+        self,
+        user_id: str,
+        reference_id: str,
+        actual_amount: int,
+    ) -> CreditWallet:
+        """Finalise une réservation avec le coût réel."""
+        if actual_amount <= 0:
+            raise ValueError("Le coût réel doit être supérieur à zéro.")
+        if not reference_id:
+            raise ValueError("La référence de réservation est obligatoire.")
+
+        response = (
+            self.supabase
+            .rpc(
+                "settle_credit_reservation",
+                {
+                    "p_reservation_id": reference_id,
+                    "p_actual_amount": actual_amount,
+                },
+            )
+            .execute()
+        )
+
+        if not response or not response.data:
+            raise RuntimeError("Impossible de finaliser la réservation de crédits.")
+
+        data = response.data
+        if isinstance(data, list):
+            if not data:
+                raise RuntimeError(
+                    "La RPC settle_credit_reservation "
+                    "n'a retourné aucun portefeuille."
+                )
+            data = data[0]
+
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                "Réponse inattendue de la RPC settle_credit_reservation."
+            )
+
+        wallet_data = data.get("wallet")
+        if not isinstance(wallet_data, dict):
+            raise RuntimeError(
+                "La RPC de réservation n'a retourné aucun wallet exploitable."
+            )
+
+        return self._wallet_from_data(wallet_data)
+
+    def release_credit_reservation(
+        self,
+        user_id: str,
+        reference_id: str,
+    ) -> CreditWallet:
+        """Libère une réservation lorsque l'appel IA échoue."""
+        if not reference_id:
+            raise ValueError("La référence de réservation est obligatoire.")
+
+        response = (
+            self.supabase
+            .rpc(
+                "release_credit_reservation",
+                {
+                    "p_reservation_id": reference_id,
+                },
+            )
+            .execute()
+        )
+
+        if not response or not response.data:
+            raise RuntimeError("Impossible de libérer la réservation de crédits.")
+
+        data = response.data
+        if isinstance(data, list):
+            if not data:
+                raise RuntimeError(
+                    "La RPC release_credit_reservation "
+                    "n'a retourné aucun portefeuille."
+                )
+            data = data[0]
+
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                "Réponse inattendue de la RPC release_credit_reservation."
+            )
+
+        wallet_data = data.get("wallet")
+        if not isinstance(wallet_data, dict):
+            raise RuntimeError(
+                "La RPC de réservation n'a retourné aucun wallet exploitable."
+            )
+
+        return self._wallet_from_data(wallet_data)
 
     def recharge_credits(
         self,
