@@ -54,6 +54,7 @@ type Pack = {
   id: PackId;
   name: string;
   price: string;
+  launchPrice: string;
   credits: string;
   duration: string;
   description: string;
@@ -121,6 +122,7 @@ const packs: Pack[] = [
     id: "light_pack",
     name: "Léger",
     price: "4 000 XAF",
+    launchPrice: "3 000 XAF",
     credits: "20 000",
     duration: "35 jours",
     description:
@@ -171,6 +173,7 @@ const packs: Pack[] = [
     id: "intermediate_pack",
     name: "Intermédiaire",
     price: "8 000 XAF",
+    launchPrice: "5 500 XAF",
     credits: "36 000",
     duration: "35 jours",
     description:
@@ -217,6 +220,7 @@ const packs: Pack[] = [
     id: "pro_pack",
     name: "Pro",
     price: "12 000 XAF",
+    launchPrice: "8 000 XAF",
     credits: "48 000",
     duration: "35 jours",
     description:
@@ -281,6 +285,7 @@ const packs: Pack[] = [
     id: "business_pack",
     name: "Business",
     price: "45 000 XAF",
+    launchPrice: "25 000 XAF",
     credits: "160 000",
     duration: "35 jours",
     description:
@@ -402,6 +407,9 @@ const UI = {
     packsOria: "Packs Oria",
     heroTitle: "Choisissez votre accès à l'IA.",
     heroDescription: "Chaque pack vous donne un volume de crédits utilisable pendant 35 jours. Les modèles et capacités accessibles dépendent du pack choisi, et chaque action est facturée selon sa consommation réelle.",
+    launchPromotion: "Promotion de lancement",
+    launchOffer: "Prix de lancement",
+    launchLimit: "Offre réservée aux 300 premiers clients payants.",
     needMoreCredits: "Besoin de crédits supplémentaires ?",
     topUpIntro: "Rechargez votre solde sans changer de pack. Les crédits complémentaires sont ajoutés directement à votre portefeuille.",
     fromPrice: "À partir de 563 XAF pour 1 000 crédits",
@@ -446,6 +454,9 @@ const UI = {
     packsOria: "Oria Packs",
     heroTitle: "Choose your AI access.",
     heroDescription: "Each pack gives you a credit balance usable for 35 days. Available models and capabilities depend on the pack, and each action is charged according to actual usage.",
+    launchPromotion: "Launch promotion",
+    launchOffer: "Launch price",
+    launchLimit: "Offer reserved for the first 300 paying customers.",
     needMoreCredits: "Need more credits?",
     topUpIntro: "Top up your balance without changing packs. Additional credits are added directly to your wallet.",
     fromPrice: "Starting at 563 XAF for 1,000 credits",
@@ -1065,6 +1076,40 @@ export default function PacksPage() {
             >
               {t.heroDescription}
             </Text>
+
+            <View
+              style={
+                styles.launchBanner
+              }
+            >
+              <View
+                style={
+                  styles.launchBannerTitleRow
+                }
+              >
+                <Ionicons
+                  name="sparkles"
+                  size={15}
+                  color="#18181b"
+                />
+
+                <Text
+                  style={
+                    styles.launchBannerTitle
+                  }
+                >
+                  {t.launchPromotion}
+                </Text>
+              </View>
+
+              <Text
+                style={
+                  styles.launchBannerText
+                }
+              >
+                {t.launchLimit}
+              </Text>
+            </View>
           </View>
 
           {/* Packs */}
@@ -1857,12 +1902,40 @@ function PackCard({
         }
       >
         <Text
+          style={[
+            styles.launchPriceLabel,
+            isPopular &&
+              styles.popularLaunchPriceLabel,
+          ]}
+        >
+          {t.launchOffer}
+        </Text>
+
+        <View
           style={
-            styles.packPrice
+            styles.launchPriceRow
           }
         >
-          {pack.price}
-        </Text>
+          <Text
+            style={[
+              styles.originalPrice,
+              isPopular &&
+                styles.popularOriginalPrice,
+            ]}
+          >
+            {pack.price}
+          </Text>
+
+          <Text
+            style={[
+              styles.packPrice,
+              isPopular &&
+                styles.popularPackPrice,
+            ]}
+          >
+            {pack.launchPrice}
+          </Text>
+        </View>
 
         <View
           style={
@@ -2436,6 +2509,37 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
+  launchBanner: {
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: "#e4e4e7",
+    borderRadius: 16,
+    backgroundColor: "#f4f4f5",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    alignItems: "center",
+    gap: 4,
+  },
+
+  launchBannerTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+
+  launchBannerTitle: {
+    color: "#18181b",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+
+  launchBannerText: {
+    color: "#71717a",
+    fontSize: 11,
+    lineHeight: 16,
+    textAlign: "center",
+  },
+
   packList: {
     width: "100%",
     gap: 14,
@@ -2512,12 +2616,48 @@ const styles = StyleSheet.create({
     marginTop: 23,
   },
 
+  launchPriceLabel: {
+    color: "#52525b",
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+
+  popularLaunchPriceLabel: {
+    color: "#ffffff",
+    opacity: 0.75,
+  },
+
+  launchPriceRow: {
+    marginTop: 4,
+    flexDirection: "row",
+    alignItems: "baseline",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+
+  originalPrice: {
+    color: "#71717a",
+    fontSize: 14,
+    textDecorationLine: "line-through",
+  },
+
+  popularOriginalPrice: {
+    color: "#ffffff",
+    opacity: 0.55,
+  },
+
   packPrice: {
     color: "#18181b",
     fontSize: 30,
     lineHeight: 36,
     fontWeight: "700",
     letterSpacing: -0.5,
+  },
+
+  popularPackPrice: {
+    color: "#ffffff",
   },
 
   durationRow: {
