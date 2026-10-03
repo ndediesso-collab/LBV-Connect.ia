@@ -4229,6 +4229,16 @@ export default function ChatPage() {
         )
       : null;
 
+  // Solde réellement disponible à afficher.
+  // Un pack expiré/inactif doit toujours apparaître à 0 crédit,
+  // même si un ancien solde reste encore stocké dans Supabase.
+  // La navigation reste libre et la sécurité des actions IA
+  // reste gérée par le backend et Supabase.
+  const availableBalance =
+    wallet?.is_pack_active
+      ? wallet.balance
+      : 0;
+
   /*
    * ==========================================================
    * AFFICHAGE
@@ -4375,7 +4385,7 @@ export default function ChatPage() {
               {isLoadingWallet
                 ? "..."
                 : wallet
-                  ? wallet.balance.toLocaleString(language === "en" ? "en-US" : "fr-FR")
+                  ? availableBalance.toLocaleString(language === "en" ? "en-US" : "fr-FR")
                   : "—"}
             </p>
 
@@ -4488,7 +4498,7 @@ export default function ChatPage() {
                 {isLoadingWallet
                   ? "..."
                   : wallet
-                    ? wallet.balance.toLocaleString(language === "en" ? "en-US" : "fr-FR")
+                    ? availableBalance.toLocaleString(language === "en" ? "en-US" : "fr-FR")
                     : "—"}
               </span>
             </Link>

@@ -2724,6 +2724,15 @@ export default function CreditsPage() {
     wallet?.is_pack_active ?? false;
 
 
+  // Solde réellement disponible à afficher.
+  // Si le pack est expiré/inactif, l'utilisateur doit voir 0 crédit,
+  // même si le wallet conserve encore un ancien solde en base.
+  const availableBalance =
+    isPackActive && wallet
+      ? wallet.balance
+      : 0;
+
+
   const operationCount =
 
 
@@ -3304,7 +3313,7 @@ export default function CreditsPage() {
 
 
 
-                            wallet.balance,
+                            availableBalance,
 
 
 
