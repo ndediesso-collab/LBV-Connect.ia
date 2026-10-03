@@ -288,22 +288,40 @@ class UpdatePhoneRequest(BaseModel):
 def _wallet_response(wallet):
     """
     Transforme un objet CreditWallet en réponse JSON stable.
+
+    Le solde réellement stocké dans Supabase est conservé tel quel.
+    En revanche, lorsqu'un pack est expiré ou inactif, aucun crédit
+    n'est considéré comme disponible pour le frontend.
     """
 
     if wallet is None:
         return None
 
+    is_pack_active = wallet.is_pack_active
+
+    available_balance = (
+        wallet.balance
+        if is_pack_active
+        else 0
+    )
+
+    available_remaining_percentage = (
+        wallet.remaining_percentage
+        if is_pack_active
+        else 0.0
+    )
+
     return {
         "user_id": wallet.user_id,
         "pack_id": wallet.pack_id,
-        "balance": wallet.balance,
+        "balance": available_balance,
         "initial_credits": wallet.initial_credits,
         "consumed_credits": wallet.consumed_credits,
         "consumed_percentage": wallet.consumed_percentage,
-        "remaining_percentage": wallet.remaining_percentage,
+        "remaining_percentage": available_remaining_percentage,
         "pack_activated_at": wallet.pack_activated_at,
         "pack_expires_at": wallet.pack_expires_at,
-        "is_pack_active": wallet.is_pack_active,
+        "is_pack_active": is_pack_active,
         "created_at": wallet.created_at,
         "updated_at": wallet.updated_at,
     }

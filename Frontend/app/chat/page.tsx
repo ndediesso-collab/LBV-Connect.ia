@@ -45,6 +45,7 @@ type WalletData = {
   pack_id: string | null;
   pack_activated_at: string | null;
   pack_expires_at: string | null;
+  is_pack_active: boolean;
 };
 
 type ChatResponse = {
@@ -139,6 +140,7 @@ const UI = {
     noConversation: "Aucune conversation pour le moment.",
     availableCredits: "Crédits disponibles",
     daysRemaining: "jours restants",
+    packExpired: "Pack expiré",
     durationUnavailable: "Durée indisponible",
     myCredits: "Mes crédits",
     myCreations: "Mes créations",
@@ -197,6 +199,7 @@ const UI = {
     noConversation: "No conversations yet.",
     availableCredits: "Available credits",
     daysRemaining: "days remaining",
+    packExpired: "Pack expired",
     durationUnavailable: "Duration unavailable",
     myCredits: "My credits",
     myCreations: "My creations",
@@ -1028,94 +1031,374 @@ async function saveMessageRemote(
  * [lien](https://...)
  */
 
-function decodeLatexGroup(value: string): string {
-  return value
-    .replace(/\\text\s*\{([^{}]*)\}/g, "$1")
-    .replace(/\\mathrm\s*\{([^{}]*)\}/g, "$1")
-    .replace(/\\mathbf\s*\{([^{}]*)\}/g, "$1")
-    .replace(/\\operatorname\s*\{([^{}]*)\}/g, "$1")
+const MATH_SYMBOLS: Record<string, string> = {
+  alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε",
+  zeta: "ζ", eta: "η", theta: "θ", iota: "ι", kappa: "κ",
+  lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", omicron: "ο",
+  pi: "π", rho: "ρ", sigma: "σ", tau: "τ", upsilon: "υ",
+  phi: "φ", chi: "χ", psi: "ψ", omega: "ω",
+  Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Xi: "Ξ",
+  Pi: "Π", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
+  infty: "∞", partial: "∂", nabla: "∇", ell: "ℓ",
+  cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓",
+  leq: "≤", geq: "≥", neq: "≠", approx: "≈", sim: "∼",
+  equiv: "≡", propto: "∝", to: "→", rightarrow: "→",
+  leftarrow: "←", leftrightarrow: "↔", mapsto: "↦",
+  implies: "⇒", Rightarrow: "⇒", iff: "⇔", Leftrightarrow: "⇔",
+  sum: "∑", prod: "∏", int: "∫", iint: "∬", iiint: "∭",
+  cup: "∪", cap: "∩", subset: "⊂", supset: "⊃",
+  subseteq: "⊆", supseteq: "⊇", in: "∈", notin: "∉",
+  forall: "∀", exists: "∃", angle: "∠", degree: "°",
+  perp: "⊥", parallel: "∥", therefore: "∴", because: "∵",
+};
+
+const MATH_WORD_COMMANDS: Record<string, string> = {
+  sin: "sin", cos: "cos", tan: "tan", cot: "cot",
+  arcsin: "arcsin", arccos: "arccos", arctan: "arctan",
+  sinh: "sinh", cosh: "cosh", tanh: "tanh",
+  ln: "ln", log: "log", exp: "exp", lim: "lim",
+  min: "min", max: "max", det: "det", gcd: "gcd",
+};
+
+type MathGroup = {
+  content: string;
+  nextIndex: number;
+};
+
+function normalizeMathSource(expression: string): string {
+  return expression
+    .replace(/\\dfrac/g, "\\frac")
+    .replace(/\\tfrac/g, "\\frac")
+    .replace(/\\displaystyle/g, "")
     .replace(/\\left/g, "")
     .replace(/\\right/g, "")
-    .replace(/\\cdot/g, " · ")
-    .replace(/\\times/g, " × ")
-    .replace(/\\div/g, " ÷ ")
-    .replace(/\\pm/g, " ± ")
-    .replace(/\\mp/g, " ∓ ")
-    .replace(/\\leq/g, " ≤ ")
-    .replace(/\\geq/g, " ≥ ")
-    .replace(/\\neq/g, " ≠ ")
-    .replace(/\\approx/g, " ≈ ")
-    .replace(/\\infty/g, "∞")
-    .replace(/\\pi/g, "π")
-    .replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)")
-    .replace(/\\sqrt\s*([^\s]+)/g, "√($1)")
-    .replace(/\^\{([^{}]+)\}/g, "^($1)")
-    .replace(/_\{([^{}]+)\}/g, "_($1)")
+    .replace(/\\begin\{(?:aligned|align\*?|gathered|cases|matrix|pmatrix|bmatrix|vmatrix)\}/g, "")
+    .replace(/\\end\{(?:aligned|align\*?|gathered|cases|matrix|pmatrix|bmatrix|vmatrix)\}/g, "")
     .replace(/\\,/g, " ")
     .replace(/\\;/g, " ")
+    .replace(/\\:/g, " ")
     .replace(/\\!/g, "")
-    .replace(/\\quad/g, " ")
-    .replace(/\\qquad/g, " ")
-    .replace(/\\([{}])/g, "$1")
-    .replace(/[{}]/g, "")
-    .replace(/\s+/g, " ")
+    .replace(/\\quad/g, "  ")
+    .replace(/\\qquad/g, "   ")
     .trim();
 }
 
-function makeMathReadable(expression: string): string {
-  let value = expression.trim();
+function readMathGroup(source: string, startIndex: number): MathGroup | null {
+  if (source[startIndex] !== "{") return null;
 
-  // Common malformed output from some models, e.g. \\text[Centre}.
-  value = value.replace(/\\text\[([^\]]+)\}/g, "$1");
+  let depth = 0;
 
-  // Resolve simple fractions repeatedly, including text/groups already decoded.
-  let previous = "";
-  while (previous !== value) {
-    previous = value;
-    value = value.replace(
-      /\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g,
-      "($1) ÷ ($2)",
-    );
+  for (let index = startIndex; index < source.length; index++) {
+    if (source[index] === "{") depth++;
+    if (source[index] === "}") depth--;
+
+    if (depth === 0) {
+      return {
+        content: source.slice(startIndex + 1, index),
+        nextIndex: index + 1,
+      };
+    }
   }
 
-  value = decodeLatexGroup(value);
-
-  // Make powers readable without exposing LaTeX syntax.
-  const superscripts: Record<string, string> = {
-    "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
-    "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
-    "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
-    "n": "ⁿ", "i": "ⁱ",
-  };
-  value = value.replace(/\^\(([^)]+)\)/g, (_, exponent: string) =>
-    exponent.split("").map((char) => superscripts[char] ?? char).join(""),
-  );
-  value = value.replace(/_\(([^)]+)\)/g, (_, subscript: string) => `_${subscript}`);
-  value = value.replace(/\^([A-Za-z0-9])/g, (_, exponent: string) => superscripts[exponent] ?? exponent);
-
-  // Clean leftover commands/braces and normalize operators.
-  value = value
-    .replace(/\\text/g, "")
-    .replace(/\\frac/g, "")
-    .replace(/\\[a-zA-Z]+/g, "")
-    .replace(/[{}]/g, "")
-    .replace(/\s*([=+\-×÷±≤≥≠≈])\s*/g, " $1 ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return value;
+  return null;
 }
 
-function renderMathToken(expression: string, key: string) {
-  const readable = makeMathReadable(expression);
+function readOptionalMathArgument(
+  source: string,
+  startIndex: number,
+): MathGroup | null {
+  if (source[startIndex] === "{") {
+    return readMathGroup(source, startIndex);
+  }
+
+  if (startIndex >= source.length) return null;
+
+  if (source[startIndex] === "\\") {
+    const commandMatch = source.slice(startIndex + 1).match(/^[A-Za-z]+/);
+    if (commandMatch) {
+      return {
+        content: `\\${commandMatch[0]}`,
+        nextIndex: startIndex + 1 + commandMatch[0].length,
+      };
+    }
+  }
+
+  return {
+    content: source[startIndex],
+    nextIndex: startIndex + 1,
+  };
+}
+
+function renderMathNodes(
+  rawSource: string,
+  keyPrefix: string,
+): ReactNode[] {
+  const source = normalizeMathSource(rawSource);
+  const nodes: ReactNode[] = [];
+  let index = 0;
+  let nodeIndex = 0;
+
+  const pushText = (value: string) => {
+    if (!value) return;
+    nodes.push(
+      <span key={`${keyPrefix}-text-${nodeIndex++}`}>
+        {value}
+      </span>,
+    );
+  };
+
+  while (index < source.length) {
+    const char = source[index];
+
+    if (char === "\\") {
+      // Double antislash LaTeX : retour à la ligne dans une formule multi-ligne.
+      if (source[index + 1] === "\\") {
+        nodes.push(<br key={`${keyPrefix}-br-${nodeIndex++}`} />);
+        index += 2;
+        continue;
+      }
+
+      const commandMatch = source.slice(index + 1).match(/^[A-Za-z]+/);
+
+      if (!commandMatch) {
+        pushText(source[index + 1] || "");
+        index += source[index + 1] ? 2 : 1;
+        continue;
+      }
+
+      const command = commandMatch[0];
+      index += 1 + command.length;
+
+      if (command === "frac") {
+        const numerator = readMathGroup(source, index);
+        if (!numerator) {
+          pushText("÷");
+          continue;
+        }
+
+        index = numerator.nextIndex;
+        const denominator = readMathGroup(source, index);
+        if (!denominator) {
+          pushText(`(${numerator.content}) ÷`);
+          continue;
+        }
+
+        index = denominator.nextIndex;
+        nodes.push(
+          <span
+            key={`${keyPrefix}-frac-${nodeIndex++}`}
+            className="mx-1 inline-flex min-w-[1.5em] flex-col items-center justify-center align-middle leading-none"
+          >
+            <span className="border-b border-current px-1 pb-0.5 text-center">
+              {renderMathNodes(numerator.content, `${keyPrefix}-num-${nodeIndex}`)}
+            </span>
+            <span className="px-1 pt-0.5 text-center">
+              {renderMathNodes(denominator.content, `${keyPrefix}-den-${nodeIndex}`)}
+            </span>
+          </span>,
+        );
+        continue;
+      }
+
+      if (command === "sqrt") {
+        let rootDegree: string | null = null;
+
+        if (source[index] === "[") {
+          const closing = source.indexOf("]", index + 1);
+          if (closing !== -1) {
+            rootDegree = source.slice(index + 1, closing);
+            index = closing + 1;
+          }
+        }
+
+        const radicand = readMathGroup(source, index);
+        if (!radicand) {
+          pushText("√");
+          continue;
+        }
+
+        index = radicand.nextIndex;
+        nodes.push(
+          <span
+            key={`${keyPrefix}-sqrt-${nodeIndex++}`}
+            className="mx-0.5 inline-flex items-start align-middle"
+          >
+            {rootDegree ? (
+              <sup className="mr-[-0.15em] mt-[-0.1em] text-[0.58em] leading-none">
+                {rootDegree}
+              </sup>
+            ) : null}
+            <span className="text-[1.08em] leading-none">√</span>
+            <span className="border-t border-current px-1 pt-0.5">
+              {renderMathNodes(radicand.content, `${keyPrefix}-rad-${nodeIndex}`)}
+            </span>
+          </span>,
+        );
+        continue;
+      }
+
+      if (["text", "mathrm", "mathbf", "operatorname"].includes(command)) {
+        const group = readMathGroup(source, index);
+        if (!group) {
+          pushText(command === "operatorname" ? "" : command);
+          continue;
+        }
+
+        index = group.nextIndex;
+        const content = group.content.replace(/\\ /g, " ");
+
+        nodes.push(
+          command === "mathbf" ? (
+            <strong key={`${keyPrefix}-textcmd-${nodeIndex++}`} className="font-semibold">
+              {content}
+            </strong>
+          ) : (
+            <span
+              key={`${keyPrefix}-textcmd-${nodeIndex++}`}
+              className={command === "operatorname" ? "font-medium not-italic" : "not-italic"}
+            >
+              {content}
+            </span>
+          ),
+        );
+        continue;
+      }
+
+      if (["vec", "overrightarrow"].includes(command)) {
+        const group = readMathGroup(source, index);
+        if (!group) {
+          pushText("→");
+          continue;
+        }
+
+        index = group.nextIndex;
+        nodes.push(
+          <span
+            key={`${keyPrefix}-vec-${nodeIndex++}`}
+            className="relative mx-0.5 inline-block px-0.5 pt-1"
+          >
+            <span className="absolute left-0 right-0 top-[-0.25em] text-center text-[0.7em] leading-none">
+              →
+            </span>
+            {renderMathNodes(group.content, `${keyPrefix}-veccontent-${nodeIndex}`)}
+          </span>,
+        );
+        continue;
+      }
+
+      if (MATH_SYMBOLS[command]) {
+        pushText(MATH_SYMBOLS[command]);
+        continue;
+      }
+
+      if (MATH_WORD_COMMANDS[command]) {
+        nodes.push(
+          <span
+            key={`${keyPrefix}-word-${nodeIndex++}`}
+            className="mx-0.5 font-medium not-italic"
+          >
+            {MATH_WORD_COMMANDS[command]}
+          </span>,
+        );
+        continue;
+      }
+
+      // Une commande inconnue est rendue sans antislash afin de ne pas
+      // exposer du LaTeX brut / langage machine à l'utilisateur.
+      pushText(command);
+      continue;
+    }
+
+    if (char === "^" || char === "_") {
+      const isSuperscript = char === "^";
+      const argument = readOptionalMathArgument(source, index + 1);
+
+      if (!argument) {
+        pushText(char);
+        index++;
+        continue;
+      }
+
+      index = argument.nextIndex;
+      const Tag = isSuperscript ? "sup" : "sub";
+
+      nodes.push(
+        <Tag
+          key={`${keyPrefix}-${isSuperscript ? "sup" : "sub"}-${nodeIndex++}`}
+          className={
+            isSuperscript
+              ? "ml-0.5 align-super text-[0.68em] leading-none"
+              : "ml-0.5 align-sub text-[0.68em] leading-none"
+          }
+        >
+          {renderMathNodes(argument.content, `${keyPrefix}-script-${nodeIndex}`)}
+        </Tag>,
+      );
+      continue;
+    }
+
+    if (char === "{") {
+      const group = readMathGroup(source, index);
+      if (group) {
+        nodes.push(
+          <span key={`${keyPrefix}-group-${nodeIndex++}`}>
+            {renderMathNodes(group.content, `${keyPrefix}-groupcontent-${nodeIndex}`)}
+          </span>,
+        );
+        index = group.nextIndex;
+        continue;
+      }
+    }
+
+    if (char === "&") {
+      pushText("   ");
+      index++;
+      continue;
+    }
+
+    let end = index + 1;
+    while (
+      end < source.length &&
+      !["\\", "^", "_", "{", "&"].includes(source[end])
+    ) {
+      end++;
+    }
+
+    pushText(source.slice(index, end));
+    index = end;
+  }
+
+  return nodes;
+}
+
+function renderMathToken(
+  expression: string,
+  key: string,
+  display = false,
+) {
+  const content = renderMathNodes(expression, `math-${key}`);
+
+  if (display) {
+    return (
+      <div
+        key={key}
+        className="my-4 w-full overflow-x-auto rounded-xl border border-border/70 bg-surface-secondary/55 px-4 py-3"
+        title="Formule mathématique"
+      >
+        <div className="min-w-max text-center font-serif text-[1.05rem] leading-8 tracking-[0.01em]">
+          {content}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <span
       key={key}
-      className="mx-0.5 rounded-md bg-surface-secondary px-1.5 py-0.5 font-mono text-[0.95em]"
-      title="Math"
+      className="mx-0.5 inline-flex max-w-full items-baseline rounded-md bg-surface-secondary/70 px-1.5 py-0.5 font-serif text-[1em] leading-relaxed"
+      title="Formule mathématique"
     >
-      {readable}
+      {content}
     </span>
   );
 }
@@ -1176,7 +1459,17 @@ function renderInlineMarkdown(
           ? token.slice(1, -1)
           : token.slice(2, -2);
 
-      parts.push(renderMathToken(expression, String(index)));
+      const isDisplayMath =
+        token.startsWith("$$") ||
+        token.startsWith("\[");
+
+      parts.push(
+        renderMathToken(
+          expression,
+          String(index),
+          isDisplayMath,
+        ),
+      );
     }
 
     /*
@@ -4087,10 +4380,11 @@ export default function ChatPage() {
             </p>
 
             <p className="mt-1 text-[11px] text-muted">
-              {remainingDays !==
-              null
-                ? `${remainingDays} ${UI[language].daysRemaining}`
-                : UI[language].durationUnavailable}
+              {wallet && !wallet.is_pack_active
+                ? UI[language].packExpired
+                : remainingDays !== null
+                  ? `${remainingDays} ${UI[language].daysRemaining}`
+                  : UI[language].durationUnavailable}
             </p>
           </div>
         </div>
@@ -4273,7 +4567,7 @@ export default function ChatPage() {
                           item.role ===
                           "user"
                             ? "flex justify-end"
-                            : "flex justify-start"
+                            : "flex flex-col items-start"
                         }
                       >
                         <div
@@ -4281,7 +4575,7 @@ export default function ChatPage() {
                             item.role ===
                             "user"
                               ? "max-w-[85%] rounded-3xl rounded-br-lg bg-accent px-5 py-3.5 text-sm leading-6 text-accent-foreground"
-                              : "max-w-[90%] rounded-3xl rounded-bl-lg border border-border bg-surface px-5 py-4 text-foreground shadow-sm"
+                              : "w-full text-foreground"
                           }
                         >
                           {item.role ===
@@ -4289,8 +4583,12 @@ export default function ChatPage() {
                             /*
                              * IMPORTANT :
                              *
-                             * Les réponses IA passent maintenant
-                             * par le renderer Markdown.
+                             * Les réponses IA utilisent le renderer Markdown
+                             * existant, mais sont affichées sans bulle afin de
+                             * conserver une lecture ouverte de type ChatGPT.
+                             *
+                             * Le Markdown, les blocs de code, les maths,
+                             * la copie et les médias restent inchangés.
                              */
                             <>
                               <MarkdownMessage
