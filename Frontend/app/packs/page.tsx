@@ -1110,7 +1110,7 @@ const FAQS_EN = [
 
     answer:
 
-      "Light includes 20,000 credits, Intermediate 36,000, Pro 48,000, and Business 160,000.",
+      "Light includes 15,000 credits, Intermediate 27,000, Pro 36,000, and Business 120,000.",
 
   },
 
@@ -1200,19 +1200,18 @@ const FAQS_EN = [
 
 
 
- * Léger         : 20 000 crédits  / 35 jours
+ * Léger         : 15 000 crédits  / 35 jours
 
 
 
- * Intermédiaire : 36 000 crédits / 35 jours
+ * Intermédiaire : 27 000 crédits / 35 jours
+
+
+ * Pro           : 36 000 crédits / 35 jours
 
 
 
- * Pro           : 48 000 crédits / 35 jours
-
-
-
- * Business      : 160 000 crédits / 35 jours
+ * Business      : 120 000 crédits / 35 jours
 
 
 
@@ -1356,7 +1355,7 @@ const packs: Pack[] = [
 
     launchPrice: "3 000 XAF",
 
-    credits: "20 000",
+    credits: "15 000",
 
     duration: "35 jours",
 
@@ -1416,7 +1415,7 @@ const packs: Pack[] = [
 
     launchPrice: "5 500 XAF",
 
-    credits: "36 000",
+    credits: "27 000",
 
     duration: "35 jours",
 
@@ -1478,7 +1477,7 @@ const packs: Pack[] = [
 
     launchPrice: "8 000 XAF",
 
-    credits: "48 000",
+    credits: "36 000",
 
     duration: "35 jours",
 
@@ -1546,7 +1545,7 @@ const packs: Pack[] = [
 
     launchPrice: "25 000 XAF",
 
-    credits: "160 000",
+    credits: "120 000",
 
     duration: "35 jours",
 
@@ -1664,7 +1663,7 @@ const faqs = [
 
     answer:
 
-      "Le pack Léger contient 20 000 crédits, l'Intermédiaire 36 000, le Pro 48 000 et le Business 160 000.",
+      "Le pack Léger contient 15 000 crédits, l'Intermédiaire 27 000, le Pro 36 000 et le Business 120 000.",
 
   },
 

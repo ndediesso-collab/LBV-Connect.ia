@@ -419,19 +419,19 @@ TARGET_PACK_CREDITS = {
 
 
 
-    "light": 20_000,
+    "light": 15_000,
 
 
 
-    "intermediate": 36_000,
+    "intermediate": 27_000,
 
 
 
-    "pro": 48_000,
+    "pro": 36_000,
 
 
 
-    "business": 160_000,
+    "business": 120_000,
 
 
 
@@ -1093,13 +1093,12 @@ MAX_MULTIMODAL_ATTACHMENTS = 3
 
 # Cibles actives :
 
-#   Léger         20_000
+#   Léger         15_000
 
-#   Intermédiaire 36_000
+#   Intermédiaire 27_000
 
-#   Pro           48_000
-
-#   Business     160_000
+#   Pro           36_000
+#   Business     120_000
 
 #
 
@@ -1113,7 +1112,7 @@ MAX_MULTIMODAL_ATTACHMENTS = 3
 
 
 
-LIGHT_PACK_CREDITS = 20_000
+LIGHT_PACK_CREDITS = 15_000
 
 
 
@@ -1141,7 +1140,8 @@ LIGHT_PACK_API_BUDGET_XAF = 2_500
 
 
 
-INTERMEDIATE_PACK_CREDITS = 36_000
+
+INTERMEDIATE_PACK_CREDITS = 27_000
 
 
 
@@ -1169,7 +1169,7 @@ INTERMEDIATE_PACK_API_BUDGET_XAF = 4_500
 
 
 
-PRO_PACK_CREDITS = 48_000
+PRO_PACK_CREDITS = 36_000
 
 
 
@@ -1197,7 +1197,7 @@ PRO_PACK_API_BUDGET_XAF = 6_000
 
 
 
-BUSINESS_PACK_CREDITS = 160_000
+BUSINESS_PACK_CREDITS = 120_000
 
 
 
