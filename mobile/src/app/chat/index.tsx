@@ -5,6 +5,7 @@ import {
   Animated,
   FlatList,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -2306,6 +2307,8 @@ export default function ChatPage() {
   const [selectedModel, setSelectedModel] = useState("luna");
   const [message, setMessage] = useState("");
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [composerInputHeight, setComposerInputHeight] = useState(96);
+  const composerInputRef = useRef<TextInput>(null);
   const [bottomAreaHeight, setBottomAreaHeight] = useState(0);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -2326,8 +2329,8 @@ export default function ChatPage() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const { width: screenWidth } = useWindowDimensions();
-  const { bottom: safeAreaBottom } = useSafeAreaInsets();
-  const drawerWidth = Math.min(290, Math.max(235, screenWidth * 0.74));
+  const { top: safeAreaTop, bottom: safeAreaBottom } = useSafeAreaInsets();
+  const drawerWidth = Math.min(324, Math.max(278, screenWidth * 0.79));
   const drawerTranslateX = useRef(new Animated.Value(-320)).current;
 
   const openDrawer = useCallback(() => {
@@ -2568,6 +2571,19 @@ export default function ChatPage() {
 
     return () => cancelAnimationFrame(frame);
   }, [messages.length, isThinking, bottomAreaHeight]);
+
+  useEffect(() => {
+    const eventName =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const subscription = Keyboard.addListener(eventName, () => {
+      if (attachments.length === 0 && !activeCapability) {
+        setComposerExpanded(false);
+      }
+    });
+
+    return () => subscription.remove();
+  }, [attachments.length, activeCapability]);
 
   async function loadWallet(
     trialState: Record<string, TrialInfo> = trials,
@@ -2855,6 +2871,7 @@ export default function ChatPage() {
     setMessage("");
     setAttachments([]);
     setComposerExpanded(false);
+    setComposerInputHeight(96);
     setActiveCapability(null);
     setError(null);
     closeDrawer();
@@ -3433,6 +3450,7 @@ export default function ChatPage() {
     ]);
     setMessage("");
     setComposerExpanded(false);
+    setComposerInputHeight(96);
     setIsThinking(true);
     setError(null);
 
@@ -4309,8 +4327,15 @@ export default function ChatPage() {
               </View>
             ) : null}
 
-            <View style={styles.composer}>
-              {attachments.length > 0 ? (
+            <View
+              style={[
+                styles.composer,
+                composerExpanded
+                  ? styles.composerExpanded
+                  : styles.composerResting,
+              ]}
+            >
+              {composerExpanded && attachments.length > 0 ? (
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -4321,15 +4346,14 @@ export default function ChatPage() {
                       key={attachment.id}
                       attachment={attachment}
                       language={language}
-                      onRemove={() =>
-                        removeAttachment(attachment.id)
-                      }
+                      onRemove={() => removeAttachment(attachment.id)}
                     />
                   ))}
                 </ScrollView>
               ) : null}
 
               <TextInput
+                ref={composerInputRef}
                 value={message}
                 onChangeText={setMessage}
                 placeholder={
@@ -4339,16 +4363,31 @@ export default function ChatPage() {
                 }
                 placeholderTextColor={themedIconColor("#999999", isDark)}
                 editable={!isThinking}
-                multiline
-                textAlignVertical="top"
+                multiline={composerExpanded}
+                textAlignVertical={composerExpanded ? "top" : "center"}
+                scrollEnabled={composerExpanded && composerInputHeight >= 176}
                 style={[
                   styles.composerInput,
                   composerExpanded
-                    ? styles.composerInputExpanded
+                    ? [
+                        styles.composerInputExpanded,
+                        { height: composerInputHeight },
+                      ]
                     : styles.composerInputCompact,
                 ]}
-                onFocus={() => setComposerExpanded(true)}
-                onBlur={() => setComposerExpanded(false)}
+                onFocus={() => {
+                  setComposerExpanded(true);
+                  setComposerInputHeight((current) => Math.max(96, current));
+                  requestAnimationFrame(() => scrollToBottom(false));
+                }}
+                onBlur={() => undefined}
+                onContentSizeChange={(event) => {
+                  if (!composerExpanded) return;
+                  const nextHeight = Math.max(96, Math.min(176, Math.ceil(event.nativeEvent.contentSize.height) + 18));
+                  setComposerInputHeight((current) =>
+                    Math.abs(current - nextHeight) > 1 ? nextHeight : current,
+                  );
+                }}
                 onSubmitEditing={(event) => {
                   if (Platform.OS === "ios") {
                     event.preventDefault();
@@ -4356,137 +4395,141 @@ export default function ChatPage() {
                 }}
               />
 
-              <View style={styles.composerFooter}>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.capabilityRow}
-                >
-                  <Pressable
-                    style={styles.capabilityButton}
-                    onPress={() => selectCapability("Fichier")}
+              {composerExpanded ? (
+                <View style={styles.composerFooter}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                    contentContainerStyle={styles.capabilityRow}
                   >
-                    <Ionicons
-                      name="document-text-outline"
-                      size={17}
-                      color={themedIconColor("#555555", isDark)}
-                    />
-                    <Text style={styles.capabilityButtonText}>
-                      {t.file}
-                    </Text>
-                    {attachments.length > 0 ? (
-                      <Text style={styles.smallMuted}>
-                        {attachments.length}/{MAX_ATTACHMENTS}
+                    <Pressable
+                      style={styles.capabilityButton}
+                      onPress={() => selectCapability("Fichier")}
+                    >
+                      <Ionicons
+                        name="document-text-outline"
+                        size={19}
+                        color={themedIconColor("#555555", isDark)}
+                      />
+                      <Text style={styles.capabilityButtonText}>
+                        {t.file}
                       </Text>
-                    ) : null}
-                  </Pressable>
+                    </Pressable>
 
-                  <Pressable
-                    style={styles.capabilityButton}
-                    onPress={() => selectCapability("Image")}
-                  >
-                    <Ionicons
-                      name="image-outline"
-                      size={17}
-                      color={themedIconColor("#555555", isDark)}
-                    />
-                    <Text style={styles.capabilityButtonText}>
-                      {t.image}
-                    </Text>
-                    {attachments.length > 0 ? (
-                      <Text style={styles.smallMuted}>
-                        {attachments.length}/{MAX_ATTACHMENTS}
+                    <Pressable
+                      style={styles.capabilityButton}
+                      onPress={() => selectCapability("Image")}
+                    >
+                      <Ionicons
+                        name="image-outline"
+                        size={19}
+                        color={themedIconColor("#555555", isDark)}
+                      />
+                      <Text style={styles.capabilityButtonText}>
+                        {t.image}
                       </Text>
-                    ) : null}
-                  </Pressable>
+                    </Pressable>
 
-                  <Pressable
-                    style={styles.capabilityButton}
-                    onPress={() => void pickCamera()}
-                  >
-                    <Ionicons
-                      name="camera-outline"
-                      size={17}
-                      color={themedIconColor("#555555", isDark)}
-                    />
-                    <Text style={styles.capabilityButtonText}>
-                      {t.camera}
-                    </Text>
-                  </Pressable>
+                    <Pressable
+                      style={styles.capabilityButton}
+                      onPress={() => void pickCamera()}
+                    >
+                      <Ionicons
+                        name="camera-outline"
+                        size={19}
+                        color={themedIconColor("#555555", isDark)}
+                      />
+                      <Text style={styles.capabilityButtonText}>
+                        {t.camera}
+                      </Text>
+                    </Pressable>
 
-                  <Pressable
-                    style={[
-                      styles.capabilityButton,
-                      activeCapability === "Recherche Web" &&
-                        styles.capabilityActive,
-                    ]}
-                    onPress={() =>
-                      selectCapability("Recherche Web")
-                    }
-                  >
-                    <Ionicons
-                      name="globe-outline"
-                      size={17}
-                      color={
-                        activeCapability === "Recherche Web"
-                          ? "#ffffff"
-                          : "#555555"
-                      }
-                    />
-                    <Text
+                    <Pressable
                       style={[
-                        styles.capabilityButtonText,
+                        styles.capabilityButton,
                         activeCapability === "Recherche Web" &&
-                          styles.capabilityActiveText,
+                          styles.capabilityActive,
                       ]}
+                      onPress={() => selectCapability("Recherche Web")}
                     >
-                      {t.webSearch}
-                    </Text>
-                  </Pressable>
+                      <Ionicons
+                        name="globe-outline"
+                        size={19}
+                        color={
+                          activeCapability === "Recherche Web"
+                            ? "#ffffff"
+                            : themedIconColor("#555555", isDark)
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.capabilityButtonText,
+                          activeCapability === "Recherche Web" &&
+                            styles.capabilityActiveText,
+                        ]}
+                      >
+                        {t.webSearch}
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={[
+                        styles.capabilityButton,
+                        activeCapability === "Création" &&
+                          styles.capabilityActive,
+                      ]}
+                      onPress={() => selectCapability("Création")}
+                    >
+                      <Ionicons
+                        name="videocam-outline"
+                        size={19}
+                        color={
+                          activeCapability === "Création"
+                            ? "#ffffff"
+                            : themedIconColor("#555555", isDark)
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.capabilityButtonText,
+                          activeCapability === "Création" &&
+                            styles.capabilityActiveText,
+                        ]}
+                      >
+                        {t.creation}
+                      </Text>
+                    </Pressable>
+                  </ScrollView>
 
                   <Pressable
                     style={[
-                      styles.capabilityButton,
-                      activeCapability === "Création" &&
-                        styles.capabilityActive,
+                      styles.sendButton,
+                      ((!message.trim() && attachments.length === 0) ||
+                        isThinking) && styles.sendDisabled,
                     ]}
-                    onPress={() =>
-                      selectCapability("Création")
+                    disabled={
+                      (!message.trim() && attachments.length === 0) ||
+                      isThinking
                     }
+                    onPress={() => void handleSendMessage()}
                   >
-                    <Ionicons
-                      name="videocam-outline"
-                      size={17}
-                      color={
-                        activeCapability === "Création"
-                          ? "#ffffff"
-                          : "#555555"
-                      }
-                    />
-                    <Text
-                      style={[
-                        styles.capabilityButtonText,
-                        activeCapability === "Création" &&
-                          styles.capabilityActiveText,
-                      ]}
-                    >
-                      {t.creation}
-                    </Text>
+                    {isThinking ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <Ionicons name="arrow-up" size={22} color="#ffffff" />
+                    )}
                   </Pressable>
-                </ScrollView>
-
+                </View>
+              ) : (
                 <Pressable
                   style={[
-                    styles.sendButton,
-                    (!message.trim() &&
-                      attachments.length === 0) ||
-                    isThinking
-                      ? styles.sendDisabled
-                      : null,
+                    styles.restingSendButton,
+                    ((!message.trim() && attachments.length === 0) ||
+                      isThinking) && styles.sendDisabled,
                   ]}
                   disabled={
-                    (!message.trim() &&
-                      attachments.length === 0) ||
+                    (!message.trim() && attachments.length === 0) ||
                     isThinking
                   }
                   onPress={() => void handleSendMessage()}
@@ -4496,19 +4539,21 @@ export default function ChatPage() {
                   ) : (
                     <Ionicons
                       name="arrow-up"
-                      size={19}
+                      size={22}
                       color="#ffffff"
                     />
                   )}
                 </Pressable>
-              </View>
+              )}
             </View>
 
-            <Text style={styles.disclaimer}>
-              {interpolate(t.attachmentDisclaimer, {
-                max: MAX_ATTACHMENTS,
-              })}
-            </Text>
+            {composerExpanded ? (
+              <Text style={styles.disclaimer}>
+                {interpolate(t.attachmentDisclaimer, {
+                  max: MAX_ATTACHMENTS,
+                })}
+              </Text>
+            ) : null}
           </View>
 
           <Modal
@@ -4523,6 +4568,8 @@ export default function ChatPage() {
                   styles.drawer,
                   {
                     width: drawerWidth,
+                    marginTop: Math.max(safeAreaTop, 12) + 8,
+                    marginBottom: Math.max(safeAreaBottom, 10) + 8,
                     transform: [{ translateX: drawerTranslateX }],
                   },
                 ]}
@@ -4570,6 +4617,7 @@ export default function ChatPage() {
                 </Text>
 
                 <FlatList
+                  style={styles.historyScroller}
                   data={conversations}
                   keyExtractor={(item) => item.id}
                   contentContainerStyle={styles.historyList}
@@ -5367,16 +5415,27 @@ const baseStyles = StyleSheet.create({
     fontWeight: "700",
   },
   composer: {
-    borderRadius: 22,
     borderWidth: 1,
-    borderColor: "#cfcfca",
+    borderColor: "#d2d2ce",
     backgroundColor: "#ffffff",
     overflow: "hidden",
   },
+  composerResting: {
+    minHeight: 62,
+    borderRadius: 31,
+    paddingLeft: 5,
+    paddingRight: 7,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  composerExpanded: {
+    borderRadius: 26,
+    paddingTop: 3,
+  },
   attachmentsRow: {
-    paddingHorizontal: 11,
-    paddingTop: 10,
-    gap: 7,
+    paddingHorizontal: 13,
+    paddingTop: 12,
+    gap: 8,
   },
   attachmentCard: {
     width: 205,
@@ -5424,45 +5483,50 @@ const baseStyles = StyleSheet.create({
     backgroundColor: "#ffffff",
   },
   composerInput: {
-    paddingHorizontal: 15,
-    paddingTop: 11,
-    paddingBottom: 9,
+    flex: 1,
     color: "#171715",
-    fontSize: 14,
-    lineHeight: 21,
+    fontSize: 16,
+    lineHeight: 23,
   },
   composerInputCompact: {
-    minHeight: 48,
-    maxHeight: 48,
+    minHeight: 54,
+    maxHeight: 54,
+    paddingHorizontal: 16,
+    paddingVertical: 0,
   },
   composerInputExpanded: {
-    minHeight: 92,
-    maxHeight: 180,
+    width: "100%",
+    minHeight: 96,
+    maxHeight: 176,
+    paddingHorizontal: 17,
+    paddingTop: 14,
+    paddingBottom: 10,
   },
   composerFooter: {
-    minHeight: 54,
-    paddingHorizontal: 9,
-    paddingBottom: 9,
-    paddingTop: 2,
+    minHeight: 58,
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+    paddingTop: 4,
     flexDirection: "row",
     alignItems: "flex-end",
-    gap: 7,
+    gap: 8,
   },
   capabilityRow: {
     alignItems: "center",
-    gap: 2,
-    paddingRight: 3,
+    gap: 4,
+    paddingRight: 5,
   },
   capabilityButton: {
-    minHeight: 37,
-    paddingHorizontal: 8,
-    borderRadius: 10,
+    minHeight: 40,
+    paddingHorizontal: 9,
+    borderRadius: 12,
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 6,
   },
   capabilityButtonText: {
-    fontSize: 10,
+    fontSize: 11,
+    fontWeight: "500",
     color: "#555550",
   },
   capabilityActive: {
@@ -5472,21 +5536,30 @@ const baseStyles = StyleSheet.create({
     color: "#ffffff",
   },
   sendButton: {
-    width: 39,
-    height: 39,
-    borderRadius: 14,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: "#111111",
     alignItems: "center",
     justifyContent: "center",
+  },
+  restingSendButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "#111111",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
   },
   sendDisabled: {
     opacity: 0.28,
   },
   disclaimer: {
     marginTop: 7,
-    paddingHorizontal: 8,
-    fontSize: 8,
-    lineHeight: 13,
+    paddingHorizontal: 12,
+    fontSize: 9,
+    lineHeight: 14,
     color: "#8a8a85",
     textAlign: "center",
   },
@@ -5497,52 +5570,53 @@ const baseStyles = StyleSheet.create({
   },
   drawerBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.22)",
+    backgroundColor: "rgba(0,0,0,0.24)",
   },
   drawer: {
     backgroundColor: "#ffffff",
-    paddingHorizontal: 13,
-    paddingTop: 18,
-    paddingBottom: 12,
-    borderTopRightRadius: 20,
-    borderBottomRightRadius: 20,
+    paddingHorizontal: 18,
+    paddingTop: 22,
+    paddingBottom: 16,
+    borderRadius: 26,
     shadowColor: "#000000",
-    shadowOffset: { width: 3, height: 0 },
-    shadowOpacity: 0.12,
-    shadowRadius: 14,
-    elevation: 10,
+    shadowOffset: { width: 4, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 18,
+    elevation: 14,
   },
   drawerHeader: {
-    paddingHorizontal: 5,
-    paddingBottom: 17,
+    paddingHorizontal: 3,
+    paddingBottom: 22,
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
   },
   drawerBrand: {
-    fontSize: 18,
+    fontSize: 20,
+    lineHeight: 25,
     fontWeight: "700",
     color: "#111111",
   },
   drawerSubtitle: {
-    marginTop: 2,
-    fontSize: 8,
+    marginTop: 5,
+    fontSize: 9,
+    lineHeight: 13,
     textTransform: "uppercase",
-    letterSpacing: 1.3,
+    letterSpacing: 1.8,
     color: "#888882",
   },
   closeButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f1f1ee",
+    backgroundColor: "transparent",
   },
   newConversationButton: {
-    minHeight: 48,
-    paddingHorizontal: 13,
-    borderRadius: 15,
+    minHeight: 58,
+    paddingHorizontal: 18,
+    borderRadius: 20,
     backgroundColor: "#111111",
     flexDirection: "row",
     alignItems: "center",
@@ -5550,82 +5624,90 @@ const baseStyles = StyleSheet.create({
   },
   newConversationText: {
     color: "#ffffff",
-    fontSize: 12,
-    fontWeight: "600",
+    fontSize: 15,
+    fontWeight: "500",
   },
   plusText: {
     color: "#ffffff",
-    fontSize: 15,
-    opacity: 0.5,
+    fontSize: 18,
+    opacity: 0.55,
   },
   historyLabel: {
-    marginTop: 20,
-    marginBottom: 7,
-    paddingHorizontal: 5,
-    fontSize: 9,
+    marginTop: 28,
+    marginBottom: 10,
+    paddingHorizontal: 8,
+    fontSize: 11,
     fontWeight: "700",
     textTransform: "uppercase",
-    letterSpacing: 1.3,
+    letterSpacing: 1.5,
     color: "#888882",
   },
+  historyScroller: {
+    flexGrow: 0,
+    flexShrink: 1,
+    minHeight: 88,
+    maxHeight: 330,
+  },
   historyList: {
-    gap: 2,
-    paddingBottom: 12,
+    gap: 3,
+    paddingBottom: 14,
   },
   conversationItem: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 11,
+    paddingHorizontal: 12,
+    paddingVertical: 13,
+    borderRadius: 14,
   },
   conversationItemActive: {
-    backgroundColor: "#eeeeeb",
+    backgroundColor: "#f0f0ed",
   },
   conversationTitle: {
-    fontSize: 12,
+    fontSize: 14,
+    lineHeight: 20,
     color: "#565650",
   },
   walletCard: {
-    marginTop: 8,
-    padding: 13,
-    borderRadius: 15,
-    backgroundColor: "#f4f4f1",
+    marginTop: 10,
+    padding: 16,
+    borderRadius: 19,
+    backgroundColor: "#f7f7f5",
     borderWidth: 1,
-    borderColor: "#e1e1dc",
+    borderColor: "#deded9",
   },
   walletBalance: {
-    marginTop: 7,
-    fontSize: 22,
+    marginTop: 10,
+    fontSize: 27,
+    lineHeight: 32,
     fontWeight: "700",
     color: "#171715",
   },
   drawerLinks: {
-    marginTop: 9,
-    paddingTop: 7,
+    marginTop: 14,
+    paddingTop: 13,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: "#e1e1dc",
-    gap: 2,
+    gap: 3,
   },
   drawerLink: {
-    minHeight: 42,
-    paddingHorizontal: 8,
-    borderRadius: 10,
+    minHeight: 48,
+    paddingHorizontal: 10,
+    borderRadius: 13,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: 13,
   },
   drawerLinkText: {
     flex: 1,
-    fontSize: 12,
+    fontSize: 14,
     color: "#555550",
   },
   drawerCount: {
-    minWidth: 22,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    minWidth: 24,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
     borderRadius: 20,
     backgroundColor: "#e5e5e1",
     color: "#666660",
-    fontSize: 9,
+    fontSize: 10,
     textAlign: "center",
   },
 });
