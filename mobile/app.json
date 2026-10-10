@@ -4,12 +4,12 @@
     "slug": "lbv-connectia",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/oria-logo.png",
+    "icon": "./assets/images/icon.png",
     "scheme": "oria",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.lbvconnect.oria",
-      "icon": "./assets/images/oria-logo.png",
+      "icon": "./assets/images/icon.png",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -24,7 +24,7 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/oria-logo.png"
+      "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
       "expo-router",
@@ -36,7 +36,9 @@
       ],
       "expo-secure-store",
       "expo-video",
-      "expo-sharing"
+      "expo-sharing",
+      "expo-image",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

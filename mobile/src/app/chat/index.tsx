@@ -19,7 +19,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { Stack, useFocusEffect, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useNavigation, useRouter } from "expo-router";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
@@ -1258,8 +1258,51 @@ function readBalancedGroup(source: string, start: number) {
   return null;
 }
 
+const SUPERSCRIPT_MAP: Record<string, string> = {
+  "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
+  "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+  "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+  a: "ᵃ", b: "ᵇ", c: "ᶜ", d: "ᵈ", e: "ᵉ", f: "ᶠ",
+  g: "ᵍ", h: "ʰ", i: "ⁱ", j: "ʲ", k: "ᵏ", l: "ˡ",
+  m: "ᵐ", n: "ⁿ", o: "ᵒ", p: "ᵖ", r: "ʳ", s: "ˢ",
+  t: "ᵗ", u: "ᵘ", v: "ᵛ", w: "ʷ", x: "ˣ", y: "ʸ", z: "ᶻ",
+};
+
+const SUBSCRIPT_MAP: Record<string, string> = {
+  "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
+  "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
+  "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
+  a: "ₐ", e: "ₑ", h: "ₕ", i: "ᵢ", j: "ⱼ", k: "ₖ",
+  l: "ₗ", m: "ₘ", n: "ₙ", o: "ₒ", p: "ₚ", r: "ᵣ",
+  s: "ₛ", t: "ₜ", u: "ᵤ", v: "ᵥ", x: "ₓ",
+};
+
+function scriptText(
+  rawValue: string,
+  map: Record<string, string>,
+  fallbackOpen: string,
+  fallbackClose: string,
+) {
+  const clean = rawValue.replace(/[{}]/g, "").trim();
+  if (!clean) return "";
+
+  const chars = clean.split("");
+  const mapped = chars.map((char) => map[char]);
+
+  if (mapped.every(Boolean)) {
+    return mapped.join("");
+  }
+
+  // On évite volontairement d'afficher la syntaxe LaTeX brute (_{...}, ^{...}).
+  // Quand Unicode ne possède pas tous les caractères nécessaires, on conserve
+  // un libellé humain et lisible plutôt qu'une notation technique.
+  return `${fallbackOpen}${clean}${fallbackClose}`;
+}
+
 function normalizeMathText(value: string) {
   return value
+    .replace(/\\displaystyle/g, "")
+    .replace(/\\textstyle/g, "")
     .replace(/\\text\s*\{([^{}]*)\}/g, "$1")
     .replace(/\\text\s*\[([^\]]*)\}/g, "$1")
     .replace(/\\text\s*\[([^\]]*)\]/g, "$1")
@@ -1277,34 +1320,55 @@ function normalizeMathText(value: string) {
     .replace(/\\geq/g, "≥")
     .replace(/\\neq/g, "≠")
     .replace(/\\approx/g, "≈")
+    .replace(/\\equiv/g, "≡")
+    .replace(/\\propto/g, "∝")
     .replace(/\\rightarrow/g, "→")
+    .replace(/\\Rightarrow/g, "⇒")
+    .replace(/\\leftrightarrow/g, "↔")
     .replace(/\\to/g, "→")
     .replace(/\\infty/g, "∞")
+    .replace(/\\partial/g, "∂")
+    .replace(/\\nabla/g, "∇")
+    .replace(/\\in/g, "∈")
+    .replace(/\\notin/g, "∉")
+    .replace(/\\cup/g, "∪")
+    .replace(/\\cap/g, "∩")
+    .replace(/\\angle/g, "∠")
+    .replace(/\\degree/g, "°")
     .replace(/\\pi/g, "π")
     .replace(/\\alpha/g, "α")
     .replace(/\\beta/g, "β")
     .replace(/\\gamma/g, "γ")
     .replace(/\\delta/g, "δ")
+    .replace(/\\Delta/g, "Δ")
     .replace(/\\theta/g, "θ")
     .replace(/\\lambda/g, "λ")
     .replace(/\\mu/g, "μ")
     .replace(/\\sigma/g, "σ")
+    .replace(/\\omega/g, "ω")
+    .replace(/\\Omega/g, "Ω")
     .replace(/\\sum/g, "Σ")
     .replace(/\\prod/g, "Π")
+    .replace(/\\int/g, "∫")
+    .replace(/\\sin/g, "sin")
+    .replace(/\\cos/g, "cos")
+    .replace(/\\tan/g, "tan")
+    .replace(/\\ln/g, "ln")
+    .replace(/\\log/g, "log")
+    .replace(/\\exp/g, "exp")
     .replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)")
-    .replace(/\^\{([^{}]*)\}/g, (_, exponent: string) => {
-      const superscriptMap: Record<string, string> = {
-        "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
-        "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
-        "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
-        "n": "ⁿ", "i": "ⁱ",
-      };
-      return exponent
-        .split("")
-        .map((char) => superscriptMap[char] ?? char)
-        .join("");
-    })
-    .replace(/_\{([^{}]*)\}/g, "$1")
+    .replace(/\^\{([^{}]*)\}/g, (_, exponent: string) =>
+      scriptText(exponent, SUPERSCRIPT_MAP, "⁽", "⁾"),
+    )
+    .replace(/\^([0-9A-Za-z+\-=()]+)/g, (_, exponent: string) =>
+      scriptText(exponent, SUPERSCRIPT_MAP, "⁽", "⁾"),
+    )
+    .replace(/_\{([^{}]*)\}/g, (_, subscript: string) =>
+      scriptText(subscript, SUBSCRIPT_MAP, "₍", "₎"),
+    )
+    .replace(/_([0-9A-Za-z+\-=()]+)/g, (_, subscript: string) =>
+      scriptText(subscript, SUBSCRIPT_MAP, "₍", "₎"),
+    )
     .replace(/\\([{}])/g, "$1")
     .replace(/[{}]/g, "")
     .replace(/\\+/g, "")
@@ -1411,7 +1475,13 @@ function MathExpression({ source }: { source: string }) {
 
   return (
     <View style={styles.mathBlock}>
-      <View style={styles.mathExpression}>{parts}</View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.mathScrollContent}
+      >
+        <View style={styles.mathExpression}>{parts}</View>
+      </ScrollView>
     </View>
   );
 }
@@ -1463,7 +1533,7 @@ function InlineMarkdown({ text }: { text: string }) {
   let index = 0;
 
   const tokenRegex =
-    /(\\\([^\n]*?\\\)|\$[^$\n]+\$|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
+    /(\\\([^\n]*?\\\)|\$[^$\n]+\$|\b[A-Za-z](?:(?:_(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+)))+(?![A-Za-z0-9_])|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
 
   while (remaining.length > 0) {
     const match = remaining.match(tokenRegex);
@@ -1512,6 +1582,15 @@ function InlineMarkdown({ text }: { text: string }) {
         <MathInline
           key={index}
           value={token.slice(1, -1)}
+        />,
+      );
+    } else if (
+      /^[A-Za-z](?:(?:_(?:\{[^{}]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}]+\}|[A-Za-z0-9+\-=()]+)))+$/.test(token)
+    ) {
+      parts.push(
+        <MathInline
+          key={index}
+          value={token}
         />,
       );
     } else if (token.startsWith("[")) {
@@ -1964,6 +2043,7 @@ function AttachmentCard({
 
 export default function ChatPage() {
   const router = useRouter();
+  const navigation = useNavigation();
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
   const [language, setLanguage] = useState<OriaLanguage>("fr");
@@ -1974,6 +2054,25 @@ export default function ChatPage() {
     [theme],
   );
   const t = CHAT_TEXT[language];
+
+  // Le Chat est la racine authentifiée d'ORIA : un geste natif "retour"
+  // ne doit jamais dépiler l'écran vers login / accueil. Les navigations
+  // normales (Crédits, Paramètres, déconnexion via replace) restent autorisées.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener("beforeRemove", (event) => {
+      const actionType = event.data.action.type;
+
+      if (
+        actionType === "GO_BACK" ||
+        actionType === "POP" ||
+        actionType === "POP_TO_TOP"
+      ) {
+        event.preventDefault();
+      }
+    });
+
+    return unsubscribe;
+  }, [navigation]);
 
   useFocusEffect(
     useCallback(() => {
@@ -4647,57 +4746,66 @@ const baseStyles = StyleSheet.create({
     lineHeight: 22,
   },
   inlineMathText: {
-    color: "#1b1b19",
-    fontSize: 14,
-    lineHeight: 22,
+    color: "#111111",
+    fontSize: 15,
+    lineHeight: 23,
+    fontWeight: "500",
     fontStyle: "italic",
   },
   mathBlock: {
     width: "100%",
-    marginVertical: 5,
-    paddingHorizontal: 4,
-    paddingVertical: 8,
-    borderRadius: 12,
-    backgroundColor: "#f5f5f2",
+    marginVertical: 9,
+    borderRadius: 18,
+    backgroundColor: "#f7f7f4",
     borderWidth: 1,
-    borderColor: "#e2e2dd",
+    borderColor: "#deded8",
+    overflow: "hidden",
+  },
+  mathScrollContent: {
+    flexGrow: 1,
+    minHeight: 62,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    justifyContent: "center",
   },
   mathExpression: {
     flexDirection: "row",
-    flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "center",
-    columnGap: 4,
-    rowGap: 6,
+    columnGap: 6,
   },
   mathText: {
-    color: "#151513",
-    fontSize: 15,
-    lineHeight: 22,
+    color: "#111111",
+    fontSize: 18,
+    lineHeight: 28,
+    fontWeight: "500",
+    letterSpacing: 0.1,
   },
   fraction: {
-    minWidth: 54,
+    minWidth: 60,
     alignItems: "stretch",
     justifyContent: "center",
-    marginHorizontal: 2,
+    marginHorizontal: 4,
   },
   fractionPart: {
-    minHeight: 19,
-    paddingHorizontal: 4,
+    minHeight: 22,
+    paddingHorizontal: 6,
     alignItems: "center",
     justifyContent: "center",
   },
   fractionText: {
-    color: "#151513",
-    fontSize: 13,
-    lineHeight: 18,
+    color: "#111111",
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: "500",
     textAlign: "center",
   },
   fractionLine: {
-    height: 1,
-    backgroundColor: "#343430",
+    height: 1.5,
+    backgroundColor: "#2d2d2a",
     width: "100%",
-    minWidth: 40,
+    minWidth: 44,
+    borderRadius: 1,
   },
   bold: {
     fontWeight: "700",

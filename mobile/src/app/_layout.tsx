@@ -15,25 +15,28 @@ void SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
-
   const isDark = colorScheme === "dark";
 
   return (
     <SafeAreaProvider>
-      <ThemeProvider
-        value={isDark ? DarkTheme : DefaultTheme}
-      >
-        <StatusBar
-          style={isDark ? "light" : "dark"}
-        />
-
+      <ThemeProvider value={isDark ? DarkTheme : DefaultTheme}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <AnimatedSplashOverlay />
 
-        <Stack
-          screenOptions={{
-            headerShown: false,
-          }}
-        />
+        <Stack screenOptions={{ headerShown: false }}>
+          {/*
+            Le Chat est l'écran racine une fois connecté.
+            On désactive son geste natif de retour dès la création de la route,
+            avant même que le composant Chat ne soit monté. Les autres pages
+            conservent le swipe-back natif.
+          */}
+          <Stack.Screen
+            name="chat"
+            options={{
+              gestureEnabled: false,
+            }}
+          />
+        </Stack>
       </ThemeProvider>
     </SafeAreaProvider>
   );
