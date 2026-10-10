@@ -959,7 +959,12 @@ function getSelectableModels(
   if (trialModelId && !normalIds.has(trialModelId)) {
     const trialModel = models.find((model) => model.id === trialModelId);
     const trial = trials[trialModelId];
-    if (trialModel && trial) selectable.push(trialModel);
+
+    // Le modèle d'essai reste visible même si /ai/trials a temporairement
+    // échoué. Le backend reste l'autorité finale au moment de l'envoi.
+    if (trialModel && (!trial || trial.max > 0)) {
+      selectable.push(trialModel);
+    }
   }
 
   return selectable;
@@ -2167,6 +2172,7 @@ function ModelOption({
   model,
   active,
   trial,
+  isTrial,
   disabled,
   onPress,
   language,
@@ -2174,6 +2180,7 @@ function ModelOption({
   model: ModelDefinition;
   active: boolean;
   trial?: TrialInfo;
+  isTrial?: boolean;
   disabled: boolean;
   onPress: () => void;
   language: OriaLanguage;
@@ -2193,16 +2200,17 @@ function ModelOption({
     >
       <View style={styles.rowBetween}>
         <Text style={styles.modelName}>{model.name}</Text>
-        {trial ? (
+        {isTrial ? (
           <Text style={styles.trialBadge}>
-            {CHAT_TEXT[language].trial} · {trial.remaining}/{trial.max}
+            {CHAT_TEXT[language].trial}
+            {trial ? ` · ${trial.remaining}/${trial.max}` : ""}
           </Text>
         ) : active ? (
           <Ionicons name="checkmark" size={17} color={themedIconColor("#111111", isDark)} />
         ) : null}
       </View>
       <Text style={styles.modelDescription}>{getModelDescription(model, language)}</Text>
-      {trial ? (
+      {isTrial ? (
         <Text style={styles.smallMuted}>
           {CHAT_TEXT[language].higherModelTrial}
         </Text>
@@ -2307,7 +2315,7 @@ export default function ChatPage() {
   const [selectedModel, setSelectedModel] = useState("luna");
   const [message, setMessage] = useState("");
   const [composerExpanded, setComposerExpanded] = useState(false);
-  const [composerInputHeight, setComposerInputHeight] = useState(96);
+  const [composerInputHeight, setComposerInputHeight] = useState(112);
   const composerInputRef = useRef<TextInput>(null);
   const [bottomAreaHeight, setBottomAreaHeight] = useState(0);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -2573,17 +2581,25 @@ export default function ChatPage() {
   }, [messages.length, isThinking, bottomAreaHeight, composerExpanded]);
 
   useEffect(() => {
-    const eventName =
-      "keyboardDidHide";
-
-    const subscription = Keyboard.addListener(eventName, () => {
-      if (attachments.length === 0 && !activeCapability) {
+    const subscription = Keyboard.addListener("keyboardDidHide", () => {
+      if (
+        !message.trim() &&
+        attachments.length === 0 &&
+        !activeCapability &&
+        !modelMenuOpen
+      ) {
         setComposerExpanded(false);
+        setComposerInputHeight(112);
       }
     });
 
     return () => subscription.remove();
-  }, [attachments.length, activeCapability]);
+  }, [
+    message,
+    attachments.length,
+    activeCapability,
+    modelMenuOpen,
+  ]);
 
   async function loadWallet(
     trialState: Record<string, TrialInfo> = trials,
@@ -2871,7 +2887,7 @@ export default function ChatPage() {
     setMessage("");
     setAttachments([]);
     setComposerExpanded(false);
-    setComposerInputHeight(96);
+    setComposerInputHeight(112);
     setActiveCapability(null);
     setError(null);
     closeDrawer();
@@ -3450,7 +3466,7 @@ export default function ChatPage() {
     ]);
     setMessage("");
     setComposerExpanded(false);
-    setComposerInputHeight(96);
+    setComposerInputHeight(112);
     setIsThinking(true);
     setError(null);
 
@@ -3944,81 +3960,97 @@ export default function ChatPage() {
             onLayout={(event) => {
               const height = Math.ceil(event.nativeEvent.layout.height);
               setBottomAreaHeight((current) =>
-                current === height ? current : height,
+                Math.abs(current - height) >= 4 ? height : current,
               );
             }}
           >
-            {modelMenuOpen ? (
-              <View style={styles.modelMenu}>
-                {availableModels.length === 0 ? (
-                  <Text style={styles.emptyMenuText}>
-                    {t.noModel}
-                  </Text>
-                ) : (
-                  availableModels.map((model) => (
-                    <ModelOption
-                      key={model.id}
-                      model={model}
-                      active={selectedModel === model.id}
-                      trial={trials[model.id]}
-                      disabled={
-                        Boolean(trials[model.id]) &&
-                        trials[model.id].remaining <= 0
-                      }
-                      language={language}
-                      onPress={() => {
-                        if (
-                          trials[model.id] &&
-                          trials[model.id].remaining <= 0
-                        ) {
-                          return;
-                        }
+            <View style={styles.modelSelectorWrap}>
+              {modelMenuOpen ? (
+                <View style={styles.modelMenu}>
+                  {availableModels.length === 0 ? (
+                    <Text style={styles.emptyMenuText}>
+                      {t.noModel}
+                    </Text>
+                  ) : (
+                    availableModels.map((model) => {
+                      const configuredTrialModelId = wallet?.pack_id
+                        ? TRIAL_MODEL_BY_PACK[wallet.pack_id]
+                        : undefined;
+                      const isTrialModel =
+                        configuredTrialModelId === model.id;
+                      const trialInfo = trials[model.id];
 
-                        setSelectedModel(model.id);
-                        setModelMenuOpen(false);
-                      }}
-                    />
-                  ))
-                )}
-              </View>
-            ) : null}
+                      return (
+                        <ModelOption
+                          key={model.id}
+                          model={model}
+                          active={selectedModel === model.id}
+                          trial={trialInfo}
+                          isTrial={isTrialModel}
+                          disabled={
+                            Boolean(isTrialModel && trialInfo) &&
+                            trialInfo!.remaining <= 0
+                          }
+                          language={language}
+                          onPress={() => {
+                            if (
+                              isTrialModel &&
+                              trialInfo &&
+                              trialInfo.remaining <= 0
+                            ) {
+                              return;
+                            }
 
-            <Pressable
-              style={styles.modelSelector}
-              onPress={() => {
-                if (availableModels.length > 1) {
-                  setModelMenuOpen((current) => !current);
-                }
-              }}
-            >
-              <Ionicons
-                name="sparkles-outline"
-                size={17}
-                color={themedIconColor("#111111", isDark)}
-              />
-              <Text style={styles.modelSelectorText}>
-                {models.find(
-                  (model) => model.id === selectedModel,
-)?.name || t.model}
-              </Text>
-
-              {trials[selectedModel] ? (
-                <Text style={styles.trialBadge}>
-                  {t.trial} · {trials[selectedModel].remaining}/
-                  {trials[selectedModel].max}
-                </Text>
+                            setSelectedModel(model.id);
+                            setModelMenuOpen(false);
+                          }}
+                        />
+                      );
+                    })
+                  )}
+                </View>
               ) : null}
 
-              <Ionicons
-                name={
-                  modelMenuOpen
-                    ? "chevron-up"
-                    : "chevron-down"
-                }
-                size={15}
-                color={themedIconColor("#555555", isDark)}
-              />
-            </Pressable>
+              <Pressable
+                style={styles.modelSelector}
+                onPress={() => {
+                  if (availableModels.length > 1) {
+                    setModelMenuOpen((current) => !current);
+                  }
+                }}
+              >
+                <Ionicons
+                  name="sparkles-outline"
+                  size={17}
+                  color={themedIconColor("#111111", isDark)}
+                />
+                <Text style={styles.modelSelectorText}>
+                  {models.find(
+                    (model) => model.id === selectedModel,
+                  )?.name || t.model}
+                </Text>
+
+                {wallet?.pack_id &&
+                TRIAL_MODEL_BY_PACK[wallet.pack_id] === selectedModel ? (
+                  <Text style={styles.trialBadge}>
+                    {t.trial}
+                    {trials[selectedModel]
+                      ? ` · ${trials[selectedModel].remaining}/${trials[selectedModel].max}`
+                      : ""}
+                  </Text>
+                ) : null}
+
+                <Ionicons
+                  name={
+                    modelMenuOpen
+                      ? "chevron-up"
+                      : "chevron-down"
+                  }
+                  size={15}
+                  color={themedIconColor("#555555", isDark)}
+                />
+              </Pressable>
+            </View>
 
             {activeCapability === "Recherche Web" ? (
               <View style={styles.capabilityBanner}>
@@ -4371,7 +4403,7 @@ export default function ChatPage() {
                 editable={!isThinking}
                 multiline
                 textAlignVertical={composerExpanded ? "top" : "center"}
-                scrollEnabled={composerExpanded && composerInputHeight >= 176}
+                scrollEnabled={composerExpanded && composerInputHeight >= 172}
                 style={[
                   styles.composerInput,
                   composerExpanded
@@ -4383,14 +4415,24 @@ export default function ChatPage() {
                 ]}
                 onFocus={() => {
                   setComposerExpanded(true);
-                  setComposerInputHeight((current) => Math.max(96, current));
+                  setModelMenuOpen(false);
+                  setComposerInputHeight((current) => Math.max(112, current));
                 }}
                 onBlur={() => undefined}
                 onContentSizeChange={(event) => {
                   if (!composerExpanded) return;
-                  const nextHeight = Math.max(96, Math.min(176, Math.ceil(event.nativeEvent.contentSize.height) + 18));
+
+                  const measuredHeight =
+                    Math.ceil(event.nativeEvent.contentSize.height) + 22;
+                  const nextHeight = Math.max(
+                    112,
+                    Math.min(176, measuredHeight),
+                  );
+
                   setComposerInputHeight((current) =>
-                    Math.abs(current - nextHeight) > 1 ? nextHeight : current,
+                    Math.abs(current - nextHeight) >= 6
+                      ? nextHeight
+                      : current,
                   );
                 }}
                 onSubmitEditing={(event) => {
@@ -5198,14 +5240,28 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 13,
     backgroundColor: "#f8f8f6",
   },
+  modelSelectorWrap: {
+    position: "relative",
+    width: "100%",
+    zIndex: 60,
+    elevation: 60,
+  },
   modelMenu: {
-    marginBottom: 8,
-    maxHeight: 280,
-    borderRadius: 16,
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 55,
+    maxHeight: 300,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: "#ddddda",
     backgroundColor: "#ffffff",
-    padding: 6,
+    padding: 7,
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 18,
   },
   modelSelector: {
     alignSelf: "flex-start",
@@ -5502,7 +5558,7 @@ const baseStyles = StyleSheet.create({
   },
   composerInputExpanded: {
     width: "100%",
-    minHeight: 96,
+    minHeight: 112,
     maxHeight: 176,
     paddingHorizontal: 17,
     paddingTop: 14,
