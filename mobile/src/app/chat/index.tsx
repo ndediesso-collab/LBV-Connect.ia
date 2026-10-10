@@ -30,6 +30,7 @@ import * as SecureStore from "expo-secure-store";
 import { File as ExpoFile } from "expo-file-system";
 import { fetch as expoFetch } from "expo/fetch";
 import { Ionicons } from "@expo/vector-icons";
+import { WebView } from "react-native-webview";
 
 /**
  * ORIA MOBILE — CHAT
@@ -1238,250 +1239,443 @@ async function saveMessageRemote(
 }
 
 
-function readBalancedGroup(source: string, start: number) {
-  if (source[start] !== "{") return null;
+type MathTextVariant = "body" | "h1" | "h2" | "h3" | "quote";
 
-  let depth = 0;
-  for (let i = start; i < source.length; i += 1) {
-    if (source[i] === "{") depth += 1;
-    if (source[i] === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return {
-          value: source.slice(start + 1, i),
-          end: i + 1,
-        };
+const INLINE_MARKDOWN_TOKEN_REGEX =
+  /(\\\([^\n]*?\\\)|\$[^$\n]+\$|\b[A-Za-z](?:(?:_(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+)))+(?![A-Za-z0-9_])|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
+
+const INLINE_MATH_TOKEN_REGEX =
+  /(\\\([^\n]*?\\\)|\$[^$\n]+\$|\b[A-Za-z](?:(?:_(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+)))+(?![A-Za-z0-9_]))/;
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function safeLinkUrl(value: string) {
+  const url = value.trim();
+  if (/^(https?:\/\/|mailto:)/i.test(url)) {
+    return url;
+  }
+
+  return "#";
+}
+
+function buildInlineMathHtml(text: string): string {
+  const parts: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    const match = remaining.match(INLINE_MARKDOWN_TOKEN_REGEX);
+
+    if (!match || match.index === undefined) {
+      parts.push(escapeHtml(remaining));
+      break;
+    }
+
+    if (match.index > 0) {
+      parts.push(escapeHtml(remaining.slice(0, match.index)));
+    }
+
+    const token = match[0];
+
+    if (token.startsWith("**") && token.endsWith("**")) {
+      parts.push(
+        `<strong>${buildInlineMathHtml(token.slice(2, -2))}</strong>`,
+      );
+    } else if (token.startsWith("`") && token.endsWith("`")) {
+      parts.push(`<code>${escapeHtml(token.slice(1, -1))}</code>`);
+    } else if (token.startsWith("\\(") && token.endsWith("\\)")) {
+      parts.push(`\\(${escapeHtml(token.slice(2, -2))}\\)`);
+    } else if (token.startsWith("$") && token.endsWith("$")) {
+      parts.push(`\\(${escapeHtml(token.slice(1, -1))}\\)`);
+    } else if (
+      /^[A-Za-z](?:(?:_(?:\{[^{}]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}]+\}|[A-Za-z0-9+\-=()]+)))+$/.test(
+        token,
+      )
+    ) {
+      parts.push(`\\(${escapeHtml(token)}\\)`);
+    } else if (token.startsWith("[")) {
+      const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+
+      if (linkMatch) {
+        const [, label, url] = linkMatch;
+        const safeUrl = safeLinkUrl(url);
+        parts.push(
+          `<a href="${escapeHtml(safeUrl)}">${buildInlineMathHtml(label)}</a>`,
+        );
+      }
+    } else if (token.startsWith("*") && token.endsWith("*")) {
+      parts.push(`<em>${buildInlineMathHtml(token.slice(1, -1))}</em>`);
+    } else {
+      parts.push(escapeHtml(token));
+    }
+
+    remaining = remaining.slice(match.index + token.length);
+  }
+
+  return parts.join("");
+}
+
+function mathTypography(variant: MathTextVariant) {
+  switch (variant) {
+    case "h1":
+      return { fontSize: 25, lineHeight: 31, fontWeight: 700 };
+    case "h2":
+      return { fontSize: 21, lineHeight: 27, fontWeight: 700 };
+    case "h3":
+      return { fontSize: 17, lineHeight: 23, fontWeight: 700 };
+    case "quote":
+      return { fontSize: 14, lineHeight: 22, fontWeight: 400 };
+    default:
+      return { fontSize: 14, lineHeight: 22, fontWeight: 400 };
+  }
+}
+
+function buildMathJaxDocument({
+  content,
+  isDark,
+  variant,
+  displayMode,
+}: {
+  content: string;
+  isDark: boolean;
+  variant: MathTextVariant;
+  displayMode: boolean;
+}) {
+  const typography = mathTypography(variant);
+  const textColor =
+    variant === "quote"
+      ? isDark
+        ? "#b7b7be"
+        : "#686863"
+      : isDark
+        ? "#f3f3f5"
+        : "#1b1b19";
+  const linkColor = isDark ? "#d9d9df" : "#2d2d2a";
+  const codeBackground = isDark ? "#242429" : "#eeeeeb";
+  const codeColor = isDark ? "#f2f2f4" : "#222222";
+  const displayClass = displayMode ? "display" : "inline";
+
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+  />
+  <style>
+    :root {
+      color-scheme: ${isDark ? "dark" : "light"};
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      background: transparent;
+      color: ${textColor};
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: ${typography.fontSize}px;
+      line-height: ${typography.lineHeight}px;
+      font-weight: ${typography.fontWeight};
+      -webkit-text-size-adjust: 100%;
+    }
+
+    body {
+      overflow-x: ${displayMode ? "auto" : "hidden"};
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    #content {
+      box-sizing: border-box;
+      color: ${textColor};
+    }
+
+    #content.inline {
+      width: 100%;
+      min-height: ${typography.lineHeight}px;
+      overflow-wrap: anywhere;
+      word-break: normal;
+    }
+
+    #content.display {
+      width: max-content;
+      min-width: 100%;
+      padding: 10px 16px;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    strong {
+      font-weight: 700;
+    }
+
+    em {
+      font-style: italic;
+    }
+
+    code {
+      padding: 1px 4px;
+      border-radius: 5px;
+      background: ${codeBackground};
+      color: ${codeColor};
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9em;
+    }
+
+    a {
+      color: ${linkColor};
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+
+    mjx-container {
+      color: ${textColor} !important;
+    }
+
+    mjx-container:not([display="true"]) {
+      display: inline-block !important;
+      margin: 0 0.08em !important;
+      vertical-align: -0.08em;
+    }
+
+    mjx-container[display="true"] {
+      display: inline-block !important;
+      margin: 0 !important;
+      text-align: center !important;
+    }
+
+    mjx-container svg {
+      color: ${textColor} !important;
+      fill: currentColor !important;
+    }
+  </style>
+
+  <script>
+    function reportSize() {
+      try {
+        var content = document.getElementById("content");
+        if (!content || !window.ReactNativeWebView) return;
+
+        var rect = content.getBoundingClientRect();
+        var width = Math.ceil(Math.max(rect.width, content.scrollWidth, 1));
+        var height = Math.ceil(
+          Math.max(
+            rect.height,
+            content.scrollHeight,
+            document.body.scrollHeight,
+            document.documentElement.scrollHeight,
+            1
+          )
+        );
+
+        window.ReactNativeWebView.postMessage(
+          JSON.stringify({
+            type: "math-size",
+            width: width,
+            height: height
+          })
+        );
+      } catch (error) {
+        // La WebView garde simplement sa hauteur initiale si la mesure échoue.
       }
     }
-  }
 
-  return null;
+    window.MathJax = {
+      tex: {
+        processEscapes: true
+      },
+      svg: {
+        fontCache: "local"
+      },
+      startup: {
+        pageReady: function () {
+          return MathJax.startup.defaultPageReady().then(function () {
+            requestAnimationFrame(function () {
+              requestAnimationFrame(reportSize);
+            });
+
+            if (window.ResizeObserver) {
+              var observer = new ResizeObserver(reportSize);
+              observer.observe(document.getElementById("content"));
+            }
+          });
+        }
+      }
+    };
+
+    document.addEventListener("DOMContentLoaded", function () {
+      requestAnimationFrame(reportSize);
+    });
+  </script>
+
+  <script
+    defer
+    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"
+    onerror="window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({type:'math-error'}))"
+  ></script>
+</head>
+<body>
+  <div id="content" class="${displayClass}">${content}</div>
+</body>
+</html>`;
 }
 
-const SUPERSCRIPT_MAP: Record<string, string> = {
-  "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
-  "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
-  "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
-  a: "ᵃ", b: "ᵇ", c: "ᶜ", d: "ᵈ", e: "ᵉ", f: "ᶠ",
-  g: "ᵍ", h: "ʰ", i: "ⁱ", j: "ʲ", k: "ᵏ", l: "ˡ",
-  m: "ᵐ", n: "ⁿ", o: "ᵒ", p: "ᵖ", r: "ʳ", s: "ˢ",
-  t: "ᵗ", u: "ᵘ", v: "ᵛ", w: "ʷ", x: "ˣ", y: "ʸ", z: "ᶻ",
-};
-
-const SUBSCRIPT_MAP: Record<string, string> = {
-  "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
-  "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
-  "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
-  a: "ₐ", e: "ₑ", h: "ₕ", i: "ᵢ", j: "ⱼ", k: "ₖ",
-  l: "ₗ", m: "ₘ", n: "ₙ", o: "ₒ", p: "ₚ", r: "ᵣ",
-  s: "ₛ", t: "ₜ", u: "ᵤ", v: "ᵥ", x: "ₓ",
-};
-
-function scriptText(
-  rawValue: string,
-  map: Record<string, string>,
-  fallbackOpen: string,
-  fallbackClose: string,
-) {
-  const clean = rawValue.replace(/[{}]/g, "").trim();
-  if (!clean) return "";
-
-  const chars = clean.split("");
-  const mapped = chars.map((char) => map[char]);
-
-  if (mapped.every(Boolean)) {
-    return mapped.join("");
-  }
-
-  // On évite volontairement d'afficher la syntaxe LaTeX brute (_{...}, ^{...}).
-  // Quand Unicode ne possède pas tous les caractères nécessaires, on conserve
-  // un libellé humain et lisible plutôt qu'une notation technique.
-  return `${fallbackOpen}${clean}${fallbackClose}`;
-}
-
-function normalizeMathText(value: string) {
-  return value
-    .replace(/\\displaystyle/g, "")
-    .replace(/\\textstyle/g, "")
-    .replace(/\\text\s*\{([^{}]*)\}/g, "$1")
-    .replace(/\\text\s*\[([^\]]*)\}/g, "$1")
-    .replace(/\\text\s*\[([^\]]*)\]/g, "$1")
-    .replace(/\\mathrm\s*\{([^{}]*)\}/g, "$1")
-    .replace(/\\mathbf\s*\{([^{}]*)\}/g, "$1")
-    .replace(/\\operatorname\s*\{([^{}]*)\}/g, "$1")
-    .replace(/\\left/g, "")
-    .replace(/\\right/g, "")
-    .replace(/\\cdot/g, "·")
-    .replace(/\\times/g, "×")
-    .replace(/\\div/g, "÷")
-    .replace(/\\pm/g, "±")
-    .replace(/\\mp/g, "∓")
-    .replace(/\\leq/g, "≤")
-    .replace(/\\geq/g, "≥")
-    .replace(/\\neq/g, "≠")
-    .replace(/\\approx/g, "≈")
-    .replace(/\\equiv/g, "≡")
-    .replace(/\\propto/g, "∝")
-    .replace(/\\rightarrow/g, "→")
-    .replace(/\\Rightarrow/g, "⇒")
-    .replace(/\\leftrightarrow/g, "↔")
-    .replace(/\\to/g, "→")
-    .replace(/\\infty/g, "∞")
-    .replace(/\\partial/g, "∂")
-    .replace(/\\nabla/g, "∇")
-    .replace(/\\in/g, "∈")
-    .replace(/\\notin/g, "∉")
-    .replace(/\\cup/g, "∪")
-    .replace(/\\cap/g, "∩")
-    .replace(/\\angle/g, "∠")
-    .replace(/\\degree/g, "°")
-    .replace(/\\pi/g, "π")
-    .replace(/\\alpha/g, "α")
-    .replace(/\\beta/g, "β")
-    .replace(/\\gamma/g, "γ")
-    .replace(/\\delta/g, "δ")
-    .replace(/\\Delta/g, "Δ")
-    .replace(/\\theta/g, "θ")
-    .replace(/\\lambda/g, "λ")
-    .replace(/\\mu/g, "μ")
-    .replace(/\\sigma/g, "σ")
-    .replace(/\\omega/g, "ω")
-    .replace(/\\Omega/g, "Ω")
-    .replace(/\\sum/g, "Σ")
-    .replace(/\\prod/g, "Π")
-    .replace(/\\int/g, "∫")
-    .replace(/\\sin/g, "sin")
-    .replace(/\\cos/g, "cos")
-    .replace(/\\tan/g, "tan")
-    .replace(/\\ln/g, "ln")
-    .replace(/\\log/g, "log")
-    .replace(/\\exp/g, "exp")
-    .replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)")
-    .replace(/\^\{([^{}]*)\}/g, (_, exponent: string) =>
-      scriptText(exponent, SUPERSCRIPT_MAP, "⁽", "⁾"),
-    )
-    .replace(/\^([0-9A-Za-z+\-=()]+)/g, (_, exponent: string) =>
-      scriptText(exponent, SUPERSCRIPT_MAP, "⁽", "⁾"),
-    )
-    .replace(/_\{([^{}]*)\}/g, (_, subscript: string) =>
-      scriptText(subscript, SUBSCRIPT_MAP, "₍", "₎"),
-    )
-    .replace(/_([0-9A-Za-z+\-=()]+)/g, (_, subscript: string) =>
-      scriptText(subscript, SUBSCRIPT_MAP, "₍", "₎"),
-    )
-    .replace(/\\([{}])/g, "$1")
-    .replace(/[{}]/g, "")
-    .replace(/\\+/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function MathInline({ value }: { value: string }) {
+function MathJaxWebView({
+  html,
+  displayMode,
+  fallback,
+}: {
+  html: string;
+  displayMode: boolean;
+  fallback: string;
+}) {
   const styles = useThemedStyles();
+  const { width: windowWidth } = useWindowDimensions();
+  const [height, setHeight] = useState(displayMode ? 72 : 24);
+  const [failed, setFailed] = useState(false);
+
+  const handleMessage = useCallback((event: any) => {
+    try {
+      const payload = JSON.parse(event.nativeEvent.data);
+
+      if (payload?.type === "math-error") {
+        setFailed(true);
+        return;
+      }
+
+      if (payload?.type !== "math-size") return;
+
+      const measuredHeight = Number(payload.height);
+      if (!Number.isFinite(measuredHeight)) return;
+
+      const maxHeight = displayMode ? 640 : 1200;
+      const nextHeight = Math.min(
+        Math.max(Math.ceil(measuredHeight) + 2, displayMode ? 54 : 22),
+        maxHeight,
+      );
+
+      setHeight((current) =>
+        Math.abs(current - nextHeight) >= 2 ? nextHeight : current,
+      );
+    } catch {
+      // Message non reconnu : aucune action.
+    }
+  }, [displayMode]);
+
+  const handleNavigation = useCallback((request: any) => {
+    const url = String(request?.url ?? "");
+
+    if (
+      !url ||
+      url === "about:blank" ||
+      url.startsWith("data:") ||
+      url.startsWith("https://cdn.jsdelivr.net/")
+    ) {
+      return true;
+    }
+
+    if (/^(https?:\/\/|mailto:)/i.test(url)) {
+      Linking.openURL(url).catch(() => undefined);
+    }
+
+    return false;
+  }, []);
+
+  if (failed) {
+    return (
+      <Text style={styles.mathFallbackText}>
+        {fallback}
+      </Text>
+    );
+  }
+
   return (
-    <Text style={styles.inlineMathText}>
-      {normalizeMathText(value)}
-    </Text>
+    <WebView
+      originWhitelist={["*"]}
+      source={{ html }}
+      style={[
+        styles.mathWebView,
+        {
+          height,
+          maxWidth: Math.max(windowWidth - 36, 220),
+        },
+      ]}
+      containerStyle={styles.mathWebViewContainer}
+      javaScriptEnabled
+      scrollEnabled={displayMode}
+      nestedScrollEnabled={displayMode}
+      showsHorizontalScrollIndicator={false}
+      showsVerticalScrollIndicator={false}
+      bounces={false}
+      overScrollMode="never"
+      onMessage={handleMessage}
+      onShouldStartLoadWithRequest={handleNavigation}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+function MathRichText({
+  text,
+  variant = "body",
+}: {
+  text: string;
+  variant?: MathTextVariant;
+}) {
+  const isDark = useIsDarkTheme();
+
+  const html = useMemo(
+    () =>
+      buildMathJaxDocument({
+        content: buildInlineMathHtml(text),
+        isDark,
+        variant,
+        displayMode: false,
+      }),
+    [isDark, text, variant],
+  );
+
+  return (
+    <MathJaxWebView
+      html={html}
+      displayMode={false}
+      fallback={text}
+    />
   );
 }
 
 function MathExpression({ source }: { source: string }) {
   const styles = useThemedStyles();
-  const value = source.trim();
-  const parts: React.ReactNode[] = [];
-  let cursor = 0;
-  let key = 0;
+  const isDark = useIsDarkTheme();
 
-  const pushPlain = (plain: string) => {
-    if (!plain) return;
-    const normalized = normalizeMathText(plain);
-    if (!normalized) return;
-    parts.push(
-      <Text key={`math-text-${key++}`} style={styles.mathText}>
-        {normalized}
-      </Text>,
-    );
-  };
-
-  while (cursor < value.length) {
-    const fractionIndex = value.indexOf("\\frac", cursor);
-    const sqrtIndex = value.indexOf("\\sqrt", cursor);
-
-    const candidates = [fractionIndex, sqrtIndex].filter((index) => index >= 0);
-    const commandIndex = candidates.length ? Math.min(...candidates) : -1;
-
-    if (commandIndex < 0) {
-      pushPlain(value.slice(cursor));
-      break;
-    }
-
-    pushPlain(value.slice(cursor, commandIndex));
-
-    if (commandIndex === fractionIndex) {
-      const numeratorStart = commandIndex + 5;
-      const numerator = readBalancedGroup(value, numeratorStart);
-
-      if (!numerator) {
-        pushPlain(value.slice(commandIndex, commandIndex + 5));
-        cursor = commandIndex + 5;
-        continue;
-      }
-
-      const denominator = readBalancedGroup(value, numerator.end);
-
-      if (!denominator) {
-        pushPlain(value.slice(commandIndex, numerator.end));
-        cursor = numerator.end;
-        continue;
-      }
-
-      parts.push(
-        <View key={`fraction-${key++}`} style={styles.fraction}>
-          <View style={styles.fractionPart}>
-            <Text style={styles.fractionText}>
-              {normalizeMathText(numerator.value)}
-            </Text>
-          </View>
-          <View style={styles.fractionLine} />
-          <View style={styles.fractionPart}>
-            <Text style={styles.fractionText}>
-              {normalizeMathText(denominator.value)}
-            </Text>
-          </View>
-        </View>,
-      );
-
-      cursor = denominator.end;
-      continue;
-    }
-
-    const radicand = readBalancedGroup(value, commandIndex + 5);
-    if (!radicand) {
-      pushPlain("\\sqrt");
-      cursor = commandIndex + 5;
-      continue;
-    }
-
-    parts.push(
-      <Text key={`sqrt-${key++}`} style={styles.mathText}>
-        {"√("}
-        {normalizeMathText(radicand.value)}
-        {")"}
-      </Text>,
-    );
-
-    cursor = radicand.end;
-  }
+  const html = useMemo(
+    () =>
+      buildMathJaxDocument({
+        content: `\\[${escapeHtml(source.trim())}\\]`,
+        isDark,
+        variant: "body",
+        displayMode: true,
+      }),
+    [isDark, source],
+  );
 
   return (
     <View style={styles.mathBlock}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.mathScrollContent}
-      >
-        <View style={styles.mathExpression}>{parts}</View>
-      </ScrollView>
+      <MathJaxWebView
+        html={html}
+        displayMode
+        fallback={source}
+      />
     </View>
   );
 }
@@ -1526,21 +1720,42 @@ function MessageCopyButton({
   );
 }
 
-function InlineMarkdown({ text }: { text: string }) {
+function InlineMarkdown({
+  text,
+  variant = "body",
+}: {
+  text: string;
+  variant?: MathTextVariant;
+}) {
   const styles = useThemedStyles();
+
+  const hasMath = INLINE_MATH_TOKEN_REGEX.test(text);
+
+  if (hasMath) {
+    return <MathRichText text={text} variant={variant} />;
+  }
+
+  const textStyle =
+    variant === "h1"
+      ? styles.h1
+      : variant === "h2"
+        ? styles.h2
+        : variant === "h3"
+          ? styles.h3
+          : variant === "quote"
+            ? styles.quoteText
+            : styles.messageText;
+
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let index = 0;
 
-  const tokenRegex =
-    /(\\\([^\n]*?\\\)|\$[^$\n]+\$|\b[A-Za-z](?:(?:_(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+)))+(?![A-Za-z0-9_])|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
-
   while (remaining.length > 0) {
-    const match = remaining.match(tokenRegex);
+    const match = remaining.match(INLINE_MARKDOWN_TOKEN_REGEX);
 
     if (!match || match.index === undefined) {
       parts.push(
-        <Text key={index} style={styles.messageText}>
+        <Text key={index} style={textStyle}>
           {remaining}
         </Text>,
       );
@@ -1549,7 +1764,7 @@ function InlineMarkdown({ text }: { text: string }) {
 
     if (match.index > 0) {
       parts.push(
-        <Text key={index} style={styles.messageText}>
+        <Text key={index} style={textStyle}>
           {remaining.slice(0, match.index)}
         </Text>,
       );
@@ -1560,7 +1775,7 @@ function InlineMarkdown({ text }: { text: string }) {
 
     if (token.startsWith("**") && token.endsWith("**")) {
       parts.push(
-        <Text key={index} style={[styles.messageText, styles.bold]}>
+        <Text key={index} style={[textStyle, styles.bold]}>
           {token.slice(2, -2)}
         </Text>,
       );
@@ -1570,37 +1785,15 @@ function InlineMarkdown({ text }: { text: string }) {
           {token.slice(1, -1)}
         </Text>,
       );
-    } else if (token.startsWith("\\(") && token.endsWith("\\)")) {
-      parts.push(
-        <MathInline
-          key={index}
-          value={token.slice(2, -2)}
-        />,
-      );
-    } else if (token.startsWith("$") && token.endsWith("$")) {
-      parts.push(
-        <MathInline
-          key={index}
-          value={token.slice(1, -1)}
-        />,
-      );
-    } else if (
-      /^[A-Za-z](?:(?:_(?:\{[^{}]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}]+\}|[A-Za-z0-9+\-=()]+)))+$/.test(token)
-    ) {
-      parts.push(
-        <MathInline
-          key={index}
-          value={token}
-        />,
-      );
     } else if (token.startsWith("[")) {
       const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+
       if (linkMatch) {
         const [, label, url] = linkMatch;
         parts.push(
           <Text
             key={index}
-            style={[styles.messageText, styles.link]}
+            style={[textStyle, styles.link]}
             onPress={() =>
               Linking.openURL(url).catch(() => undefined)
             }
@@ -1611,8 +1804,14 @@ function InlineMarkdown({ text }: { text: string }) {
       }
     } else if (token.startsWith("*") && token.endsWith("*")) {
       parts.push(
-        <Text key={index} style={[styles.messageText, styles.italic]}>
+        <Text key={index} style={[textStyle, styles.italic]}>
           {token.slice(1, -1)}
+        </Text>,
+      );
+    } else {
+      parts.push(
+        <Text key={index} style={textStyle}>
+          {token}
         </Text>,
       );
     }
@@ -1621,7 +1820,7 @@ function InlineMarkdown({ text }: { text: string }) {
     index++;
   }
 
-  return <Text>{parts}</Text>;
+  return <Text style={textStyle}>{parts}</Text>;
 }
 
 function MarkdownMessage({
@@ -1649,9 +1848,10 @@ function MarkdownMessage({
   const flushParagraph = () => {
     if (!paragraph.length) return;
     blocks.push(
-      <Text key={`p-${index}`} style={styles.messageText}>
-        <InlineMarkdown text={paragraph.join(" ")} />
-      </Text>,
+      <InlineMarkdown
+        key={`p-${index}`}
+        text={paragraph.join(" ")}
+      />,
     );
     index++;
     paragraph = [];
@@ -1666,9 +1866,9 @@ function MarkdownMessage({
         {bullets.map((item, i) => (
           <View key={i} style={styles.listRow}>
             <Text style={styles.bullet}>•</Text>
-            <Text style={styles.messageText}>
+            <View style={styles.listContent}>
               <InlineMarkdown text={item} />
-            </Text>
+            </View>
           </View>
         ))}
       </View>,
@@ -1687,9 +1887,9 @@ function MarkdownMessage({
         {numbered.map((item, i) => (
           <View key={i} style={styles.listRow}>
             <Text style={styles.number}>{i + 1}.</Text>
-            <Text style={styles.messageText}>
+            <View style={styles.listContent}>
               <InlineMarkdown text={item} />
-            </Text>
+            </View>
           </View>
         ))}
       </View>,
@@ -1826,9 +2026,11 @@ function MarkdownMessage({
       flushLists();
       flushParagraph();
       blocks.push(
-        <Text key={`h3-${index}`} style={styles.h3}>
-          <InlineMarkdown text={trimmed.slice(4)} />
-        </Text>,
+        <InlineMarkdown
+          key={`h3-${index}`}
+          text={trimmed.slice(4)}
+          variant="h3"
+        />,
       );
       index++;
       return;
@@ -1838,9 +2040,11 @@ function MarkdownMessage({
       flushLists();
       flushParagraph();
       blocks.push(
-        <Text key={`h2-${index}`} style={styles.h2}>
-          <InlineMarkdown text={trimmed.slice(3)} />
-        </Text>,
+        <InlineMarkdown
+          key={`h2-${index}`}
+          text={trimmed.slice(3)}
+          variant="h2"
+        />,
       );
       index++;
       return;
@@ -1850,9 +2054,11 @@ function MarkdownMessage({
       flushLists();
       flushParagraph();
       blocks.push(
-        <Text key={`h1-${index}`} style={styles.h1}>
-          <InlineMarkdown text={trimmed.slice(2)} />
-        </Text>,
+        <InlineMarkdown
+          key={`h1-${index}`}
+          text={trimmed.slice(2)}
+          variant="h1"
+        />,
       );
       index++;
       return;
@@ -1879,9 +2085,10 @@ function MarkdownMessage({
       flushParagraph();
       blocks.push(
         <View key={`quote-${index}`} style={styles.quote}>
-          <Text style={styles.quoteText}>
-            <InlineMarkdown text={trimmed.slice(2)} />
-          </Text>
+          <InlineMarkdown
+            text={trimmed.slice(2)}
+            variant="quote"
+          />
         </View>,
       );
       index++;
@@ -4745,67 +4952,29 @@ const baseStyles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 22,
   },
-  inlineMathText: {
-    color: "#111111",
-    fontSize: 15,
-    lineHeight: 23,
-    fontWeight: "500",
-    fontStyle: "italic",
-  },
   mathBlock: {
     width: "100%",
-    marginVertical: 9,
-    borderRadius: 18,
-    backgroundColor: "#f7f7f4",
-    borderWidth: 1,
-    borderColor: "#deded8",
+    marginVertical: 7,
+    borderRadius: 14,
     overflow: "hidden",
+    backgroundColor: "transparent",
   },
-  mathScrollContent: {
-    flexGrow: 1,
-    minHeight: 62,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    justifyContent: "center",
-  },
-  mathExpression: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    columnGap: 6,
-  },
-  mathText: {
-    color: "#111111",
-    fontSize: 18,
-    lineHeight: 28,
-    fontWeight: "500",
-    letterSpacing: 0.1,
-  },
-  fraction: {
-    minWidth: 60,
-    alignItems: "stretch",
-    justifyContent: "center",
-    marginHorizontal: 4,
-  },
-  fractionPart: {
-    minHeight: 22,
-    paddingHorizontal: 6,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  fractionText: {
-    color: "#111111",
-    fontSize: 16,
-    lineHeight: 21,
-    fontWeight: "500",
-    textAlign: "center",
-  },
-  fractionLine: {
-    height: 1.5,
-    backgroundColor: "#2d2d2a",
+  mathWebViewContainer: {
     width: "100%",
-    minWidth: 44,
-    borderRadius: 1,
+    backgroundColor: "transparent",
+  },
+  mathWebView: {
+    width: "100%",
+    backgroundColor: "transparent",
+  },
+  mathFallbackText: {
+    color: "#1b1b19",
+    fontSize: 15,
+    lineHeight: 23,
+    fontStyle: "italic",
+    textAlign: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
   bold: {
     fontWeight: "700",
@@ -4853,6 +5022,10 @@ const baseStyles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 7,
+  },
+  listContent: {
+    flex: 1,
+    minWidth: 0,
   },
   bullet: {
     width: 15,
