@@ -2563,18 +2563,18 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    if (!messages.length) return;
+    if (!messages.length || composerExpanded) return;
 
     const frame = requestAnimationFrame(() => {
       listRef.current?.scrollToEnd({ animated: true });
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [messages.length, isThinking, bottomAreaHeight]);
+  }, [messages.length, isThinking, bottomAreaHeight, composerExpanded]);
 
   useEffect(() => {
     const eventName =
-      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+      "keyboardDidHide";
 
     const subscription = Keyboard.addListener(eventName, () => {
       if (attachments.length === 0 && !activeCapability) {
@@ -3916,7 +3916,13 @@ export default function ChatPage() {
               ]}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+              keyboardDismissMode={
+                composerExpanded
+                  ? "none"
+                  : Platform.OS === "ios"
+                    ? "interactive"
+                    : "on-drag"
+              }
               onContentSizeChange={() => {
                 if (isThinking) {
                   scrollToBottom(false);
@@ -4363,7 +4369,7 @@ export default function ChatPage() {
                 }
                 placeholderTextColor={themedIconColor("#999999", isDark)}
                 editable={!isThinking}
-                multiline={composerExpanded}
+                multiline
                 textAlignVertical={composerExpanded ? "top" : "center"}
                 scrollEnabled={composerExpanded && composerInputHeight >= 176}
                 style={[
@@ -4378,7 +4384,6 @@ export default function ChatPage() {
                 onFocus={() => {
                   setComposerExpanded(true);
                   setComposerInputHeight((current) => Math.max(96, current));
-                  requestAnimationFrame(() => scrollToBottom(false));
                 }}
                 onBlur={() => undefined}
                 onContentSizeChange={(event) => {
@@ -4563,13 +4568,18 @@ export default function ChatPage() {
             onRequestClose={closeDrawer}
           >
             <View style={styles.drawerOverlay}>
+              <Pressable
+                style={styles.drawerBackdrop}
+                onPress={closeDrawer}
+              />
+
               <Animated.View
                 style={[
                   styles.drawer,
                   {
                     width: drawerWidth,
-                    marginTop: Math.max(safeAreaTop, 12) + 8,
-                    marginBottom: Math.max(safeAreaBottom, 10) + 8,
+                    top: Math.max(safeAreaTop, 12) + 8,
+                    bottom: Math.max(safeAreaBottom, 10) + 8,
                     transform: [{ translateX: drawerTranslateX }],
                   },
                 ]}
@@ -4753,11 +4763,6 @@ export default function ChatPage() {
                   </Pressable>
                 </View>
               </Animated.View>
-
-              <Pressable
-                style={styles.drawerBackdrop}
-                onPress={closeDrawer}
-              />
             </View>
           </Modal>
         </View>
@@ -5492,7 +5497,8 @@ const baseStyles = StyleSheet.create({
     minHeight: 54,
     maxHeight: 54,
     paddingHorizontal: 16,
-    paddingVertical: 0,
+    paddingTop: 15,
+    paddingBottom: 12,
   },
   composerInputExpanded: {
     width: "100%",
@@ -5565,19 +5571,24 @@ const baseStyles = StyleSheet.create({
   },
   drawerOverlay: {
     flex: 1,
-    flexDirection: "row",
-    alignItems: "stretch",
   },
   drawerBackdrop: {
-    flex: 1,
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: "rgba(0,0,0,0.24)",
   },
   drawer: {
+    position: "absolute",
+    left: 8,
     backgroundColor: "#ffffff",
     paddingHorizontal: 18,
     paddingTop: 22,
     paddingBottom: 16,
     borderRadius: 26,
+    overflow: "hidden",
     shadowColor: "#000000",
     shadowOffset: { width: 4, height: 2 },
     shadowOpacity: 0.15,
