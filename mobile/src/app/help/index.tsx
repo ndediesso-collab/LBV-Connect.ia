@@ -1,393 +1,985 @@
 import React, { useCallback, useMemo, useState } from "react";
+
 import {
+
   Platform,
+
   Pressable,
+
   SafeAreaView,
+
   ScrollView,
+
   StatusBar,
+
   StyleSheet,
+
   Text,
+
   TextInput,
+
   View,
+
 } from "react-native";
+
 import { router, useFocusEffect } from "expo-router";
+
 import { Ionicons } from "@expo/vector-icons";
+
 import * as SecureStore from "expo-secure-store";
+
+import { supabase } from "@/lib/supabase/client";
+
+
 
 type OriaLanguage = "fr" | "en";
 
+
+
 const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
 
-const UI = {
-  fr: {
-    backToChat: "Retour au chat",
-    heroTitle: "Comment pouvons-nous vous aider ?",
-    heroDescription:
-      "{t.heroDescription}",
-    searchPlaceholder: "Rechercher une question...",
-    exploreHelp: "Explorer l'aide",
-    faqTitle: "Questions fréquentes",
-    noResults: "Aucun résultat",
-    noResultsText: "Essayez avec d'autres mots-clés.",
-    supportTitle: "Vous ne trouvez pas votre réponse ?",
-    supportDescription:
-      "{t.supportDescription}",
-    contactSupport: "Contacter le support",
-  },
-  en: {
-    backToChat: "Back to chat",
-    heroTitle: "How can we help you?",
-    heroDescription:
-      "Find answers to the most frequently asked questions about Oria.",
-    searchPlaceholder: "Search for a question...",
-    exploreHelp: "Explore help",
-    faqTitle: "Frequently asked questions",
-    noResults: "No results",
-    noResultsText: "Try using different keywords.",
-    supportTitle: "Can't find your answer?",
-    supportDescription:
-      "Our support team can help with issues related to your account, credits, or use of the service.",
-    contactSupport: "Contact support",
-  },
-} as const;
+type OriaTheme = "light" | "dark";
 
-const categories = {
-  fr: [
-    {
-      title: "Premiers pas",
-      description: "Découvrez comment utiliser Oria.",
-      icon: "sparkles-outline" as const,
-    },
-    {
-      title: "Crédits",
-      description: "Comprendre le fonctionnement et la consommation.",
-      icon: "card-outline" as const,
-    },
-    {
-      title: "Modèles IA",
-      description: "Comprendre Standard, Raisonnement et Premium.",
-      icon: "flash-outline" as const,
-    },
-    {
-      title: "Compte et sécurité",
-      description: "Gérer votre compte et vos paramètres.",
-      icon: "shield-checkmark-outline" as const,
-    },
-  ],
-  en: [
-    {
-      title: "Getting started",
-      description: "Learn how to use Oria.",
-      icon: "sparkles-outline" as const,
-    },
-    {
-      title: "Credits",
-      description: "Understand how credits work and are used.",
-      icon: "card-outline" as const,
-    },
-    {
-      title: "AI models",
-      description: "Understand Standard, Reasoning and Premium.",
-      icon: "flash-outline" as const,
-    },
-    {
-      title: "Account and security",
-      description: "Manage your account and settings.",
-      icon: "shield-checkmark-outline" as const,
-    },
-  ],
-} as const;
+const OriaThemeContext = React.createContext<OriaTheme>("light");
 
-const faqs = {
-  fr: [
-    {
-      question: "Qu'est-ce que Oria ?",
-      answer:
-        "Oria est une interface qui rassemble différentes technologies d'intelligence artificielle au même endroit.",
-    },
-    {
-      question: "À quoi servent les crédits ?",
-      answer:
-        "Les crédits permettent d'utiliser les différentes fonctionnalités et modèles disponibles dans votre pack. La consommation dépend de l'opération et du modèle utilisé.",
-    },
-    {
-      question: "Les crédits ont-ils une durée de validité ?",
-      answer:
-        "Oui. Les crédits sont associés à un pack et restent utilisables pendant la durée de validité de celui-ci.",
-    },
-    {
-      question: "Puis-je utiliser plusieurs modèles d'IA ?",
-      answer:
-        "Oui, les modèles disponibles dépendent du pack auquel vous avez souscrit.",
-    },
-    {
-      question: "Que se passe-t-il lorsque mes crédits sont épuisés ?",
-      answer:
-        "Vous pouvez acheter des crédits complémentaires afin de continuer à utiliser Oria.",
-    },
-    {
-      question: "Puis-je utiliser Oria sur mobile ?",
-      answer:
-        "L'interface est conçue pour être responsive et s'adapter aux smartphones, tablettes et ordinateurs.",
-    },
-  ],
-  en: [
-    {
-      question: "What is Oria?",
-      answer:
-        "Oria is an interface that brings different artificial intelligence technologies together in one place.",
-    },
-    {
-      question: "What are credits used for?",
-      answer:
-        "Credits let you use the different features and models available in your pack. Usage depends on the operation and the model used.",
-    },
-    {
-      question: "Do credits expire?",
-      answer:
-        "Yes. Credits are linked to a pack and remain usable for the duration of that pack.",
-    },
-    {
-      question: "Can I use multiple AI models?",
-      answer:
-        "Yes. The models available to you depend on the pack you subscribed to.",
-    },
-    {
-      question: "What happens when I run out of credits?",
-      answer:
-        "You can purchase additional credits to continue using Oria.",
-    },
-    {
-      question: "Can I use Oria on mobile?",
-      answer:
-        "The interface is designed to adapt to smartphones, tablets and computers.",
-    },
-  ],
-} as const;
-
-async function readOriaLanguage(): Promise<OriaLanguage> {
+async function readOriaTheme(): Promise<OriaTheme> {
   try {
-    if (Platform.OS === "web") {
-      const saved =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY)
-          : null;
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
-      if (saved === "fr" || saved === "en") return saved;
-
-      if (
-        typeof navigator !== "undefined" &&
-        navigator.language.toLowerCase().startsWith("en")
-      ) {
-        return "en";
-      }
-
-      return "fr";
+    if (userError || !user) {
+      return "light";
     }
 
-    const saved = await SecureStore.getItemAsync(ORIA_LANGUAGE_STORAGE_KEY);
-    return saved === "en" ? "en" : "fr";
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("theme")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      return "light";
+    }
+
+    return data?.theme === "dark" ? "dark" : "light";
   } catch {
-    return "fr";
+    return "light";
   }
 }
 
+function normalizeHexColor(value: string) {
+  const color = value.trim();
+
+  if (!/^#[0-9a-fA-F]{3,8}$/.test(color)) {
+    return null;
+  }
+
+  if (color.length === 4) {
+    return {
+      r: parseInt(color[1] + color[1], 16),
+      g: parseInt(color[2] + color[2], 16),
+      b: parseInt(color[3] + color[3], 16),
+    };
+  }
+
+  if (color.length === 7 || color.length === 9) {
+    return {
+      r: parseInt(color.slice(1, 3), 16),
+      g: parseInt(color.slice(3, 5), 16),
+      b: parseInt(color.slice(5, 7), 16),
+    };
+  }
+
+  return null;
+}
+
+function darkThemeNeutral(
+  value: string,
+  property:
+    | "color"
+    | "backgroundColor"
+    | "borderColor"
+    | "borderTopColor"
+    | "borderBottomColor"
+    | "borderLeftColor"
+    | "borderRightColor",
+) {
+  const rgb = normalizeHexColor(value);
+
+  if (!rgb) {
+    return value;
+  }
+
+  const max = Math.max(rgb.r, rgb.g, rgb.b);
+  const min = Math.min(rgb.r, rgb.g, rgb.b);
+
+  if (max - min > 28) {
+    return value;
+  }
+
+  const luminance =
+    (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+
+  if (property === "color") {
+    if (luminance >= 0.82) {
+      return value;
+    }
+
+    if (luminance >= 0.42) {
+      return "#b7b7be";
+    }
+
+    return "#f3f3f5";
+  }
+
+  if (
+    property === "borderColor" ||
+    property === "borderTopColor" ||
+    property === "borderBottomColor" ||
+    property === "borderLeftColor" ||
+    property === "borderRightColor"
+  ) {
+    return luminance >= 0.45 ? "#303036" : "#3a3a40";
+  }
+
+  if (luminance >= 0.94) {
+    return "#101012";
+  }
+
+  if (luminance >= 0.78) {
+    return "#17171a";
+  }
+
+  if (luminance >= 0.45) {
+    return "#1d1d21";
+  }
+
+  if (luminance <= 0.12) {
+    return "#222226";
+  }
+
+  return "#18181b";
+}
+
+function buildDarkStyleOverride(style: unknown) {
+  const flattened = StyleSheet.flatten(style as any);
+
+  if (!flattened) {
+    return undefined;
+  }
+
+  const override: Record<string, unknown> = {};
+
+  const themeColorProperties = [
+    "color",
+    "backgroundColor",
+    "borderColor",
+    "borderTopColor",
+    "borderBottomColor",
+    "borderLeftColor",
+    "borderRightColor",
+  ] as const;
+
+  for (const property of themeColorProperties) {
+    const value = flattened[property];
+
+    if (typeof value === "string" && value.startsWith("#")) {
+      override[property] = darkThemeNeutral(value, property);
+    }
+  }
+
+  return Object.keys(override).length > 0 ? override : undefined;
+}
+
+function getThemedStyles(theme: OriaTheme) {
+  if (theme === "light") {
+    return baseStyles;
+  }
+
+  const themed: Record<string, unknown> = {};
+
+  for (const key of Object.keys(baseStyles)) {
+    const style = baseStyles[key as keyof typeof baseStyles];
+
+    themed[key] = [
+      style,
+      buildDarkStyleOverride(style),
+    ];
+  }
+
+  return themed as unknown as typeof baseStyles;
+}
+
+function useThemedStyles() {
+  const theme = React.useContext(OriaThemeContext);
+
+  return useMemo(
+    () => getThemedStyles(theme),
+    [theme],
+  );
+}
+
+function useIsDarkTheme() {
+  return React.useContext(OriaThemeContext) === "dark";
+}
+
+function themedIconColor(value: string, isDark: boolean) {
+  return isDark
+    ? darkThemeNeutral(value, "color")
+    : value;
+}
+
+
+
+const UI = {
+
+  fr: {
+
+    backToChat: "Retour au chat",
+
+    heroTitle: "Comment pouvons-nous vous aider ?",
+
+    heroDescription:
+
+      "{t.heroDescription}",
+
+    searchPlaceholder: "Rechercher une question...",
+
+    exploreHelp: "Explorer l'aide",
+
+    faqTitle: "Questions fréquentes",
+
+    noResults: "Aucun résultat",
+
+    noResultsText: "Essayez avec d'autres mots-clés.",
+
+    supportTitle: "Vous ne trouvez pas votre réponse ?",
+
+    supportDescription:
+
+      "{t.supportDescription}",
+
+    contactSupport: "Contacter le support",
+
+  },
+
+  en: {
+
+    backToChat: "Back to chat",
+
+    heroTitle: "How can we help you?",
+
+    heroDescription:
+
+      "Find answers to the most frequently asked questions about Oria.",
+
+    searchPlaceholder: "Search for a question...",
+
+    exploreHelp: "Explore help",
+
+    faqTitle: "Frequently asked questions",
+
+    noResults: "No results",
+
+    noResultsText: "Try using different keywords.",
+
+    supportTitle: "Can't find your answer?",
+
+    supportDescription:
+
+      "Our support team can help with issues related to your account, credits, or use of the service.",
+
+    contactSupport: "Contact support",
+
+  },
+
+} as const;
+
+
+
+const categories = {
+
+  fr: [
+
+    {
+
+      title: "Premiers pas",
+
+      description: "Découvrez comment utiliser Oria.",
+
+      icon: "sparkles-outline" as const,
+
+    },
+
+    {
+
+      title: "Crédits",
+
+      description: "Comprendre le fonctionnement et la consommation.",
+
+      icon: "card-outline" as const,
+
+    },
+
+    {
+
+      title: "Modèles IA",
+
+      description: "Comprendre Standard, Raisonnement et Premium.",
+
+      icon: "flash-outline" as const,
+
+    },
+
+    {
+
+      title: "Compte et sécurité",
+
+      description: "Gérer votre compte et vos paramètres.",
+
+      icon: "shield-checkmark-outline" as const,
+
+    },
+
+  ],
+
+  en: [
+
+    {
+
+      title: "Getting started",
+
+      description: "Learn how to use Oria.",
+
+      icon: "sparkles-outline" as const,
+
+    },
+
+    {
+
+      title: "Credits",
+
+      description: "Understand how credits work and are used.",
+
+      icon: "card-outline" as const,
+
+    },
+
+    {
+
+      title: "AI models",
+
+      description: "Understand Standard, Reasoning and Premium.",
+
+      icon: "flash-outline" as const,
+
+    },
+
+    {
+
+      title: "Account and security",
+
+      description: "Manage your account and settings.",
+
+      icon: "shield-checkmark-outline" as const,
+
+    },
+
+  ],
+
+} as const;
+
+
+
+const faqs = {
+
+  fr: [
+
+    {
+
+      question: "Qu'est-ce que Oria ?",
+
+      answer:
+
+        "Oria est une interface qui rassemble différentes technologies d'intelligence artificielle au même endroit.",
+
+    },
+
+    {
+
+      question: "À quoi servent les crédits ?",
+
+      answer:
+
+        "Les crédits permettent d'utiliser les différentes fonctionnalités et modèles disponibles dans votre pack. La consommation dépend de l'opération et du modèle utilisé.",
+
+    },
+
+    {
+
+      question: "Les crédits ont-ils une durée de validité ?",
+
+      answer:
+
+        "Oui. Les crédits sont associés à un pack et restent utilisables pendant la durée de validité de celui-ci.",
+
+    },
+
+    {
+
+      question: "Puis-je utiliser plusieurs modèles d'IA ?",
+
+      answer:
+
+        "Oui, les modèles disponibles dépendent du pack auquel vous avez souscrit.",
+
+    },
+
+    {
+
+      question: "Que se passe-t-il lorsque mes crédits sont épuisés ?",
+
+      answer:
+
+        "Vous pouvez acheter des crédits complémentaires afin de continuer à utiliser Oria.",
+
+    },
+
+    {
+
+      question: "Puis-je utiliser Oria sur mobile ?",
+
+      answer:
+
+        "L'interface est conçue pour être responsive et s'adapter aux smartphones, tablettes et ordinateurs.",
+
+    },
+
+  ],
+
+  en: [
+
+    {
+
+      question: "What is Oria?",
+
+      answer:
+
+        "Oria is an interface that brings different artificial intelligence technologies together in one place.",
+
+    },
+
+    {
+
+      question: "What are credits used for?",
+
+      answer:
+
+        "Credits let you use the different features and models available in your pack. Usage depends on the operation and the model used.",
+
+    },
+
+    {
+
+      question: "Do credits expire?",
+
+      answer:
+
+        "Yes. Credits are linked to a pack and remain usable for the duration of that pack.",
+
+    },
+
+    {
+
+      question: "Can I use multiple AI models?",
+
+      answer:
+
+        "Yes. The models available to you depend on the pack you subscribed to.",
+
+    },
+
+    {
+
+      question: "What happens when I run out of credits?",
+
+      answer:
+
+        "You can purchase additional credits to continue using Oria.",
+
+    },
+
+    {
+
+      question: "Can I use Oria on mobile?",
+
+      answer:
+
+        "The interface is designed to adapt to smartphones, tablets and computers.",
+
+    },
+
+  ],
+
+} as const;
+
+
+
+async function readOriaLanguage(): Promise<OriaLanguage> {
+
+  try {
+
+    if (Platform.OS === "web") {
+
+      const saved =
+
+        typeof window !== "undefined"
+
+          ? window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY)
+
+          : null;
+
+
+
+      if (saved === "fr" || saved === "en") return saved;
+
+
+
+      if (
+
+        typeof navigator !== "undefined" &&
+
+        navigator.language.toLowerCase().startsWith("en")
+
+      ) {
+
+        return "en";
+
+      }
+
+
+
+      return "fr";
+
+    }
+
+
+
+    const saved = await SecureStore.getItemAsync(ORIA_LANGUAGE_STORAGE_KEY);
+
+    return saved === "en" ? "en" : "fr";
+
+  } catch {
+
+    return "fr";
+
+  }
+
+}
+
+
+
 export default function HelpPage() {
+
   const [language, setLanguage] = useState<OriaLanguage>("fr");
+  const [theme, setTheme] = useState<OriaTheme>("light");
+  const isDark = theme === "dark";
+  const styles = useMemo(
+    () => getThemedStyles(theme),
+    [theme],
+  );
+
   const [search, setSearch] = useState("");
+
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
+
+
   const t = UI[language];
+
   const currentCategories = categories[language];
+
   const currentFaqs = faqs[language];
 
+
+
   useFocusEffect(
+
     useCallback(() => {
+
       let active = true;
 
-      void readOriaLanguage().then((savedLanguage) => {
+
+
+      void Promise.all([
+        readOriaLanguage(),
+        readOriaTheme(),
+      ]).then(([savedLanguage, savedTheme]) => {
         if (active) {
           setLanguage(savedLanguage);
+          setTheme(savedTheme);
           setOpenFaq(null);
         }
       });
 
+
+
       return () => {
+
         active = false;
+
       };
+
     }, []),
+
   );
+
+
 
   const filteredFaqs = useMemo(() => {
+
     const query = search.trim().toLowerCase();
+
     if (!query) return currentFaqs;
+
     return currentFaqs.filter((faq) =>
+
       faq.question.toLowerCase().includes(query) ||
+
       faq.answer.toLowerCase().includes(query)
+
     );
+
   }, [search, currentFaqs]);
 
+
+
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
+    <OriaThemeContext.Provider value={theme}>
+      <SafeAreaView style={styles.safeArea}>
+
+      <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
+
       <View style={styles.header}>
+
         <View style={styles.headerLeft}>
+
           <Pressable style={styles.backButton} onPress={() => router.push("/chat" as any)} hitSlop={8}>
-            <Ionicons name="arrow-back" size={20} color="#55555f" />
+
+            <Ionicons name="arrow-back" size={20} color={themedIconColor("#55555f", isDark)} />
+
           </Pressable>
+
           <View style={styles.brandIcon}>
-            <Ionicons name="sparkles" size={15} color="#15151a" />
+
+            <Ionicons name="sparkles" size={15} color={themedIconColor("#15151a", isDark)} />
+
           </View>
+
           <Text style={styles.brandText}>ORIA</Text>
+
         </View>
+
         <Pressable style={styles.headerChatButton} onPress={() => router.push("/chat" as any)}>
+
           <Text style={styles.headerChatButtonText}>{t.backToChat}</Text>
+
         </Pressable>
+
       </View>
 
+
+
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+
         <View style={styles.hero}>
+
           <View style={styles.heroIcon}>
-            <Ionicons name="help-circle-outline" size={23} color="#fff" />
+
+            <Ionicons name="help-circle-outline" size={23} color={themedIconColor("#fff", isDark)} />
+
           </View>
+
           <Text style={styles.heroTitle}>{t.heroTitle}</Text>
+
           <Text style={styles.heroDescription}>
+
             Retrouvez les réponses aux questions les plus fréquentes sur Oria.
+
           </Text>
+
           <View style={styles.searchContainer}>
-            <Ionicons name="search" size={19} color="#9999a2" style={styles.searchIcon} />
+
+            <Ionicons name="search" size={19} color={themedIconColor("#9999a2", isDark)} style={styles.searchIcon} />
+
             <TextInput
+
               value={search}
+
               onChangeText={setSearch}
+
               placeholder={t.searchPlaceholder}
-              placeholderTextColor="#9999a2"
+
+              placeholderTextColor={themedIconColor("#9999a2", isDark)}
+
               style={styles.searchInput}
+
               returnKeyType="search"
+
             />
+
             {search.length > 0 && (
+
               <Pressable style={styles.clearButton} onPress={() => setSearch("")} hitSlop={8}>
-                <Ionicons name="close-circle" size={18} color="#a0a0a8" />
+
+                <Ionicons name="close-circle" size={18} color={themedIconColor("#a0a0a8", isDark)} />
+
               </Pressable>
+
             )}
+
           </View>
+
         </View>
 
+
+
         <View style={styles.section}>
+
           <Text style={styles.sectionTitle}>{t.exploreHelp}</Text>
+
           <View style={styles.categoryGrid}>
+
             {currentCategories.map((category) => (
+
               <Pressable key={category.title} style={({ pressed }) => [styles.categoryCard, pressed && styles.categoryCardPressed]}>
+
                 <View style={styles.categoryIcon}>
-                  <Ionicons name={category.icon} size={18} color="#606069" />
+
+                  <Ionicons name={category.icon} size={18} color={themedIconColor("#606069", isDark)} />
+
                 </View>
+
                 <View style={styles.categoryContent}>
+
                   <Text style={styles.categoryTitle}>{category.title}</Text>
+
                   <Text style={styles.categoryDescription}>{category.description}</Text>
+
                 </View>
+
               </Pressable>
+
             ))}
+
           </View>
+
         </View>
 
+
+
         <View style={styles.section}>
+
           <View style={styles.faqHeading}>
+
             <View style={styles.faqHeadingIcon}>
-              <Ionicons name="book-outline" size={18} color="#4f4f58" />
+
+              <Ionicons name="book-outline" size={18} color={themedIconColor("#4f4f58", isDark)} />
+
             </View>
+
             <Text style={styles.sectionTitle}>{t.faqTitle}</Text>
+
           </View>
+
+
 
           <View style={styles.faqContainer}>
+
             {filteredFaqs.length > 0 ? filteredFaqs.map((faq) => {
+
               const index = currentFaqs.findIndex((item) => item.question === faq.question);
+
               const isOpen = openFaq === index;
+
               return (
+
                 <View key={faq.question} style={styles.faqItem}>
+
                   <Pressable style={styles.faqQuestion} onPress={() => setOpenFaq(isOpen ? null : index)}>
+
                     <Text style={styles.faqQuestionText}>{faq.question}</Text>
-                    <Ionicons name={isOpen ? "chevron-up" : "chevron-down"} size={17} color="#9999a2" />
+
+                    <Ionicons name={isOpen ? "chevron-up" : "chevron-down"} size={17} color={themedIconColor("#9999a2", isDark)} />
+
                   </Pressable>
+
                   {isOpen && (
+
                     <View style={styles.faqAnswerContainer}>
+
                       <Text style={styles.faqAnswer}>{faq.answer}</Text>
+
                     </View>
+
                   )}
+
                 </View>
+
               );
+
             }) : (
+
               <View style={styles.noResults}>
+
                 <View style={styles.noResultsIcon}>
-                  <Ionicons name="search-outline" size={21} color="#777780" />
+
+                  <Ionicons name="search-outline" size={21} color={themedIconColor("#777780", isDark)} />
+
                 </View>
+
                 <Text style={styles.noResultsTitle}>{t.noResults}</Text>
+
                 <Text style={styles.noResultsText}>{t.noResultsText}</Text>
+
               </View>
+
             )}
+
           </View>
+
         </View>
+
+
 
         <View style={styles.supportCard}>
+
           <View style={styles.supportIcon}>
-            <Ionicons name="chatbubble-ellipses-outline" size={19} color="#606069" />
+
+            <Ionicons name="chatbubble-ellipses-outline" size={19} color={themedIconColor("#606069", isDark)} />
+
           </View>
+
           <Text style={styles.supportTitle}>{t.supportTitle}</Text>
+
           <Text style={styles.supportDescription}>
+
             Notre espace d'assistance pourra vous aider pour les problèmes liés à votre compte, vos crédits ou l'utilisation du service.
+
           </Text>
+
           <Pressable style={({ pressed }) => [styles.supportButton, pressed && styles.supportButtonPressed]}>
-            <Ionicons name="chatbubble-outline" size={16} color="#fff" />
+
+            <Ionicons name="chatbubble-outline" size={16} color={themedIconColor("#fff", isDark)} />
+
             <Text style={styles.supportButtonText}>{t.contactSupport}</Text>
+
           </Pressable>
+
         </View>
+
       </ScrollView>
+
     </SafeAreaView>
+    </OriaThemeContext.Provider>
   );
+
 }
 
-const styles = StyleSheet.create({
+
+
+const baseStyles = StyleSheet.create({
+
   safeArea: { flex: 1, backgroundColor: "#fff" },
+
   header: { minHeight: 64, paddingHorizontal: 18, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#dedee3", flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+
   headerLeft: { flexDirection: "row", alignItems: "center" },
+
   backButton: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center", marginRight: 7 },
+
   brandIcon: { width: 29, height: 29, borderRadius: 9, backgroundColor: "#f0f0f2", alignItems: "center", justifyContent: "center", marginRight: 8 },
+
   brandText: { color: "#15151a", fontSize: 15, fontWeight: "700", letterSpacing: 0.4 },
+
   headerChatButton: { minHeight: 38, borderRadius: 11, backgroundColor: "#111114", paddingHorizontal: 12, alignItems: "center", justifyContent: "center" },
+
   headerChatButtonText: { color: "#fff", fontSize: 11.5, fontWeight: "600" },
+
   content: { paddingHorizontal: 18, paddingTop: 38, paddingBottom: 45 },
+
   hero: { alignItems: "center" },
+
   heroIcon: { width: 50, height: 50, borderRadius: 16, backgroundColor: "#111114", alignItems: "center", justifyContent: "center" },
+
   heroTitle: { color: "#15151a", fontSize: 28, lineHeight: 34, fontWeight: "700", letterSpacing: -0.6, textAlign: "center", marginTop: 18 },
+
   heroDescription: { color: "#777780", fontSize: 13.5, lineHeight: 21, textAlign: "center", maxWidth: 480, marginTop: 8 },
+
   searchContainer: { width: "100%", maxWidth: 620, height: 52, borderWidth: 1, borderColor: "#dedee3", borderRadius: 16, backgroundColor: "#fafafa", flexDirection: "row", alignItems: "center", marginTop: 25 },
+
   searchIcon: { marginLeft: 15 },
+
   searchInput: { flex: 1, height: "100%", paddingHorizontal: 10, color: "#17171c", fontSize: 13.5 },
+
   clearButton: { paddingHorizontal: 13 },
+
   section: { marginTop: 39 },
+
   sectionTitle: { color: "#1b1b20", fontSize: 17, fontWeight: "700" },
+
   categoryGrid: { marginTop: 15, gap: 10 },
+
   categoryCard: { minHeight: 91, borderWidth: 1, borderColor: "#e2e2e6", borderRadius: 16, padding: 16, flexDirection: "row", alignItems: "flex-start", backgroundColor: "#fff" },
+
   categoryCardPressed: { backgroundColor: "#fafafa", borderColor: "#d4d4d9" },
+
   categoryIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: "#f1f1f3", alignItems: "center", justifyContent: "center", marginRight: 13 },
+
   categoryContent: { flex: 1 },
+
   categoryTitle: { color: "#202025", fontSize: 13.5, fontWeight: "600" },
+
   categoryDescription: { color: "#777780", fontSize: 12, lineHeight: 18, marginTop: 4 },
+
   faqHeading: { flexDirection: "row", alignItems: "center" },
+
   faqHeadingIcon: { width: 35, height: 35, borderRadius: 10, backgroundColor: "#f1f1f3", alignItems: "center", justifyContent: "center", marginRight: 9 },
+
   faqContainer: { marginTop: 15, borderWidth: 1, borderColor: "#e2e2e6", borderRadius: 16, overflow: "hidden", backgroundColor: "#fff" },
+
   faqItem: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#e3e3e6" },
+
   faqQuestion: { minHeight: 56, paddingHorizontal: 15, paddingVertical: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
+
   faqQuestionText: { flex: 1, color: "#25252a", fontSize: 13, lineHeight: 19, fontWeight: "600" },
+
   faqAnswerContainer: { paddingHorizontal: 15, paddingBottom: 17 },
+
   faqAnswer: { color: "#777780", fontSize: 12.5, lineHeight: 20 },
+
   noResults: { minHeight: 180, alignItems: "center", justifyContent: "center", paddingHorizontal: 20 },
+
   noResultsIcon: { width: 42, height: 42, borderRadius: 12, backgroundColor: "#f1f1f3", alignItems: "center", justifyContent: "center" },
+
   noResultsTitle: { color: "#25252a", fontSize: 13.5, fontWeight: "600", marginTop: 10 },
+
   noResultsText: { color: "#888891", fontSize: 11.5, marginTop: 4 },
+
   supportCard: { marginTop: 28, borderWidth: 1, borderColor: "#e2e2e6", borderRadius: 21, backgroundColor: "#fafafa", padding: 23, alignItems: "center" },
+
   supportIcon: { width: 42, height: 42, borderRadius: 12, backgroundColor: "#fff", alignItems: "center", justifyContent: "center" },
+
   supportTitle: { color: "#202025", fontSize: 16.5, fontWeight: "700", textAlign: "center", marginTop: 13 },
+
   supportDescription: { color: "#777780", fontSize: 12.5, lineHeight: 20, textAlign: "center", marginTop: 7, maxWidth: 520 },
+
   supportButton: { minHeight: 43, borderRadius: 11, backgroundColor: "#111114", paddingHorizontal: 17, flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 17 },
+
   supportButtonPressed: { opacity: 0.8 },
+
   supportButtonText: { color: "#fff", fontSize: 12.5, fontWeight: "600", marginLeft: 7 },
+
 });

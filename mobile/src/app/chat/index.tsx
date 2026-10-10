@@ -12,6 +12,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -63,6 +64,201 @@ type OriaLanguage = "fr" | "en";
 
 const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
 
+type OriaTheme = "light" | "dark";
+
+const OriaThemeContext = React.createContext<OriaTheme>("light");
+
+async function readOriaTheme(): Promise<OriaTheme> {
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return "light";
+    }
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("theme")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      return "light";
+    }
+
+    return data?.theme === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function normalizeHexColor(value: string) {
+  const color = value.trim();
+
+  if (!/^#[0-9a-fA-F]{3,8}$/.test(color)) {
+    return null;
+  }
+
+  if (color.length === 4) {
+    return {
+      r: parseInt(color[1] + color[1], 16),
+      g: parseInt(color[2] + color[2], 16),
+      b: parseInt(color[3] + color[3], 16),
+    };
+  }
+
+  if (color.length === 7 || color.length === 9) {
+    return {
+      r: parseInt(color.slice(1, 3), 16),
+      g: parseInt(color.slice(3, 5), 16),
+      b: parseInt(color.slice(5, 7), 16),
+    };
+  }
+
+  return null;
+}
+
+function darkThemeNeutral(
+  value: string,
+  property:
+    | "color"
+    | "backgroundColor"
+    | "borderColor"
+    | "borderTopColor"
+    | "borderBottomColor"
+    | "borderLeftColor"
+    | "borderRightColor",
+) {
+  const rgb = normalizeHexColor(value);
+
+  if (!rgb) {
+    return value;
+  }
+
+  const max = Math.max(rgb.r, rgb.g, rgb.b);
+  const min = Math.min(rgb.r, rgb.g, rgb.b);
+
+  // Preserve non-neutral semantic/accent colors.
+  if (max - min > 28) {
+    return value;
+  }
+
+  const luminance =
+    (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+
+  if (property === "color") {
+    if (luminance >= 0.82) {
+      return value;
+    }
+
+    if (luminance >= 0.42) {
+      return "#b7b7be";
+    }
+
+    return "#f3f3f5";
+  }
+
+  if (
+    property === "borderColor" ||
+    property === "borderTopColor" ||
+    property === "borderBottomColor" ||
+    property === "borderLeftColor" ||
+    property === "borderRightColor"
+  ) {
+    return luminance >= 0.45 ? "#303036" : "#3a3a40";
+  }
+
+  if (luminance >= 0.94) {
+    return "#101012";
+  }
+
+  if (luminance >= 0.78) {
+    return "#17171a";
+  }
+
+  if (luminance >= 0.45) {
+    return "#1d1d21";
+  }
+
+  if (luminance <= 0.12) {
+    return "#222226";
+  }
+
+  return "#18181b";
+}
+
+function buildDarkStyleOverride(style: unknown) {
+  const flattened = StyleSheet.flatten(style as any);
+
+  if (!flattened) {
+    return undefined;
+  }
+
+  const override: Record<string, unknown> = {};
+
+  const themeColorProperties = [
+    "color",
+    "backgroundColor",
+    "borderColor",
+    "borderTopColor",
+    "borderBottomColor",
+    "borderLeftColor",
+    "borderRightColor",
+  ] as const;
+
+  for (const property of themeColorProperties) {
+    const value = flattened[property];
+
+    if (typeof value === "string" && value.startsWith("#")) {
+      override[property] = darkThemeNeutral(value, property);
+    }
+  }
+
+  return Object.keys(override).length > 0 ? override : undefined;
+}
+
+function getThemedStyles(theme: OriaTheme) {
+  if (theme === "light") {
+    return baseStyles;
+  }
+
+  const themed: Record<string, unknown> = {};
+
+  for (const key of Object.keys(baseStyles)) {
+    const style = baseStyles[key as keyof typeof baseStyles];
+
+    themed[key] = [
+      style,
+      buildDarkStyleOverride(style),
+    ];
+  }
+
+  return themed as unknown as typeof baseStyles;
+}
+
+function useThemedStyles() {
+  const theme = React.useContext(OriaThemeContext);
+
+  return useMemo(
+    () => getThemedStyles(theme),
+    [theme],
+  );
+}
+
+function useIsDarkTheme() {
+  return React.useContext(OriaThemeContext) === "dark";
+}
+
+function themedIconColor(value: string, isDark: boolean) {
+  return isDark
+    ? darkThemeNeutral(value, "color")
+    : value;
+}
+
+
 const CHAT_TEXT = {
   fr: {
     newConversation: "Nouvelle conversation",
@@ -112,6 +308,7 @@ const CHAT_TEXT = {
     noConversation: "Aucune conversation pour le moment.",
     availableCredits: "Crédits disponibles",
     daysRemaining: "{days} jours restants",
+    packExpired: "Pack expiré",
     durationUnavailable: "Durée indisponible",
     myCredits: "Mes crédits",
     myCreations: "Mes créations",
@@ -229,6 +426,7 @@ const CHAT_TEXT = {
     noConversation: "No conversations yet.",
     availableCredits: "Available credits",
     daysRemaining: "{days} days remaining",
+    packExpired: "Pack expired",
     durationUnavailable: "Duration unavailable",
     myCredits: "My credits",
     myCreations: "My creations",
@@ -392,6 +590,7 @@ type WalletData = {
   pack_id: string | null;
   pack_activated_at: string | null;
   pack_expires_at: string | null;
+  is_pack_active: boolean;
 };
 
 type TrialInfo = {
@@ -487,7 +686,7 @@ const MEDIA_GENERATION_CONFIGS = [
     label: "Image Essentielle",
     description: "Génération rapide avec GPT Image 2",
     configuration: "Qualité basse",
-    packs: ["light_pack", "intermediate_pack"],
+    packs: ["light_pack"],
     model: "GPT Image 2",
   },
   {
@@ -1114,6 +1313,7 @@ function normalizeMathText(value: string) {
 }
 
 function MathInline({ value }: { value: string }) {
+  const styles = useThemedStyles();
   return (
     <Text style={styles.inlineMathText}>
       {normalizeMathText(value)}
@@ -1122,6 +1322,7 @@ function MathInline({ value }: { value: string }) {
 }
 
 function MathExpression({ source }: { source: string }) {
+  const styles = useThemedStyles();
   const value = source.trim();
   const parts: React.ReactNode[] = [];
   let cursor = 0;
@@ -1222,6 +1423,8 @@ function MessageCopyButton({
   value: string;
   language: OriaLanguage;
 }) {
+  const styles = useThemedStyles();
+  const isDark = useIsDarkTheme();
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -1244,7 +1447,7 @@ function MessageCopyButton({
       <Ionicons
         name={copied ? "checkmark" : "copy-outline"}
         size={13}
-        color="#777771"
+        color={themedIconColor("#777771", isDark)}
       />
       <Text style={styles.messageCopyText}>
         {copied ? CHAT_TEXT[language].copied : CHAT_TEXT[language].copy}
@@ -1254,12 +1457,13 @@ function MessageCopyButton({
 }
 
 function InlineMarkdown({ text }: { text: string }) {
+  const styles = useThemedStyles();
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let index = 0;
 
   const tokenRegex =
-    /(\\\([^\n]*?\\\)|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
+    /(\\\([^\n]*?\\\)|\$[^$\n]+\$|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
 
   while (remaining.length > 0) {
     const match = remaining.match(tokenRegex);
@@ -1303,6 +1507,13 @@ function InlineMarkdown({ text }: { text: string }) {
           value={token.slice(2, -2)}
         />,
       );
+    } else if (token.startsWith("$") && token.endsWith("$")) {
+      parts.push(
+        <MathInline
+          key={index}
+          value={token.slice(1, -1)}
+        />,
+      );
     } else if (token.startsWith("[")) {
       const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       if (linkMatch) {
@@ -1341,6 +1552,7 @@ function MarkdownMessage({
   content: string;
   language: OriaLanguage;
 }) {
+  const styles = useThemedStyles();
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = normalized.split("\n");
 
@@ -1606,15 +1818,7 @@ function MarkdownMessage({
   flushLists();
   flushParagraph();
 
-  return (
-    <ScrollView
-      style={styles.responseScrollArea}
-      showsVerticalScrollIndicator
-      nestedScrollEnabled
-    >
-      <View style={styles.markdown}>{blocks}</View>
-    </ScrollView>
-  );
+  return <View style={styles.markdown}>{blocks}</View>;
 }
 
 function CodeBlock({
@@ -1626,6 +1830,7 @@ function CodeBlock({
   value: string;
   uiLanguage: OriaLanguage;
 }) {
+  const styles = useThemedStyles();
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -1656,6 +1861,7 @@ function CodeBlock({
 }
 
 function VideoMessage({ url }: { url: string }) {
+  const styles = useThemedStyles();
   const player = useVideoPlayer(url, (instance) => {
     instance.loop = false;
   });
@@ -1685,6 +1891,9 @@ function ModelOption({
   onPress: () => void;
   language: OriaLanguage;
 }) {
+  const styles = useThemedStyles();
+  const isDark = useIsDarkTheme();
+
   return (
     <Pressable
       disabled={disabled}
@@ -1702,13 +1911,13 @@ function ModelOption({
             {CHAT_TEXT[language].trial} · {trial.remaining}/{trial.max}
           </Text>
         ) : active ? (
-          <Ionicons name="checkmark" size={17} color="#111111" />
+          <Ionicons name="checkmark" size={17} color={themedIconColor("#111111", isDark)} />
         ) : null}
       </View>
       <Text style={styles.modelDescription}>{getModelDescription(model, language)}</Text>
       {trial ? (
         <Text style={styles.smallMuted}>
-          Modèle supérieur · 5 essais maximum
+          {CHAT_TEXT[language].higherModelTrial}
         </Text>
       ) : null}
     </Pressable>
@@ -1724,13 +1933,16 @@ function AttachmentCard({
   onRemove: () => void;
   language: OriaLanguage;
 }) {
+  const styles = useThemedStyles();
+  const isDark = useIsDarkTheme();
+
   return (
     <View style={styles.attachmentCard}>
       {attachment.kind === "image" ? (
         <Image source={{ uri: attachment.uri }} style={styles.attachmentImage} />
       ) : (
         <View style={styles.fileIcon}>
-          <Ionicons name="document-text-outline" size={22} color="#666" />
+          <Ionicons name="document-text-outline" size={22} color={themedIconColor("#666", isDark)} />
         </View>
       )}
 
@@ -1744,7 +1956,7 @@ function AttachmentCard({
       </View>
 
       <Pressable onPress={onRemove} style={styles.removeAttachment}>
-        <Ionicons name="close" size={16} color="#666" />
+        <Ionicons name="close" size={16} color={themedIconColor("#666", isDark)} />
       </Pressable>
     </View>
   );
@@ -1755,14 +1967,26 @@ export default function ChatPage() {
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
   const [language, setLanguage] = useState<OriaLanguage>("fr");
+  const [theme, setTheme] = useState<OriaTheme>("light");
+  const isDark = theme === "dark";
+  const styles = useMemo(
+    () => getThemedStyles(theme),
+    [theme],
+  );
   const t = CHAT_TEXT[language];
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
 
-      void readOriaLanguage().then((savedLanguage) => {
-        if (active) setLanguage(savedLanguage);
+      void Promise.all([
+        readOriaLanguage(),
+        readOriaTheme(),
+      ]).then(([savedLanguage, savedTheme]) => {
+        if (active) {
+          setLanguage(savedLanguage);
+          setTheme(savedTheme);
+        }
       });
 
       return () => {
@@ -1919,6 +2143,11 @@ export default function ChatPage() {
   );
 
   const hasActivePack = Boolean(wallet?.pack_id);
+
+  // Comme sur le Web, le solde affiché représente uniquement les crédits
+  // réellement utilisables. Un ancien solde peut rester dans la base, mais
+  // un pack expiré/inactif doit apparaître à 0 dans l'interface mobile.
+  const availableBalance = wallet?.is_pack_active ? wallet.balance : 0;
 
   const remainingDays = wallet?.pack_expires_at
     ? Math.max(
@@ -3180,12 +3409,11 @@ export default function ChatPage() {
         ]}
       >
         <View
-          style={[
-            styles.messageBubble,
+          style={
             item.role === "user"
-              ? styles.userBubble
-              : styles.assistantBubble,
-          ]}
+              ? [styles.messageBubble, styles.userBubble]
+              : styles.assistantMessageContent
+          }
         >
           {item.role === "assistant" ? (
             <MarkdownMessage
@@ -3248,11 +3476,18 @@ export default function ChatPage() {
   );
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <Stack.Screen options={{ gestureEnabled: false }} />
+    <OriaThemeContext.Provider value={theme}>
+      <SafeAreaView
+        style={styles.safe}
+        edges={["top", "left", "right"]}
+      >
+        <StatusBar
+          barStyle={isDark ? "light-content" : "dark-content"}
+        />
+        <Stack.Screen options={{ gestureEnabled: false }} />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior="padding"
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={0}
       >
         <View style={styles.container} {...edgePanResponder.panHandlers}>
@@ -3261,7 +3496,7 @@ export default function ChatPage() {
               style={styles.headerButton}
               onPress={openDrawer}
             >
-              <Ionicons name="menu" size={22} color="#111111" />
+              <Ionicons name="menu" size={22} color={themedIconColor("#111111", isDark)} />
             </Pressable>
 
             <View style={styles.headerTitleWrap}>
@@ -3284,13 +3519,13 @@ export default function ChatPage() {
                 <Ionicons
                   name="wallet-outline"
                   size={15}
-                  color="#555555"
+                  color={themedIconColor("#555555", isDark)}
                 />
                 <Text style={styles.creditText}>
                   {isLoadingWallet
                     ? "..."
                     : wallet
-                      ? formatCredits(wallet.balance)
+                      ? formatCredits(availableBalance)
                       : "—"}
                 </Text>
               </Pressable>
@@ -3308,7 +3543,7 @@ export default function ChatPage() {
             <View style={styles.errorBox}>
               <Text style={styles.errorText}>{error}</Text>
               <Pressable onPress={() => setError(null)}>
-                <Ionicons name="close" size={17} color="#555555" />
+                <Ionicons name="close" size={17} color={themedIconColor("#555555", isDark)} />
               </Pressable>
             </View>
           ) : null}
@@ -3357,6 +3592,7 @@ export default function ChatPage() {
               ]}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
               onContentSizeChange={() => {
                 if (isThinking) {
                   scrollToBottom(false);
@@ -3368,7 +3604,12 @@ export default function ChatPage() {
           <View
             style={[
               styles.bottomArea,
-              { bottom: safeAreaBottom },
+              {
+                paddingBottom: Math.max(
+                  safeAreaBottom,
+                  Platform.OS === "ios" ? 8 : 10,
+                ),
+              },
             ]}
             onLayout={(event) => {
               const height = Math.ceil(event.nativeEvent.layout.height);
@@ -3423,7 +3664,7 @@ export default function ChatPage() {
               <Ionicons
                 name="sparkles-outline"
                 size={17}
-                color="#111111"
+                color={themedIconColor("#111111", isDark)}
               />
               <Text style={styles.modelSelectorText}>
                 {models.find(
@@ -3445,7 +3686,7 @@ export default function ChatPage() {
                     : "chevron-down"
                 }
                 size={15}
-                color="#555555"
+                color={themedIconColor("#555555", isDark)}
               />
             </Pressable>
 
@@ -3455,7 +3696,7 @@ export default function ChatPage() {
                   <Ionicons
                     name="globe-outline"
                     size={18}
-                    color="#111111"
+                    color={themedIconColor("#111111", isDark)}
                   />
                 </View>
                 <View style={styles.flex}>
@@ -3472,7 +3713,7 @@ export default function ChatPage() {
                   <Ionicons
                     name="close"
                     size={18}
-                    color="#666666"
+                    color={themedIconColor("#666666", isDark)}
                   />
                 </Pressable>
               </View>
@@ -3500,7 +3741,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="close"
                       size={18}
-                      color="#666666"
+                      color={themedIconColor("#666666", isDark)}
                     />
                   </Pressable>
                 </View>
@@ -3510,7 +3751,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="lock-closed-outline"
                       size={17}
-                      color="#555555"
+                      color={themedIconColor("#555555", isDark)}
                     />
                     <View style={styles.flex}>
                       <Text style={styles.mediaLockedTitle}>
@@ -3562,7 +3803,7 @@ export default function ChatPage() {
                               : "videocam-outline"
                           }
                           size={23}
-                          color="#111111"
+                          color={themedIconColor("#111111", isDark)}
                         />
                         <Text style={styles.mediaTypeText}>
                           {type === "image"
@@ -3638,7 +3879,7 @@ export default function ChatPage() {
                                   <Ionicons
                                     name="checkmark"
                                     size={15}
-                                    color="#111111"
+                                    color={themedIconColor("#111111", isDark)}
                                   />
                                 ) : null}
                               </View>
@@ -3790,7 +4031,7 @@ export default function ChatPage() {
                     ? t.creationPrompt
                     : t.messagePrompt
                 }
-                placeholderTextColor="#999999"
+                placeholderTextColor={themedIconColor("#999999", isDark)}
                 editable={!isThinking}
                 multiline
                 textAlignVertical="top"
@@ -3822,7 +4063,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="document-text-outline"
                       size={17}
-                      color="#555555"
+                      color={themedIconColor("#555555", isDark)}
                     />
                     <Text style={styles.capabilityButtonText}>
                       {t.file}
@@ -3841,7 +4082,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="image-outline"
                       size={17}
-                      color="#555555"
+                      color={themedIconColor("#555555", isDark)}
                     />
                     <Text style={styles.capabilityButtonText}>
                       {t.image}
@@ -3860,7 +4101,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="camera-outline"
                       size={17}
-                      color="#555555"
+                      color={themedIconColor("#555555", isDark)}
                     />
                     <Text style={styles.capabilityButtonText}>
                       {t.camera}
@@ -3996,7 +4237,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="close"
                       size={20}
-                      color="#555555"
+                      color={themedIconColor("#555555", isDark)}
                     />
                   </Pressable>
                 </View>
@@ -4065,7 +4306,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="wallet-outline"
                       size={16}
-                      color="#666666"
+                      color={themedIconColor("#666666", isDark)}
                     />
                   </View>
 
@@ -4073,14 +4314,16 @@ export default function ChatPage() {
                     {isLoadingWallet
                       ? "..."
                       : wallet
-                        ? formatCredits(wallet.balance)
+                        ? formatCredits(availableBalance)
                         : "—"}
                   </Text>
 
                   <Text style={styles.smallMuted}>
-                    {remainingDays !== null
-                      ? interpolate(t.daysRemaining, { days: remainingDays })
-                      : t.durationUnavailable}
+                    {wallet && !wallet.is_pack_active
+                      ? t.packExpired
+                      : remainingDays !== null
+                        ? interpolate(t.daysRemaining, { days: remainingDays })
+                        : t.durationUnavailable}
                   </Text>
                 </View>
 
@@ -4095,7 +4338,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="wallet-outline"
                       size={18}
-                      color="#555555"
+                      color={themedIconColor("#555555", isDark)}
                     />
                     <Text style={styles.drawerLinkText}>
                       {t.myCredits}
@@ -4112,7 +4355,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="images-outline"
                       size={18}
-                      color="#555555"
+                      color={themedIconColor("#555555", isDark)}
                     />
                     <Text style={styles.drawerLinkText}>
                       {t.myCreations}
@@ -4134,7 +4377,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="settings-outline"
                       size={18}
-                      color="#555555"
+                      color={themedIconColor("#555555", isDark)}
                     />
                     <Text style={styles.drawerLinkText}>
                       {t.settings}
@@ -4148,7 +4391,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="log-out-outline"
                       size={18}
-                      color="#555555"
+                      color={themedIconColor("#555555", isDark)}
                     />
                     <Text style={styles.drawerLinkText}>
                       {t.logout}
@@ -4165,11 +4408,12 @@ export default function ChatPage() {
           </Modal>
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+      </SafeAreaView>
+    </OriaThemeContext.Provider>
   );
 }
 
-const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: "#f8f8f6",
@@ -4378,7 +4622,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   messageBubble: {
-    maxWidth: "91%",
+    maxWidth: "85%",
     borderRadius: 22,
     paddingHorizontal: 15,
     paddingVertical: 12,
@@ -4387,11 +4631,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#111111",
     borderBottomRightRadius: 7,
   },
-  assistantBubble: {
-    backgroundColor: "#ffffff",
-    borderWidth: 1,
-    borderColor: "#e0e0dc",
-    borderBottomLeftRadius: 7,
+  assistantMessageContent: {
+    width: "100%",
+    paddingHorizontal: 2,
+    paddingVertical: 2,
   },
   userText: {
     color: "#ffffff",
@@ -4470,10 +4713,6 @@ const styles = StyleSheet.create({
   },
   link: {
     textDecorationLine: "underline",
-  },
-  responseScrollArea: {
-    flexGrow: 0,
-    maxHeight: 430,
   },
   markdown: {
     gap: 8,
@@ -4623,7 +4862,6 @@ const styles = StyleSheet.create({
     zIndex: 20,
     elevation: 20,
     paddingHorizontal: 13,
-    paddingBottom: Platform.OS === "ios" ? 6 : 10,
     backgroundColor: "#f8f8f6",
   },
   modelMenu: {

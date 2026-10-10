@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -6,13 +6,14 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
 import { supabase } from "@/lib/supabase/client";
 import * as SecureStore from "expo-secure-store";
@@ -81,10 +82,10 @@ type CreditTopUp = {
  *
  * Les crédits et les durées sont :
  *
- * Léger         : 20 000 crédits / 35 jours
- * Intermédiaire : 36 000 crédits / 35 jours
- * Pro           : 48 000 crédits / 35 jours
- * Business      : 160 000 crédits / 35 jours
+ * Léger         : 15 000 crédits / 35 jours
+ * Intermédiaire : 27 000 crédits / 35 jours
+ * Pro           : 36 000 crédits / 35 jours
+ * Business      : 120 000 crédits / 35 jours
  *
  * Les prix correspondent aux prix actuellement définis
  * pour les offres.
@@ -123,7 +124,7 @@ const packs: Pack[] = [
     name: "Léger",
     price: "4 000 XAF",
     launchPrice: "3 000 XAF",
-    credits: "20 000",
+    credits: "15 000",
     duration: "35 jours",
     description:
       "L'accès essentiel à Oria pour les usages courants, avec GPT-6 Luna et les créations légères.",
@@ -174,7 +175,7 @@ const packs: Pack[] = [
     name: "Intermédiaire",
     price: "8 000 XAF",
     launchPrice: "5 500 XAF",
-    credits: "36 000",
+    credits: "27 000",
     duration: "35 jours",
     description:
       "Un niveau plus polyvalent avec GPT-5 et davantage de capacité pour les usages quotidiens et créatifs.",
@@ -221,7 +222,7 @@ const packs: Pack[] = [
     name: "Pro",
     price: "12 000 XAF",
     launchPrice: "8 000 XAF",
-    credits: "48 000",
+    credits: "36 000",
     duration: "35 jours",
     description:
       "Pour les utilisateurs intensifs qui recherchent davantage de raisonnement, de puissance et de création professionnelle.",
@@ -286,7 +287,7 @@ const packs: Pack[] = [
     name: "Business",
     price: "45 000 XAF",
     launchPrice: "25 000 XAF",
-    credits: "160 000",
+    credits: "120 000",
     duration: "35 jours",
     description:
       "L'offre haut de gamme d'Oria pour les usages IA et créatifs les plus exigeants.",
@@ -368,7 +369,7 @@ const faqs = [
   {
     question: "Combien de crédits contient chaque pack ?",
     answer:
-      "Le pack Léger contient 20 000 crédits, l'Intermédiaire 36 000, le Pro 48 000 et le Business 160 000.",
+      "Le pack Léger contient 15 000 crédits, l'Intermédiaire 27 000, le Pro 36 000 et le Business 120 000.",
   },
   {
     question: "Toutes les actions consomment-elles le même nombre de crédits ?",
@@ -397,6 +398,200 @@ type OriaLanguage = "fr" | "en";
 
 const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
 
+type OriaTheme = "light" | "dark";
+
+const OriaThemeContext = React.createContext<OriaTheme>("light");
+
+async function readOriaTheme(): Promise<OriaTheme> {
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      return "light";
+    }
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("theme")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      return "light";
+    }
+
+    return data?.theme === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function normalizeHexColor(value: string) {
+  const color = value.trim();
+
+  if (!/^#[0-9a-fA-F]{3,8}$/.test(color)) {
+    return null;
+  }
+
+  if (color.length === 4) {
+    return {
+      r: parseInt(color[1] + color[1], 16),
+      g: parseInt(color[2] + color[2], 16),
+      b: parseInt(color[3] + color[3], 16),
+    };
+  }
+
+  if (color.length === 7 || color.length === 9) {
+    return {
+      r: parseInt(color.slice(1, 3), 16),
+      g: parseInt(color.slice(3, 5), 16),
+      b: parseInt(color.slice(5, 7), 16),
+    };
+  }
+
+  return null;
+}
+
+function darkThemeNeutral(
+  value: string,
+  property:
+    | "color"
+    | "backgroundColor"
+    | "borderColor"
+    | "borderTopColor"
+    | "borderBottomColor"
+    | "borderLeftColor"
+    | "borderRightColor",
+) {
+  const rgb = normalizeHexColor(value);
+
+  if (!rgb) {
+    return value;
+  }
+
+  const max = Math.max(rgb.r, rgb.g, rgb.b);
+  const min = Math.min(rgb.r, rgb.g, rgb.b);
+
+  if (max - min > 28) {
+    return value;
+  }
+
+  const luminance =
+    (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+
+  if (property === "color") {
+    if (luminance >= 0.82) {
+      return value;
+    }
+
+    if (luminance >= 0.42) {
+      return "#b7b7be";
+    }
+
+    return "#f3f3f5";
+  }
+
+  if (
+    property === "borderColor" ||
+    property === "borderTopColor" ||
+    property === "borderBottomColor" ||
+    property === "borderLeftColor" ||
+    property === "borderRightColor"
+  ) {
+    return luminance >= 0.45 ? "#303036" : "#3a3a40";
+  }
+
+  if (luminance >= 0.94) {
+    return "#101012";
+  }
+
+  if (luminance >= 0.78) {
+    return "#17171a";
+  }
+
+  if (luminance >= 0.45) {
+    return "#1d1d21";
+  }
+
+  if (luminance <= 0.12) {
+    return "#222226";
+  }
+
+  return "#18181b";
+}
+
+function buildDarkStyleOverride(style: unknown) {
+  const flattened = StyleSheet.flatten(style as any);
+
+  if (!flattened) {
+    return undefined;
+  }
+
+  const override: Record<string, unknown> = {};
+
+  const themeColorProperties = [
+    "color",
+    "backgroundColor",
+    "borderColor",
+    "borderTopColor",
+    "borderBottomColor",
+    "borderLeftColor",
+    "borderRightColor",
+  ] as const;
+
+  for (const property of themeColorProperties) {
+    const value = flattened[property];
+
+    if (typeof value === "string" && value.startsWith("#")) {
+      override[property] = darkThemeNeutral(value, property);
+    }
+  }
+
+  return Object.keys(override).length > 0 ? override : undefined;
+}
+
+function getThemedStyles(theme: OriaTheme) {
+  if (theme === "light") {
+    return baseStyles;
+  }
+
+  const themed: Record<string, unknown> = {};
+
+  for (const key of Object.keys(baseStyles)) {
+    const style = baseStyles[key as keyof typeof baseStyles];
+
+    themed[key] = [
+      style,
+      buildDarkStyleOverride(style),
+    ];
+  }
+
+  return themed as unknown as typeof baseStyles;
+}
+
+function useThemedStyles() {
+  const theme = React.useContext(OriaThemeContext);
+
+  return useMemo(
+    () => getThemedStyles(theme),
+    [theme],
+  );
+}
+
+function useIsDarkTheme() {
+  return React.useContext(OriaThemeContext) === "dark";
+}
+
+function themedIconColor(value: string, isDark: boolean) {
+  return isDark
+    ? darkThemeNeutral(value, "color")
+    : value;
+}
+
+
 const UI = {
   fr: {
     payment: "Paiement",
@@ -421,7 +616,7 @@ const UI = {
     step2Title: "Utilisez Oria",
     step2Description: "Utilisez les modèles, la recherche Web, les images, les vidéos et les autres capacités incluses dans votre pack.",
     step3Title: "Suivez vos crédits",
-    step3Description: "Oria réserve d’abord une estimation, puis ajuste automatiquement votre solde au coût réel après chaque action.",
+    step3Description: "Avant une action, Oria réserve une estimation puis ajuste automatiquement votre solde au coût réel une fois l’action terminée.",
     modelAccess: "Accès aux modèles",
     compareModels: "Comparez les niveaux d'IA",
     model: "Modèle",
@@ -453,22 +648,22 @@ const UI = {
     myCredits: "My credits",
     packsOria: "Oria Packs",
     heroTitle: "Choose your AI access.",
-    heroDescription: "Each pack gives you a credit balance usable for 35 days. Available models and capabilities depend on the pack, and each action is charged according to actual usage.",
+    heroDescription: "Each pack gives you a volume of credits usable for 35 days. Available models and capabilities depend on the pack you choose, and each action is charged according to its actual usage.",
     launchPromotion: "Launch promotion",
     launchOffer: "Launch price",
     launchLimit: "Offer reserved for the first 300 paying customers.",
-    needMoreCredits: "Need more credits?",
+    needMoreCredits: "Need additional credits?",
     topUpIntro: "Top up your balance without changing packs. Additional credits are added directly to your wallet.",
     fromPrice: "Starting at 563 XAF for 1,000 credits",
     buyCredits: "Buy credits",
     howItWorks: "How it works",
     simple: "Simple to understand",
     step1Title: "Choose a pack",
-    step1Description: "Select the level of power, capabilities and credit volume that fits your usage.",
+    step1Description: "Select the level of capability, features, and credit volume that fits your usage.",
     step2Title: "Use Oria",
     step2Description: "Use the models, Web Search, images, videos and other capabilities included in your pack.",
     step3Title: "Track your credits",
-    step3Description: "Oria first reserves an estimate, then automatically adjusts your balance to the actual cost after each action.",
+    step3Description: "Before an action, Oria reserves an estimate and then automatically adjusts your balance to the actual cost once the action is complete.",
     modelAccess: "Model access",
     compareModels: "Compare AI levels",
     model: "Model",
@@ -511,7 +706,7 @@ const PACK_TEXT_EN: Record<
     features: [
       "GPT-6 Luna",
       "Web Search with GPT-6 Luna",
-      "GPT Image 2",
+      "GPT Image 2 creation",
       "Short Sora 2 videos",
       "File and image analysis",
     ],
@@ -531,8 +726,8 @@ const PACK_TEXT_EN: Record<
       "Everything in the Light pack",
       "GPT-5",
       "Web Search with GPT-5",
-      "GPT Image 2",
-      "Sora 2 Lite video",
+      "GPT Image 2 creation",
+      "Sora 2 video creation",
       "Advanced file and image analysis",
     ],
     mediaNames: [
@@ -576,7 +771,7 @@ const PACK_TEXT_EN: Record<
       "Web Search with Terra, Sol and Astra",
       "GPT Image 2.5 Sunburst",
       "Sora 2 Pro",
-      "Business videos up to 12 seconds",
+      "Long-form Business video capabilities",
       "Premium AI capabilities",
     ],
     mediaNames: [
@@ -611,7 +806,7 @@ const FAQS_EN = [
   {
     question: "How many credits are included in each pack?",
     answer:
-      "Light includes 20,000 credits, Intermediate 36,000, Pro 48,000, and Business 160,000.",
+      "Light includes 15,000 credits, Intermediate 27,000, Pro 36,000, and Business 120,000.",
   },
   {
     question: "Do all actions consume the same number of credits?",
@@ -695,7 +890,14 @@ function getTopUpDescription(
  */
 
 export default function PacksPage() {
+  const insets = useSafeAreaInsets();
   const [language, setLanguage] = useState<OriaLanguage>("fr");
+  const [theme, setTheme] = useState<OriaTheme>("light");
+  const isDark = theme === "dark";
+  const styles = useMemo(
+    () => getThemedStyles(theme),
+    [theme],
+  );
   const t = UI[language];
   const displayedPacks = packs.map((pack) => localizePack(pack, language));
   const displayedFaqs = language === "en" ? FAQS_EN : faqs;
@@ -704,9 +906,13 @@ export default function PacksPage() {
     useCallback(() => {
       let active = true;
 
-      void readOriaLanguage().then((savedLanguage) => {
+      void Promise.all([
+        readOriaLanguage(),
+        readOriaTheme(),
+      ]).then(([savedLanguage, savedTheme]) => {
         if (active) {
           setLanguage(savedLanguage);
+          setTheme(savedTheme);
           setOpenFaq(null);
         }
       });
@@ -949,9 +1155,15 @@ export default function PacksPage() {
   }
 
   return (
-    <SafeAreaView
+    <OriaThemeContext.Provider value={theme}>
+      <SafeAreaView
       style={styles.safeArea}
+      edges={["top", "left", "right"]}
     >
+      <StatusBar
+        barStyle={isDark ? "light-content" : "dark-content"}
+        backgroundColor={isDark ? "#101012" : "#fafafa"}
+      />
       <View
         style={styles.container}
       >
@@ -983,7 +1195,7 @@ export default function PacksPage() {
               <Ionicons
                 name="arrow-back"
                 size={20}
-                color="#52525b"
+                color={themedIconColor("#52525b", isDark)}
               />
             </Pressable>
 
@@ -995,7 +1207,7 @@ export default function PacksPage() {
               <Ionicons
                 name="sparkles"
                 size={19}
-                color="#18181b"
+                color={themedIconColor("#18181b", isDark)}
               />
 
               <Text
@@ -1024,7 +1236,7 @@ export default function PacksPage() {
             <Ionicons
               name="card-outline"
               size={17}
-              color="#52525b"
+              color={themedIconColor("#52525b", isDark)}
             />
 
             <Text
@@ -1043,9 +1255,10 @@ export default function PacksPage() {
           style={
             styles.scrollView
           }
-          contentContainerStyle={
-            styles.content
-          }
+          contentContainerStyle={[
+            styles.content,
+            { paddingBottom: 60 + insets.bottom },
+          ]}
           showsVerticalScrollIndicator={
             false
           }
@@ -1090,7 +1303,7 @@ export default function PacksPage() {
                 <Ionicons
                   name="sparkles"
                   size={15}
-                  color="#18181b"
+                  color={themedIconColor("#18181b", isDark)}
                 />
 
                 <Text
@@ -1154,7 +1367,7 @@ export default function PacksPage() {
                 <Ionicons
                   name="flash-outline"
                   size={19}
-                  color="#18181b"
+                  color={themedIconColor("#18181b", isDark)}
                 />
 
                 <Text
@@ -1427,13 +1640,13 @@ export default function PacksPage() {
                                   <Ionicons
                                     name="checkmark"
                                     size={18}
-                                    color="#52525b"
+                                    color={themedIconColor("#52525b", isDark)}
                                   />
                                 ) : (
                                   <Ionicons
                                     name="lock-closed-outline"
                                     size={16}
-                                    color="#a1a1aa"
+                                    color={themedIconColor("#a1a1aa", isDark)}
                                   />
                                 )}
                               </View>
@@ -1463,7 +1676,7 @@ export default function PacksPage() {
               <Ionicons
                 name="help-circle-outline"
                 size={19}
-                color="#18181b"
+                color={themedIconColor("#18181b", isDark)}
               />
 
               <Text
@@ -1538,7 +1751,7 @@ export default function PacksPage() {
                               : "chevron-down"
                           }
                           size={18}
-                          color="#71717a"
+                          color={themedIconColor("#71717a", isDark)}
                         />
                       </Pressable>
 
@@ -1599,9 +1812,10 @@ export default function PacksPage() {
           />
 
           <View
-            style={
-              styles.topUpModal
-            }
+            style={[
+              styles.topUpModal,
+              { paddingBottom: 25 + insets.bottom },
+            ]}
           >
             <View
               style={
@@ -1659,7 +1873,7 @@ export default function PacksPage() {
                 <Ionicons
                   name="close"
                   size={20}
-                  color="#52525b"
+                  color={themedIconColor("#52525b", isDark)}
                 />
               </Pressable>
             </View>
@@ -1778,7 +1992,7 @@ export default function PacksPage() {
               <Ionicons
                 name="information-circle-outline"
                 size={17}
-                color="#71717a"
+                color={themedIconColor("#71717a", isDark)}
               />
 
               <Text
@@ -1793,6 +2007,7 @@ export default function PacksPage() {
         </View>
       </Modal>
     </SafeAreaView>
+    </OriaThemeContext.Provider>
   );
 }
 
@@ -1830,6 +2045,8 @@ function PackCard({
   language: OriaLanguage;
 }) {
   const t = UI[language];
+  const styles = useThemedStyles();
+  const isDark = useIsDarkTheme();
   const isPopular =
     Boolean(pack.popular);
 
@@ -1948,7 +2165,7 @@ function PackCard({
             color={
               isPopular
                 ? "#ffffff"
-                : "#71717a"
+                : themedIconColor("#71717a", isDark)
             }
           />
 
@@ -2040,7 +2257,7 @@ function PackCard({
                       color={
                         isPopular
                           ? "#ffffff"
-                          : "#52525b"
+                          : themedIconColor("#52525b", isDark)
                       }
                     />
                   ) : (
@@ -2050,7 +2267,7 @@ function PackCard({
                       color={
                         isPopular
                           ? "#ffffff"
-                          : "#a1a1aa"
+                          : themedIconColor("#a1a1aa", isDark)
                       }
                     />
                   )}
@@ -2239,7 +2456,7 @@ function PackCard({
                   color={
                     isPopular
                       ? "#ffffff"
-                      : "#52525b"
+                      : themedIconColor("#52525b", isDark)
                   }
                   style={
                     styles.featureIcon
@@ -2339,6 +2556,8 @@ function Step({
   title: string;
   description: string;
 }) {
+  const styles = useThemedStyles();
+
   return (
     <View
       style={
@@ -2397,7 +2616,7 @@ function Step({
  * Les styles sont volontairement détaillés et non compactés.
  */
 
-const styles = StyleSheet.create({
+const baseStyles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: "#fafafa",

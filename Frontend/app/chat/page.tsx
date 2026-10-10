@@ -4576,7 +4576,7 @@ export default function ChatPage() {
                         className={
                           item.role ===
                           "user"
-                            ? "flex justify-end"
+                            ? "flex flex-col items-end"
                             : "flex flex-col items-start"
                         }
                       >
@@ -4629,6 +4629,15 @@ export default function ChatPage() {
                             </div>
                           )}
                         </div>
+
+                        {item.role === "user" ? (
+                          <div className="mt-2 flex justify-end">
+                            <MessageCopyButton
+                              language={language}
+                              value={item.content}
+                            />
+                          </div>
+                        ) : null}
 
                         {(() => {
                           const mediaForMessage =

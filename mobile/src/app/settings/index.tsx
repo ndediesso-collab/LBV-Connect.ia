@@ -8,13 +8,14 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Switch,
   Text,
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
@@ -269,7 +270,7 @@ const SETTINGS_TEXT = {
     changePassword: "Change password",
     resetDescription:
       "You can also request a secure password reset link by email.",
-    sendResetLink: "Send password reset link",
+    sendResetLink: "Send reset link",
     sessions: "Sessions",
     sessionsDescription: "Close sessions open on your other devices.",
     signOutOtherSessions: "Sign out other sessions",
@@ -297,7 +298,7 @@ const SETTINGS_TEXT = {
       "Important information about your account and credits",
     enableNotifications: "Enable notifications",
     subscription: "Subscription",
-    subscriptionDescription: "Review your current Oria access.",
+    subscriptionDescription: "View your current Oria access.",
     currentPack: "Current pack",
     currentPackDescription: "Your access and validity period",
     manage: "Manage",
@@ -343,7 +344,7 @@ const SETTINGS_TEXT = {
     resetEmailError: "Unable to send the password reset email.",
     otherSessionsSignedOut: "Other sessions have been signed out.",
     otherSessionsError: "Unable to close the other sessions.",
-    logoutError: "Unable to sign you out.",
+    logoutError: "Unable to sign out.",
   },
 } as const;
 
@@ -394,6 +395,7 @@ async function publishOriaLanguage(value: Language) {
  */
 
 export default function SettingsPage() {
+  const insets = useSafeAreaInsets();
   /**
    * ----------------------------------------------------------
    * DONNÉES PROFIL
@@ -1445,6 +1447,8 @@ export default function SettingsPage() {
   async function changeTheme(
     value: Theme,
   ) {
+    const previousTheme = theme;
+
     setSavingTheme(true);
 
     clearMessages();
@@ -1520,6 +1524,8 @@ export default function SettingsPage() {
         "THEME UPDATE ERROR:",
         error,
       );
+
+      setTheme(previousTheme);
 
       setErrorMessage(
         t.themeSaveError,
@@ -2168,17 +2174,22 @@ export default function SettingsPage() {
         "top",
         "left",
         "right",
+        "bottom",
       ]}
     >
+      <StatusBar
+        barStyle={theme === "dark" ? "light-content" : "dark-content"}
+        backgroundColor={theme === "dark" ? "#09090b" : "#fafafa"}
+      />
+
       <KeyboardAvoidingView
         style={
           styles.keyboardContainer
         }
         behavior={
-          Platform.OS ===
-          "ios"
+          Platform.OS === "ios"
             ? "padding"
-            : undefined
+            : "height"
         }
       >
         <View
@@ -2306,13 +2317,24 @@ export default function SettingsPage() {
             style={
               styles.scrollView
             }
-            contentContainerStyle={
-              styles.content
-            }
+            contentContainerStyle={[
+              styles.content,
+              {
+                paddingBottom: Math.max(
+                  insets.bottom + 32,
+                  60,
+                ),
+              },
+            ]}
             showsVerticalScrollIndicator={
               false
             }
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={
+              Platform.OS === "ios"
+                ? "interactive"
+                : "on-drag"
+            }
           >
             {/* =================================================
                 TITLE
@@ -3391,6 +3413,12 @@ export default function SettingsPage() {
           <View
             style={[
               styles.languageModal,
+              {
+                paddingBottom: Math.max(
+                  insets.bottom + 18,
+                  24,
+                ),
+              },
               theme ===
                 "dark" &&
                 styles.languageModalDark,
