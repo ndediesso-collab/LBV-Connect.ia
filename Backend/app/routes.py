@@ -22,6 +22,9 @@ from app.services.credit_service import (
 from app.services.wallet_service import WalletService
 from app.services.openai_service import OpenAIService
 from app.services.media_service import media_service
+from app.repositories.supabase_artifact_repository import (
+    supabase_artifact_repository,
+)
 
 from app.config.payments import (
     ADDON_PACKS,
@@ -3825,10 +3828,40 @@ def get_conversation_messages(
         .execute()
     )
 
+    # Les fichiers générés sont renvoyés séparément des messages.
+    # Aucune URL signée n'est créée ici : cela évite de ralentir
+    # l'ouverture d'une conversation et évite de générer des liens
+    # temporaires tant que l'utilisateur ne télécharge pas le fichier.
+    try:
+        artifacts = supabase_artifact_repository.list_artifacts(
+            user_id=authenticated_user_id,
+            conversation_id=conversation_id,
+            limit=100,
+            offset=0,
+            include_urls=False,
+        )
+    except Exception as error:
+        # La lecture des messages reste prioritaire. Une panne ponctuelle
+        # du sous-système artifacts ne doit pas empêcher l'ouverture
+        # de la conversation.
+        print(
+            "[CONVERSATION ARTIFACTS] "
+            f"load_failed=True "
+            f"conversation_id={conversation_id!r} "
+            f"user_id={authenticated_user_id!r} "
+            f"error={str(error)!r}",
+            flush=True,
+        )
+        artifacts = []
+
     return {
         "success": True,
         "conversation_id": conversation_id,
         "messages": response.data or [],
+        "artifacts": [
+            _artifact_response(item)
+            for item in artifacts
+        ],
     }
 
 
@@ -4023,11 +4056,42 @@ def delete_conversation(
         authenticated_user_id=authenticated_user_id,
     )
 
+    # Les fichiers générés appartiennent à l'utilisateur, pas uniquement
+    # à la conversation. Lorsqu'une conversation est supprimée, on les
+    # conserve donc dans « Mes créations », mais on retire les références
+    # vers la conversation et ses messages qui vont disparaître.
+    try:
+        (
+            supabase
+            .table("generated_artifacts")
+            .update(
+                {
+                    "conversation_id": None,
+                    "source_message_id": None,
+                }
+            )
+            .eq("conversation_id", conversation_id)
+            .eq("user_id", authenticated_user_id)
+            .execute()
+        )
+    except Exception as error:
+        print(
+            "[CONVERSATION ARTIFACTS] "
+            f"detach_failed=True "
+            f"conversation_id={conversation_id!r} "
+            f"user_id={authenticated_user_id!r} "
+            f"error={str(error)!r}",
+            flush=True,
+        )
+
     # Suppression explicite des messages afin de ne pas dépendre
     # d'une configuration CASCADE particulière.
     supabase.table("messages").delete().eq(
         "conversation_id",
         conversation_id,
+    ).eq(
+        "user_id",
+        authenticated_user_id,
     ).execute()
 
     response = (
@@ -4048,6 +4112,197 @@ def delete_conversation(
     return {
         "success": True,
         "conversation_id": conversation_id,
+    }
+
+
+# ============================================================
+# ARTIFACTS — MES FICHIERS GÉNÉRÉS
+# ============================================================
+#
+# Source de vérité :
+#     supabase_artifact_repository
+#         -> SupabaseArtifactRepository
+#             -> Supabase Storage privé + generated_artifacts
+#
+# Ces routes sont les routes générales de bibliothèque.
+# Les routes /ai/... restent responsables de la génération IA.
+# ============================================================
+
+
+def _artifact_response(
+    artifact: dict,
+) -> dict:
+    """
+    Normalise un fichier généré pour les frontends Web/Mobile.
+
+    Le bucket generated-artifacts est privé. Une URL de téléchargement
+    n'est présente que lorsqu'elle vient d'être explicitement créée par
+    le repository.
+    """
+    download_url = (
+        artifact.get("download_url")
+        or artifact.get("url")
+    )
+
+    size_value = (
+        artifact.get("size_bytes")
+        if artifact.get("size_bytes") is not None
+        else artifact.get("size")
+    )
+
+    return {
+        "id": artifact.get("id"),
+        "artifact_id": artifact.get("id"),
+        "user_id": artifact.get("user_id"),
+        "conversation_id": artifact.get("conversation_id"),
+        "source_message_id": artifact.get("source_message_id"),
+
+        "creation_type": "artifact",
+        "type": "file",
+
+        "filename": artifact.get("filename"),
+        "extension": artifact.get("extension"),
+        "mime_type": artifact.get("mime_type"),
+        "category": artifact.get("category"),
+
+        "size": size_value,
+        "size_bytes": size_value,
+        "sha256": artifact.get("sha256"),
+
+        "model": artifact.get("model"),
+        "metadata": artifact.get("metadata") or {},
+
+        "download_url": download_url,
+        "url": download_url,
+
+        "created_at": artifact.get("created_at"),
+        "updated_at": artifact.get("updated_at"),
+    }
+
+
+@router.get("/artifacts")
+def get_my_artifacts(
+    conversation_id: str | None = None,
+    category: str | None = None,
+    extension: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    include_urls: bool = False,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Retourne les fichiers générés de l'utilisateur."""
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    try:
+        artifacts = supabase_artifact_repository.list_artifacts(
+            user_id=authenticated_user_id,
+            conversation_id=conversation_id,
+            category=category,
+            extension=extension,
+            limit=limit,
+            offset=offset,
+            include_urls=include_urls,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Impossible de récupérer les fichiers générés : "
+                f"{str(error)}"
+            ),
+        ) from error
+
+    return {
+        "success": True,
+        "user_id": authenticated_user_id,
+        "artifacts": [
+            _artifact_response(item)
+            for item in artifacts
+        ],
+        "count": len(artifacts),
+    }
+
+
+@router.get("/artifacts/{artifact_id}")
+def get_my_artifact_by_id(
+    artifact_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Retourne un artifact avec une URL signée fraîche."""
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    try:
+        artifact = supabase_artifact_repository.get_artifact_with_url(
+            artifact_id=artifact_id,
+            user_id=authenticated_user_id,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Impossible de préparer le téléchargement du fichier : "
+                f"{str(error)}"
+            ),
+        ) from error
+
+    if artifact is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Fichier généré introuvable.",
+        )
+
+    return {
+        "success": True,
+        "artifact": _artifact_response(artifact),
+    }
+
+
+@router.delete("/artifacts/{artifact_id}")
+def delete_my_artifact(
+    artifact_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Supprime l'artifact et son fichier privé Supabase Storage."""
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    try:
+        deleted = supabase_artifact_repository.delete_artifact(
+            artifact_id=artifact_id,
+            user_id=authenticated_user_id,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Impossible de supprimer le fichier généré : "
+                f"{str(error)}"
+            ),
+        ) from error
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Fichier généré introuvable ou déjà supprimé.",
+        )
+
+    return {
+        "success": True,
+        "artifact_id": artifact_id,
+        "message": "Fichier généré et objet Storage supprimés.",
     }
 
 
@@ -4387,3 +4642,87 @@ def delete_my_media(
             "Création média et fichier Storage supprimés."
         ),
     }
+
+# ============================================================
+# GET /creations
+# ============================================================
+
+
+@router.get("/creations")
+def get_my_creations(
+    limit: int = 100,
+    include_artifact_urls: bool = False,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """
+    Bibliothèque unifiée des créations Oria :
+    images, vidéos et fichiers natifs.
+    """
+    authenticated_user_id = _get_authenticated_user_id(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    if limit < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="limit doit être supérieur ou égal à 1.",
+        )
+
+    resolved_limit = min(limit, 100)
+
+    try:
+        media = media_service.list_user_media(
+            user_id=authenticated_user_id,
+            media_type=None,
+            limit=resolved_limit,
+            offset=0,
+        )
+
+        artifacts = supabase_artifact_repository.list_artifacts(
+            user_id=authenticated_user_id,
+            limit=resolved_limit,
+            offset=0,
+            include_urls=include_artifact_urls,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Impossible de récupérer les créations Oria : "
+                f"{str(error)}"
+            ),
+        ) from error
+
+    normalized_media = []
+
+    for item in media:
+        creation = _media_response(item)
+        creation["creation_type"] = (
+            creation.get("type")
+            or "media"
+        )
+        normalized_media.append(creation)
+
+    normalized_artifacts = [
+        _artifact_response(item)
+        for item in artifacts
+    ]
+
+    creations = normalized_media + normalized_artifacts
+    creations.sort(
+        key=lambda item: str(item.get("created_at") or ""),
+        reverse=True,
+    )
+    creations = creations[:resolved_limit]
+
+    return {
+        "success": True,
+        "user_id": authenticated_user_id,
+        "creations": creations,
+        "count": len(creations),
+        "media_count": len(normalized_media),
+        "artifact_count": len(normalized_artifacts),
+    }
+

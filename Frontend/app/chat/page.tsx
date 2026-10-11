@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
 import { createClient } from "@/lib/supabase/client";
@@ -99,12 +99,34 @@ type GeneratedMedia = {
   size?: string | null;
 };
 
+type GeneratedArtifact = {
+  id: string;
+  artifact_id?: string;
+  user_id?: string;
+  conversation_id?: string | null;
+  source_message_id?: string | null;
+  filename: string;
+  extension: string;
+  mimeType: string;
+  category: string;
+  sizeBytes: number;
+  sha256?: string | null;
+  model?: string | null;
+  downloadUrl?: string | null;
+  created_at?: string | null;
+
+  // Association locale pendant le streaming. Une fois le message sauvegardé,
+  // les marqueurs ORIA_ARTIFACT_ID deviennent la source de vérité.
+  messageId?: string | null;
+};
+
 type ConversationResponse = {
   conversations: Conversation[];
 };
 
 type MessagesResponse = {
   messages: ChatMessage[];
+  artifacts?: Array<Record<string, unknown>>;
 };
 
 /**
@@ -122,6 +144,14 @@ type ChatAttachment = {
 };
 
 const MAX_ATTACHMENTS = 3;
+
+// Un gros collage devient automatiquement une pièce jointe texte.
+// Cela évite de transformer le composer et l'historique en mur de texte.
+const LONG_PASTE_THRESHOLD = 6000;
+
+// Les messages utilisateur restent compacts dans l'historique.
+const USER_MESSAGE_COLLAPSE_CHARACTERS = 700;
+const USER_MESSAGE_COLLAPSE_LINES = 8;
 
 
 type OriaLanguage = "fr" | "en";
@@ -484,6 +514,40 @@ function extractMediaIdFromMessage(
   );
 }
 
+const ORIA_ARTIFACT_MARKER_REGEX =
+  /\[\[ORIA_ARTIFACT_ID:([^\]]+)\]\]/g;
+
+function buildArtifactMessageMarkers(
+  artifacts: GeneratedArtifact[],
+): string {
+  return artifacts
+    .map(
+      (artifact) =>
+        `[[ORIA_ARTIFACT_ID:${artifact.id}]]`,
+    )
+    .join("\n");
+}
+
+function extractArtifactIdsFromMessage(
+  content: string,
+): string[] {
+  const ids: string[] = [];
+
+  for (
+    const match of content.matchAll(
+      ORIA_ARTIFACT_MARKER_REGEX,
+    )
+  ) {
+    const id = match[1]?.trim();
+
+    if (id && !ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+
+  return ids;
+}
+
 function getVisibleMessageContent(
   content: string,
 ): string {
@@ -492,7 +556,160 @@ function getVisibleMessageContent(
       /\s*\[\[ORIA_MEDIA_ID:[^\]]+\]\]\s*$/g,
       "",
     )
+    .replace(
+      /\s*\[\[ORIA_ARTIFACT_ID:[^\]]+\]\]\s*/g,
+      "\n",
+    )
     .trimEnd();
+}
+
+function normalizeGeneratedArtifact(
+  raw: Record<string, unknown>,
+  messageId?: string | null,
+): GeneratedArtifact | null {
+  const id =
+    typeof raw.id === "string"
+      ? raw.id
+      : typeof raw.artifact_id === "string"
+        ? raw.artifact_id
+        : "";
+
+  if (!id) {
+    return null;
+  }
+
+  const filename =
+    typeof raw.filename === "string" && raw.filename.trim()
+      ? raw.filename.trim()
+      : `fichier-${id}`;
+
+  const extension =
+    typeof raw.extension === "string"
+      ? raw.extension.replace(/^\./, "").toLowerCase()
+      : filename.includes(".")
+        ? filename.split(".").pop()?.toLowerCase() || ""
+        : "";
+
+  const mimeType =
+    typeof raw.mime_type === "string"
+      ? raw.mime_type
+      : typeof raw.mimeType === "string"
+        ? raw.mimeType
+        : "application/octet-stream";
+
+  const category =
+    typeof raw.category === "string"
+      ? raw.category
+      : "file";
+
+  const sizeValue =
+    typeof raw.size_bytes === "number"
+      ? raw.size_bytes
+      : typeof raw.sizeBytes === "number"
+        ? raw.sizeBytes
+        : 0;
+
+  const downloadUrl =
+    typeof raw.download_url === "string"
+      ? raw.download_url
+      : typeof raw.url === "string"
+        ? raw.url
+        : null;
+
+  return {
+    id,
+    artifact_id: id,
+    user_id:
+      typeof raw.user_id === "string"
+        ? raw.user_id
+        : undefined,
+    conversation_id:
+      typeof raw.conversation_id === "string"
+        ? raw.conversation_id
+        : null,
+    source_message_id:
+      typeof raw.source_message_id === "string"
+        ? raw.source_message_id
+        : null,
+    filename,
+    extension,
+    mimeType,
+    category,
+    sizeBytes:
+      Number.isFinite(sizeValue)
+        ? sizeValue
+        : 0,
+    sha256:
+      typeof raw.sha256 === "string"
+        ? raw.sha256
+        : null,
+    model:
+      typeof raw.model === "string"
+        ? raw.model
+        : null,
+    downloadUrl,
+    created_at:
+      typeof raw.created_at === "string"
+        ? raw.created_at
+        : null,
+    messageId: messageId ?? null,
+  };
+}
+
+function mergeGeneratedArtifacts(
+  current: GeneratedArtifact[],
+  incoming: GeneratedArtifact[],
+): GeneratedArtifact[] {
+  const map = new Map<string, GeneratedArtifact>();
+
+  for (const artifact of current) {
+    map.set(artifact.id, artifact);
+  }
+
+  for (const artifact of incoming) {
+    const previous = map.get(artifact.id);
+
+    map.set(
+      artifact.id,
+      previous
+        ? {
+            ...previous,
+            ...artifact,
+            downloadUrl:
+              artifact.downloadUrl ||
+              previous.downloadUrl ||
+              null,
+            messageId:
+              artifact.messageId ||
+              previous.messageId ||
+              null,
+          }
+        : artifact,
+    );
+  }
+
+  return [...map.values()];
+}
+
+function formatArtifactSize(
+  sizeBytes: number,
+  language: OriaLanguage,
+): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
+    return language === "en"
+      ? "Size unavailable"
+      : "Taille indisponible";
+  }
+
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} o`;
+  }
+
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} Ko`;
+  }
+
+  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} Mo`;
 }
 
 
@@ -1669,6 +1886,73 @@ function MessageCopyButton({
   );
 }
 
+function CollapsibleUserMessage({
+  content,
+  language = "fr",
+}: {
+  content: string;
+  language?: OriaLanguage;
+}) {
+  const [expanded, setExpanded] =
+    useState(false);
+
+  const lineCount =
+    content.split("\n").length;
+
+  const collapsible =
+    content.length >
+      USER_MESSAGE_COLLAPSE_CHARACTERS ||
+    lineCount >
+      USER_MESSAGE_COLLAPSE_LINES;
+
+  return (
+    <div>
+      <div
+        className={`relative whitespace-pre-wrap break-words ${
+          collapsible && !expanded
+            ? "max-h-32 overflow-hidden"
+            : ""
+        }`}
+      >
+        {content}
+
+        {collapsible && !expanded ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-accent to-transparent" />
+        ) : null}
+      </div>
+
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() =>
+            setExpanded(
+              (current) => !current,
+            )
+          }
+          className="mt-2 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-accent-foreground/80 transition hover:bg-white/10 hover:text-accent-foreground"
+          aria-expanded={expanded}
+        >
+          <ChevronDown
+            size={14}
+            className={`transition-transform ${
+              expanded
+                ? "rotate-180"
+                : ""
+            }`}
+          />
+          {expanded
+            ? language === "en"
+              ? "Show less"
+              : "Réduire"
+            : language === "en"
+              ? "Show more"
+              : "Afficher la suite"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 /*
  * ============================================================
  * MARKDOWN MESSAGE
@@ -2201,6 +2485,9 @@ export default function ChatPage() {
   const [generatedMedia, setGeneratedMedia] =
     useState<GeneratedMedia[]>([]);
 
+  const [generatedArtifacts, setGeneratedArtifacts] =
+    useState<GeneratedArtifact[]>([]);
+
   const [isLoadingMediaCapabilities, setIsLoadingMediaCapabilities] =
     useState(false);
 
@@ -2543,6 +2830,7 @@ export default function ChatPage() {
             localCache,
           ),
           loadPersistedMedia(),
+          loadPersistedArtifacts(),
         ]);
 
         // Les capacités média sont chargées à l'ouverture du mode
@@ -2745,6 +3033,28 @@ export default function ChatPage() {
       const remoteMessages =
         data.messages || [];
 
+      const remoteArtifacts =
+        (data.artifacts || [])
+          .map((item) =>
+            normalizeGeneratedArtifact(
+              item,
+            ),
+          )
+          .filter(
+            (
+              item,
+            ): item is GeneratedArtifact =>
+              item !== null,
+          );
+
+      setGeneratedArtifacts(
+        (current) =>
+          mergeGeneratedArtifacts(
+            current,
+            remoteArtifacts,
+          ),
+      );
+
       if (
         remoteMessages.length > 0
       ) {
@@ -2886,6 +3196,156 @@ export default function ChatPage() {
       setGeneratedMedia(restored);
     } catch (requestError) {
       console.error("Erreur chargement créations Oria :", requestError);
+    }
+  }
+
+  async function loadPersistedArtifacts(): Promise<void> {
+    try {
+      const data = await apiFetch<{
+        success?: boolean;
+        artifacts?: Array<Record<string, unknown>>;
+      }>("/artifacts?limit=100");
+
+      const restored =
+        (data.artifacts ?? [])
+          .map((item) =>
+            normalizeGeneratedArtifact(
+              item,
+            ),
+          )
+          .filter(
+            (
+              item,
+            ): item is GeneratedArtifact =>
+              item !== null,
+          );
+
+      setGeneratedArtifacts(
+        restored,
+      );
+    } catch (requestError) {
+      console.error(
+        "Erreur chargement fichiers Oria :",
+        requestError,
+      );
+    }
+  }
+
+  function findArtifactsForMessage(
+    item: ChatMessage,
+  ): GeneratedArtifact[] {
+    if (item.role !== "assistant") {
+      return [];
+    }
+
+    const markerIds =
+      extractArtifactIdsFromMessage(
+        item.content || "",
+      );
+
+    const byMarker =
+      markerIds
+        .map((artifactId) =>
+          generatedArtifacts.find(
+            (artifact) =>
+              artifact.id === artifactId,
+          ),
+        )
+        .filter(
+          (
+            artifact,
+          ): artifact is GeneratedArtifact =>
+            Boolean(artifact),
+        );
+
+    if (byMarker.length > 0) {
+      return byMarker;
+    }
+
+    // Pendant le streaming, le message n'a pas encore ses marqueurs persistés.
+    return generatedArtifacts.filter(
+      (artifact) =>
+        artifact.messageId === item.id,
+    );
+  }
+
+  async function downloadArtifact(
+    artifact: GeneratedArtifact,
+  ): Promise<void> {
+    try {
+      const response = await apiFetch<{
+        success?: boolean;
+        artifact?: Record<string, unknown>;
+      }>(
+        `/artifacts/${artifact.id}`,
+      );
+
+      const refreshed =
+        response.artifact
+          ? normalizeGeneratedArtifact(
+              response.artifact,
+              artifact.messageId,
+            )
+          : null;
+
+      const downloadUrl =
+        refreshed?.downloadUrl ||
+        artifact.downloadUrl;
+
+      if (!downloadUrl) {
+        throw new Error(
+          language === "en"
+            ? "No download URL was returned."
+            : "Aucune URL de téléchargement n'a été retournée.",
+        );
+      }
+
+      setGeneratedArtifacts(
+        (current) =>
+          mergeGeneratedArtifacts(
+            current,
+            refreshed
+              ? [refreshed]
+              : [],
+          ),
+      );
+
+      const fileResponse =
+        await fetch(downloadUrl);
+
+      if (!fileResponse.ok) {
+        throw new Error(
+          "Téléchargement impossible.",
+        );
+      }
+
+      const blob =
+        await fileResponse.blob();
+
+      const objectUrl =
+        URL.createObjectURL(blob);
+
+      const anchor =
+        document.createElement("a");
+
+      anchor.href = objectUrl;
+      anchor.download =
+        artifact.filename ||
+        `fichier-${artifact.id}`;
+
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      URL.revokeObjectURL(
+        objectUrl,
+      );
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Téléchargement impossible.",
+      );
     }
   }
 
@@ -3146,6 +3606,70 @@ export default function ChatPage() {
       ...newAttachments,
     ]);
     setError(null);
+  }
+
+  function createPastedTextAttachment(
+    pastedText: string,
+  ): boolean {
+    if (
+      attachments.length >=
+      MAX_ATTACHMENTS
+    ) {
+      setError(
+        `Vous pouvez joindre au maximum ${MAX_ATTACHMENTS} éléments par message.`,
+      );
+      return false;
+    }
+
+    const timestamp =
+      new Date()
+        .toISOString()
+        .replace(
+          /[:.]/g,
+          "-",
+        );
+
+    const file = new File(
+      [pastedText],
+      `texte-colle-${timestamp}.txt`,
+      {
+        type: "text/plain",
+      },
+    );
+
+    addAttachments(
+      [file],
+      "file",
+    );
+
+    return true;
+  }
+
+  function handleComposerPaste(
+    event: ClipboardEvent<HTMLTextAreaElement>,
+  ) {
+    const pastedText =
+      event.clipboardData.getData(
+        "text/plain",
+      );
+
+    if (
+      pastedText.length <
+      LONG_PASTE_THRESHOLD
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const created =
+      createPastedTextAttachment(
+        pastedText,
+      );
+
+    if (created) {
+      setError(null);
+    }
   }
 
   function removeAttachment(id: string) {
@@ -3558,6 +4082,30 @@ export default function ChatPage() {
     const content =
       message.trim();
 
+    // Garde-fou supplémentaire : même si un collage massif contourne
+    // l'événement onPaste (autofill, extension navigateur, etc.),
+    // il devient une pièce jointe avant tout envoi au backend.
+    if (
+      content.length >=
+      LONG_PASTE_THRESHOLD
+    ) {
+      const created =
+        createPastedTextAttachment(
+          content,
+        );
+
+      if (created) {
+        setMessage("");
+        setError(
+          language === "en"
+            ? "Long pasted text was converted to a text file. You can now send it."
+            : "Le texte long a été transformé en fichier texte. Vous pouvez maintenant l'envoyer.",
+        );
+      }
+
+      return;
+    }
+
     const selectedTrial =
       trials[selectedModel];
 
@@ -3776,24 +4324,32 @@ export default function ChatPage() {
     try {
       /*
        * ======================================================
-       * SAUVEGARDE MESSAGE UTILISATEUR
+       * SAUVEGARDE MESSAGE UTILISATEUR — NON BLOQUANTE
        * ======================================================
+       *
+       * IMPORTANT PERFORMANCE :
+       * le streaming IA ne doit plus attendre la requête de persistance.
+       * Le message est déjà visible localement ; Supabase se synchronise
+       * en parallèle pendant que /ai/chat/stream démarre.
        */
 
-      try {
-        await saveMessageRemote(
+      const userMessageSavePromise =
+        saveMessageRemote(
           userMessage,
-        );
-      } catch (saveError) {
-        console.error(
-          "Erreur sauvegarde message utilisateur :",
-          saveError,
-        );
+        ).catch(
+          (saveError) => {
+            console.error(
+              "Erreur sauvegarde message utilisateur :",
+              saveError,
+            );
 
-        setError(
-          "Message conservé localement. Synchronisation cloud en attente.",
+            setError(
+              "Message conservé localement. Synchronisation cloud en attente.",
+            );
+
+            return null;
+          },
         );
-      }
 
       /*
        * ======================================================
@@ -3824,6 +4380,19 @@ export default function ChatPage() {
       formData.append(
         "conversation_id",
         conversationId,
+      );
+
+      // Identifiant stable du tour pour le backend streaming/steering.
+      formData.append(
+        "generation_id",
+        crypto.randomUUID(),
+      );
+
+      // Tant que le sélecteur de profondeur n'est pas encore exposé
+      // dans cette version Web, on utilise le mode backend par défaut.
+      formData.append(
+        "reasoning_mode",
+        "balanced",
       );
 
       for (
@@ -3857,6 +4426,7 @@ export default function ChatPage() {
       let assistantContent = "";
       let streamBuffer = "";
       let streamDone = false;
+      let streamedArtifacts: GeneratedArtifact[] = [];
       setMessages(
         (current) => [
           ...current,
@@ -3979,8 +4549,97 @@ export default function ChatPage() {
 
           if (
             eventName ===
+            "artifact"
+          ) {
+            const artifact =
+              normalizeGeneratedArtifact(
+                eventData,
+                assistantId,
+              );
+
+            if (artifact) {
+              streamedArtifacts =
+                mergeGeneratedArtifacts(
+                  streamedArtifacts,
+                  [artifact],
+                );
+
+              setGeneratedArtifacts(
+                (current) =>
+                  mergeGeneratedArtifacts(
+                    current,
+                    [artifact],
+                  ),
+              );
+            }
+
+            continue;
+          }
+
+          if (
+            eventName ===
+            "artifact_error"
+          ) {
+            if (
+              typeof eventData.detail ===
+              "string"
+            ) {
+              setError(
+                eventData.detail,
+              );
+            }
+
+            continue;
+          }
+
+          if (
+            eventName ===
             "done"
           ) {
+            const doneArtifacts =
+              Array.isArray(
+                eventData.artifacts,
+              )
+                ? eventData.artifacts
+                    .map((item) =>
+                      item &&
+                      typeof item ===
+                        "object"
+                        ? normalizeGeneratedArtifact(
+                            item as Record<
+                              string,
+                              unknown
+                            >,
+                            assistantId,
+                          )
+                        : null,
+                    )
+                    .filter(
+                      (
+                        item,
+                      ): item is GeneratedArtifact =>
+                        item !== null,
+                    )
+                : [];
+
+            if (
+              doneArtifacts.length > 0
+            ) {
+              streamedArtifacts =
+                mergeGeneratedArtifacts(
+                  streamedArtifacts,
+                  doneArtifacts,
+                );
+
+              setGeneratedArtifacts(
+                (current) =>
+                  mergeGeneratedArtifacts(
+                    current,
+                    doneArtifacts,
+                  ),
+              );
+            }
+
             streamDone = true;
             break;
           }
@@ -4005,13 +4664,40 @@ export default function ChatPage() {
         );
       }
 
+      const artifactMarkers =
+        buildArtifactMessageMarkers(
+          streamedArtifacts,
+        );
+
+      const persistedAssistantContent =
+        artifactMarkers
+          ? `${assistantContent}\n\n${artifactMarkers}`
+          : assistantContent;
+
+      // On remplace le contenu live par sa version persistable contenant
+      // les marqueurs invisibles qui permettront de retrouver les fichiers
+      // après réouverture de la conversation.
+      setMessages(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id === assistantId
+                ? {
+                    ...item,
+                    content:
+                      persistedAssistantContent,
+                  }
+                : item,
+          ),
+      );
+
       const assistantMessage:
         ChatMessage = {
         id: assistantId,
         conversationId,
         role: "assistant",
         content:
-          assistantContent,
+          persistedAssistantContent,
         createdAt:
           assistantCreatedAt,
       };
@@ -4083,6 +4769,10 @@ export default function ChatPage() {
        * SAUVEGARDE BACKEND
        * ======================================================
        */
+
+      // On ne l'attend qu'ici, après la génération : aucun impact sur
+      // le temps avant le premier token.
+      await userMessageSavePromise;
 
       try {
         await saveMessageRemote(
@@ -4420,9 +5110,11 @@ export default function ChatPage() {
           >
             <ImageIcon size={17} />
             {UI[language].myCreations}
-            {generatedMedia.length > 0 && (
+            {(generatedMedia.length +
+              generatedArtifacts.length) > 0 && (
               <span className="ml-auto rounded-full bg-surface-tertiary px-2 py-0.5 text-[10px] text-muted">
-                {generatedMedia.length}
+                {generatedMedia.length +
+                  generatedArtifacts.length}
               </span>
             )}
           </Link>
@@ -4622,11 +5314,12 @@ export default function ChatPage() {
                              * Le message utilisateur reste simple
                              * et conserve les retours à la ligne.
                              */
-                            <div className="whitespace-pre-wrap break-words">
-                              {
+                            <CollapsibleUserMessage
+                              content={
                                 item.content
                               }
-                            </div>
+                              language={language}
+                            />
                           )}
                         </div>
 
@@ -4681,6 +5374,86 @@ export default function ChatPage() {
                                   {UI[language].download}
                                 </button>
                               </div>
+                            </div>
+                          );
+                        })()}
+
+                        {(() => {
+                          const artifactsForMessage =
+                            findArtifactsForMessage(
+                              item,
+                            );
+
+                          if (
+                            artifactsForMessage.length ===
+                            0
+                          ) {
+                            return null;
+                          }
+
+                          return (
+                            <div className="mt-3 grid w-full max-w-xl gap-2">
+                              {artifactsForMessage.map(
+                                (artifact) => (
+                                  <div
+                                    key={
+                                      artifact.id
+                                    }
+                                    className="flex items-center gap-3 rounded-2xl border border-border bg-surface px-3.5 py-3 shadow-sm"
+                                  >
+                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-secondary text-muted-strong">
+                                      <FileText
+                                        size={18}
+                                      />
+                                    </div>
+
+                                    <div className="min-w-0 flex-1">
+                                      <p className="truncate text-sm font-medium">
+                                        {
+                                          artifact.filename
+                                        }
+                                      </p>
+
+                                      <p className="mt-0.5 text-[10px] uppercase tracking-[0.08em] text-muted">
+                                        {artifact.extension ||
+                                          artifact.category}
+                                        {" · "}
+                                        {formatArtifactSize(
+                                          artifact.sizeBytes,
+                                          language,
+                                        )}
+                                      </p>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void downloadArtifact(
+                                          artifact,
+                                        )
+                                      }
+                                      className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-xs font-medium transition hover:bg-surface-tertiary"
+                                      title={
+                                        UI[language]
+                                          .download
+                                      }
+                                      aria-label={`${UI[language].download} ${artifact.filename}`}
+                                    >
+                                      <Download
+                                        size={14}
+                                      />
+                                      <span className="hidden sm:inline">
+                                        {
+                                          UI[
+                                            language
+                                          ]
+                                            .download
+                                        }
+                                      </span>
+                                    </button>
+                                  </div>
+                                ),
+                              )}
                             </div>
                           );
                         })()}
@@ -5194,6 +5967,9 @@ export default function ChatPage() {
                       event.target.value,
                     )
                   }
+                  onPaste={
+                    handleComposerPaste
+                  }
                   onKeyDown={(event) => {
                     if (
                       event.key ===
@@ -5293,7 +6069,15 @@ export default function ChatPage() {
               </div>
 
               <p className="mt-3 text-center text-[11px] text-muted">
-                {language === "fr" ? <>Jusqu&apos;à {MAX_ATTACHMENTS} {UI.fr.attachmentsHelp}</> : <>Up to {MAX_ATTACHMENTS} {UI.en.attachmentsHelp}</>}
+                {language === "fr" ? (
+                  <>
+                    Jusqu&apos;à {MAX_ATTACHMENTS} {UI.fr.attachmentsHelp} Les collages très longs sont convertis automatiquement en fichier texte.
+                  </>
+                ) : (
+                  <>
+                    Up to {MAX_ATTACHMENTS} {UI.en.attachmentsHelp} Very long pasted text is automatically converted into a text file.
+                  </>
+                )}
               </p>
             </div>
           </div>

@@ -527,5 +527,5 @@ if __name__ == "__main__":
     print("\n=== 4. ÉTAT FINAL DE payment_transactions ===")
     print(updated)
 
-    print("\n✅ TEST RÉUSSI : le payload Chariow est correctement")
+    print("\n TEST RÉUSSI : le payload Chariow est correctement")
     print("   normalisé → retrouvé par référence → écrit dans Supabase.")

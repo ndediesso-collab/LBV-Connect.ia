@@ -28,7 +28,7 @@ import * as ImagePicker from "expo-image-picker";
 import { VideoView, useVideoPlayer } from "expo-video";
 import { supabase } from "@/lib/supabase/client";
 import * as SecureStore from "expo-secure-store";
-import { File as ExpoFile } from "expo-file-system";
+import { File as ExpoFile, Paths } from "expo-file-system";
 import { fetch as expoFetch } from "expo/fetch";
 import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
@@ -49,9 +49,12 @@ import { WebView } from "react-native-webview";
  *   GET  /conversations/:id/messages
  *   POST /conversations/:id/messages
  *   GET  /media
+ *   GET  /artifacts
+ *   GET  /artifacts/:id
  *   GET  /ai/media-capabilities
  *   POST /ai/image
  *   POST /ai/video
+ *   POST /ai/chat/control
  *   POST /ai/chat/stream
  *
  * Le cache utilise localStorage sur Web et SecureStore sur Android/iOS.
@@ -63,6 +66,53 @@ const API_URL =
 
 
 type OriaLanguage = "fr" | "en";
+
+type ReasoningMode = "fast" | "balanced" | "deep";
+
+const REASONING_OPTIONS: Array<{
+  id: ReasoningMode;
+  label: Record<OriaLanguage, string>;
+  description: Record<OriaLanguage, string>;
+  icon: React.ComponentProps<typeof Ionicons>["name"];
+}> = [
+  {
+    id: "fast",
+    label: { fr: "Rapide", en: "Fast" },
+    description: {
+      fr: "Réponse plus rapide",
+      en: "Faster response",
+    },
+    icon: "flash-outline",
+  },
+  {
+    id: "balanced",
+    label: { fr: "Équilibré", en: "Balanced" },
+    description: {
+      fr: "Bon compromis vitesse / réflexion",
+      en: "Balanced speed and reasoning",
+    },
+    icon: "options-outline",
+  },
+  {
+    id: "deep",
+    label: { fr: "Approfondi", en: "Deep" },
+    description: {
+      fr: "Plus de réflexion pour les tâches complexes",
+      en: "More reasoning for complex tasks",
+    },
+    icon: "diamond-outline",
+  },
+];
+
+function getReasoningOption(
+  mode: ReasoningMode,
+) {
+  return (
+    REASONING_OPTIONS.find(
+      (item) => item.id === mode,
+    ) ?? REASONING_OPTIONS[1]
+  );
+}
 
 const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
 
@@ -272,6 +322,13 @@ const CHAT_TEXT = {
     image: "Image",
     file: "Fichier",
     open: "Ouvrir",
+    download: "Télécharger",
+    showMore: "Afficher la suite",
+    showLess: "Réduire",
+    longPasteConverted:
+      "Le texte long a été transformé en fichier texte. Vous pouvez maintenant l'envoyer.",
+    longPasteFailed:
+      "Impossible de transformer ce long texte en fichier.",
     model: "Modèle",
     noModel: "Aucun modèle disponible avec ce pack.",
     welcomeHeading: "Comment puis-je\nvous aider ?",
@@ -390,6 +447,13 @@ const CHAT_TEXT = {
     image: "Image",
     file: "File",
     open: "Open",
+    download: "Download",
+    showMore: "Show more",
+    showLess: "Show less",
+    longPasteConverted:
+      "Long pasted text was converted to a text file. You can now send it.",
+    longPasteFailed:
+      "Unable to convert this long text into a file.",
     model: "Model",
     noModel: "No model available with this pack.",
     welcomeHeading: "How can I\nhelp you?",
@@ -644,6 +708,24 @@ type GeneratedMedia = {
   size?: string | null;
 };
 
+type GeneratedArtifact = {
+  id: string;
+  artifact_id?: string;
+  user_id?: string;
+  conversation_id?: string | null;
+  source_message_id?: string | null;
+  filename: string;
+  extension: string;
+  mimeType: string;
+  category: string;
+  sizeBytes: number;
+  sha256?: string | null;
+  model?: string | null;
+  downloadUrl?: string | null;
+  created_at?: string | null;
+  messageId?: string | null;
+};
+
 type ChatAttachment = {
   id: string;
   uri: string;
@@ -661,6 +743,13 @@ type ModelDefinition = {
 };
 
 const MAX_ATTACHMENTS = 3;
+
+// Un collage massif devient automatiquement une pièce jointe texte.
+// React Native n'expose pas un événement onPaste fiable sur toutes les
+// plateformes : on détecte donc une insertion très importante dans onChangeText.
+const LONG_PASTE_THRESHOLD = 6000;
+const USER_MESSAGE_COLLAPSE_CHARACTERS = 700;
+const USER_MESSAGE_COLLAPSE_LINES = 8;
 
 const ACCEPTED_FILE_TYPES = [
   "application/pdf",
@@ -877,6 +966,8 @@ const TRIAL_MODEL_BY_PACK: Record<string, string> = {
 };
 
 const ORIA_MEDIA_MARKER_REGEX = /\[\[ORIA_MEDIA_ID:([^\]]+)\]\]/;
+const ORIA_ARTIFACT_MARKER_REGEX =
+  /\[\[ORIA_ARTIFACT_ID:([^\]]+)\]\]/g;
 
 function buildMediaMessageContent(
   type: "image" | "video",
@@ -886,14 +977,204 @@ function buildMediaMessageContent(
   return `${type === "image" ? "Image" : "Vidéo"} générée · ${action}\n[[ORIA_MEDIA_ID:${mediaId}]]`;
 }
 
+function buildArtifactMessageMarkers(
+  artifacts: GeneratedArtifact[],
+) {
+  return artifacts
+    .map(
+      (artifact) =>
+        `[[ORIA_ARTIFACT_ID:${artifact.id}]]`,
+    )
+    .join("\n");
+}
+
 function getVisibleMessageContent(content: string) {
   return content
     .replace(/\s*\[\[ORIA_MEDIA_ID:[^\]]+\]\]\s*$/g, "")
+    .replace(
+      /\s*\[\[ORIA_ARTIFACT_ID:[^\]]+\]\]\s*/g,
+      "\n",
+    )
     .trimEnd();
 }
 
 function extractMediaIdFromMessage(content: string) {
   return content.match(ORIA_MEDIA_MARKER_REGEX)?.[1] ?? null;
+}
+
+function extractArtifactIdsFromMessage(
+  content: string,
+) {
+  const ids: string[] = [];
+
+  for (
+    const match of content.matchAll(
+      ORIA_ARTIFACT_MARKER_REGEX,
+    )
+  ) {
+    const id = match[1]?.trim();
+
+    if (id && !ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+
+  return ids;
+}
+
+function normalizeGeneratedArtifact(
+  raw: Record<string, unknown>,
+  messageId?: string | null,
+): GeneratedArtifact | null {
+  const id =
+    typeof raw.id === "string"
+      ? raw.id
+      : typeof raw.artifact_id === "string"
+        ? raw.artifact_id
+        : "";
+
+  if (!id) return null;
+
+  const filename =
+    typeof raw.filename === "string" &&
+    raw.filename.trim()
+      ? raw.filename.trim()
+      : `fichier-${id}`;
+
+  const extension =
+    typeof raw.extension === "string"
+      ? raw.extension.replace(/^\./, "").toLowerCase()
+      : filename.includes(".")
+        ? filename.split(".").pop()?.toLowerCase() || ""
+        : "";
+
+  const sizeValue =
+    typeof raw.size_bytes === "number"
+      ? raw.size_bytes
+      : typeof raw.sizeBytes === "number"
+        ? raw.sizeBytes
+        : 0;
+
+  const downloadUrl =
+    typeof raw.download_url === "string"
+      ? raw.download_url
+      : typeof raw.url === "string"
+        ? raw.url
+        : null;
+
+  return {
+    id,
+    artifact_id: id,
+    user_id:
+      typeof raw.user_id === "string"
+        ? raw.user_id
+        : undefined,
+    conversation_id:
+      typeof raw.conversation_id === "string"
+        ? raw.conversation_id
+        : null,
+    source_message_id:
+      typeof raw.source_message_id === "string"
+        ? raw.source_message_id
+        : null,
+    filename,
+    extension,
+    mimeType:
+      typeof raw.mime_type === "string"
+        ? raw.mime_type
+        : typeof raw.mimeType === "string"
+          ? raw.mimeType
+          : "application/octet-stream",
+    category:
+      typeof raw.category === "string"
+        ? raw.category
+        : "file",
+    sizeBytes:
+      Number.isFinite(sizeValue)
+        ? sizeValue
+        : 0,
+    sha256:
+      typeof raw.sha256 === "string"
+        ? raw.sha256
+        : null,
+    model:
+      typeof raw.model === "string"
+        ? raw.model
+        : null,
+    downloadUrl,
+    created_at:
+      typeof raw.created_at === "string"
+        ? raw.created_at
+        : null,
+    messageId: messageId ?? null,
+  };
+}
+
+function mergeGeneratedArtifacts(
+  current: GeneratedArtifact[],
+  incoming: GeneratedArtifact[],
+) {
+  const map =
+    new Map<string, GeneratedArtifact>();
+
+  for (const artifact of current) {
+    map.set(
+      artifact.id,
+      artifact,
+    );
+  }
+
+  for (const artifact of incoming) {
+    const previous =
+      map.get(artifact.id);
+
+    map.set(
+      artifact.id,
+      previous
+        ? {
+            ...previous,
+            ...artifact,
+            downloadUrl:
+              artifact.downloadUrl ||
+              previous.downloadUrl ||
+              null,
+            messageId:
+              artifact.messageId ||
+              previous.messageId ||
+              null,
+          }
+        : artifact,
+    );
+  }
+
+  return [...map.values()];
+}
+
+function formatArtifactSize(
+  sizeBytes: number,
+  language: OriaLanguage,
+) {
+  if (
+    !Number.isFinite(sizeBytes) ||
+    sizeBytes <= 0
+  ) {
+    return language === "en"
+      ? "Size unavailable"
+      : "Taille indisponible";
+  }
+
+  if (sizeBytes < 1024) {
+    return `${sizeBytes} o`;
+  }
+
+  if (sizeBytes < 1024 * 1024) {
+    return `${(sizeBytes / 1024).toFixed(1)} Ko`;
+  }
+
+  return `${(
+    sizeBytes /
+    (1024 * 1024)
+  ).toFixed(1)} Mo`;
 }
 
 function getMediaGenerationConfig(action: string) {
@@ -1104,6 +1385,7 @@ type LocalChatCache = {
   messages: Record<string, ChatMessage[]>;
   activeConversationId: string | null;
   selectedModel: string;
+  reasoningMode?: ReasoningMode;
   activeCapability: string | null;
   savedAt: string;
 };
@@ -1157,6 +1439,12 @@ async function readLocalCache(userId: string): Promise<LocalChatCache | null> {
         typeof parsed?.selectedModel === "string"
           ? parsed.selectedModel
           : "luna",
+      reasoningMode:
+        parsed?.reasoningMode === "fast" ||
+        parsed?.reasoningMode === "balanced" ||
+        parsed?.reasoningMode === "deep"
+          ? parsed.reasoningMode
+          : "balanced",
       activeCapability:
         typeof parsed?.activeCapability === "string"
           ? parsed.activeCapability
@@ -1723,6 +2011,80 @@ function MessageCopyButton({
         {copied ? CHAT_TEXT[language].copied : CHAT_TEXT[language].copy}
       </Text>
     </Pressable>
+  );
+}
+
+function CollapsibleUserMessage({
+  content,
+  language,
+}: {
+  content: string;
+  language: OriaLanguage;
+}) {
+  const styles = useThemedStyles();
+  const isDark = useIsDarkTheme();
+  const [expanded, setExpanded] =
+    useState(false);
+
+  const lineCount =
+    content.split("\n").length;
+
+  const collapsible =
+    content.length >
+      USER_MESSAGE_COLLAPSE_CHARACTERS ||
+    lineCount >
+      USER_MESSAGE_COLLAPSE_LINES;
+
+  return (
+    <View>
+      <Text
+        style={styles.userText}
+        numberOfLines={
+          collapsible && !expanded
+            ? 7
+            : undefined
+        }
+        ellipsizeMode="tail"
+      >
+        {content}
+      </Text>
+
+      {collapsible ? (
+        <Pressable
+          onPress={() =>
+            setExpanded(
+              (current) => !current,
+            )
+          }
+          style={styles.userMessageExpandButton}
+          accessibilityRole="button"
+          accessibilityState={{
+            expanded,
+          }}
+        >
+          <Ionicons
+            name={
+              expanded
+                ? "chevron-up"
+                : "chevron-down"
+            }
+            size={14}
+            color={themedIconColor("#ffffff", isDark)}
+          />
+          <Text
+            style={
+              styles.userMessageExpandText
+            }
+          >
+            {expanded
+              ? CHAT_TEXT[language]
+                  .showLess
+              : CHAT_TEXT[language]
+                  .showMore}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -2312,12 +2674,18 @@ export default function ChatPage() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [reasoningMenuOpen, setReasoningMenuOpen] = useState(false);
   const [selectedModel, setSelectedModel] = useState("luna");
+  const [reasoningMode, setReasoningMode] =
+    useState<ReasoningMode>("balanced");
+  const [activeGenerationId, setActiveGenerationId] =
+    useState<string | null>(null);
+  const [canModifyActiveGeneration, setCanModifyActiveGeneration] =
+    useState(false);
   const [message, setMessage] = useState("");
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [composerInputHeight, setComposerInputHeight] = useState(112);
   const composerInputRef = useRef<TextInput>(null);
-  const [bottomAreaHeight, setBottomAreaHeight] = useState(0);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -2450,6 +2818,8 @@ export default function ChatPage() {
   const [mediaPrompt, setMediaPrompt] = useState("");
   const [generatedMedia, setGeneratedMedia] =
     useState<GeneratedMedia[]>([]);
+  const [generatedArtifacts, setGeneratedArtifacts] =
+    useState<GeneratedArtifact[]>([]);
   const [mediaMenuOpen, setMediaMenuOpen] = useState(false);
   const [isLoadingMediaCapabilities, setIsLoadingMediaCapabilities] =
     useState(false);
@@ -2494,6 +2864,9 @@ export default function ChatPage() {
           setConversations(cache.conversations);
           setActiveConversationId(cache.activeConversationId);
           setSelectedModel(cache.selectedModel || "luna");
+          setReasoningMode(
+            cache.reasoningMode || "balanced",
+          );
           setActiveCapability(cache.activeCapability);
 
           if (cache.activeConversationId) {
@@ -2513,6 +2886,7 @@ export default function ChatPage() {
           loadWallet(trialState),
           loadConversations(cache),
           loadPersistedMedia(),
+          loadPersistedArtifacts(),
         ]);
       } catch (requestError) {
         console.error("Erreur initialisation Chat :", requestError);
@@ -2549,6 +2923,7 @@ export default function ChatPage() {
         },
         activeConversationId,
         selectedModel,
+        reasoningMode,
         activeCapability,
       });
     }, 300);
@@ -2559,6 +2934,7 @@ export default function ChatPage() {
     messages,
     activeConversationId,
     selectedModel,
+    reasoningMode,
     activeCapability,
     currentUserId,
     isInitialized,
@@ -2578,7 +2954,7 @@ export default function ChatPage() {
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [messages.length, isThinking, bottomAreaHeight, composerExpanded]);
+  }, [messages.length, isThinking, composerExpanded]);
 
   useEffect(() => {
     const subscription = Keyboard.addListener("keyboardDidHide", () => {
@@ -2586,7 +2962,8 @@ export default function ChatPage() {
         !message.trim() &&
         attachments.length === 0 &&
         !activeCapability &&
-        !modelMenuOpen
+        !modelMenuOpen &&
+        !reasoningMenuOpen
       ) {
         setComposerExpanded(false);
         setComposerInputHeight(112);
@@ -2599,6 +2976,7 @@ export default function ChatPage() {
     attachments.length,
     activeCapability,
     modelMenuOpen,
+    reasoningMenuOpen,
   ]);
 
   async function loadWallet(
@@ -2774,6 +3152,143 @@ export default function ChatPage() {
     }
   }
 
+  async function loadPersistedArtifacts() {
+    try {
+      const data = await apiFetch<{
+        success?: boolean;
+        artifacts?: Array<Record<string, unknown>>;
+      }>("/artifacts?limit=100");
+
+      const restored =
+        (data.artifacts ?? [])
+          .map((item) =>
+            normalizeGeneratedArtifact(
+              item,
+            ),
+          )
+          .filter(
+            (
+              item,
+            ): item is GeneratedArtifact =>
+              item !== null,
+          );
+
+      setGeneratedArtifacts(
+        restored,
+      );
+    } catch (requestError) {
+      console.error(
+        "Erreur chargement fichiers Oria :",
+        requestError,
+      );
+    }
+  }
+
+  function findArtifactsForMessage(
+    item: ChatMessage,
+  ) {
+    if (item.role !== "assistant") {
+      return [] as GeneratedArtifact[];
+    }
+
+    const markerIds =
+      extractArtifactIdsFromMessage(
+        item.content || "",
+      );
+
+    const byMarker =
+      markerIds
+        .map((artifactId) =>
+          generatedArtifacts.find(
+            (artifact) =>
+              artifact.id === artifactId,
+          ),
+        )
+        .filter(
+          (
+            artifact,
+          ): artifact is GeneratedArtifact =>
+            Boolean(artifact),
+        );
+
+    if (byMarker.length > 0) {
+      return byMarker;
+    }
+
+    return generatedArtifacts.filter(
+      (artifact) =>
+        artifact.messageId === item.id,
+    );
+  }
+
+  async function openArtifact(
+    artifact: GeneratedArtifact,
+  ) {
+    try {
+      const response = await apiFetch<{
+        success?: boolean;
+        artifact?: Record<string, unknown>;
+      }>(
+        `/artifacts/${artifact.id}`,
+      );
+
+      const refreshed =
+        response.artifact
+          ? normalizeGeneratedArtifact(
+              response.artifact,
+              artifact.messageId,
+            )
+          : null;
+
+      const downloadUrl =
+        refreshed?.downloadUrl ||
+        artifact.downloadUrl;
+
+      if (!downloadUrl) {
+        throw new Error(
+          language === "en"
+            ? "No download URL was returned."
+            : "Aucune URL de téléchargement n'a été retournée.",
+        );
+      }
+
+      if (refreshed) {
+        setGeneratedArtifacts(
+          (current) =>
+            mergeGeneratedArtifacts(
+              current,
+              [refreshed],
+            ),
+        );
+      }
+
+      const supported =
+        await Linking.canOpenURL(
+          downloadUrl,
+        );
+
+      if (!supported) {
+        throw new Error(
+          language === "en"
+            ? "This file cannot be opened on this device."
+            : "Ce fichier ne peut pas être ouvert sur cet appareil.",
+        );
+      }
+
+      await Linking.openURL(
+        downloadUrl,
+      );
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : language === "en"
+            ? "Unable to open the generated file."
+            : "Impossible d'ouvrir le fichier généré.",
+      );
+    }
+  }
+
   function findMediaForMessage(
     item: ChatMessage,
   ): GeneratedMedia | null {
@@ -2945,11 +3460,36 @@ export default function ChatPage() {
     }
 
     try {
-      const data = await apiFetch<{ messages: ChatMessage[] }>(
+      const data = await apiFetch<{
+        messages: ChatMessage[];
+        artifacts?: Array<Record<string, unknown>>;
+      }>(
         `/conversations/${conversationId}/messages`,
       );
 
       const remote = data.messages || [];
+
+      const remoteArtifacts =
+        (data.artifacts ?? [])
+          .map((item) =>
+            normalizeGeneratedArtifact(
+              item,
+            ),
+          )
+          .filter(
+            (
+              item,
+            ): item is GeneratedArtifact =>
+              item !== null,
+          );
+
+      setGeneratedArtifacts(
+        (current) =>
+          mergeGeneratedArtifacts(
+            current,
+            remoteArtifacts,
+          ),
+      );
 
       if (remote.length) {
         setMessages(remote);
@@ -3137,6 +3677,239 @@ export default function ChatPage() {
 
     setAttachments((current) => [...current, ...incoming]);
     setError(null);
+  }
+
+  function getLargeInsertedText(
+    previousValue: string,
+    nextValue: string,
+  ) {
+    if (
+      nextValue.length <=
+      previousValue.length
+    ) {
+      return null;
+    }
+
+    let prefixLength = 0;
+
+    while (
+      prefixLength <
+        previousValue.length &&
+      prefixLength <
+        nextValue.length &&
+      previousValue[prefixLength] ===
+        nextValue[prefixLength]
+    ) {
+      prefixLength++;
+    }
+
+    let suffixLength = 0;
+
+    while (
+      suffixLength <
+        previousValue.length -
+          prefixLength &&
+      suffixLength <
+        nextValue.length -
+          prefixLength &&
+      previousValue[
+        previousValue.length -
+          1 -
+          suffixLength
+      ] ===
+        nextValue[
+          nextValue.length -
+            1 -
+            suffixLength
+        ]
+    ) {
+      suffixLength++;
+    }
+
+    const insertedEnd =
+      nextValue.length -
+      suffixLength;
+
+    const insertedText =
+      nextValue.slice(
+        prefixLength,
+        insertedEnd,
+      );
+
+    if (
+      insertedText.length <
+      LONG_PASTE_THRESHOLD
+    ) {
+      return null;
+    }
+
+    return {
+      insertedText,
+      remainingText:
+        nextValue.slice(
+          0,
+          prefixLength,
+        ) +
+        nextValue.slice(
+          insertedEnd,
+        ),
+    };
+  }
+
+  async function createPastedTextAttachment(
+    pastedText: string,
+  ) {
+    if (
+      attachments.length >=
+      MAX_ATTACHMENTS
+    ) {
+      setError(
+        interpolate(
+          t.maxAttachments,
+          {
+            max: MAX_ATTACHMENTS,
+          },
+        ),
+      );
+      return false;
+    }
+
+    try {
+      const filename =
+        `texte-colle-${Date.now()}.txt`;
+
+      const file =
+        new ExpoFile(
+          Paths.cache,
+          filename,
+        );
+
+      file.create();
+
+      await file.write(
+        pastedText,
+      );
+
+      const attachment: ChatAttachment = {
+        id: uid(),
+        uri: file.uri,
+        name: filename,
+        mimeType: "text/plain",
+        kind: "file",
+        size: file.size || pastedText.length,
+      };
+
+      setAttachments(
+        (current) => [
+          ...current,
+          attachment,
+        ].slice(
+          0,
+          MAX_ATTACHMENTS,
+        ),
+      );
+
+      setComposerExpanded(true);
+
+      return true;
+    } catch (pasteError) {
+      console.error(
+        "Erreur conversion collage en fichier :",
+        pasteError,
+      );
+
+      setError(
+        t.longPasteFailed,
+      );
+
+      return false;
+    }
+  }
+
+  async function handleComposerTextChange(
+    nextValue: string,
+  ) {
+    const largeInsert =
+      getLargeInsertedText(
+        message,
+        nextValue,
+      );
+
+    if (!largeInsert) {
+      setMessage(
+        nextValue,
+      );
+      return;
+    }
+
+    const created =
+      await createPastedTextAttachment(
+        largeInsert.insertedText,
+      );
+
+    if (created) {
+      setMessage(
+        largeInsert.remainingText,
+      );
+      setError(
+        t.longPasteConverted,
+      );
+    } else {
+      // Ne jamais perdre le contenu si la conversion locale échoue.
+      setMessage(
+        nextValue,
+      );
+    }
+  }
+
+  async function selectReasoningMode(
+    mode: ReasoningMode,
+  ) {
+    setReasoningMode(mode);
+    setReasoningMenuOpen(false);
+    setModelMenuOpen(false);
+
+    if (
+      !isThinking ||
+      !activeGenerationId ||
+      !canModifyActiveGeneration
+    ) {
+      return;
+    }
+
+    try {
+      await apiFetch<{
+        success?: boolean;
+        accepted?: boolean;
+        strategy?: string;
+        reasoning_mode?: ReasoningMode;
+      }>(
+        "/ai/chat/control",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            generation_id:
+              activeGenerationId,
+            reasoning_mode: mode,
+          }),
+        },
+      );
+    } catch (requestError) {
+      console.error(
+        "Modification du raisonnement impossible :",
+        requestError,
+      );
+
+      // Le mode choisi reste mémorisé pour le prochain message,
+      // même si la génération actuelle n'est plus pilotable.
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : language === "en"
+            ? "Unable to change reasoning during this response."
+            : "Impossible de changer la réflexion pendant cette réponse.",
+      );
+    }
   }
 
   function removeAttachment(id: string) {
@@ -3368,6 +4141,28 @@ export default function ChatPage() {
 
   async function handleSendMessage() {
     const content = message.trim();
+
+    // Garde-fou : si un très long texte a contourné la détection de collage
+    // (autofill, clavier tiers, etc.), il devient un fichier avant envoi.
+    if (
+      content.length >=
+      LONG_PASTE_THRESHOLD
+    ) {
+      const created =
+        await createPastedTextAttachment(
+          content,
+        );
+
+      if (created) {
+        setMessage("");
+        setError(
+          t.longPasteConverted,
+        );
+      }
+
+      return;
+    }
+
     const selectedTrial = trials[selectedModel];
 
     if (selectedTrial && selectedTrial.remaining <= 0) {
@@ -3471,21 +4266,37 @@ export default function ChatPage() {
     setError(null);
 
     try {
-      try {
-        await saveMessageRemote(userMessage);
-      } catch (saveError) {
-        console.error(
-          "Erreur sauvegarde message utilisateur :",
-          saveError,
+      // Ne pas bloquer le premier token sur l'écriture Supabase.
+      // Le message est déjà visible localement et se synchronise en parallèle.
+      const userMessageSavePromise =
+        saveMessageRemote(
+          userMessage,
+        ).catch(
+          (saveError) => {
+            console.error(
+              "Erreur sauvegarde message utilisateur :",
+              saveError,
+            );
+            return null;
+          },
         );
-      }
 
       const formData = new FormData();
+      const generationId = uid();
+
+      setActiveGenerationId(
+        generationId,
+      );
+      setCanModifyActiveGeneration(
+        false,
+      );
 
       formData.append("model", selectedModel);
       formData.append("message", content);
       formData.append("web", String(webEnabled));
       formData.append("conversation_id", conversationId);
+      formData.append("reasoning_mode", reasoningMode);
+      formData.append("generation_id", generationId);
 
       for (const attachment of attachments) {
         /*
@@ -3515,6 +4326,7 @@ export default function ChatPage() {
       const assistantCreatedAt = new Date().toISOString();
 
       let assistantContent = "";
+      let streamedArtifacts: GeneratedArtifact[] = [];
 
       setMessages((current) => [
         ...current,
@@ -3577,6 +4389,78 @@ export default function ChatPage() {
               continue;
             }
 
+            if (eventName === "start") {
+              setCanModifyActiveGeneration(
+                Boolean(
+                  eventData.live_modify,
+                ),
+              );
+              continue;
+            }
+
+            if (
+              eventName ===
+              "generation_restarted"
+            ) {
+              assistantContent = "";
+
+              setMessages(
+                (current) =>
+                  current.map((item) =>
+                    item.id === assistantId
+                      ? {
+                          ...item,
+                          content: "",
+                        }
+                      : item,
+                  ),
+              );
+
+              continue;
+            }
+
+            if (eventName === "artifact") {
+              const artifact =
+                normalizeGeneratedArtifact(
+                  eventData,
+                  assistantId,
+                );
+
+              if (artifact) {
+                streamedArtifacts =
+                  mergeGeneratedArtifacts(
+                    streamedArtifacts,
+                    [artifact],
+                  );
+
+                setGeneratedArtifacts(
+                  (current) =>
+                    mergeGeneratedArtifacts(
+                      current,
+                      [artifact],
+                    ),
+                );
+              }
+
+              continue;
+            }
+
+            if (
+              eventName ===
+              "artifact_error"
+            ) {
+              if (
+                typeof eventData.detail ===
+                "string"
+              ) {
+                setError(
+                  eventData.detail,
+                );
+              }
+
+              continue;
+            }
+
             if (eventName === "delta") {
               const delta =
                 typeof eventData.content === "string"
@@ -3608,14 +4492,200 @@ export default function ChatPage() {
             }
 
             if (eventName === "done") {
+              const doneArtifacts =
+                Array.isArray(
+                  eventData.artifacts,
+                )
+                  ? eventData.artifacts
+                      .map((item) =>
+                        item &&
+                        typeof item ===
+                          "object"
+                          ? normalizeGeneratedArtifact(
+                              item as Record<
+                                string,
+                                unknown
+                              >,
+                              assistantId,
+                            )
+                          : null,
+                      )
+                      .filter(
+                        (
+                          item,
+                        ): item is GeneratedArtifact =>
+                          item !== null,
+                      )
+                  : [];
+
+              if (
+                doneArtifacts.length > 0
+              ) {
+                streamedArtifacts =
+                  mergeGeneratedArtifacts(
+                    streamedArtifacts,
+                    doneArtifacts,
+                  );
+
+                setGeneratedArtifacts(
+                  (current) =>
+                    mergeGeneratedArtifacts(
+                      current,
+                      doneArtifacts,
+                    ),
+                );
+              }
+
               done = true;
               break;
             }
           }
         }
       } else {
-        const text = await streamResponse.text();
-        assistantContent = text;
+        // Fallback pour les runtimes React Native qui ne donnent pas
+        // accès à ReadableStream.getReader(). On parse tout de même le
+        // corps SSE complet au lieu d'afficher "event: delta" brut.
+        const rawSse =
+          await streamResponse.text();
+
+        const rawEvents =
+          rawSse.split("\n\n");
+
+        for (const rawEvent of rawEvents) {
+          if (!rawEvent.trim()) {
+            continue;
+          }
+
+          let eventName =
+            "message";
+          let dataText = "";
+
+          for (
+            const line of rawEvent.split(
+              "\n",
+            )
+          ) {
+            if (
+              line.startsWith(
+                "event:",
+              )
+            ) {
+              eventName =
+                line
+                  .slice(6)
+                  .trim();
+            }
+
+            if (
+              line.startsWith(
+                "data:",
+              )
+            ) {
+              dataText +=
+                line
+                  .slice(5)
+                  .trim();
+            }
+          }
+
+          if (!dataText) {
+            continue;
+          }
+
+          let eventData:
+            Record<string, unknown>;
+
+          try {
+            eventData =
+              JSON.parse(
+                dataText,
+              );
+          } catch {
+            continue;
+          }
+
+          if (
+            eventName ===
+            "generation_restarted"
+          ) {
+            assistantContent = "";
+            continue;
+          }
+
+          if (eventName === "delta") {
+            const delta =
+              typeof eventData.content ===
+              "string"
+                ? eventData.content
+                : "";
+
+            assistantContent +=
+              delta;
+          }
+
+          if (eventName === "artifact") {
+            const artifact =
+              normalizeGeneratedArtifact(
+                eventData,
+                assistantId,
+              );
+
+            if (artifact) {
+              streamedArtifacts =
+                mergeGeneratedArtifacts(
+                  streamedArtifacts,
+                  [artifact],
+                );
+            }
+          }
+
+          if (
+            eventName === "done" &&
+            Array.isArray(
+              eventData.artifacts,
+            )
+          ) {
+            const doneArtifacts =
+              eventData.artifacts
+                .map((item) =>
+                  item &&
+                  typeof item ===
+                    "object"
+                    ? normalizeGeneratedArtifact(
+                        item as Record<
+                          string,
+                          unknown
+                        >,
+                        assistantId,
+                      )
+                    : null,
+                )
+                .filter(
+                  (
+                    item,
+                  ): item is GeneratedArtifact =>
+                    item !== null,
+                );
+
+            streamedArtifacts =
+              mergeGeneratedArtifacts(
+                streamedArtifacts,
+                doneArtifacts,
+              );
+          }
+        }
+
+        if (
+          streamedArtifacts.length > 0
+        ) {
+          setGeneratedArtifacts(
+            (current) =>
+              mergeGeneratedArtifacts(
+                current,
+                streamedArtifacts,
+              ),
+          );
+        }
       }
 
       if (!assistantContent.trim()) {
@@ -3624,11 +4694,22 @@ export default function ChatPage() {
         );
       }
 
+      const artifactMarkers =
+        buildArtifactMessageMarkers(
+          streamedArtifacts,
+        );
+
+      const persistedAssistantContent =
+        artifactMarkers
+          ? `${assistantContent}\n\n${artifactMarkers}`
+          : assistantContent;
+
       const assistantMessage: ChatMessage = {
         id: assistantId,
         conversationId,
         role: "assistant",
-        content: assistantContent,
+        content:
+          persistedAssistantContent,
         createdAt: assistantCreatedAt,
       };
 
@@ -3639,6 +4720,10 @@ export default function ChatPage() {
             : item,
         ),
       );
+
+      // La sauvegarde utilisateur n'est attendue qu'après le streaming :
+      // elle n'ajoute donc plus de latence avant le premier mot.
+      await userMessageSavePromise;
 
       try {
         await saveMessageRemote(assistantMessage);
@@ -3684,10 +4769,15 @@ export default function ChatPage() {
       ]);
     } finally {
       setIsThinking(false);
+      setActiveGenerationId(null);
+      setCanModifyActiveGeneration(false);
     }
   }
 
   function selectCapability(label: string) {
+    setModelMenuOpen(false);
+    setReasoningMenuOpen(false);
+
     if (label === "Fichier") {
       void pickFiles();
       return;
@@ -3734,6 +4824,8 @@ export default function ChatPage() {
 
   function renderMessage({ item }: { item: ChatMessage }) {
     const media = findMediaForMessage(item);
+    const artifactsForMessage =
+      findArtifactsForMessage(item);
     const copyValue =
       item.role === "assistant"
         ? getVisibleMessageContent(item.content)
@@ -3761,7 +4853,10 @@ export default function ChatPage() {
               language={language}
             />
           ) : (
-            <Text style={styles.userText}>{item.content}</Text>
+            <CollapsibleUserMessage
+              content={item.content}
+              language={language}
+            />
           )}
         </View>
 
@@ -3801,6 +4896,69 @@ export default function ChatPage() {
               />
               <Text style={styles.openMediaText}>{t.open}</Text>
             </Pressable>
+          </View>
+        ) : null}
+
+        {artifactsForMessage.length > 0 ? (
+          <View style={styles.artifactList}>
+            {artifactsForMessage.map(
+              (artifact) => (
+                <View
+                  key={artifact.id}
+                  style={styles.artifactCard}
+                >
+                  <View style={styles.artifactIcon}>
+                    <Ionicons
+                      name="document-text-outline"
+                      size={20}
+                      color={themedIconColor(
+                        "#555555",
+                        isDark,
+                      )}
+                    />
+                  </View>
+
+                  <View style={styles.artifactInfo}>
+                    <Text
+                      numberOfLines={1}
+                      style={styles.artifactName}
+                    >
+                      {artifact.filename}
+                    </Text>
+
+                    <Text style={styles.artifactMeta}>
+                      {(artifact.extension ||
+                        artifact.category).toUpperCase()}
+                      {" · "}
+                      {formatArtifactSize(
+                        artifact.sizeBytes,
+                        language,
+                      )}
+                    </Text>
+                  </View>
+
+                  <Pressable
+                    onPress={() =>
+                      void openArtifact(
+                        artifact,
+                      )
+                    }
+                    style={styles.artifactDownloadButton}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${t.download} ${artifact.filename}`}
+                  >
+                    <Ionicons
+                      name="download-outline"
+                      size={16}
+                      color={themedIconColor(
+                        "#111111",
+                        isDark,
+                      )}
+                    />
+                  </Pressable>
+                </View>
+              ),
+            )}
           </View>
         ) : null}
       </View>
@@ -3921,15 +5079,7 @@ export default function ChatPage() {
               data={messages}
               keyExtractor={(item) => item.id}
               renderItem={renderMessage}
-              contentContainerStyle={[
-                styles.messageList,
-                {
-                  paddingBottom: Math.max(
-                    34,
-                    bottomAreaHeight + 20,
-                  ),
-                },
-              ]}
+              contentContainerStyle={styles.messageList}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode={
@@ -3957,12 +5107,6 @@ export default function ChatPage() {
                 ),
               },
             ]}
-            onLayout={(event) => {
-              const height = Math.ceil(event.nativeEvent.layout.height);
-              setBottomAreaHeight((current) =>
-                Math.abs(current - height) >= 4 ? height : current,
-              );
-            }}
           >
             <View style={styles.modelSelectorWrap}>
               {modelMenuOpen ? (
@@ -4003,6 +5147,7 @@ export default function ChatPage() {
 
                             setSelectedModel(model.id);
                             setModelMenuOpen(false);
+                            setReasoningMenuOpen(false);
                           }}
                         />
                       );
@@ -4011,45 +5156,161 @@ export default function ChatPage() {
                 </View>
               ) : null}
 
-              <Pressable
-                style={styles.modelSelector}
-                onPress={() => {
-                  if (availableModels.length > 1) {
-                    setModelMenuOpen((current) => !current);
-                  }
-                }}
-              >
-                <Ionicons
-                  name="sparkles-outline"
-                  size={17}
-                  color={themedIconColor("#111111", isDark)}
-                />
-                <Text style={styles.modelSelectorText}>
-                  {models.find(
-                    (model) => model.id === selectedModel,
-                  )?.name || t.model}
-                </Text>
+              {reasoningMenuOpen ? (
+                <View style={styles.reasoningMenu}>
+                  {REASONING_OPTIONS.map((option) => {
+                    const active =
+                      reasoningMode === option.id;
 
-                {wallet?.pack_id &&
-                TRIAL_MODEL_BY_PACK[wallet.pack_id] === selectedModel ? (
-                  <Text style={styles.trialBadge}>
-                    {t.trial}
-                    {trials[selectedModel]
-                      ? ` · ${trials[selectedModel].remaining}/${trials[selectedModel].max}`
-                      : ""}
+                    return (
+                      <Pressable
+                        key={option.id}
+                        onPress={() =>
+                          void selectReasoningMode(
+                            option.id,
+                          )
+                        }
+                        style={[
+                          styles.reasoningOption,
+                          active &&
+                            styles.reasoningOptionActive,
+                        ]}
+                      >
+                        <View style={styles.reasoningOptionIcon}>
+                          <Ionicons
+                            name={option.icon}
+                            size={17}
+                            color={themedIconColor(
+                              "#222222",
+                              isDark,
+                            )}
+                          />
+                        </View>
+
+                        <View style={styles.flex}>
+                          <Text style={styles.reasoningOptionTitle}>
+                            {option.label[language]}
+                          </Text>
+                          <Text style={styles.reasoningOptionDescription}>
+                            {option.description[language]}
+                          </Text>
+                        </View>
+
+                        {active ? (
+                          <Ionicons
+                            name="checkmark"
+                            size={17}
+                            color={themedIconColor(
+                              "#111111",
+                              isDark,
+                            )}
+                          />
+                        ) : null}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : null}
+
+              <View style={styles.modelControlsRow}>
+                <Pressable
+                  style={[
+                    styles.modelSelector,
+                    styles.modelSelectorFlexible,
+                  ]}
+                  onPress={() => {
+                    setReasoningMenuOpen(false);
+
+                    if (availableModels.length > 1) {
+                      setModelMenuOpen(
+                        (current) => !current,
+                      );
+                    }
+                  }}
+                >
+                  <Ionicons
+                    name="sparkles-outline"
+                    size={17}
+                    color={themedIconColor("#111111", isDark)}
+                  />
+                  <Text
+                    numberOfLines={1}
+                    style={styles.modelSelectorText}
+                  >
+                    {models.find(
+                      (model) => model.id === selectedModel,
+                    )?.name || t.model}
                   </Text>
-                ) : null}
 
-                <Ionicons
-                  name={
-                    modelMenuOpen
-                      ? "chevron-up"
-                      : "chevron-down"
+                  {wallet?.pack_id &&
+                  TRIAL_MODEL_BY_PACK[wallet.pack_id] === selectedModel ? (
+                    <Text style={styles.trialBadge}>
+                      {t.trial}
+                      {trials[selectedModel]
+                        ? ` · ${trials[selectedModel].remaining}/${trials[selectedModel].max}`
+                        : ""}
+                    </Text>
+                  ) : null}
+
+                  <Ionicons
+                    name={
+                      modelMenuOpen
+                        ? "chevron-up"
+                        : "chevron-down"
+                    }
+                    size={15}
+                    color={themedIconColor("#555555", isDark)}
+                  />
+                </Pressable>
+
+                <Pressable
+                  style={styles.reasoningSelector}
+                  onPress={() => {
+                    setModelMenuOpen(false);
+                    setReasoningMenuOpen(
+                      (current) => !current,
+                    );
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    getReasoningOption(
+                      reasoningMode,
+                    ).label[language]
                   }
-                  size={15}
-                  color={themedIconColor("#555555", isDark)}
-                />
-              </Pressable>
+                >
+                  <Ionicons
+                    name={
+                      getReasoningOption(
+                        reasoningMode,
+                      ).icon
+                    }
+                    size={16}
+                    color={themedIconColor(
+                      "#555555",
+                      isDark,
+                    )}
+                  />
+                  <Text style={styles.reasoningSelectorText}>
+                    {
+                      getReasoningOption(
+                        reasoningMode,
+                      ).label[language]
+                    }
+                  </Text>
+                  <Ionicons
+                    name={
+                      reasoningMenuOpen
+                        ? "chevron-up"
+                        : "chevron-down"
+                    }
+                    size={14}
+                    color={themedIconColor(
+                      "#777777",
+                      isDark,
+                    )}
+                  />
+                </Pressable>
+              </View>
             </View>
 
             {activeCapability === "Recherche Web" ? (
@@ -4393,7 +5654,11 @@ export default function ChatPage() {
               <TextInput
                 ref={composerInputRef}
                 value={message}
-                onChangeText={setMessage}
+                onChangeText={(value) =>
+                  void handleComposerTextChange(
+                    value,
+                  )
+                }
                 placeholder={
                   activeCapability === "Création"
                     ? t.creationPrompt
@@ -4416,6 +5681,7 @@ export default function ChatPage() {
                 onFocus={() => {
                   setComposerExpanded(true);
                   setModelMenuOpen(false);
+                  setReasoningMenuOpen(false);
                   setComposerInputHeight((current) => Math.max(112, current));
                 }}
                 onBlur={() => undefined}
@@ -4598,7 +5864,10 @@ export default function ChatPage() {
               <Text style={styles.disclaimer}>
                 {interpolate(t.attachmentDisclaimer, {
                   max: MAX_ATTACHMENTS,
-                })}
+                })}{" "}
+                {language === "en"
+                  ? "Very long pasted text is automatically converted into a text file."
+                  : "Les collages très longs sont automatiquement convertis en fichier texte."}
               </Text>
             ) : null}
           </View>
@@ -4766,9 +6035,11 @@ export default function ChatPage() {
                     <Text style={styles.drawerLinkText}>
                       {t.myCreations}
                     </Text>
-                    {generatedMedia.length > 0 ? (
+                    {(generatedMedia.length +
+                      generatedArtifacts.length) > 0 ? (
                       <Text style={styles.drawerCount}>
-                        {generatedMedia.length}
+                        {generatedMedia.length +
+                          generatedArtifacts.length}
                       </Text>
                     ) : null}
                   </Pressable>
@@ -4986,7 +6257,7 @@ const baseStyles = StyleSheet.create({
   messageList: {
     paddingHorizontal: 14,
     paddingTop: 20,
-    paddingBottom: 34,
+    paddingBottom: 20,
     gap: 18,
   },
   messageRow: {
@@ -5041,6 +6312,23 @@ const baseStyles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 14,
     lineHeight: 21,
+  },
+  userMessageExpandButton: {
+    marginTop: 8,
+    alignSelf: "flex-start",
+    minHeight: 28,
+    paddingHorizontal: 8,
+    borderRadius: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  userMessageExpandText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "600",
+    opacity: 0.86,
   },
   messageText: {
     color: "#1b1b19",
@@ -5230,14 +6518,62 @@ const baseStyles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
   },
+  artifactList: {
+    marginTop: 9,
+    width: "94%",
+    gap: 7,
+  },
+  artifactCard: {
+    minHeight: 64,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: "#deded9",
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  artifactIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#eeeeeb",
+  },
+  artifactInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  artifactName: {
+    color: "#22221f",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  artifactMeta: {
+    marginTop: 3,
+    color: "#777771",
+    fontSize: 9,
+    fontWeight: "500",
+  },
+  artifactDownloadButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#deded9",
+    backgroundColor: "#f7f7f4",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   bottomArea: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
+    flexShrink: 0,
     zIndex: 20,
     elevation: 20,
     paddingHorizontal: 13,
+    paddingTop: 6,
     backgroundColor: "#f8f8f6",
   },
   modelSelectorWrap: {
@@ -5245,6 +6581,80 @@ const baseStyles = StyleSheet.create({
     width: "100%",
     zIndex: 60,
     elevation: 60,
+  },
+  modelControlsRow: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  modelSelectorFlexible: {
+    flex: 1,
+    minWidth: 0,
+  },
+  reasoningSelector: {
+    minHeight: 39,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#ddddda",
+    backgroundColor: "#ffffff",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 8,
+  },
+  reasoningSelectorText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#4c4c47",
+  },
+  reasoningMenu: {
+    position: "absolute",
+    right: 0,
+    bottom: 55,
+    width: 270,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#ddddda",
+    backgroundColor: "#ffffff",
+    padding: 7,
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 7 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 19,
+  },
+  reasoningOption: {
+    minHeight: 58,
+    borderRadius: 13,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  reasoningOptionActive: {
+    backgroundColor: "#f0f0ed",
+  },
+  reasoningOptionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#f3f3f0",
+  },
+  reasoningOptionTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#22221f",
+  },
+  reasoningOptionDescription: {
+    marginTop: 2,
+    fontSize: 9,
+    lineHeight: 13,
+    color: "#777771",
   },
   modelMenu: {
     position: "absolute",

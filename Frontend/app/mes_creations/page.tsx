@@ -2,6 +2,7 @@
 
 import {
   Download,
+  FileText,
   Image as ImageIcon,
   Loader2,
   Play,
@@ -12,39 +13,64 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+
 import { createClient } from "@/lib/supabase/client";
 
-type MediaType = "image" | "video";
-type FilterType = "all" | MediaType;
+type OriaLanguage = "fr" | "en";
+type CreationKind = "image" | "video" | "artifact";
+type FilterType = "all" | CreationKind;
 
-type MediaItem = {
+type CreationItem = {
   id: string;
   user_id?: string;
-  media_type?: MediaType;
-  type?: MediaType;
+  conversation_id?: string | null;
+  source_message_id?: string | null;
+
+  creation_type?: string | null;
+  media_type?: "image" | "video";
+  type?: string | null;
+
   prompt?: string | null;
-  storage_path?: string | null;
-  public_url?: string | null;
-  url?: string | null;
-  mime_type?: string | null;
-  size_bytes?: number | null;
-  size?: number | null;
-  metadata?: Record<string, unknown> | null;
   action?: string | null;
   model?: string | null;
   credits_cost?: number | null;
-  seconds?: number | null;
+
+  filename?: string | null;
+  extension?: string | null;
+  category?: string | null;
+  sha256?: string | null;
+
+  storage_path?: string | null;
+  public_url?: string | null;
+  media_url?: string | null;
+  download_url?: string | null;
+  url?: string | null;
+
+  mime_type?: string | null;
+  size_bytes?: number | null;
+  size?: number | null;
+
+  metadata?: Record<string, unknown> | null;
+  seconds?: number | string | null;
+
   created_at?: string | null;
   updated_at?: string | null;
 };
 
+type CreationsResponse = {
+  success?: boolean;
+  creations?: CreationItem[];
+  count?: number;
+  media_count?: number;
+  artifact_count?: number;
+  detail?: string;
+  message?: string;
+};
+
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
+  process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ||
   "";
-
-
-type OriaLanguage = "fr" | "en";
 
 const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
 
@@ -53,232 +79,158 @@ const UI = {
     unknownDate: "Date inconnue",
     backToChat: "Retour au chat",
     myCreations: "Mes créations",
-    creationsDescription:
-      "Retrouvez ici vos images et vidéos générées avec Oria.",
+    description:
+      "Retrouvez ici vos images, vidéos et fichiers générés avec Oria.",
     refresh: "Actualiser",
     creation: "création",
     creations: "créations",
     image: "image",
-    images: "images",
+    images: "Images",
     video: "vidéo",
-    videos: "vidéos",
+    videos: "Vidéos",
+    file: "fichier",
+    files: "Fichiers",
     all: "Toutes",
     close: "Fermer",
-    loadingCreations: "Chargement de vos créations…",
-    noCreation: "Aucune création pour le moment",
-    noCreationDescription:
-      "Vos images et vidéos générées avec Oria apparaîtront automatiquement ici.",
+    loading: "Chargement de vos créations…",
+    emptyTitle: "Aucune création pour le moment",
+    emptyDescription:
+      "Vos images, vidéos et fichiers générés avec Oria apparaîtront automatiquement ici.",
     createSomething: "Créer quelque chose",
-    noCreationInCategory: "Aucune création dans cette catégorie.",
-    openImageCreation: "Ouvrir la création image",
-    openVideoCreation: "Ouvrir la vidéo",
+    emptyFilter: "Aucune création dans cette catégorie.",
     generatedWithOria: "Création générée avec Oria",
     noDescription: "Création sans description",
     open: "Ouvrir",
     download: "Télécharger",
     delete: "Supprimer",
-    oriaCreation: "Création Oria",
     fileUnavailable: "Ce fichier n'est plus disponible.",
     sessionExpired: "Votre session a expiré. Veuillez vous reconnecter.",
-    backendNotConfigured:
+    backendMissing:
       "L'URL du backend n'est pas configurée dans le frontend.",
-    fetchCreationsError: "Impossible de récupérer vos créations.",
-    loadingError: "Une erreur est survenue pendant le chargement.",
-    creationFileUnavailable:
-      "Le fichier de cette création n'est plus disponible.",
+    loadFailed: "Impossible de récupérer vos créations.",
+    loadError: "Une erreur est survenue pendant le chargement.",
     downloadError: "Téléchargement impossible.",
     deleteConfirm: "Supprimer définitivement cette création ?",
-    deleteCreationError: "Impossible de supprimer cette création.",
+    deleteError: "Impossible de supprimer cette création.",
+    document: "Fichier",
   },
   en: {
     unknownDate: "Unknown date",
     backToChat: "Back to chat",
     myCreations: "My creations",
-    creationsDescription:
-      "Find all the images and videos you generated with Oria.",
+    description:
+      "Find your images, videos and files generated with Oria.",
     refresh: "Refresh",
     creation: "creation",
     creations: "creations",
     image: "image",
-    images: "images",
+    images: "Images",
     video: "video",
-    videos: "videos",
+    videos: "Videos",
+    file: "file",
+    files: "Files",
     all: "All",
     close: "Close",
-    loadingCreations: "Loading your creations…",
-    noCreation: "No creations yet",
-    noCreationDescription:
-      "Images and videos generated with Oria will automatically appear here.",
+    loading: "Loading your creations…",
+    emptyTitle: "No creations yet",
+    emptyDescription:
+      "Your images, videos and files generated with Oria will automatically appear here.",
     createSomething: "Create something",
-    noCreationInCategory: "No creations in this category.",
-    openImageCreation: "Open image creation",
-    openVideoCreation: "Open video",
+    emptyFilter: "No creations in this category.",
     generatedWithOria: "Creation generated with Oria",
-    noDescription: "Creation without a description",
+    noDescription: "Creation without description",
     open: "Open",
     download: "Download",
     delete: "Delete",
-    oriaCreation: "Oria creation",
     fileUnavailable: "This file is no longer available.",
     sessionExpired: "Your session has expired. Please sign in again.",
-    backendNotConfigured:
+    backendMissing:
       "The backend URL is not configured in the frontend.",
-    fetchCreationsError: "Unable to retrieve your creations.",
-    loadingError: "An error occurred while loading.",
-    creationFileUnavailable:
-      "The file for this creation is no longer available.",
+    loadFailed: "Unable to retrieve your creations.",
+    loadError: "An error occurred while loading.",
     downloadError: "Download failed.",
     deleteConfirm: "Permanently delete this creation?",
-    deleteCreationError: "Unable to delete this creation.",
+    deleteError: "Unable to delete this creation.",
+    document: "File",
   },
 } as const;
 
 function getInitialOriaLanguage(): OriaLanguage {
-  if (typeof window === "undefined") {
-    return "fr";
-  }
+  if (typeof window === "undefined") return "fr";
 
-  const saved = window.localStorage.getItem(
-    ORIA_LANGUAGE_STORAGE_KEY,
-  );
+  const saved = window.localStorage.getItem(ORIA_LANGUAGE_STORAGE_KEY);
+  if (saved === "fr" || saved === "en") return saved;
 
-  if (saved === "fr" || saved === "en") {
-    return saved;
-  }
-
-  return window.navigator.language
-    .toLowerCase()
-    .startsWith("en")
+  return window.navigator.language.toLowerCase().startsWith("en")
     ? "en"
     : "fr";
 }
 
-function localizeFrontendError(
-  message: string,
-  language: OriaLanguage,
-): string {
-  if (language === "fr") {
-    return message;
+function getCreationKind(item: CreationItem): CreationKind {
+  const explicit = String(item.creation_type || "").toLowerCase();
+  const mediaType = String(item.media_type || item.type || "").toLowerCase();
+
+  if (explicit === "artifact" || mediaType === "file") {
+    return "artifact";
   }
 
-  const exact: Record<string, string> = {
-    "Votre session a expiré. Veuillez vous reconnecter.":
-      UI.en.sessionExpired,
-    "L'URL du backend n'est pas configurée dans le frontend.":
-      UI.en.backendNotConfigured,
-    "Impossible de récupérer vos créations.":
-      UI.en.fetchCreationsError,
-    "Une erreur est survenue pendant le chargement.":
-      UI.en.loadingError,
-    "Le fichier de cette création n'est plus disponible.":
-      UI.en.creationFileUnavailable,
-    "Téléchargement impossible.":
-      UI.en.downloadError,
-    "Impossible de supprimer cette création.":
-      UI.en.deleteCreationError,
-  };
-
-  return exact[message] ?? message;
-}
-
-const getMediaType = (media: MediaItem): MediaType => {
-  if (media.media_type === "video" || media.type === "video") {
+  if (explicit === "video" || mediaType === "video") {
     return "video";
   }
 
   return "image";
-};
+}
 
-const getMediaUrl = (media: MediaItem): string | null =>
-  media.public_url || media.url || null;
-
-/**
- * Retourne toujours une URL directement exploitable par le navigateur.
- *
- * Cas pris en charge :
- * 1. URL publique Supabase :
- *    /storage/v1/object/public/generated-media/...
- * 2. Ancienne URL signée Supabase :
- *    /storage/v1/object/sign/generated-media/...?...token=...
- *
- * Lorsque l'ancienne URL signée est rencontrée, elle est convertie
- * localement en URL publique permanente. Le navigateur n'a donc plus
- * besoin d'appeler le backend /media/{id}.
- */
-const normalizeMediaUrl = (
-  media: MediaItem,
-): string | null => {
-  const rawValue =
-    media.public_url ||
-    media.url ||
+function getMediaUrl(item: CreationItem): string | null {
+  const value =
+    item.public_url ||
+    item.media_url ||
+    item.url ||
     null;
 
-  if (
-    !rawValue ||
-    typeof rawValue !== "string"
-  ) {
-    return null;
-  }
+  if (!value || typeof value !== "string") return null;
 
-  const value = rawValue.trim();
+  const trimmed = value.trim();
+  return trimmed || null;
+}
 
-  if (!value) {
-    return null;
-  }
+function getArtifactUrl(item: CreationItem): string | null {
+  const value =
+    item.download_url ||
+    item.url ||
+    null;
 
-  try {
-    const parsed = new URL(value);
+  if (!value || typeof value !== "string") return null;
 
-    if (
-      parsed.pathname.includes(
-        "/storage/v1/object/sign/",
-      )
-    ) {
-      const publicPath =
-        parsed.pathname.replace(
-          "/storage/v1/object/sign/",
-          "/storage/v1/object/public/",
-        );
+  const trimmed = value.trim();
+  return trimmed || null;
+}
 
-      return `${parsed.origin}${publicPath}`;
-    }
-
-    return value;
-  } catch {
-    // Si une valeur relative est exceptionnellement renvoyée,
-    // on la conserve telle quelle plutôt que de casser l'affichage.
-    return value;
-  }
-};
-
-const formatDate = (
+function formatDate(
   value: string | null | undefined,
   language: OriaLanguage,
-) => {
+) {
   if (!value) return UI[language].unknownDate;
 
   const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return UI[language].unknownDate;
-  }
+  if (Number.isNaN(date.getTime())) return UI[language].unknownDate;
 
   return new Intl.DateTimeFormat(
     language === "en" ? "en-US" : "fr-FR",
     {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     },
   ).format(date);
-};
+}
 
-const formatSize = (
+function formatSize(
   value: number | null | undefined,
   language: OriaLanguage,
-) => {
+) {
   if (!value || value <= 0) return null;
 
   if (value < 1024) {
@@ -286,23 +238,75 @@ const formatSize = (
   }
 
   if (value < 1024 * 1024) {
-    return language === "en" ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1024).toFixed(1)} Ko`;
+    return language === "en"
+      ? `${(value / 1024).toFixed(1)} KB`
+      : `${(value / 1024).toFixed(1)} Ko`;
   }
 
-  return language === "en" ? `${(value / (1024 * 1024)).toFixed(1)} MB` : `${(value / (1024 * 1024)).toFixed(1)} Mo`;
-};
+  return language === "en"
+    ? `${(value / (1024 * 1024)).toFixed(1)} MB`
+    : `${(value / (1024 * 1024)).toFixed(1)} Mo`;
+}
 
-const getActionLabel = (action?: string | null) => {
+function getActionLabel(action?: string | null) {
   if (!action) return null;
 
   return action
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
-};
+}
+
+function getFileLabel(item: CreationItem, language: OriaLanguage) {
+  const extension = item.extension?.replace(/^\./, "").toUpperCase();
+  if (extension) return extension;
+
+  const category = item.category?.trim();
+  if (category) return category;
+
+  return UI[language].document;
+}
+
+function safeFilename(item: CreationItem) {
+  if (item.filename?.trim()) {
+    return item.filename.trim();
+  }
+
+  const kind = getCreationKind(item);
+
+  if (kind === "video") {
+    return `oria-${item.id}.mp4`;
+  }
+
+  if (kind === "image") {
+    return `oria-${item.id}.png`;
+  }
+
+  const extension = item.extension?.replace(/^\./, "") || "bin";
+  return `oria-${item.id}.${extension}`;
+}
 
 export default function CreationsPage() {
   const [language, setLanguage] =
     useState<OriaLanguage>("fr");
+  const [creations, setCreations] =
+    useState<CreationItem[]>([]);
+  const [filter, setFilter] =
+    useState<FilterType>("all");
+  const [loading, setLoading] =
+    useState(true);
+  const [refreshing, setRefreshing] =
+    useState(false);
+  const [error, setError] =
+    useState<string | null>(null);
+  const [selectedMedia, setSelectedMedia] =
+    useState<CreationItem | null>(null);
+  const [deletingId, setDeletingId] =
+    useState<string | null>(null);
+
+  const supabase = useMemo(
+    () => createClient(),
+    [],
+  );
 
   useEffect(() => {
     const syncLanguage = () => {
@@ -310,21 +314,14 @@ export default function CreationsPage() {
     };
 
     syncLanguage();
-
-    window.addEventListener(
-      "storage",
-      syncLanguage,
-    );
+    window.addEventListener("storage", syncLanguage);
     window.addEventListener(
       "oria-language-change",
       syncLanguage,
     );
 
     return () => {
-      window.removeEventListener(
-        "storage",
-        syncLanguage,
-      );
+      window.removeEventListener("storage", syncLanguage);
       window.removeEventListener(
         "oria-language-change",
         syncLanguage,
@@ -332,25 +329,56 @@ export default function CreationsPage() {
     };
   }, []);
 
-  const supabase = useMemo(() => createClient(), []);
-
-  const [media, setMedia] = useState<MediaItem[]>([]);
-  const [filter, setFilter] = useState<FilterType>("all");
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  const getAccessToken = useCallback(async () => {
+  const getSession = useCallback(async () => {
     const {
       data: { session },
     } = await supabase.auth.getSession();
 
-    return session?.access_token || null;
-  }, [supabase]);
+    if (!session?.user?.id || !session.access_token) {
+      throw new Error(UI[language].sessionExpired);
+    }
 
-  const loadMedia = useCallback(
+    return session;
+  }, [language, supabase]);
+
+  const authenticatedFetch = useCallback(
+    async (
+      path: string,
+      options: RequestInit = {},
+    ) => {
+      const session = await getSession();
+
+      if (!API_BASE_URL) {
+        throw new Error(UI[language].backendMissing);
+      }
+
+      const headers = new Headers(options.headers);
+      headers.set(
+        "Authorization",
+        `Bearer ${session.access_token}`,
+      );
+      headers.set("user-id", session.user.id);
+
+      if (
+        options.body &&
+        !(options.body instanceof FormData)
+      ) {
+        headers.set(
+          "Content-Type",
+          "application/json",
+        );
+      }
+
+      return fetch(`${API_BASE_URL}${path}`, {
+        ...options,
+        headers,
+        cache: "no-store",
+      });
+    },
+    [getSession, language],
+  );
+
+  const loadCreations = useCallback(
     async (showRefreshState = false) => {
       if (showRefreshState) {
         setRefreshing(true);
@@ -361,36 +389,244 @@ export default function CreationsPage() {
       setError(null);
 
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const response = await authenticatedFetch(
+          "/creations?limit=100",
+        );
 
-        if (!session?.user) {
-          setMedia([]);
-          setError("Votre session a expiré. Veuillez vous reconnecter.");
-          return;
+        let payload: CreationsResponse = {};
+
+        try {
+          payload = await response.json();
+        } catch {
+          payload = {};
         }
 
-        const token = session.access_token;
-
-        if (!API_BASE_URL) {
+        if (!response.ok) {
           throw new Error(
-            "L'URL du backend n'est pas configurée dans le frontend."
+            payload.detail ||
+              payload.message ||
+              UI[language].loadFailed,
           );
         }
 
-        const response = await fetch(`${API_BASE_URL}/media`, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            "user-id": session.user.id,
+        setCreations(
+          Array.isArray(payload.creations)
+            ? payload.creations
+            : [],
+        );
+      } catch (requestError) {
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : UI[language].loadError,
+        );
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [authenticatedFetch, language],
+  );
+
+  useEffect(() => {
+    void loadCreations();
+  }, [loadCreations]);
+
+  const counts = useMemo(() => {
+    const result = {
+      image: 0,
+      video: 0,
+      artifact: 0,
+    };
+
+    for (const item of creations) {
+      result[getCreationKind(item)] += 1;
+    }
+
+    return result;
+  }, [creations]);
+
+  const filteredCreations = useMemo(() => {
+    if (filter === "all") {
+      return creations;
+    }
+
+    return creations.filter(
+      (item) =>
+        getCreationKind(item) === filter,
+    );
+  }, [creations, filter]);
+
+  const resolveArtifactDownloadUrl = useCallback(
+    async (item: CreationItem) => {
+      const existing = getArtifactUrl(item);
+
+      if (existing) {
+        return existing;
+      }
+
+      const response = await authenticatedFetch(
+        `/artifacts/${encodeURIComponent(item.id)}`,
+      );
+
+      let payload: {
+        artifact?: CreationItem;
+        detail?: string;
+        message?: string;
+      } = {};
+
+      try {
+        payload = await response.json();
+      } catch {
+        payload = {};
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          payload.detail ||
+            payload.message ||
+            UI[language].downloadError,
+        );
+      }
+
+      const refreshed = payload.artifact;
+      const url = refreshed
+        ? getArtifactUrl(refreshed)
+        : null;
+
+      if (!url) {
+        throw new Error(
+          UI[language].fileUnavailable,
+        );
+      }
+
+      setCreations((current) =>
+        current.map((creation) =>
+          creation.id === item.id
+            ? {
+                ...creation,
+                ...refreshed,
+              }
+            : creation,
+        ),
+      );
+
+      return url;
+    },
+    [authenticatedFetch, language],
+  );
+
+  const handleDownload = useCallback(
+    async (item: CreationItem) => {
+      try {
+        const kind = getCreationKind(item);
+
+        const url =
+          kind === "artifact"
+            ? await resolveArtifactDownloadUrl(item)
+            : getMediaUrl(item);
+
+        if (!url) {
+          throw new Error(
+            UI[language].fileUnavailable,
+          );
+        }
+
+        const response = await fetch(url);
+
+        if (!response.ok) {
+          window.open(
+            url,
+            "_blank",
+            "noopener,noreferrer",
+          );
+          return;
+        }
+
+        const blob = await response.blob();
+        const objectUrl =
+          URL.createObjectURL(blob);
+
+        const link =
+          document.createElement("a");
+
+        link.href = objectUrl;
+        link.download = safeFilename(item);
+
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+
+        URL.revokeObjectURL(objectUrl);
+      } catch (requestError) {
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : UI[language].downloadError,
+        );
+      }
+    },
+    [language, resolveArtifactDownloadUrl],
+  );
+
+  const handleOpen = useCallback(
+    async (item: CreationItem) => {
+      const kind = getCreationKind(item);
+
+      if (kind !== "artifact") {
+        setSelectedMedia(item);
+        return;
+      }
+
+      try {
+        const url =
+          await resolveArtifactDownloadUrl(item);
+
+        window.open(
+          url,
+          "_blank",
+          "noopener,noreferrer",
+        );
+      } catch (requestError) {
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : UI[language].fileUnavailable,
+        );
+      }
+    },
+    [language, resolveArtifactDownloadUrl],
+  );
+
+  const handleDelete = useCallback(
+    async (item: CreationItem) => {
+      if (
+        !window.confirm(
+          UI[language].deleteConfirm,
+        )
+      ) {
+        return;
+      }
+
+      setDeletingId(item.id);
+      setError(null);
+
+      try {
+        const kind = getCreationKind(item);
+
+        const endpoint =
+          kind === "artifact"
+            ? `/artifacts/${encodeURIComponent(item.id)}`
+            : `/media/${encodeURIComponent(item.id)}`;
+
+        const response = await authenticatedFetch(
+          endpoint,
+          {
+            method: "DELETE",
           },
-          cache: "no-store",
-        });
+        );
 
         let payload: {
-          media?: MediaItem[];
           detail?: string;
           message?: string;
         } = {};
@@ -405,160 +641,65 @@ export default function CreationsPage() {
           throw new Error(
             payload.detail ||
               payload.message ||
-              "Impossible de récupérer vos créations."
+              UI[language].deleteError,
           );
         }
 
-        const loadedMedia = Array.isArray(payload.media)
-          ? payload.media
-          : [];
-
-        setMedia(loadedMedia);
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Une erreur est survenue pendant le chargement."
-        );
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [supabase]
-  );
-
-  useEffect(() => {
-    void loadMedia();
-  }, [loadMedia]);
-
-  const filteredMedia = useMemo(() => {
-    if (filter === "all") return media;
-
-    return media.filter((item) => getMediaType(item) === filter);
-  }, [filter, media]);
-
-  const imageCount = useMemo(
-    () => media.filter((item) => getMediaType(item) === "image").length,
-    [media]
-  );
-
-  const videoCount = useMemo(
-    () => media.filter((item) => getMediaType(item) === "video").length,
-    [media]
-  );
-
-  const handleDownload = useCallback(async (item: MediaItem) => {
-    const url = normalizeMediaUrl(item);
-
-    if (!url) {
-      setError("Le fichier de cette création n'est plus disponible.");
-      return;
-    }
-
-    try {
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error("Téléchargement impossible.");
-      }
-
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-
-      const extension =
-        item.mime_type?.split("/")[1]?.split(";")[0] ||
-        (getMediaType(item) === "video" ? "mp4" : "png");
-
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = `oria-${item.id}.${extension}`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-
-      URL.revokeObjectURL(objectUrl);
-    } catch {
-      // Fallback : ouvre directement l'URL publique normalisée.
-      window.open(url, "_blank", "noopener,noreferrer");
-    }
-  }, []);
-
-  const handleDelete = useCallback(
-    async (item: MediaItem) => {
-      const confirmed = window.confirm(
-        UI[language].deleteConfirm
-      );
-
-      if (!confirmed) return;
-
-      setDeletingId(item.id);
-      setError(null);
-
-      try {
-        const token = await getAccessToken();
-
-        if (!token) {
-          throw new Error("Votre session a expiré. Veuillez vous reconnecter.");
-        }
-
-        if (!API_BASE_URL) {
-          throw new Error(
-            "L'URL du backend n'est pas configurée dans le frontend."
-          );
-        }
-
-        const response = await fetch(
-          `${API_BASE_URL}/media/${encodeURIComponent(item.id)}`,
-          {
-            method: "DELETE",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        let payload: { detail?: string; message?: string } = {};
-
-        try {
-          payload = await response.json();
-        } catch {
-          payload = {};
-        }
-
-        if (!response.ok) {
-          throw new Error(
-            payload.detail ||
-              payload.message ||
-              "Impossible de supprimer cette création."
-          );
-        }
-
-        setMedia((current) =>
-          current.filter((currentItem) => currentItem.id !== item.id)
+        setCreations((current) =>
+          current.filter(
+            (creation) =>
+              creation.id !== item.id,
+          ),
         );
 
         setSelectedMedia((current) =>
-          current?.id === item.id ? null : current
+          current?.id === item.id
+            ? null
+            : current,
         );
-      } catch (err) {
+      } catch (requestError) {
         setError(
-          err instanceof Error
-            ? err.message
-            : "Impossible de supprimer cette création."
+          requestError instanceof Error
+            ? requestError.message
+            : UI[language].deleteError,
         );
       } finally {
         setDeletingId(null);
       }
     },
-    [getAccessToken, language]
+    [authenticatedFetch, language],
   );
+
+  const filters: Array<{
+    value: FilterType;
+    label: string;
+    count: number;
+  }> = [
+    {
+      value: "all",
+      label: UI[language].all,
+      count: creations.length,
+    },
+    {
+      value: "image",
+      label: UI[language].images,
+      count: counts.image,
+    },
+    {
+      value: "video",
+      label: UI[language].videos,
+      count: counts.video,
+    },
+    {
+      value: "artifact",
+      label: UI[language].files,
+      count: counts.artifact,
+    },
+  ];
 
   return (
     <main className="min-h-screen bg-[#f7f7f5] text-[#111111]">
       <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
-        {/* Header */}
         <header className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <Link
@@ -584,96 +725,102 @@ export default function CreationsPage() {
             </div>
 
             <p className="mt-3 max-w-xl text-sm leading-6 text-black/55">
-              {UI[language].creationsDescription}
+              {UI[language].description}
             </p>
           </div>
 
           <button
             type="button"
-            onClick={() => void loadMedia(true)}
+            onClick={() =>
+              void loadCreations(true)
+            }
             disabled={loading || refreshing}
             className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-black/10 bg-white px-4 text-sm font-semibold shadow-sm transition hover:border-black/20 hover:bg-black/[0.02] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <RefreshCw
-              className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+              className={`h-4 w-4 ${
+                refreshing
+                  ? "animate-spin"
+                  : ""
+              }`}
             />
             {UI[language].refresh}
           </button>
         </header>
 
-        {/* Stats */}
-        {!loading && !error && media.length > 0 && (
-          <div className="mb-6 flex flex-wrap gap-2 text-sm">
-            <span className="rounded-full bg-black px-3 py-1.5 font-medium text-white">
-              {media.length}{" "}
-              {media.length === 1
-                ? UI[language].creation
-                : UI[language].creations}
-            </span>
+        {!loading &&
+          !error &&
+          creations.length > 0 && (
+            <div className="mb-6 flex flex-wrap gap-2 text-sm">
+              <span className="rounded-full bg-black px-3 py-1.5 font-medium text-white">
+                {creations.length}{" "}
+                {creations.length === 1
+                  ? UI[language].creation
+                  : UI[language].creations}
+              </span>
 
-            <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
-              {imageCount}{" "}
-              {imageCount === 1
-                ? UI[language].image
-                : UI[language].images}
-            </span>
+              <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
+                {counts.image}{" "}
+                {counts.image === 1
+                  ? UI[language].image
+                  : UI[language].images.toLowerCase()}
+              </span>
 
-            <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
-              {videoCount}{" "}
-              {videoCount === 1
-                ? UI[language].video
-                : UI[language].videos}
-            </span>
-          </div>
-        )}
+              <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
+                {counts.video}{" "}
+                {counts.video === 1
+                  ? UI[language].video
+                  : UI[language].videos.toLowerCase()}
+              </span>
 
-        {/* Filters */}
-        {!loading && media.length > 0 && (
-          <div className="mb-7 flex flex-wrap gap-2">
-            {[
-              {
-                value: "all" as const,
-                label: UI[language].all,
-                count: media.length,
-              },
-              {
-                value: "image" as const,
-                label: language === "en" ? "Images" : "Images",
-                count: imageCount,
-              },
-              {
-                value: "video" as const,
-                label: language === "en" ? "Videos" : "Vidéos",
-                count: videoCount,
-              },
-            ].map((item) => {
-              const active = filter === item.value;
+              <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
+                {counts.artifact}{" "}
+                {counts.artifact === 1
+                  ? UI[language].file
+                  : UI[language].files.toLowerCase()}
+              </span>
+            </div>
+          )}
 
-              return (
-                <button
-                  key={item.value}
-                  type="button"
-                  onClick={() => setFilter(item.value)}
-                  className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                    active
-                      ? "bg-black text-white"
-                      : "border border-black/10 bg-white text-black/60 hover:border-black/20 hover:text-black"
-                  }`}
-                >
-                  {item.label}
-                  <span className={active ? "ml-1.5 opacity-60" : "ml-1.5 opacity-40"}>
-                    {item.count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
+        {!loading &&
+          creations.length > 0 && (
+            <div className="mb-7 flex flex-wrap gap-2">
+              {filters.map((item) => {
+                const active =
+                  filter === item.value;
 
-        {/* Error */}
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() =>
+                      setFilter(item.value)
+                    }
+                    className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                      active
+                        ? "bg-black text-white"
+                        : "border border-black/10 bg-white text-black/60 hover:border-black/20 hover:text-black"
+                    }`}
+                  >
+                    {item.label}
+                    <span
+                      className={
+                        active
+                          ? "ml-1.5 opacity-60"
+                          : "ml-1.5 opacity-40"
+                      }
+                    >
+                      {item.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
         {error && (
           <div className="mb-6 flex items-start justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
-            <p>{localizeFrontendError(error, language)}</p>
+            <p>{error}</p>
             <button
               type="button"
               onClick={() => setError(null)}
@@ -685,283 +832,490 @@ export default function CreationsPage() {
           </div>
         )}
 
-        {/* Loading */}
         {loading && (
           <div className="flex min-h-[360px] items-center justify-center rounded-3xl border border-black/10 bg-white">
             <div className="flex flex-col items-center gap-3 text-black/45">
               <Loader2 className="h-7 w-7 animate-spin" />
-              <p className="text-sm">{UI[language].loadingCreations}</p>
+              <p className="text-sm">
+                {UI[language].loading}
+              </p>
             </div>
           </div>
         )}
 
-        {/* Empty */}
-        {!loading && !error && media.length === 0 && (
-          <div className="flex min-h-[420px] flex-col items-center justify-center rounded-3xl border border-dashed border-black/15 bg-white px-6 text-center">
-            <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-black/[0.04]">
-              <ImageIcon className="h-7 w-7 text-black/40" />
+        {!loading &&
+          !error &&
+          creations.length === 0 && (
+            <div className="flex min-h-[420px] flex-col items-center justify-center rounded-3xl border border-dashed border-black/15 bg-white px-6 text-center">
+              <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-black/[0.04]">
+                <FileText className="h-7 w-7 text-black/40" />
+              </div>
+
+              <h2 className="text-xl font-semibold">
+                {UI[language].emptyTitle}
+              </h2>
+
+              <p className="mt-2 max-w-md text-sm leading-6 text-black/50">
+                {UI[language].emptyDescription}
+              </p>
+
+              <Link
+                href="/chat"
+                className="mt-6 inline-flex h-11 items-center rounded-xl bg-black px-5 text-sm font-semibold text-white transition hover:bg-black/85"
+              >
+                {UI[language].createSomething}
+              </Link>
             </div>
+          )}
 
-            <h2 className="text-xl font-semibold">{UI[language].noCreation}</h2>
+        {!loading &&
+          !error &&
+          creations.length > 0 &&
+          filteredCreations.length === 0 && (
+            <div className="rounded-3xl border border-black/10 bg-white px-6 py-16 text-center">
+              <p className="text-sm text-black/50">
+                {UI[language].emptyFilter}
+              </p>
+            </div>
+          )}
 
-            <p className="mt-2 max-w-md text-sm leading-6 text-black/50">
-              {UI[language].noCreationDescription}
-            </p>
+        {!loading &&
+          !error &&
+          filteredCreations.length > 0 && (
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {filteredCreations.map(
+                (item) => {
+                  const kind =
+                    getCreationKind(item);
+                  const mediaUrl =
+                    kind === "artifact"
+                      ? null
+                      : getMediaUrl(item);
+                  const size = formatSize(
+                    item.size_bytes ??
+                      item.size,
+                    language,
+                  );
+                  const action =
+                    getActionLabel(
+                      item.action,
+                    );
 
-            <Link
-              href="/chat"
-              className="mt-6 inline-flex h-11 items-center rounded-xl bg-black px-5 text-sm font-semibold text-white transition hover:bg-black/85"
-            >
-              {UI[language].createSomething}
-            </Link>
-          </div>
-        )}
+                  if (kind === "artifact") {
+                    return (
+                      <article
+                        key={item.id}
+                        className="flex min-h-[245px] flex-col rounded-2xl border border-black/10 bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition hover:border-black/15 hover:shadow-md"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleOpen(
+                              item,
+                            )
+                          }
+                          className="flex flex-1 flex-col items-start text-left"
+                        >
+                          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-black/[0.05] text-black/60">
+                            <FileText className="h-7 w-7" />
+                          </div>
 
-        {/* Filter empty */}
-        {!loading && !error && media.length > 0 && filteredMedia.length === 0 && (
-          <div className="rounded-3xl border border-black/10 bg-white px-6 py-16 text-center">
-            <p className="text-sm text-black/50">
-              {UI[language].noCreationInCategory}
-            </p>
-          </div>
-        )}
+                          <p className="mt-5 line-clamp-2 break-all text-base font-semibold leading-6">
+                            {safeFilename(
+                              item,
+                            )}
+                          </p>
 
-        {/* Gallery */}
-        {!loading && !error && filteredMedia.length > 0 && (
-          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {filteredMedia.map((item) => {
-              const type = getMediaType(item);
-              const url = normalizeMediaUrl(item);
-              const size = formatSize(
-                item.size_bytes ?? item.size,
-                language,
-              );
-              const action = getActionLabel(item.action);
+                          <p className="mt-2 text-xs text-black/40">
+                            {formatDate(
+                              item.created_at,
+                              language,
+                            )}
+                          </p>
 
-              return (
-                <article
-                  key={item.id}
-                  className="group overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition hover:border-black/15 hover:shadow-md"
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedMedia(item);
-                    }}
-                    className="relative block aspect-square w-full overflow-hidden bg-black/[0.04] text-left"
-                    aria-label={
-                      type === "image"
-                        ? UI[language].openImageCreation
-                        : UI[language].openVideoCreation
-                    }
-                  >
-                    {url ? (
-                      type === "image" ? (
-                        <img
-                          src={url}
-                          alt={item.prompt || UI[language].generatedWithOria}
-                          className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.025]"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <>
-                          <video
-                            src={url}
-                            className="h-full w-full object-cover"
-                            muted
-                            playsInline
-                            preload="metadata"
-                          />
-                          <span className="absolute inset-0 flex items-center justify-center bg-black/10">
-                            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/90 text-black shadow-lg">
-                              <Play className="ml-0.5 h-5 w-5 fill-current" />
+                          <div className="mt-4 flex flex-wrap gap-1.5">
+                            <span className="rounded-md bg-black/[0.05] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-black/55">
+                              {getFileLabel(
+                                item,
+                                language,
+                              )}
                             </span>
-                          </span>
-                        </>
-                      )
-                    ) : (
-                      <div className="flex h-full items-center justify-center">
-                        {type === "image" ? (
-                          <ImageIcon className="h-8 w-8 text-black/25" />
+
+                            {size && (
+                              <span className="rounded-md bg-black/[0.04] px-2 py-1 text-[10px] font-medium text-black/45">
+                                {size}
+                              </span>
+                            )}
+                          </div>
+                        </button>
+
+                        <div className="mt-5 flex items-center justify-end gap-1 border-t border-black/5 pt-3">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleOpen(
+                                item,
+                              )
+                            }
+                            className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black"
+                            aria-label={
+                              UI[language].open
+                            }
+                          >
+                            <FileText className="h-4 w-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleDownload(
+                                item,
+                              )
+                            }
+                            className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black"
+                            aria-label={
+                              UI[language]
+                                .download
+                            }
+                          >
+                            <Download className="h-4 w-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleDelete(
+                                item,
+                              )
+                            }
+                            disabled={
+                              deletingId ===
+                              item.id
+                            }
+                            className="rounded-lg p-2 text-black/35 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                            aria-label={
+                              UI[language]
+                                .delete
+                            }
+                          >
+                            {deletingId ===
+                            item.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  }
+
+                  return (
+                    <article
+                      key={item.id}
+                      className="group overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition hover:border-black/15 hover:shadow-md"
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedMedia(
+                            item,
+                          )
+                        }
+                        className="relative block aspect-square w-full overflow-hidden bg-black/[0.04] text-left"
+                        aria-label={
+                          UI[language].open
+                        }
+                      >
+                        {mediaUrl ? (
+                          kind === "image" ? (
+                            <img
+                              src={mediaUrl}
+                              alt={
+                                item.prompt ||
+                                UI[
+                                  language
+                                ]
+                                  .generatedWithOria
+                              }
+                              className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.025]"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <>
+                              <video
+                                src={
+                                  mediaUrl
+                                }
+                                className="h-full w-full object-cover"
+                                muted
+                                playsInline
+                                preload="metadata"
+                              />
+                              <span className="absolute inset-0 flex items-center justify-center bg-black/10">
+                                <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/90 text-black shadow-lg">
+                                  <Play className="ml-0.5 h-5 w-5 fill-current" />
+                                </span>
+                              </span>
+                            </>
+                          )
                         ) : (
-                          <Video className="h-8 w-8 text-black/25" />
-                        )}
-                      </div>
-                    )}
-
-                    <span className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-black/70 px-2.5 py-1.5 text-[11px] font-semibold text-white backdrop-blur">
-                      {type === "image" ? (
-                        <ImageIcon className="h-3 w-3" />
-                      ) : (
-                        <Video className="h-3 w-3" />
-                      )}
-                      {type === "image"
-                        ? "Image"
-                        : language === "en"
-                          ? "Video"
-                          : "Vidéo"}
-                    </span>
-                  </button>
-
-                  <div className="p-4">
-                    <div className="min-h-[46px]">
-                      <p className="line-clamp-2 text-sm font-medium leading-5 text-black/80">
-                        {item.prompt || UI[language].noDescription}
-                      </p>
-
-                      <p className="mt-1 text-xs text-black/40">
-                        {formatDate(
-                          item.created_at,
-                          language,
-                        )}
-                      </p>
-                    </div>
-
-                    <div className="mt-4 flex items-center justify-between gap-2 border-t border-black/5 pt-3">
-                      <div className="flex min-w-0 flex-wrap gap-1.5">
-                        {action && (
-                          <span className="max-w-[150px] truncate rounded-md bg-black/[0.04] px-2 py-1 text-[10px] font-medium text-black/50">
-                            {action}
-                          </span>
+                          <div className="flex h-full items-center justify-center">
+                            {kind ===
+                            "image" ? (
+                              <ImageIcon className="h-8 w-8 text-black/25" />
+                            ) : (
+                              <Video className="h-8 w-8 text-black/25" />
+                            )}
+                          </div>
                         )}
 
-                        {size && (
-                          <span className="rounded-md bg-black/[0.04] px-2 py-1 text-[10px] font-medium text-black/40">
-                            {size}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex shrink-0 items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedMedia(item)}
-                          className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black"
-                          aria-label={UI[language].open}
-                        >
-                          {type === "image" ? (
-                            <ImageIcon className="h-4 w-4" />
+                        <span className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-black/70 px-2.5 py-1.5 text-[11px] font-semibold text-white backdrop-blur">
+                          {kind ===
+                          "image" ? (
+                            <ImageIcon className="h-3 w-3" />
                           ) : (
-                            <Play className="h-4 w-4" />
+                            <Video className="h-3 w-3" />
                           )}
-                        </button>
+                          {kind ===
+                          "image"
+                            ? "Image"
+                            : language ===
+                                "en"
+                              ? "Video"
+                              : "Vidéo"}
+                        </span>
+                      </button>
 
-                        <button
-                          type="button"
-                          onClick={() => void handleDownload(item)}
-                          disabled={!url}
-                          className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black disabled:cursor-not-allowed disabled:opacity-30"
-                          aria-label={UI[language].download}
-                        >
-                          <Download className="h-4 w-4" />
-                        </button>
+                      <div className="p-4">
+                        <div className="min-h-[46px]">
+                          <p className="line-clamp-2 text-sm font-medium leading-5 text-black/80">
+                            {item.prompt ||
+                              UI[language]
+                                .noDescription}
+                          </p>
 
-                        <button
-                          type="button"
-                          onClick={() => void handleDelete(item)}
-                          disabled={deletingId === item.id}
-                          className="rounded-lg p-2 text-black/35 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
-                          aria-label={UI[language].delete}
-                        >
-                          {deletingId === item.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-4 w-4" />
-                          )}
-                        </button>
+                          <p className="mt-1 text-xs text-black/40">
+                            {formatDate(
+                              item.created_at,
+                              language,
+                            )}
+                          </p>
+                        </div>
+
+                        <div className="mt-4 flex items-center justify-between gap-2 border-t border-black/5 pt-3">
+                          <div className="flex min-w-0 flex-wrap gap-1.5">
+                            {action && (
+                              <span className="max-w-[150px] truncate rounded-md bg-black/[0.04] px-2 py-1 text-[10px] font-medium text-black/50">
+                                {action}
+                              </span>
+                            )}
+
+                            {size && (
+                              <span className="rounded-md bg-black/[0.04] px-2 py-1 text-[10px] font-medium text-black/40">
+                                {size}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedMedia(
+                                  item,
+                                )
+                              }
+                              className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black"
+                              aria-label={
+                                UI[language]
+                                  .open
+                              }
+                            >
+                              {kind ===
+                              "image" ? (
+                                <ImageIcon className="h-4 w-4" />
+                              ) : (
+                                <Play className="h-4 w-4" />
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handleDownload(
+                                  item,
+                                )
+                              }
+                              disabled={
+                                !mediaUrl
+                              }
+                              className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black disabled:cursor-not-allowed disabled:opacity-30"
+                              aria-label={
+                                UI[language]
+                                  .download
+                              }
+                            >
+                              <Download className="h-4 w-4" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handleDelete(
+                                  item,
+                                )
+                              }
+                              disabled={
+                                deletingId ===
+                                item.id
+                              }
+                              className="rounded-lg p-2 text-black/35 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label={
+                                UI[language]
+                                  .delete
+                              }
+                            >
+                              {deletingId ===
+                              item.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </section>
-        )}
+                    </article>
+                  );
+                },
+              )}
+            </section>
+          )}
       </div>
 
-      {/* Viewer */}
-      {selectedMedia && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setSelectedMedia(null);
-            }
-          }}
-        >
-          <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-black/10 px-4 py-3">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold">
-                  {getMediaType(selectedMedia) === "image"
-                    ? "Image"
-                    : language === "en"
-                      ? "Video"
-                      : "Vidéo"}
-                </p>
-                <p className="truncate text-xs text-black/45">
-                  {formatDate(
-                    selectedMedia.created_at,
-                    language,
-                  )}
-                </p>
+      {selectedMedia &&
+        getCreationKind(
+          selectedMedia,
+        ) !== "artifact" && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+            onMouseDown={(event) => {
+              if (
+                event.target ===
+                event.currentTarget
+              ) {
+                setSelectedMedia(null);
+              }
+            }}
+          >
+            <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-black/10 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">
+                    {getCreationKind(
+                      selectedMedia,
+                    ) === "image"
+                      ? "Image"
+                      : language === "en"
+                        ? "Video"
+                        : "Vidéo"}
+                  </p>
+
+                  <p className="truncate text-xs text-black/45">
+                    {formatDate(
+                      selectedMedia.created_at,
+                      language,
+                    )}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void handleDownload(
+                        selectedMedia,
+                      )
+                    }
+                    className="rounded-lg p-2 text-black/50 transition hover:bg-black/[0.05] hover:text-black"
+                    aria-label={
+                      UI[language].download
+                    }
+                  >
+                    <Download className="h-5 w-5" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelectedMedia(
+                        null,
+                      )
+                    }
+                    className="rounded-lg p-2 text-black/50 transition hover:bg-black/[0.05] hover:text-black"
+                    aria-label={
+                      UI[language].close
+                    }
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
               </div>
 
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => void handleDownload(selectedMedia)}
-                  className="rounded-lg p-2 text-black/50 transition hover:bg-black/[0.05] hover:text-black"
-                  aria-label={UI[language].download}
-                >
-                  <Download className="h-5 w-5" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSelectedMedia(null)}
-                  className="rounded-lg p-2 text-black/50 transition hover:bg-black/[0.05] hover:text-black"
-                  aria-label={UI[language].close}
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-2 sm:p-5">
-              {normalizeMediaUrl(selectedMedia) ? (
-                getMediaType(selectedMedia) === "image" ? (
-                  <img
-                    src={normalizeMediaUrl(selectedMedia) || ""}
-                    alt={selectedMedia.prompt || UI[language].oriaCreation}
-                    className="max-h-[78vh] max-w-full object-contain"
-                  />
+              <div className="flex min-h-0 flex-1 items-center justify-center bg-black p-2 sm:p-5">
+                {getMediaUrl(
+                  selectedMedia,
+                ) ? (
+                  getCreationKind(
+                    selectedMedia,
+                  ) === "image" ? (
+                    <img
+                      src={
+                        getMediaUrl(
+                          selectedMedia,
+                        ) || ""
+                      }
+                      alt={
+                        selectedMedia.prompt ||
+                        UI[language]
+                          .generatedWithOria
+                      }
+                      className="max-h-[78vh] max-w-full object-contain"
+                    />
+                  ) : (
+                    <video
+                      src={
+                        getMediaUrl(
+                          selectedMedia,
+                        ) || ""
+                      }
+                      className="max-h-[78vh] max-w-full"
+                      controls
+                      autoPlay
+                      playsInline
+                    />
+                  )
                 ) : (
-                  <video
-                    src={normalizeMediaUrl(selectedMedia) || ""}
-                    className="max-h-[78vh] max-w-full"
-                    controls
-                    autoPlay
-                    playsInline
-                  />
-                )
-              ) : (
-                <p className="py-20 text-sm text-white/60">
-                  {UI[language].fileUnavailable}
-                </p>
+                  <p className="py-20 text-sm text-white/60">
+                    {
+                      UI[language]
+                        .fileUnavailable
+                    }
+                  </p>
+                )}
+              </div>
+
+              {selectedMedia.prompt && (
+                <div className="max-h-28 overflow-y-auto border-t border-black/10 px-4 py-3">
+                  <p className="text-xs leading-5 text-black/55">
+                    {selectedMedia.prompt}
+                  </p>
+                </div>
               )}
             </div>
-
-            {selectedMedia.prompt && (
-              <div className="max-h-28 overflow-y-auto border-t border-black/10 px-4 py-3">
-                <p className="text-xs leading-5 text-black/55">
-                  {selectedMedia.prompt}
-                </p>
-              </div>
-            )}
           </div>
-        </div>
-      )}
+        )}
     </main>
   );
 }

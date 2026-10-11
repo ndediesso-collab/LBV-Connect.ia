@@ -1,5 +1,7 @@
 from json import dumps
 
+import asyncio
+
 import base64
 
 from uuid import uuid4
@@ -7,6 +9,8 @@ from uuid import uuid4
 from types import SimpleNamespace
 
 from datetime import datetime, timezone
+
+from time import perf_counter
 
 from typing import Any
 
@@ -55,8 +59,18 @@ from app.repositories.supabase_credit_repository import (
 )
 
 
+from app.repositories.supabase_artifact_repository import (
+    supabase_artifact_repository,
+)
+
+
 
 from app.services.openai_service import OpenAIService
+
+from app.services.artifact_service import (
+    ArtifactError,
+    ArtifactService,
+)
 
 from app.services.token_billing_service import (
     MediaBillingError,
@@ -296,8 +310,856 @@ class ChatResponse(BaseModel):
 
     trials_remaining: int | None = None
 
+    artifacts: list[dict[str, Any]] | None = None
+
+    artifact_errors: list[str] | None = None
 
 
+
+class ChatControlRequest(BaseModel):
+    """
+    Commande envoyée pendant une génération active.
+
+    Le frontend utilisera ce contrat pour le bouton « Modifier ».
+    """
+
+    generation_id: str
+    instruction: str | None = None
+    reasoning_mode: str | None = None
+
+
+# ============================================================
+# CONTRÔLE DES GÉNÉRATIONS ACTIVES
+# ============================================================
+
+REASONING_MODES = {
+    "fast",
+    "balanced",
+    "deep",
+}
+
+MAX_CONTROL_INSTRUCTION_CHARS = 8000
+MAX_PENDING_CONTROLS = 4
+MAX_SMART_RESTARTS = 3
+ACTIVE_GENERATION_TTL_SECONDS = 60 * 60
+
+
+class ActiveChatGeneration:
+    """
+    État minimal d'une génération pilotable.
+
+    Ce registre est volontairement en mémoire pour la première version.
+    Il convient à un unique process backend. Si Oria passe à plusieurs
+    workers/instances, ce registre devra être déplacé vers un stockage
+    partagé (par exemple Redis) afin que /chat/control retrouve toujours
+    la génération active.
+    """
+
+    def __init__(
+        self,
+        *,
+        user_id: str,
+        model: str,
+        openai_model: str,
+        reasoning_mode: str,
+        transport: str,
+    ):
+        self.user_id = user_id
+        self.model = model
+        self.openai_model = openai_model
+        self.reasoning_mode = reasoning_mode
+        self.transport = transport
+        self.control_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+            maxsize=MAX_PENDING_CONTROLS
+        )
+        self.active_attempt_id: str | None = None
+        self.created_at = perf_counter()
+        self.closed = False
+
+
+_ACTIVE_CHAT_GENERATIONS: dict[str, ActiveChatGeneration] = {}
+
+
+def _normalize_reasoning_mode(
+    value: str | None,
+) -> str:
+    """Valide le preset public de réflexion Oria."""
+    mode = str(value or "balanced").strip().lower()
+
+    if mode not in REASONING_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Mode de réflexion invalide. "
+                "Valeurs autorisées : fast, balanced, deep."
+            ),
+        )
+
+    return mode
+
+
+def _normalize_generation_id(
+    value: str | None,
+) -> str:
+    """
+    Retourne un identifiant de génération sûr.
+
+    Le frontend peut le créer avant l'envoi afin de connaître immédiatement
+    l'identifiant à utiliser avec /ai/chat/control.
+    """
+    if value is None or not str(value).strip():
+        return str(uuid4())
+
+    generation_id = str(value).strip()
+
+    if (
+        len(generation_id) > 128
+        or re.fullmatch(r"[A-Za-z0-9._:-]+", generation_id) is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="generation_id invalide.",
+        )
+
+    return generation_id
+
+
+def _cleanup_active_generations() -> None:
+    """Supprime les entrées terminées ou anormalement anciennes."""
+    now = perf_counter()
+
+    for generation_id, state in list(_ACTIVE_CHAT_GENERATIONS.items()):
+        if (
+            state.closed
+            or now - state.created_at > ACTIVE_GENERATION_TTL_SECONDS
+        ):
+            _ACTIVE_CHAT_GENERATIONS.pop(generation_id, None)
+
+
+def _register_active_generation(
+    *,
+    generation_id: str,
+    user_id: str,
+    model: str,
+    openai_model: str,
+    reasoning_mode: str,
+    transport: str,
+) -> ActiveChatGeneration:
+    _cleanup_active_generations()
+
+    existing = _ACTIVE_CHAT_GENERATIONS.get(generation_id)
+
+    if existing is not None and not existing.closed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Une génération portant cet identifiant est déjà active."
+            ),
+        )
+
+    state = ActiveChatGeneration(
+        user_id=user_id,
+        model=model,
+        openai_model=openai_model,
+        reasoning_mode=reasoning_mode,
+        transport=transport,
+    )
+
+    _ACTIVE_CHAT_GENERATIONS[generation_id] = state
+    return state
+
+
+def _close_active_generation(
+    generation_id: str,
+    state: ActiveChatGeneration,
+) -> None:
+    state.closed = True
+
+    if _ACTIVE_CHAT_GENERATIONS.get(generation_id) is state:
+        _ACTIVE_CHAT_GENERATIONS.pop(generation_id, None)
+
+
+def _sse(
+    event: str,
+    payload: dict[str, Any],
+) -> str:
+    """Encode un événement SSE Oria."""
+    return (
+        f"event: {event}\n"
+        "data: "
+        + dumps(payload, ensure_ascii=False)
+        + "\n\n"
+    )
+
+
+def _restart_message(
+    *,
+    original_message: str,
+    modification_instructions: list[str],
+) -> str:
+    """
+    Reconstruit la demande pour un smart restart sans créer un nouveau
+    message visible dans la conversation.
+    """
+    if not modification_instructions:
+        return original_message
+
+    instructions = "\n\n".join(
+        f"- {instruction}"
+        for instruction in modification_instructions
+        if instruction.strip()
+    )
+
+    if not instructions:
+        return original_message
+
+    return (
+        f"{original_message}\n\n"
+        "========================\n"
+        "MODIFICATION EN COURS DE RÉPONSE\n"
+        "========================\n"
+        "L'utilisateur a modifié la réponse attendue pendant la génération. "
+        "Réponds toujours à la demande originale, mais applique maintenant "
+        "les instructions les plus récentes ci-dessous. "
+        "Ne parle pas du redémarrage technique de la génération.\n\n"
+        f"{instructions}"
+    )
+
+
+
+
+
+
+# ============================================================
+# ARTIFACTS NATIFS — DÉTECTION / GÉNÉRATION / PERSISTANCE
+# ============================================================
+
+ARTIFACT_SERVICE = ArtifactService()
+ARTIFACT_REPOSITORY = supabase_artifact_repository
+
+MAX_ARTIFACTS_PER_TURN = 5
+
+_ARTIFACT_FORMAT_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
+    ("pdf", ("pdf",)),
+    ("docx", ("docx", "word", "document word")),
+    ("xlsx", ("xlsx", "excel", "classeur")),
+    ("pptx", ("pptx", "powerpoint", "power point", "diaporama")),
+    ("odt", ("odt", "open document text")),
+    ("ods", ("ods", "open document spreadsheet")),
+    ("odp", ("odp", "open document presentation")),
+    ("epub", ("epub", "ebook", "e-book", "livre numérique")),
+    ("rtf", ("rtf",)),
+    ("csv", ("csv",)),
+    ("tsv", ("tsv",)),
+    ("jsonl", ("jsonl", "ndjson")),
+    ("json", ("json",)),
+    ("sqlite", ("sqlite", "base sqlite")),
+    ("zip", ("zip", "archive zip")),
+    ("md", ("markdown", "fichier md", ".md")),
+    ("txt", ("txt", "texte brut", "plain text")),
+    ("html", ("html", "page html")),
+    ("css", ("css", "feuille css")),
+    ("tsx", ("tsx",)),
+    ("jsx", ("jsx",)),
+    ("ts", ("typescript", "fichier ts", ".ts")),
+    ("js", ("javascript", "fichier js", ".js")),
+    ("py", ("python", "fichier py", ".py")),
+    ("sql", ("sql", "script sql")),
+    ("xml", ("xml",)),
+    ("yaml", ("yaml", "yml")),
+    ("toml", ("toml",)),
+    ("svg", ("svg",)),
+    ("tex", ("latex", "fichier tex", ".tex")),
+    ("ics", ("ics", "calendrier ics")),
+    ("vcf", ("vcf", "vcard")),
+]
+
+_ARTIFACT_GENERATION_WORDS = (
+    "crée", "cree", "créer", "creer", "génère", "genere", "générer",
+    "generer", "fais", "faire", "fabrique", "prépare", "prepare",
+    "produis", "exporte", "convertis", "transforme", "donne-moi",
+    "donne moi", "create", "generate", "make", "build", "export",
+    "convert", "save", "give me", "write",
+)
+
+_CODE_EXTENSION_BY_LANGUAGE = {
+    "python": "py",
+    "py": "py",
+    "javascript": "js",
+    "js": "js",
+    "typescript": "ts",
+    "ts": "ts",
+    "tsx": "tsx",
+    "jsx": "jsx",
+    "json": "json",
+    "jsonl": "jsonl",
+    "sql": "sql",
+    "html": "html",
+    "css": "css",
+    "xml": "xml",
+    "yaml": "yaml",
+    "yml": "yml",
+    "toml": "toml",
+    "bash": "sh",
+    "shell": "sh",
+    "sh": "sh",
+    "powershell": "ps1",
+    "ps1": "ps1",
+    "java": "java",
+    "c": "c",
+    "cpp": "cpp",
+    "c++": "cpp",
+    "csharp": "cs",
+    "cs": "cs",
+    "go": "go",
+    "rust": "rs",
+    "rs": "rs",
+    "php": "php",
+    "ruby": "rb",
+    "rb": "rb",
+    "markdown": "md",
+    "md": "md",
+    "latex": "tex",
+    "tex": "tex",
+}
+
+
+def _artifact_filename_from_message(
+    message: str,
+    *,
+    extension: str,
+    explicit_filename: str | None = None,
+) -> str | None:
+    """
+    Résout un nom demandé explicitement.
+
+    Le nom final est encore assaini par ArtifactService puis par le repository.
+    """
+    if explicit_filename and explicit_filename.strip():
+        return explicit_filename.strip()
+
+    # Cherche un nom explicite du type rapport.pdf / main.py / data.xlsx.
+    match = re.search(
+        rf"""(?ix)
+        (?<![A-Za-z0-9_.-])
+        ([A-Za-z0-9À-ÿ _().-]{{1,100}}\.{re.escape(extension)})
+        (?![A-Za-z0-9_.-])
+        """,
+        message,
+    )
+
+    if match:
+        return match.group(1).strip()
+
+    return None
+
+
+def _resolve_artifact_requests(
+    *,
+    message: str,
+    explicit_type: str | None = None,
+    explicit_filename: str | None = None,
+) -> list[dict[str, str | None]]:
+    """
+    Détermine si le tour demande un ou plusieurs fichiers.
+
+    Priorité :
+    1. `artifact_type` fourni explicitement par le frontend ;
+    2. détection prudente dans le langage naturel.
+
+    `artifact_type` accepte aussi une liste séparée par des virgules afin que
+    le frontend puisse demander PDF + DOCX dans un seul tour.
+    """
+    message_text = str(message or "").strip()
+    lower_message = message_text.lower()
+
+    detected_types: list[str] = []
+
+    if explicit_type and explicit_type.strip():
+        raw_types = re.split(r"[,;|]+", explicit_type)
+
+        for raw_type in raw_types:
+            normalized = raw_type.strip().lower().lstrip(".")
+            normalized = ArtifactService.TYPE_ALIASES.get(
+                normalized,
+                normalized,
+            )
+
+            if normalized and normalized not in detected_types:
+                detected_types.append(normalized)
+    else:
+        # Évite de générer un fichier simplement parce que l'utilisateur parle
+        # du concept PDF/Excel. Il faut aussi une intention de création/export.
+        has_generation_intent = any(
+            word in lower_message
+            for word in _ARTIFACT_GENERATION_WORDS
+        )
+
+        # Quelques formulations sont naturellement des demandes de fichier.
+        has_file_intent = (
+            "fichier" in lower_message
+            or "file" in lower_message
+            or "document" in lower_message
+            or "présentation" in lower_message
+            or "presentation" in lower_message
+            or "tableur" in lower_message
+            or "spreadsheet" in lower_message
+            or "archive" in lower_message
+        )
+
+        if has_generation_intent or has_file_intent:
+            for extension, keywords in _ARTIFACT_FORMAT_PATTERNS:
+                if any(keyword in lower_message for keyword in keywords):
+                    if extension not in detected_types:
+                        detected_types.append(extension)
+
+    if not detected_types:
+        return []
+
+    requests: list[dict[str, str | None]] = []
+
+    for extension in detected_types[:MAX_ARTIFACTS_PER_TURN]:
+        filename = _artifact_filename_from_message(
+            message_text,
+            extension=extension,
+            explicit_filename=(
+                explicit_filename
+                if len(detected_types) == 1
+                else None
+            ),
+        )
+
+        # Si plusieurs formats sont demandés avec un nom fourni explicitement,
+        # réutiliser le même stem et adapter l'extension.
+        if (
+            explicit_filename
+            and len(detected_types) > 1
+            and explicit_filename.strip()
+        ):
+            raw_name = explicit_filename.strip()
+            stem = re.sub(
+                r"\.[A-Za-z0-9]{1,12}$",
+                "",
+                raw_name,
+            )
+            filename = f"{stem}.{extension}"
+
+        requests.append(
+            {
+                "file_type": extension,
+                "filename": filename,
+            }
+        )
+
+    return requests
+
+
+def _strip_outer_code_fence(
+    value: str,
+) -> str:
+    text = str(value or "").strip()
+
+    match = re.fullmatch(
+        r"```[A-Za-z0-9_+.-]*\s*\n?(.*?)\n?```",
+        text,
+        flags=re.DOTALL,
+    )
+
+    if match:
+        return match.group(1).strip()
+
+    return text
+
+
+def _try_json_payload(
+    value: str,
+) -> Any | None:
+    candidate = _strip_outer_code_fence(value)
+
+    try:
+        import json
+        return json.loads(candidate)
+    except Exception:
+        return None
+
+
+def _markdown_table_rows(
+    value: str,
+) -> list[list[str]] | None:
+    """
+    Extrait le premier tableau Markdown afin que XLSX/CSV/ODS deviennent
+    immédiatement exploitables au lieu d'avoir tout le texte dans une cellule.
+    """
+    raw_lines = [
+        line.strip()
+        for line in str(value or "").splitlines()
+    ]
+
+    for index in range(len(raw_lines) - 1):
+        header = raw_lines[index]
+        separator = raw_lines[index + 1]
+
+        if "|" not in header or "|" not in separator:
+            continue
+
+        separator_cells = [
+            cell.strip()
+            for cell in separator.strip("|").split("|")
+        ]
+
+        if not separator_cells:
+            continue
+
+        if not all(
+            re.fullmatch(r":?-{3,}:?", cell or "") is not None
+            for cell in separator_cells
+        ):
+            continue
+
+        rows: list[list[str]] = [
+            [
+                cell.strip()
+                for cell in header.strip("|").split("|")
+            ]
+        ]
+
+        cursor = index + 2
+
+        while cursor < len(raw_lines):
+            line = raw_lines[cursor]
+
+            if "|" not in line or not line:
+                break
+
+            rows.append(
+                [
+                    cell.strip()
+                    for cell in line.strip("|").split("|")
+                ]
+            )
+            cursor += 1
+
+        return rows
+
+    return None
+
+
+def _zip_content_from_response(
+    response_text: str,
+) -> dict[str, Any]:
+    """
+    Transforme des blocs de code Markdown en fichiers d'une archive ZIP.
+
+    Si la réponse n'est pas structurée en plusieurs fichiers, l'archive contient
+    simplement `README.md` avec la réponse complète.
+    """
+    files: list[dict[str, Any]] = []
+    text_value = str(response_text or "")
+
+    pattern = re.compile(
+        r"""(?ms)
+        (?:
+            ^\s*\#{1,6}\s+
+            (?P<heading>[^\n`]+?\.[A-Za-z0-9_+-]{1,12})
+            \s*\n
+        )?
+        ^```(?P<language>[A-Za-z0-9_+.-]*)[^\n]*\n
+        (?P<code>.*?)
+        ^```\s*$
+        """,
+        re.VERBOSE,
+    )
+
+    for index, match in enumerate(pattern.finditer(text_value), start=1):
+        heading = (match.group("heading") or "").strip()
+        language = (match.group("language") or "").strip().lower()
+        code = match.group("code")
+
+        if heading:
+            filename = heading.split("/")[-1].strip()
+            extension = filename.rsplit(".", 1)[-1].lower()
+        else:
+            extension = _CODE_EXTENSION_BY_LANGUAGE.get(
+                language,
+                "txt",
+            )
+            filename = f"fichier-{index}.{extension}"
+
+        files.append(
+            {
+                "name": filename,
+                "file_type": extension,
+                "content": code,
+            }
+        )
+
+    if not files:
+        files.append(
+            {
+                "name": "README.md",
+                "file_type": "md",
+                "content": text_value,
+            }
+        )
+
+    return {"files": files[:ArtifactService.MAX_ARCHIVE_FILES]}
+
+
+def _artifact_content_from_response(
+    *,
+    file_type: str,
+    response_text: str,
+) -> Any:
+    """
+    Adapte la réponse finale au format demandé sans nouvel appel IA.
+
+    Le coût utilisateur reste donc le coût du tour Chat déjà calculé.
+    """
+    normalized_type = str(file_type).lower().lstrip(".")
+    cleaned = _strip_outer_code_fence(response_text)
+
+    if normalized_type in {"xlsx", "ods", "csv", "tsv"}:
+        json_payload = _try_json_payload(cleaned)
+
+        if isinstance(json_payload, (list, dict)):
+            return json_payload
+
+        table_rows = _markdown_table_rows(cleaned)
+
+        if table_rows:
+            return table_rows
+
+        return [
+            [line]
+            for line in cleaned.splitlines()
+            if line.strip()
+        ] or [[""]]
+
+    if normalized_type in {"json", "jsonl", "ndjson"}:
+        json_payload = _try_json_payload(cleaned)
+
+        if json_payload is not None:
+            return json_payload
+
+        return {"content": cleaned}
+
+    if normalized_type == "sqlite":
+        json_payload = _try_json_payload(cleaned)
+
+        if isinstance(json_payload, list):
+            if all(isinstance(row, dict) for row in json_payload):
+                return json_payload
+
+        if isinstance(json_payload, dict):
+            if "tables" in json_payload:
+                return json_payload
+            return [json_payload]
+
+        return [{"content": cleaned}]
+
+    if normalized_type == "zip":
+        return _zip_content_from_response(cleaned)
+
+    return cleaned
+
+
+def _artifact_public_payload(
+    artifact: dict[str, Any],
+) -> dict[str, Any]:
+    """Réduit les métadonnées à ce qui doit être envoyé au frontend."""
+    return {
+        "id": artifact.get("id"),
+        "artifact_id": artifact.get("id"),
+        "filename": artifact.get("filename"),
+        "extension": artifact.get("extension"),
+        "mime_type": artifact.get("mime_type"),
+        "category": artifact.get("category"),
+        "size_bytes": artifact.get("size_bytes"),
+        "sha256": artifact.get("sha256"),
+        "conversation_id": artifact.get("conversation_id"),
+        "source_message_id": artifact.get("source_message_id"),
+        "download_url": artifact.get("download_url"),
+        "url": artifact.get("download_url") or artifact.get("url"),
+        "created_at": artifact.get("created_at"),
+    }
+
+
+def _create_and_persist_artifact(
+    *,
+    authenticated_user_id: str,
+    artifact_request: dict[str, str | None],
+    response_text: str,
+    conversation_id: str | None,
+    source_message_id: str | None,
+    model: str,
+    openai_model: str,
+    generation_id: str | None,
+    attempt_id: str | None,
+    reasoning_mode: str,
+) -> dict[str, Any]:
+    """Fabrique puis persiste un artifact privé dans Supabase."""
+    file_type = str(
+        artifact_request.get("file_type") or ""
+    ).strip()
+
+    filename = artifact_request.get("filename")
+
+    content = _artifact_content_from_response(
+        file_type=file_type,
+        response_text=response_text,
+    )
+
+    generated = ARTIFACT_SERVICE.create(
+        file_type=file_type,
+        content=content,
+        filename=filename,
+        metadata={
+            "source": "oria-chat",
+            "generation_id": generation_id,
+            "attempt_id": attempt_id,
+            "reasoning_mode": reasoning_mode,
+            "oria_model": model,
+            "openai_model": openai_model,
+        },
+    )
+
+    persisted = ARTIFACT_REPOSITORY.save_artifact(
+        user_id=authenticated_user_id,
+        artifact_id=generated.artifact_id,
+        filename=generated.filename,
+        extension=generated.extension,
+        mime_type=generated.mime_type,
+        category=generated.category,
+        file_bytes=generated.data,
+        size_bytes=generated.size_bytes,
+        sha256=generated.sha256,
+        conversation_id=conversation_id,
+        model=model,
+        source_message_id=source_message_id,
+        metadata=generated.metadata,
+    )
+
+    return _artifact_public_payload(persisted)
+
+
+# ============================================================
+# ENDPOINTS ARTIFACTS
+# ============================================================
+
+
+@router.get("/artifact-capabilities")
+def get_artifact_capabilities(
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Retourne les formats de fichiers que le backend Oria sait fabriquer."""
+    _authenticate_chat_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    return {
+        "success": True,
+        "private_storage": True,
+        "max_artifacts_per_turn": MAX_ARTIFACTS_PER_TURN,
+        "max_file_size_bytes": ArtifactService.MAX_ARTIFACT_BYTES,
+        "formats": ARTIFACT_SERVICE.supported_types(),
+    }
+
+
+@router.get("/artifacts")
+def list_user_artifacts(
+    conversation_id: str | None = None,
+    category: str | None = None,
+    extension: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    include_urls: bool = False,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Liste les fichiers générés appartenant à l'utilisateur courant."""
+    authenticated_user_id = _authenticate_chat_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    artifacts = ARTIFACT_REPOSITORY.list_artifacts(
+        user_id=authenticated_user_id,
+        conversation_id=conversation_id,
+        category=category,
+        extension=extension,
+        limit=limit,
+        offset=offset,
+        include_urls=include_urls,
+    )
+
+    return {
+        "success": True,
+        "artifacts": [
+            _artifact_public_payload(item)
+            for item in artifacts
+        ],
+    }
+
+
+@router.get("/artifacts/{artifact_id}")
+def get_user_artifact(
+    artifact_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Retourne un fichier avec une nouvelle URL signée de téléchargement."""
+    authenticated_user_id = _authenticate_chat_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    artifact = ARTIFACT_REPOSITORY.get_artifact_with_url(
+        artifact_id=artifact_id,
+        user_id=authenticated_user_id,
+    )
+
+    if artifact is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Fichier généré introuvable.",
+        )
+
+    return {
+        "success": True,
+        "artifact": _artifact_public_payload(artifact),
+    }
+
+
+@router.delete("/artifacts/{artifact_id}")
+def delete_user_artifact(
+    artifact_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Supprime définitivement un fichier généré appartenant à l'utilisateur."""
+    authenticated_user_id = _authenticate_chat_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    deleted = ARTIFACT_REPOSITORY.delete_artifact(
+        artifact_id=artifact_id,
+        user_id=authenticated_user_id,
+    )
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Fichier généré introuvable.",
+        )
+
+    return {
+        "success": True,
+        "artifact_id": artifact_id,
+        "deleted": True,
+    }
 
 
 # ============================================================
@@ -2166,10 +3028,15 @@ async def chat(
     message: str = Form(""),
     web: bool = Form(False),
     conversation_id: str | None = Form(default=None),
+    reasoning_mode: str = Form("balanced"),
+    artifact_type: str | None = Form(default=None),
+    artifact_filename: str | None = Form(default=None),
+    source_message_id: str | None = Form(default=None),
     files: list[UploadFile] = File(default=[]),
     user_id: str | None = Header(default=None, alias="user-id"),
     authorization: str | None = Header(default=None, alias="authorization"),
 ):
+    reasoning_mode = _normalize_reasoning_mode(reasoning_mode)
     attachments = await _build_attachments(files)
 
     (
@@ -2188,6 +3055,12 @@ async def chat(
         user_id=user_id,
         authorization=authorization,
         conversation_id=conversation_id,
+    )
+
+    artifact_requests = _resolve_artifact_requests(
+        message=message,
+        explicit_type=artifact_type,
+        explicit_filename=artifact_filename,
     )
 
     reservation_id, _reserved_amount = _reserve_chat_credits(
@@ -2210,6 +3083,7 @@ async def chat(
             web=web,
             attachments=_attachments_for_openai(attachments),
             history=history,
+            reasoning_mode=reasoning_mode,
         )
     except Exception as error:
         try:
@@ -2251,6 +3125,28 @@ async def chat(
     except RuntimeError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
 
+    generated_artifacts: list[dict[str, Any]] = []
+    artifact_errors: list[str] = []
+
+    for artifact_request in artifact_requests:
+        try:
+            generated_artifacts.append(
+                _create_and_persist_artifact(
+                    authenticated_user_id=authenticated_user_id,
+                    artifact_request=artifact_request,
+                    response_text=response_text,
+                    conversation_id=conversation_id,
+                    source_message_id=source_message_id,
+                    model=model,
+                    openai_model=MODEL_OPENAI_IDS[model],
+                    generation_id=None,
+                    attempt_id=None,
+                    reasoning_mode=reasoning_mode,
+                )
+            )
+        except Exception as error:
+            artifact_errors.append(str(error))
+
     return ChatResponse(
         success=True,
         model=model,
@@ -2265,6 +3161,8 @@ async def chat(
         requires_critical_warning=result.requires_critical_warning,
         trial=is_trial_model,
         trials_remaining=trials_remaining,
+        artifacts=generated_artifacts or None,
+        artifact_errors=artifact_errors or None,
     )
 
 
@@ -3624,6 +4522,127 @@ def get_trials(
 
 
 # ============================================================
+# POST /ai/chat/control
+# ============================================================
+
+
+@router.post("/chat/control")
+async def control_chat_generation(
+    payload: ChatControlRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """
+    Modifie une génération déjà active.
+
+    - changement d'instruction sur GPT-6 + WebSocket : mid-turn steering ;
+    - changement de reasoning : smart restart ;
+    - modèle sans steering : smart restart.
+
+    Le contrôle n'est activé que lorsque le transport Responses WebSocket
+    est disponible. Le streaming HTTP classique reste un fallback sûr.
+    """
+    authenticated_user_id = _authenticate_chat_user(
+        user_id=user_id,
+        authorization=authorization,
+    )
+
+    generation_id = _normalize_generation_id(payload.generation_id)
+    state = _ACTIVE_CHAT_GENERATIONS.get(generation_id)
+
+    if state is None or state.closed:
+        raise HTTPException(
+            status_code=404,
+            detail="Cette génération n'est plus active.",
+        )
+
+    if state.user_id != authenticated_user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Cette génération appartient à un autre utilisateur.",
+        )
+
+    instruction = str(payload.instruction or "").strip()
+
+    if len(instruction) > MAX_CONTROL_INSTRUCTION_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "L'instruction de modification est trop longue "
+                f"(maximum {MAX_CONTROL_INSTRUCTION_CHARS} caractères)."
+            ),
+        )
+
+    requested_reasoning = (
+        _normalize_reasoning_mode(payload.reasoning_mode)
+        if payload.reasoning_mode
+        else None
+    )
+
+    reasoning_changed = bool(
+        requested_reasoning
+        and requested_reasoning != state.reasoning_mode
+    )
+    instruction_changed = bool(instruction)
+
+    if not reasoning_changed and not instruction_changed:
+        return {
+            "success": True,
+            "accepted": False,
+            "generation_id": generation_id,
+            "strategy": "none",
+            "reasoning_mode": state.reasoning_mode,
+        }
+
+    # Le contrôle bidirectionnel pendant une réponse nécessite Responses
+    # WebSocket. Avec l'ancien SDK, le chat continue normalement en HTTP.
+    if state.transport != "websocket":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "La modification en cours de génération nécessite "
+                "Responses WebSocket sur le backend. "
+                "Le streaming HTTP actuel reste actif."
+            ),
+        )
+
+    openai_service = OpenAIService()
+    strategy = openai_service.resolve_modification_strategy(
+        model=state.openai_model,
+        instruction_changed=instruction_changed,
+        reasoning_changed=reasoning_changed,
+    )
+
+    command = {
+        "type": "modify",
+        "instruction": instruction,
+        "reasoning_mode": requested_reasoning,
+    }
+
+    try:
+        state.control_queue.put_nowait(command)
+    except asyncio.QueueFull as error:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Trop de modifications sont déjà en attente. "
+                "Attendez qu'Oria applique la précédente."
+            ),
+        ) from error
+
+    return {
+        "success": True,
+        "accepted": True,
+        "generation_id": generation_id,
+        "attempt_id": state.active_attempt_id,
+        "strategy": strategy,
+        "reasoning_mode": (
+            requested_reasoning or state.reasoning_mode
+        ),
+    }
+
+
+# ============================================================
 # POST /ai/chat/stream
 # ============================================================
 
@@ -3634,12 +4653,36 @@ async def chat_stream(
     message: str = Form(""),
     web: bool = Form(False),
     conversation_id: str | None = Form(default=None),
+    reasoning_mode: str = Form("balanced"),
+    generation_id: str | None = Form(default=None),
+    artifact_type: str | None = Form(default=None),
+    artifact_filename: str | None = Form(default=None),
+    source_message_id: str | None = Form(default=None),
     files: list[UploadFile] = File(default=[]),
     user_id: str | None = Header(default=None, alias="user-id"),
     authorization: str | None = Header(default=None, alias="authorization"),
 ):
-    """Streaming Chat Oria avec réservation avant l'appel et settlement final."""
+    """
+    Streaming Chat Oria V2.
+
+    Contrat principal :
+    - reasoning_mode : fast | balanced | deep ;
+    - generation_id : identifiant stable du tour ;
+    - attempt_id : identifiant de chaque tentative OpenAI ;
+    - GPT-6 + WebSocket : steering sans redémarrage ;
+    - changement de reasoning / steering impossible : smart restart ;
+    - une seule réservation Oria est conservée pour le tour logique.
+    """
+    route_started_at = perf_counter()
+
+    reasoning_mode = _normalize_reasoning_mode(reasoning_mode)
+    generation_id = _normalize_generation_id(generation_id)
+
+    attachments_started_at = perf_counter()
     attachments = await _build_attachments(files)
+    attachments_ms = (perf_counter() - attachments_started_at) * 1000
+
+    prepare_started_at = perf_counter()
 
     (
         authenticated_user_id,
@@ -3659,6 +4702,16 @@ async def chat_stream(
         conversation_id=conversation_id,
     )
 
+    artifact_requests = _resolve_artifact_requests(
+        message=message,
+        explicit_type=artifact_type,
+        explicit_filename=artifact_filename,
+    )
+
+    prepare_ms = (perf_counter() - prepare_started_at) * 1000
+
+    reserve_started_at = perf_counter()
+
     reservation_id, reserved_amount = _reserve_chat_credits(
         repository=repository,
         authenticated_user_id=authenticated_user_id,
@@ -3670,62 +4723,379 @@ async def chat_stream(
         web=web,
     )
 
+    reserve_ms = (perf_counter() - reserve_started_at) * 1000
+
     openai_service = OpenAIService()
     openai_attachments = _attachments_for_openai(attachments)
+    openai_model = MODEL_OPENAI_IDS[model]
 
-    def event_stream():
+    websocket_available = (
+        openai_service.supports_responses_websocket()
+    )
+    transport = (
+        "websocket"
+        if websocket_available
+        else "http"
+    )
+
+    try:
+        generation_state = _register_active_generation(
+            generation_id=generation_id,
+            user_id=authenticated_user_id,
+            model=model,
+            openai_model=openai_model,
+            reasoning_mode=reasoning_mode,
+            transport=transport,
+        )
+    except Exception:
+        # La réservation a déjà été créée : si l'enregistrement local échoue
+        # avant tout appel OpenAI, elle doit être rendue.
+        try:
+            _release_chat_reservation(
+                repository=repository,
+                authenticated_user_id=authenticated_user_id,
+                reservation_id=reservation_id,
+            )
+        except Exception:
+            pass
+        raise
+
+    async def event_stream():
         full_response = ""
         final_usage = None
         final_web_search_calls = None
+        final_openai_timing: dict[str, Any] = {}
         settled = False
+        first_delta_server_ms: float | None = None
+
+        current_reasoning_mode = reasoning_mode
+        original_message = message
+        modification_instructions: list[str] = []
+
+        restart_count = 0
+        attempt_number = 1
+        attempt_id = str(uuid4())
 
         try:
-            yield (
-                "event: start\n"
-                "data: "
-                + dumps(
-                    {
-                        "success": True,
-                        "model": model,
-                        "web": web,
-                        "attachments": len(openai_attachments),
-                        "reservation_id": reservation_id,
-                        "reserved_credits": reserved_amount,
+            generation_state.active_attempt_id = attempt_id
+
+            yield _sse(
+                "start",
+                {
+                    "success": True,
+                    "model": model,
+                    "openai_model": openai_model,
+                    "web": web,
+                    "attachments": len(openai_attachments),
+                    "generation_id": generation_id,
+                    "attempt_id": attempt_id,
+                    "reasoning_mode": current_reasoning_mode,
+                    "reservation_id": reservation_id,
+                    "reserved_credits": reserved_amount,
+                    "transport": transport,
+                    "live_modify": websocket_available,
+                    "artifact_requests": artifact_requests,
+                    "timing": {
+                        "attachments_ms": attachments_ms,
+                        "prepare_chat_ms": prepare_ms,
+                        "reserve_credits_ms": reserve_ms,
+                        "backend_pre_stream_ms": (
+                            perf_counter() - route_started_at
+                        ) * 1000,
                     },
-                    ensure_ascii=False,
-                )
-                + "\n\n"
+                },
             )
 
-            stream_result = openai_service.chat_stream(
-                model=MODEL_OPENAI_IDS[model],
-                message=message,
-                web=web,
-                attachments=openai_attachments,
-                history=history,
-            )
+            while True:
+                generation_state.reasoning_mode = current_reasoning_mode
+                generation_state.active_attempt_id = attempt_id
 
-            for item in stream_result:
-                if item is None:
-                    continue
-
-                delta, usage, web_search_calls = _parse_stream_item(item)
-
-                if usage is not None:
-                    final_usage = usage
-                if web_search_calls is not None:
-                    final_web_search_calls = web_search_calls
-                if not delta:
-                    continue
-
-                full_response += delta
-                yield (
-                    "event: delta\n"
-                    "data: "
-                    + dumps({"content": delta}, ensure_ascii=False)
-                    + "\n\n"
+                attempt_message = _restart_message(
+                    original_message=original_message,
+                    modification_instructions=modification_instructions,
                 )
 
+                restart_request: dict[str, Any] | None = None
+                final_usage = None
+                final_web_search_calls = None
+                final_openai_timing = {}
+
+                if websocket_available:
+                    stream_result = openai_service.chat_stream_websocket(
+                        model=openai_model,
+                        message=attempt_message,
+                        web=web,
+                        attachments=openai_attachments,
+                        history=history,
+                        reasoning_mode=current_reasoning_mode,
+                        generation_id=attempt_id,
+                        control_queue=generation_state.control_queue,
+                    )
+
+                    try:
+                        async for item in stream_result:
+                            if item is None:
+                                continue
+
+                            payload = _as_mapping(item)
+                            if payload is None:
+                                continue
+
+                            item_type = str(
+                                payload.get("type") or ""
+                            ).strip()
+
+                            if item_type == "delta":
+                                delta = str(
+                                    payload.get("content") or ""
+                                )
+
+                                if not delta:
+                                    continue
+
+                                if first_delta_server_ms is None:
+                                    first_delta_server_ms = (
+                                        perf_counter() - route_started_at
+                                    ) * 1000
+
+                                full_response += delta
+
+                                yield _sse(
+                                    "delta",
+                                    {
+                                        "content": delta,
+                                        "generation_id": generation_id,
+                                        "attempt_id": attempt_id,
+                                        "response_id": payload.get(
+                                            "response_id"
+                                        ),
+                                    },
+                                )
+                                continue
+
+                            if item_type == "usage":
+                                final_usage = payload.get("usage")
+                                final_web_search_calls = payload.get(
+                                    "web_search_calls"
+                                )
+                                final_openai_timing = (
+                                    payload.get("timing")
+                                    if isinstance(
+                                        payload.get("timing"),
+                                        dict,
+                                    )
+                                    else {}
+                                )
+                                continue
+
+                            if item_type == "restart_required":
+                                if restart_count >= MAX_SMART_RESTARTS:
+                                    yield _sse(
+                                        "modify_rejected",
+                                        {
+                                            "generation_id": generation_id,
+                                            "attempt_id": attempt_id,
+                                            "reason": "restart_limit_reached",
+                                            "detail": (
+                                                "La limite de redémarrages "
+                                                "de cette réponse est atteinte."
+                                            ),
+                                        },
+                                    )
+                                    # On laisse la génération actuelle continuer.
+                                    continue
+
+                                restart_request = payload
+                                break
+
+                            if item_type in {
+                                "response_meta",
+                                "steer_sent",
+                                "steer_accepted",
+                                "steer_boundary",
+                                "control_error",
+                            }:
+                                forwarded = dict(payload)
+                                forwarded["generation_id"] = generation_id
+                                forwarded["attempt_id"] = attempt_id
+
+                                yield _sse(
+                                    item_type,
+                                    forwarded,
+                                )
+                                continue
+
+                    finally:
+                        # En cas de smart restart, fermer explicitement l'ancien
+                        # flux WebSocket afin qu'aucun delta tardif ne se mélange
+                        # avec la nouvelle tentative.
+                        if restart_request is not None:
+                            try:
+                                await stream_result.aclose()
+                            except Exception:
+                                pass
+
+                else:
+                    # Fallback sûr : streaming HTTP historique.
+                    # Le chat reste utilisable si le SDK WebSocket n'est pas
+                    # encore installé, mais le bouton Modifier en cours de
+                    # génération est désactivé par /chat/control.
+                    stream_result = openai_service.chat_stream(
+                        model=openai_model,
+                        message=attempt_message,
+                        web=web,
+                        attachments=openai_attachments,
+                        history=history,
+                        reasoning_mode=current_reasoning_mode,
+                        generation_id=attempt_id,
+                    )
+
+                    for item in stream_result:
+                        if item is None:
+                            continue
+
+                        payload = _as_mapping(item)
+
+                        if payload is None:
+                            # Compatibilité avec une ancienne implémentation.
+                            delta, usage, web_search_calls = _parse_stream_item(
+                                item
+                            )
+
+                            if usage is not None:
+                                final_usage = usage
+
+                            if web_search_calls is not None:
+                                final_web_search_calls = web_search_calls
+
+                            if delta:
+                                if first_delta_server_ms is None:
+                                    first_delta_server_ms = (
+                                        perf_counter() - route_started_at
+                                    ) * 1000
+
+                                full_response += delta
+                                yield _sse(
+                                    "delta",
+                                    {
+                                        "content": delta,
+                                        "generation_id": generation_id,
+                                        "attempt_id": attempt_id,
+                                    },
+                                )
+
+                            continue
+
+                        item_type = str(
+                            payload.get("type") or ""
+                        ).strip()
+
+                        if item_type == "delta":
+                            delta = str(
+                                payload.get("content") or ""
+                            )
+
+                            if not delta:
+                                continue
+
+                            if first_delta_server_ms is None:
+                                first_delta_server_ms = (
+                                    perf_counter() - route_started_at
+                                ) * 1000
+
+                            full_response += delta
+
+                            yield _sse(
+                                "delta",
+                                {
+                                    "content": delta,
+                                    "generation_id": generation_id,
+                                    "attempt_id": attempt_id,
+                                    "response_id": payload.get(
+                                        "response_id"
+                                    ),
+                                },
+                            )
+                            continue
+
+                        if item_type == "usage":
+                            final_usage = payload.get("usage")
+                            final_web_search_calls = payload.get(
+                                "web_search_calls"
+                            )
+                            final_openai_timing = (
+                                payload.get("timing")
+                                if isinstance(
+                                    payload.get("timing"),
+                                    dict,
+                                )
+                                else {}
+                            )
+                            continue
+
+                        if item_type == "response_meta":
+                            forwarded = dict(payload)
+                            forwarded["generation_id"] = generation_id
+                            forwarded["attempt_id"] = attempt_id
+                            yield _sse("response_meta", forwarded)
+
+                # ----------------------------------------------------
+                # SMART RESTART
+                # ----------------------------------------------------
+                if restart_request is not None:
+                    restart_count += 1
+
+                    requested_mode = restart_request.get(
+                        "reasoning_mode"
+                    )
+                    if requested_mode:
+                        current_reasoning_mode = (
+                            _normalize_reasoning_mode(
+                                str(requested_mode)
+                            )
+                        )
+
+                    instruction = str(
+                        restart_request.get("instruction") or ""
+                    ).strip()
+
+                    if instruction:
+                        modification_instructions.append(instruction)
+
+                    old_attempt_id = attempt_id
+                    attempt_number += 1
+                    attempt_id = str(uuid4())
+
+                    # La réponse visible doit repartir proprement dans la même
+                    # bulle. Le frontend videra uniquement le contenu assistant,
+                    # jamais le message utilisateur.
+                    full_response = ""
+                    first_delta_server_ms = None
+
+                    generation_state.reasoning_mode = (
+                        current_reasoning_mode
+                    )
+                    generation_state.active_attempt_id = attempt_id
+
+                    yield _sse(
+                        "generation_restarted",
+                        {
+                            "generation_id": generation_id,
+                            "old_attempt_id": old_attempt_id,
+                            "attempt_id": attempt_id,
+                            "attempt_number": attempt_number,
+                            "reasoning_mode": current_reasoning_mode,
+                            "reason": restart_request.get("reason"),
+                            "replace_content": True,
+                        },
+                    )
+                    continue
+
+                break
+
+            # --------------------------------------------------------
+            # VALIDATION DE LA RÉPONSE FINALE
+            # --------------------------------------------------------
             if not full_response.strip():
                 try:
                     _release_chat_reservation(
@@ -3736,48 +5106,43 @@ async def chat_stream(
                 except Exception:
                     pass
 
-                yield (
-                    "event: error\n"
-                    "data: "
-                    + dumps(
-                        {"detail": "Le service IA n'a retourné aucun contenu."},
-                        ensure_ascii=False,
-                    )
-                    + "\n\n"
+                yield _sse(
+                    "error",
+                    {
+                        "detail": (
+                            "Le service IA n'a retourné aucun contenu."
+                        ),
+                        "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                    },
                 )
                 return
 
             if final_usage is None:
-                yield (
-                    "event: error\n"
-                    "data: "
-                    + dumps(
-                        {
-                            "detail": (
-                                "La réponse a été générée mais l'usage OpenAI "
-                                "final n'a pas été fourni."
-                            )
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n\n"
+                yield _sse(
+                    "error",
+                    {
+                        "detail": (
+                            "La réponse a été générée mais l'usage OpenAI "
+                            "final n'a pas été fourni."
+                        ),
+                        "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                    },
                 )
                 return
 
             if web and final_web_search_calls is None:
-                yield (
-                    "event: error\n"
-                    "data: "
-                    + dumps(
-                        {
-                            "detail": (
-                                "La réponse Web a été générée mais le nombre réel "
-                                "de recherches Web n'a pas été fourni."
-                            )
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n\n"
+                yield _sse(
+                    "error",
+                    {
+                        "detail": (
+                            "La réponse Web a été générée mais le nombre réel "
+                            "de recherches Web n'a pas été fourni."
+                        ),
+                        "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                    },
                 )
                 return
 
@@ -3788,11 +5153,13 @@ async def chat_stream(
                     web_search_calls=(final_web_search_calls or 0),
                 )
             except RuntimeError as error:
-                yield (
-                    "event: error\n"
-                    "data: "
-                    + dumps({"detail": str(error)}, ensure_ascii=False)
-                    + "\n\n"
+                yield _sse(
+                    "error",
+                    {
+                        "detail": str(error),
+                        "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                    },
                 )
                 return
 
@@ -3809,49 +5176,131 @@ async def chat_stream(
                 )
                 settled = True
             except Exception as error:
-                yield (
-                    "event: error\n"
-                    "data: "
-                    + dumps(
-                        {
-                            "detail": (
-                                "La réponse IA a été générée mais le settlement "
-                                f"des crédits a échoué : {error}"
-                            )
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n\n"
+                yield _sse(
+                    "error",
+                    {
+                        "detail": (
+                            "La réponse IA a été générée mais le settlement "
+                            f"des crédits a échoué : {error}"
+                        ),
+                        "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                    },
                 )
                 return
 
-            yield (
-                "event: done\n"
-                "data: "
-                + dumps(
-                    {
-                        "success": True,
-                        "model": model,
-                        "action": result.action.value,
-                        "cost": result.cost,
-                        "previous_balance": result.previous_balance,
-                        "credits_remaining": result.new_balance,
-                        "consumed_percentage": result.consumed_percentage,
-                        "remaining_percentage": result.remaining_percentage,
-                        "requires_warning": result.requires_warning,
-                        "requires_critical_warning": result.requires_critical_warning,
-                        "trial": is_trial_model,
-                        "trials_remaining": trials_remaining,
-                    },
-                    ensure_ascii=False,
+            generated_artifacts: list[dict[str, Any]] = []
+            artifact_errors: list[str] = []
+
+            for artifact_request in artifact_requests:
+                file_type = str(
+                    artifact_request.get("file_type") or ""
                 )
-                + "\n\n"
+
+                yield _sse(
+                    "artifact_processing",
+                    {
+                        "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                        "file_type": file_type,
+                        "filename": artifact_request.get("filename"),
+                    },
+                )
+
+                try:
+                    artifact_payload = _create_and_persist_artifact(
+                        authenticated_user_id=authenticated_user_id,
+                        artifact_request=artifact_request,
+                        response_text=full_response,
+                        conversation_id=conversation_id,
+                        source_message_id=source_message_id,
+                        model=model,
+                        openai_model=openai_model,
+                        generation_id=generation_id,
+                        attempt_id=attempt_id,
+                        reasoning_mode=current_reasoning_mode,
+                    )
+
+                    generated_artifacts.append(artifact_payload)
+
+                    yield _sse(
+                        "artifact",
+                        {
+                            **artifact_payload,
+                            "generation_id": generation_id,
+                            "attempt_id": attempt_id,
+                        },
+                    )
+
+                except Exception as error:
+                    detail = str(error)
+                    artifact_errors.append(detail)
+
+                    yield _sse(
+                        "artifact_error",
+                        {
+                            "generation_id": generation_id,
+                            "attempt_id": attempt_id,
+                            "file_type": file_type,
+                            "detail": detail,
+                        },
+                    )
+
+            yield _sse(
+                "done",
+                {
+                    "success": True,
+                    "model": model,
+                    "openai_model": openai_model,
+                    "action": result.action.value,
+                    "cost": result.cost,
+                    "previous_balance": result.previous_balance,
+                    "credits_remaining": result.new_balance,
+                    "consumed_percentage": result.consumed_percentage,
+                    "remaining_percentage": result.remaining_percentage,
+                    "requires_warning": result.requires_warning,
+                    "requires_critical_warning": (
+                        result.requires_critical_warning
+                    ),
+                    "trial": is_trial_model,
+                    "trials_remaining": trials_remaining,
+                    "generation_id": generation_id,
+                    "attempt_id": attempt_id,
+                    "attempts": attempt_number,
+                    "smart_restarts": restart_count,
+                    "reasoning_mode": current_reasoning_mode,
+                    "transport": transport,
+                    "artifacts": generated_artifacts,
+                    "artifact_errors": artifact_errors,
+                    "timing": {
+                        **final_openai_timing,
+                        "first_delta_server_ms": first_delta_server_ms,
+                        "server_total_ms": (
+                            perf_counter() - route_started_at
+                        ) * 1000,
+                        "attachments_ms": attachments_ms,
+                        "prepare_chat_ms": prepare_ms,
+                        "reserve_credits_ms": reserve_ms,
+                    },
+                },
             )
 
+        except asyncio.CancelledError:
+            # Le client a fermé le flux. Si aucun contenu n'a été produit,
+            # rendre la réservation ; sinon ne pas rembourser aveuglément
+            # une consommation fournisseur potentiellement engagée.
+            if not settled and not full_response.strip():
+                try:
+                    _release_chat_reservation(
+                        repository=repository,
+                        authenticated_user_id=authenticated_user_id,
+                        reservation_id=reservation_id,
+                    )
+                except Exception:
+                    pass
+            raise
+
         except Exception as error:
-            # Si aucun contenu n'a été produit, l'appel n'a pas abouti : on rend
-            # la réservation. Après production de contenu, on évite un remboursement
-            # aveugle car le fournisseur peut déjà avoir facturé des tokens.
             if not settled and not full_response.strip():
                 try:
                     _release_chat_reservation(
@@ -3862,14 +5311,21 @@ async def chat_stream(
                 except Exception:
                     pass
 
-            yield (
-                "event: error\n"
-                "data: "
-                + dumps(
-                    {"detail": f"Erreur pendant le streaming IA : {error}"},
-                    ensure_ascii=False,
-                )
-                + "\n\n"
+            yield _sse(
+                "error",
+                {
+                    "detail": (
+                        f"Erreur pendant le streaming IA : {error}"
+                    ),
+                    "generation_id": generation_id,
+                    "attempt_id": attempt_id,
+                },
+            )
+
+        finally:
+            _close_active_generation(
+                generation_id,
+                generation_state,
             )
 
     return StreamingResponse(
