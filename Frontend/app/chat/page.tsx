@@ -155,6 +155,45 @@ const USER_MESSAGE_COLLAPSE_LINES = 8;
 
 
 type OriaLanguage = "fr" | "en";
+type ReasoningMode = "fast" | "balanced" | "deep";
+
+const REASONING_OPTIONS: Array<{
+  id: ReasoningMode;
+  label: Record<OriaLanguage, string>;
+  description: Record<OriaLanguage, string>;
+}> = [
+  {
+    id: "fast",
+    label: { fr: "Rapide", en: "Fast" },
+    description: {
+      fr: "Réponse plus rapide",
+      en: "Faster response",
+    },
+  },
+  {
+    id: "balanced",
+    label: { fr: "Équilibré", en: "Balanced" },
+    description: {
+      fr: "Bon compromis vitesse / réflexion",
+      en: "Balanced speed and reasoning",
+    },
+  },
+  {
+    id: "deep",
+    label: { fr: "Approfondi", en: "Deep" },
+    description: {
+      fr: "Plus de réflexion pour les tâches complexes",
+      en: "More reasoning for complex tasks",
+    },
+  },
+];
+
+function getReasoningOption(mode: ReasoningMode) {
+  return (
+    REASONING_OPTIONS.find((item) => item.id === mode) ??
+    REASONING_OPTIONS[1]
+  );
+}
 
 const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
 
@@ -2406,8 +2445,20 @@ export default function ChatPage() {
   const [modelMenuOpen, setModelMenuOpen] =
     useState(false);
 
+  const [reasoningMenuOpen, setReasoningMenuOpen] =
+    useState(false);
+
   const [selectedModel, setSelectedModel] =
     useState("luna");
+
+  const [reasoningMode, setReasoningMode] =
+    useState<ReasoningMode>("balanced");
+
+  const [activeGenerationId, setActiveGenerationId] =
+    useState<string | null>(null);
+
+  const [canModifyActiveGeneration, setCanModifyActiveGeneration] =
+    useState(false);
 
   const [message, setMessage] =
     useState("");
@@ -4078,6 +4129,50 @@ export default function ChatPage() {
    * ==========================================================
    */
 
+  async function selectReasoningMode(
+    mode: ReasoningMode,
+  ) {
+    setReasoningMode(mode);
+    setReasoningMenuOpen(false);
+    setModelMenuOpen(false);
+
+    if (
+      !isThinking ||
+      !activeGenerationId ||
+      !canModifyActiveGeneration
+    ) {
+      return;
+    }
+
+    try {
+      await apiFetch<{
+        success?: boolean;
+        accepted?: boolean;
+        strategy?: string;
+        reasoning_mode?: ReasoningMode;
+      }>("/ai/chat/control", {
+        method: "POST",
+        body: JSON.stringify({
+          generation_id: activeGenerationId,
+          reasoning_mode: mode,
+        }),
+      });
+    } catch (requestError) {
+      console.error(
+        "Modification du raisonnement impossible :",
+        requestError,
+      );
+
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : language === "en"
+            ? "Unable to change reasoning during this response."
+            : "Impossible de changer la réflexion pendant cette réponse.",
+      );
+    }
+  }
+
   async function handleSendMessage() {
     const content =
       message.trim();
@@ -4382,17 +4477,26 @@ export default function ChatPage() {
         conversationId,
       );
 
-      // Identifiant stable du tour pour le backend streaming/steering.
-      formData.append(
-        "generation_id",
-        crypto.randomUUID(),
+      // Identifiant stable du tour pour permettre les modifications
+      // pendant que la génération est encore active.
+      const generationId =
+        crypto.randomUUID();
+
+      setActiveGenerationId(
+        generationId,
+      );
+      setCanModifyActiveGeneration(
+        false,
       );
 
-      // Tant que le sélecteur de profondeur n'est pas encore exposé
-      // dans cette version Web, on utilise le mode backend par défaut.
+      formData.append(
+        "generation_id",
+        generationId,
+      );
+
       formData.append(
         "reasoning_mode",
-        "balanced",
+        reasoningMode,
       );
 
       for (
@@ -4511,6 +4615,51 @@ export default function ChatPage() {
                 dataText,
               );
           } catch {
+            continue;
+          }
+
+          if (
+            eventName ===
+            "start"
+          ) {
+            setCanModifyActiveGeneration(
+              Boolean(
+                eventData.live_modify,
+              ),
+            );
+
+            if (
+              typeof eventData.generation_id ===
+              "string"
+            ) {
+              setActiveGenerationId(
+                eventData.generation_id,
+              );
+            }
+
+            continue;
+          }
+
+          if (
+            eventName ===
+            "generation_restarted"
+          ) {
+            assistantContent = "";
+
+            setMessages(
+              (current) =>
+                current.map(
+                  (item) =>
+                    item.id ===
+                    assistantId
+                      ? {
+                          ...item,
+                          content: "",
+                        }
+                      : item,
+                ),
+            );
+
             continue;
           }
 
@@ -4639,6 +4788,13 @@ export default function ChatPage() {
                   ),
               );
             }
+
+            setCanModifyActiveGeneration(
+              false,
+            );
+            setActiveGenerationId(
+              null,
+            );
 
             streamDone = true;
             break;
@@ -5483,134 +5639,240 @@ export default function ChatPage() {
             )}
 
             {/* ==================================================
-                MODÈLE
+                MODÈLE + PUISSANCE DE RÉFLEXION
                 ================================================== */}
 
             <div
               className={`mx-auto w-full max-w-3xl ${
-                messages.length ===
-                0
+                messages.length === 0
                   ? "mt-10"
                   : "mt-4"
               }`}
             >
-              <div className="relative inline-block">
-                <button
-                  type="button"
-                  className={`flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium shadow-sm transition ${
-                    modelMenuOpen
-                      ? "border-border-strong bg-surface-tertiary"
-                      : "border-border bg-surface hover:bg-surface-secondary"
-                  }`}
-                  onClick={() => {
-                    if (
-                      getSelectableModels(
-                        wallet?.pack_id ??
-                          null,
-                        trials,
-                      ).length >
-                      1
-                    ) {
-                      setModelMenuOpen(
-                        (current) =>
-                          !current,
-                      );
-                    }
-                  }}
-                >
-                  <Sparkles
-                    size={16}
-                  />
-
-                  {models.find(
-                    (model) =>
-                      model.id ===
-                      selectedModel,
-                  )?.name ||
-                    "Modèle"}
-
-                  {trials[selectedModel] && (
-                    <span className="rounded-full bg-accent px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-accent-foreground">
-                      {UI[language].trial} ·{" "}
-                      {trials[selectedModel].remaining}/
-                      {trials[selectedModel].max}
-                    </span>
-                  )}
-
-                  <ChevronDown
-                    size={15}
-                    className={`transition-transform ${
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative inline-block">
+                  <button
+                    type="button"
+                    className={`flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium shadow-sm transition ${
                       modelMenuOpen
-                        ? "rotate-180"
-                        : ""
+                        ? "border-border-strong bg-surface-tertiary"
+                        : "border-border bg-surface hover:bg-surface-secondary"
                     }`}
-                  />
-                </button>
+                    onClick={() => {
+                      setReasoningMenuOpen(false);
 
-                {modelMenuOpen && (
-                  <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl">
-                    {getSelectableModels(
-                      wallet?.pack_id ??
-                        null,
-                      trials,
-                    ).map(
-                      (model) => (
+                      if (
+                        getSelectableModels(
+                          wallet?.pack_id ?? null,
+                          trials,
+                        ).length > 1
+                      ) {
+                        setModelMenuOpen(
+                          (current) => !current,
+                        );
+                      }
+                    }}
+                  >
+                    <Sparkles size={16} />
+
+                    {models.find(
+                      (model) =>
+                        model.id === selectedModel,
+                    )?.name || "Modèle"}
+
+                    {trials[selectedModel] && (
+                      <span className="rounded-full bg-accent px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-accent-foreground">
+                        {UI[language].trial} ·{" "}
+                        {trials[selectedModel].remaining}/
+                        {trials[selectedModel].max}
+                      </span>
+                    )}
+
+                    <ChevronDown
+                      size={15}
+                      className={`transition-transform ${
+                        modelMenuOpen
+                          ? "rotate-180"
+                          : ""
+                      }`}
+                    />
+                  </button>
+
+                  {modelMenuOpen && (
+                    <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl">
+                      {getSelectableModels(
+                        wallet?.pack_id ?? null,
+                        trials,
+                      ).map((model) => (
                         <ModelOption
                           language={language}
-                          key={
-                            model.id
+                          key={model.id}
+                          name={model.name}
+                          description={
+                            getModelDescription(
+                              model.id,
+                              language,
+                            ) || model.description
                           }
-                          name={
-                            model.name
-                          }
-                          description={getModelDescription(model.id, language) || model.description}
                           active={
                             selectedModel ===
                             model.id
                           }
-                          trial={
-                            trials[model.id]
-                          }
+                          trial={trials[model.id]}
                           disabled={
-                            Boolean(
-                              trials[model.id],
-                            ) &&
-                            trials[model.id]
-                              .remaining <= 0
+                            Boolean(trials[model.id]) &&
+                            trials[model.id].remaining <= 0
                           }
                           onClick={() => {
                             if (
                               trials[model.id] &&
-                              trials[model.id]
-                                .remaining <= 0
+                              trials[model.id].remaining <= 0
                             ) {
                               return;
                             }
 
-                            setSelectedModel(
-                              model.id,
-                            );
-
-                            setModelMenuOpen(
-                              false,
-                            );
+                            setSelectedModel(model.id);
+                            setModelMenuOpen(false);
+                            setReasoningMenuOpen(false);
                           }}
                         />
-                      ),
-                    )}
+                      ))}
 
-                    {getSelectableModels(
-                      wallet?.pack_id ??
-                        null,
-                      trials,
-                    ).length ===
-                      0 && (
-                      <p className="px-3 py-2 text-xs text-muted">
-                        {UI[language].noModel}
-                      </p>
-                    )}
-                  </div>
-                )}
+                      {getSelectableModels(
+                        wallet?.pack_id ?? null,
+                        trials,
+                      ).length === 0 && (
+                        <p className="px-3 py-2 text-xs text-muted">
+                          {UI[language].noModel}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="relative inline-block">
+                  <button
+                    type="button"
+                    className={`flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium shadow-sm transition ${
+                      reasoningMenuOpen
+                        ? "border-border-strong bg-surface-tertiary"
+                        : "border-border bg-surface hover:bg-surface-secondary"
+                    }`}
+                    onClick={() => {
+                      setModelMenuOpen(false);
+                      setReasoningMenuOpen(
+                        (current) => !current,
+                      );
+                    }}
+                  >
+                    <span className="text-xs">
+                      {reasoningMode === "fast"
+                        ? "⚡"
+                        : reasoningMode === "deep"
+                          ? "◆"
+                          : "◉"}
+                    </span>
+
+                    {
+                      getReasoningOption(
+                        reasoningMode,
+                      ).label[language]
+                    }
+
+                    {isThinking &&
+                      canModifyActiveGeneration && (
+                        <span className="rounded-full bg-surface-tertiary px-2 py-0.5 text-[9px] text-muted">
+                          {language === "en"
+                            ? "live"
+                            : "en cours"}
+                        </span>
+                      )}
+
+                    <ChevronDown
+                      size={15}
+                      className={`transition-transform ${
+                        reasoningMenuOpen
+                          ? "rotate-180"
+                          : ""
+                      }`}
+                    />
+                  </button>
+
+                  {reasoningMenuOpen && (
+                    <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl">
+                      {REASONING_OPTIONS.map(
+                        (option) => {
+                          const active =
+                            reasoningMode ===
+                            option.id;
+
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() =>
+                                void selectReasoningMode(
+                                  option.id,
+                                )
+                              }
+                              className={`w-full rounded-xl px-3 py-2.5 text-left transition ${
+                                active
+                                  ? "bg-surface-tertiary"
+                                  : "hover:bg-surface-secondary"
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="flex items-center gap-2 text-sm font-medium">
+                                    <span>
+                                      {option.id ===
+                                      "fast"
+                                        ? "⚡"
+                                        : option.id ===
+                                            "deep"
+                                          ? "◆"
+                                          : "◉"}
+                                    </span>
+                                    {
+                                      option.label[
+                                        language
+                                      ]
+                                    }
+                                  </div>
+
+                                  <p className="mt-0.5 text-xs text-muted">
+                                    {
+                                      option
+                                        .description[
+                                        language
+                                      ]
+                                    }
+                                  </p>
+                                </div>
+
+                                {active && (
+                                  <Check
+                                    size={15}
+                                    className="mt-0.5 text-muted-strong"
+                                  />
+                                )}
+                              </div>
+                            </button>
+                          );
+                        },
+                      )}
+
+                      {isThinking &&
+                        canModifyActiveGeneration && (
+                          <p className="px-3 pb-1 pt-2 text-[10px] text-muted">
+                            {language === "en"
+                              ? "Changing this now updates the active response."
+                              : "Changer ce niveau maintenant met à jour la réponse en cours."}
+                          </p>
+                        )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
