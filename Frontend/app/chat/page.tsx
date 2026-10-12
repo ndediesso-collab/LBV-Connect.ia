@@ -2460,6 +2460,30 @@ export default function ChatPage() {
   const [canModifyActiveGeneration, setCanModifyActiveGeneration] =
     useState(false);
 
+  const [activeGenerationStarted, setActiveGenerationStarted] =
+    useState(false);
+
+  const [activeRequestMessageId, setActiveRequestMessageId] =
+    useState<string | null>(null);
+
+  const [modificationPanelOpen, setModificationPanelOpen] =
+    useState(false);
+
+  const [modificationDraft, setModificationDraft] =
+    useState("");
+
+  const [isApplyingModification, setIsApplyingModification] =
+    useState(false);
+
+  const [modificationStatus, setModificationStatus] =
+    useState<"queued" | "applied" | null>(null);
+
+  const pendingModificationRef =
+    useRef<{
+      generationId: string;
+      instruction: string;
+    } | null>(null);
+
   const [message, setMessage] =
     useState("");
 
@@ -4173,6 +4197,93 @@ export default function ChatPage() {
     }
   }
 
+  async function sendActiveRequestModification(
+    generationId: string,
+    instruction: string,
+  ) {
+    return apiFetch<{
+      success?: boolean;
+      accepted?: boolean;
+      strategy?: string;
+      reasoning_mode?: ReasoningMode;
+    }>("/ai/chat/control", {
+      method: "POST",
+      body: JSON.stringify({
+        generation_id: generationId,
+        instruction,
+      }),
+    });
+  }
+
+  async function handleApplyActiveRequestModification() {
+    const instruction =
+      modificationDraft.trim();
+
+    if (
+      !instruction ||
+      !isThinking ||
+      !activeGenerationId ||
+      !activeRequestMessageId
+    ) {
+      return;
+    }
+
+    setIsApplyingModification(true);
+    setError(null);
+
+    try {
+      /*
+       * Le bouton « Modifier » est utilisable immédiatement après Envoyer.
+       * Si le backend n'a pas encore envoyé l'événement SSE "start",
+       * on garde l'instruction quelques millisecondes côté client puis
+       * on l'envoie dès que la génération devient pilotable.
+       */
+      if (!activeGenerationStarted) {
+        pendingModificationRef.current = {
+          generationId: activeGenerationId,
+          instruction,
+        };
+
+        setModificationStatus("queued");
+        setModificationPanelOpen(false);
+        setModificationDraft("");
+        return;
+      }
+
+      if (!canModifyActiveGeneration) {
+        throw new Error(
+          language === "en"
+            ? "Live modification is unavailable for this generation."
+            : "La modification en direct n'est pas disponible pour cette génération.",
+        );
+      }
+
+      await sendActiveRequestModification(
+        activeGenerationId,
+        instruction,
+      );
+
+      setModificationStatus("applied");
+      setModificationPanelOpen(false);
+      setModificationDraft("");
+    } catch (requestError) {
+      console.error(
+        "Modification de la requête en cours impossible :",
+        requestError,
+      );
+
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : language === "en"
+            ? "Unable to modify the request during this response."
+            : "Impossible de modifier la requête pendant cette réponse.",
+      );
+    } finally {
+      setIsApplyingModification(false);
+    }
+  }
+
   async function handleSendMessage() {
     const content =
       message.trim();
@@ -4360,14 +4471,45 @@ export default function ChatPage() {
             .join(", ")}]`
         : "";
 
+    /*
+     * L'identifiant de génération est créé AVANT l'appel réseau.
+     * Le bouton « Modifier » peut donc apparaître dès que le message
+     * utilisateur est affiché, même avant le premier token d'Oria.
+     */
+    const generationId =
+      crypto.randomUUID();
+
+    const userMessageId =
+      crypto.randomUUID();
+
     const userMessage:
       ChatMessage = {
-      id: crypto.randomUUID(),
+      id: userMessageId,
       conversationId,
       role: "user",
       content: `${content}${attachmentSummary}`.trim(),
       createdAt: now,
     };
+
+    setActiveGenerationId(
+      generationId,
+    );
+    setActiveGenerationStarted(
+      false,
+    );
+    setCanModifyActiveGeneration(
+      false,
+    );
+    setActiveRequestMessageId(
+      userMessageId,
+    );
+    setModificationPanelOpen(
+      false,
+    );
+    setModificationDraft("");
+    setModificationStatus(null);
+    pendingModificationRef.current =
+      null;
 
     setMessages(
       (current) => [
@@ -4477,18 +4619,8 @@ export default function ChatPage() {
         conversationId,
       );
 
-      // Identifiant stable du tour pour permettre les modifications
-      // pendant que la génération est encore active.
-      const generationId =
-        crypto.randomUUID();
-
-      setActiveGenerationId(
-        generationId,
-      );
-      setCanModifyActiveGeneration(
-        false,
-      );
-
+      // Identifiant stable créé avant l'appel réseau afin que
+      // « Modifier » soit disponible immédiatement.
       formData.append(
         "generation_id",
         generationId,
@@ -4622,19 +4754,98 @@ export default function ChatPage() {
             eventName ===
             "start"
           ) {
-            setCanModifyActiveGeneration(
+            const liveModify =
               Boolean(
                 eventData.live_modify,
-              ),
-            );
+              );
 
-            if (
+            const startedGenerationId =
               typeof eventData.generation_id ===
               "string"
+                ? eventData.generation_id
+                : generationId;
+
+            setActiveGenerationStarted(
+              true,
+            );
+            setCanModifyActiveGeneration(
+              liveModify,
+            );
+            setActiveGenerationId(
+              startedGenerationId,
+            );
+
+            /*
+             * L'utilisateur peut avoir appuyé sur « Modifier » pendant
+             * que le backend préparait encore la génération. Dans ce cas,
+             * l'instruction est envoyée ici, avant que le frontend n'affiche
+             * les prochains deltas du stream.
+             */
+            // TypeScript peut conserver un narrowing obsolète de la ref
+            // depuis son reset précédent dans cette même fonction, alors
+            // qu'un clic utilisateur peut l'avoir remplie pendant les await.
+            // On rétablit explicitement le type réel lu au moment du SSE start.
+            const pendingModification =
+              pendingModificationRef.current as {
+                generationId: string;
+                instruction: string;
+              } | null;
+
+            if (
+              pendingModification &&
+              pendingModification.generationId ===
+                startedGenerationId
             ) {
-              setActiveGenerationId(
-                eventData.generation_id,
-              );
+              pendingModificationRef.current =
+                null;
+
+              if (!liveModify) {
+                setModificationStatus(
+                  null,
+                );
+                setError(
+                  language === "en"
+                    ? "Live modification is unavailable for this generation."
+                    : "La modification en direct n'est pas disponible pour cette génération.",
+                );
+              } else {
+                try {
+                  setIsApplyingModification(
+                    true,
+                  );
+
+                  await sendActiveRequestModification(
+                    startedGenerationId,
+                    pendingModification.instruction,
+                  );
+
+                  setModificationStatus(
+                    "applied",
+                  );
+                } catch (
+                  modificationError
+                ) {
+                  console.error(
+                    "Modification en attente impossible :",
+                    modificationError,
+                  );
+
+                  setModificationStatus(
+                    null,
+                  );
+                  setError(
+                    modificationError instanceof Error
+                      ? modificationError.message
+                      : language === "en"
+                        ? "Unable to apply the queued modification."
+                        : "Impossible d'appliquer la modification en attente.",
+                  );
+                } finally {
+                  setIsApplyingModification(
+                    false,
+                  );
+                }
+              }
             }
 
             continue;
@@ -4792,9 +5003,22 @@ export default function ChatPage() {
             setCanModifyActiveGeneration(
               false,
             );
+            setActiveGenerationStarted(
+              false,
+            );
             setActiveGenerationId(
               null,
             );
+            setActiveRequestMessageId(
+              null,
+            );
+            setModificationPanelOpen(
+              false,
+            );
+            setModificationDraft("");
+            setModificationStatus(null);
+            pendingModificationRef.current =
+              null;
 
             streamDone = true;
             break;
@@ -5047,6 +5271,25 @@ export default function ChatPage() {
       }
     } finally {
       setIsThinking(false);
+      setCanModifyActiveGeneration(
+        false,
+      );
+      setActiveGenerationStarted(
+        false,
+      );
+      setActiveGenerationId(
+        null,
+      );
+      setActiveRequestMessageId(
+        null,
+      );
+      setModificationPanelOpen(
+        false,
+      );
+      setModificationDraft("");
+      setModificationStatus(null);
+      pendingModificationRef.current =
+        null;
     }
   }
 
@@ -5480,11 +5723,184 @@ export default function ChatPage() {
                         </div>
 
                         {item.role === "user" ? (
-                          <div className="mt-2 flex justify-end">
-                            <MessageCopyButton
-                              language={language}
-                              value={item.content}
-                            />
+                          <div className="mt-2 flex w-full max-w-sm flex-col items-end gap-2">
+                            <div className="flex justify-end gap-1">
+                              <MessageCopyButton
+                                language={language}
+                                value={item.content}
+                              />
+
+                              {isThinking &&
+                              item.id ===
+                                activeRequestMessageId ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setModificationPanelOpen(
+                                      true,
+                                    );
+                                    setModificationDraft(
+                                      "",
+                                    );
+                                    setModificationStatus(
+                                      null,
+                                    );
+                                    setError(null);
+                                  }}
+                                  className="inline-flex items-center rounded-lg px-2 py-1 text-[11px] font-medium text-muted transition hover:bg-surface-tertiary hover:text-foreground"
+                                >
+                                  {language ===
+                                  "en"
+                                    ? "Modify"
+                                    : "Modifier"}
+                                </button>
+                              ) : null}
+                            </div>
+
+                            {isThinking &&
+                            item.id ===
+                              activeRequestMessageId &&
+                            modificationPanelOpen ? (
+                              <div className="w-full rounded-2xl border border-border bg-surface p-3 text-foreground shadow-sm">
+                                <p className="text-xs font-semibold">
+                                  {language ===
+                                  "en"
+                                    ? "Modify the response in progress"
+                                    : "Modifier la réponse en cours"}
+                                </p>
+
+                                <p className="mt-1 text-[11px] leading-4 text-muted">
+                                  {language ===
+                                  "en"
+                                    ? "Tell Oria what to change without starting a new request."
+                                    : "Dites à Oria ce qu'il faut changer sans lancer une nouvelle requête."}
+                                </p>
+
+                                <textarea
+                                  autoFocus
+                                  rows={3}
+                                  value={
+                                    modificationDraft
+                                  }
+                                  onChange={(
+                                    event,
+                                  ) =>
+                                    setModificationDraft(
+                                      event
+                                        .target
+                                        .value,
+                                    )
+                                  }
+                                  onKeyDown={(
+                                    event,
+                                  ) => {
+                                    if (
+                                      event.key ===
+                                        "Enter" &&
+                                      !event.shiftKey
+                                    ) {
+                                      event.preventDefault();
+
+                                      void handleApplyActiveRequestModification();
+                                    }
+                                  }}
+                                  placeholder={
+                                    language ===
+                                    "en"
+                                      ? "E.g. make it shorter, show only the calculation, focus on part 2..."
+                                      : "Ex. fais plus court, donne seulement le calcul, concentre-toi sur la partie 2..."
+                                  }
+                                  disabled={
+                                    isApplyingModification
+                                  }
+                                  className="mt-3 w-full resize-none rounded-xl border border-border bg-surface-secondary px-3 py-2 text-sm leading-5 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
+                                />
+
+                                <div className="mt-3 flex items-center justify-between gap-3">
+                                  <p className="text-[10px] leading-4 text-muted">
+                                    {!activeGenerationStarted
+                                      ? language ===
+                                        "en"
+                                        ? "If Oria is still preparing, the change will be sent as soon as the generation starts."
+                                        : "Si Oria prépare encore la réponse, la modification sera envoyée dès le démarrage de la génération."
+                                      : canModifyActiveGeneration
+                                        ? language ===
+                                          "en"
+                                          ? "This changes the current generation, not a new message."
+                                          : "Cela modifie la génération actuelle, sans créer un nouveau message."
+                                        : language ===
+                                          "en"
+                                          ? "Live modification is unavailable for this generation."
+                                          : "La modification en direct n'est pas disponible pour cette génération."}
+                                  </p>
+
+                                  <div className="flex shrink-0 items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setModificationPanelOpen(
+                                          false,
+                                        );
+                                        setModificationDraft(
+                                          "",
+                                        );
+                                      }}
+                                      disabled={
+                                        isApplyingModification
+                                      }
+                                      className="rounded-lg px-3 py-2 text-xs font-medium text-muted transition hover:bg-surface-tertiary hover:text-foreground disabled:opacity-50"
+                                    >
+                                      {language ===
+                                      "en"
+                                        ? "Cancel"
+                                        : "Annuler"}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void handleApplyActiveRequestModification()
+                                      }
+                                      disabled={
+                                        !modificationDraft.trim() ||
+                                        isApplyingModification ||
+                                        (activeGenerationStarted &&
+                                          !canModifyActiveGeneration)
+                                      }
+                                      className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-35"
+                                    >
+                                      {isApplyingModification
+                                        ? language ===
+                                          "en"
+                                          ? "Applying..."
+                                          : "Application..."
+                                        : language ===
+                                          "en"
+                                          ? "Apply"
+                                          : "Appliquer"}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : null}
+
+                            {isThinking &&
+                            item.id ===
+                              activeRequestMessageId &&
+                            modificationStatus ? (
+                              <p className="text-right text-[10px] text-muted">
+                                {modificationStatus ===
+                                "queued"
+                                  ? language ===
+                                    "en"
+                                    ? "Modification queued…"
+                                    : "Modification en attente…"
+                                  : language ===
+                                    "en"
+                                    ? "Modification applied to the current response."
+                                    : "Modification appliquée à la réponse en cours."}
+                              </p>
+                            ) : null}
                           </div>
                         ) : null}
 

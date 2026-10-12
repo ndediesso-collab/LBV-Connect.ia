@@ -317,6 +317,23 @@ const CHAT_TEXT = {
     copyMessage: "Copier le message",
     copied: "Copié",
     copy: "Copier",
+    modify: "Modifier",
+    modifyCurrentResponse: "Modifier la réponse en cours",
+    modifyHelp:
+      "Dites à Oria ce qu'il faut changer sans lancer une nouvelle requête.",
+    modifyPlaceholder:
+      "Ex. fais plus court, donne seulement le calcul, concentre-toi sur la partie 2...",
+    cancel: "Annuler",
+    apply: "Appliquer",
+    applying: "Application...",
+    modificationQueued: "Modification en attente…",
+    modificationApplied: "Modification appliquée à la réponse en cours.",
+    modificationWaitingStart:
+      "Si Oria prépare encore la réponse, la modification sera envoyée dès le démarrage de la génération.",
+    modificationLiveUnavailable:
+      "La modification en direct n'est pas disponible pour cette génération.",
+    modificationCurrentGeneration:
+      "Cela modifie la génération actuelle, sans créer un nouveau message.",
     trial: "Essai",
     higherModelTrial: "Modèle supérieur · 5 essais maximum",
     image: "Image",
@@ -442,6 +459,23 @@ const CHAT_TEXT = {
     copyMessage: "Copy message",
     copied: "Copied",
     copy: "Copy",
+    modify: "Modify",
+    modifyCurrentResponse: "Modify the response in progress",
+    modifyHelp:
+      "Tell Oria what to change without starting a new request.",
+    modifyPlaceholder:
+      "E.g. make it shorter, show only the calculation, focus on part 2...",
+    cancel: "Cancel",
+    apply: "Apply",
+    applying: "Applying...",
+    modificationQueued: "Modification queued…",
+    modificationApplied: "Modification applied to the current response.",
+    modificationWaitingStart:
+      "If Oria is still preparing, the change will be sent as soon as the generation starts.",
+    modificationLiveUnavailable:
+      "Live modification is unavailable for this generation.",
+    modificationCurrentGeneration:
+      "This changes the current generation, not a new message.",
     trial: "Trial",
     higherModelTrial: "Higher-tier model · 5 trials maximum",
     image: "Image",
@@ -2682,6 +2716,31 @@ export default function ChatPage() {
     useState<string | null>(null);
   const [canModifyActiveGeneration, setCanModifyActiveGeneration] =
     useState(false);
+
+  const [activeGenerationStarted, setActiveGenerationStarted] =
+    useState(false);
+
+  const [activeRequestMessageId, setActiveRequestMessageId] =
+    useState<string | null>(null);
+
+  const [modificationPanelOpen, setModificationPanelOpen] =
+    useState(false);
+
+  const [modificationDraft, setModificationDraft] =
+    useState("");
+
+  const [isApplyingModification, setIsApplyingModification] =
+    useState(false);
+
+  const [modificationStatus, setModificationStatus] =
+    useState<"queued" | "applied" | null>(null);
+
+  const pendingModificationRef =
+    useRef<{
+      generationId: string;
+      instruction: string;
+    } | null>(null);
+
   const [message, setMessage] = useState("");
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [composerInputHeight, setComposerInputHeight] = useState(112);
@@ -3912,6 +3971,92 @@ export default function ChatPage() {
     }
   }
 
+  async function sendActiveRequestModification(
+    generationId: string,
+    instruction: string,
+  ) {
+    return apiFetch<{
+      success?: boolean;
+      accepted?: boolean;
+      strategy?: string;
+      reasoning_mode?: ReasoningMode;
+    }>(
+      "/ai/chat/control",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          generation_id: generationId,
+          instruction,
+        }),
+      },
+    );
+  }
+
+  async function handleApplyActiveRequestModification() {
+    const instruction =
+      modificationDraft.trim();
+
+    if (
+      !instruction ||
+      !isThinking ||
+      !activeGenerationId ||
+      !activeRequestMessageId
+    ) {
+      return;
+    }
+
+    setIsApplyingModification(true);
+    setError(null);
+
+    try {
+      /*
+       * Le bouton « Modifier » est disponible dès l'envoi.
+       * Si le backend n'a pas encore émis l'événement SSE "start",
+       * l'instruction est mise en attente côté client puis transmise
+       * dès que la génération devient pilotable.
+       */
+      if (!activeGenerationStarted) {
+        pendingModificationRef.current = {
+          generationId: activeGenerationId,
+          instruction,
+        };
+
+        setModificationStatus("queued");
+        setModificationPanelOpen(false);
+        setModificationDraft("");
+        return;
+      }
+
+      if (!canModifyActiveGeneration) {
+        throw new Error(
+          t.modificationLiveUnavailable,
+        );
+      }
+
+      await sendActiveRequestModification(
+        activeGenerationId,
+        instruction,
+      );
+
+      setModificationStatus("applied");
+      setModificationPanelOpen(false);
+      setModificationDraft("");
+    } catch (requestError) {
+      console.error(
+        "Modification de la requête en cours impossible :",
+        requestError,
+      );
+
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : t.modificationLiveUnavailable,
+      );
+    } finally {
+      setIsApplyingModification(false);
+    }
+  }
+
   function removeAttachment(id: string) {
     setAttachments((current) =>
       current.filter((attachment) => attachment.id !== id),
@@ -4247,13 +4392,41 @@ export default function ChatPage() {
             .join(", ")}]`
         : "";
 
+    /*
+     * Identifiant stable créé AVANT l'appel réseau :
+     * le message utilisateur peut donc afficher « Modifier »
+     * immédiatement, même avant le premier token d'Oria.
+     */
+    const generationId = uid();
+    const userMessageId = uid();
+
     const userMessage: ChatMessage = {
-      id: uid(),
+      id: userMessageId,
       conversationId,
       role: "user",
       content: `${content}${attachmentSummary}`.trim(),
       createdAt: now,
     };
+
+    setActiveGenerationId(
+      generationId,
+    );
+    setActiveGenerationStarted(
+      false,
+    );
+    setCanModifyActiveGeneration(
+      false,
+    );
+    setActiveRequestMessageId(
+      userMessageId,
+    );
+    setModificationPanelOpen(
+      false,
+    );
+    setModificationDraft("");
+    setModificationStatus(null);
+    pendingModificationRef.current =
+      null;
 
     setMessages((current) => [
       ...current,
@@ -4282,14 +4455,6 @@ export default function ChatPage() {
         );
 
       const formData = new FormData();
-      const generationId = uid();
-
-      setActiveGenerationId(
-        generationId,
-      );
-      setCanModifyActiveGeneration(
-        false,
-      );
 
       formData.append("model", selectedModel);
       formData.append("message", content);
@@ -4390,11 +4555,91 @@ export default function ChatPage() {
             }
 
             if (eventName === "start") {
-              setCanModifyActiveGeneration(
+              const liveModify =
                 Boolean(
                   eventData.live_modify,
-                ),
+                );
+
+              const startedGenerationId =
+                typeof eventData.generation_id ===
+                "string"
+                  ? eventData.generation_id
+                  : generationId;
+
+              setActiveGenerationStarted(
+                true,
               );
+              setCanModifyActiveGeneration(
+                liveModify,
+              );
+              setActiveGenerationId(
+                startedGenerationId,
+              );
+
+              /*
+               * Une modification peut avoir été saisie avant que le backend
+               * n'ait fini de préparer la génération. Elle est envoyée ici
+               * dès que le stream annonce que la génération est active.
+               */
+              const pendingModification =
+                pendingModificationRef.current as {
+                  generationId: string;
+                  instruction: string;
+                } | null;
+
+              if (
+                pendingModification &&
+                pendingModification.generationId ===
+                  startedGenerationId
+              ) {
+                pendingModificationRef.current =
+                  null;
+
+                if (!liveModify) {
+                  setModificationStatus(
+                    null,
+                  );
+                  setError(
+                    t.modificationLiveUnavailable,
+                  );
+                } else {
+                  try {
+                    setIsApplyingModification(
+                      true,
+                    );
+
+                    await sendActiveRequestModification(
+                      startedGenerationId,
+                      pendingModification.instruction,
+                    );
+
+                    setModificationStatus(
+                      "applied",
+                    );
+                  } catch (
+                    modificationError
+                  ) {
+                    console.error(
+                      "Modification en attente impossible :",
+                      modificationError,
+                    );
+
+                    setModificationStatus(
+                      null,
+                    );
+                    setError(
+                      modificationError instanceof Error
+                        ? modificationError.message
+                        : t.modificationLiveUnavailable,
+                    );
+                  } finally {
+                    setIsApplyingModification(
+                      false,
+                    );
+                  }
+                }
+              }
+
               continue;
             }
 
@@ -4535,6 +4780,26 @@ export default function ChatPage() {
                     ),
                 );
               }
+
+              setCanModifyActiveGeneration(
+                false,
+              );
+              setActiveGenerationStarted(
+                false,
+              );
+              setActiveGenerationId(
+                null,
+              );
+              setActiveRequestMessageId(
+                null,
+              );
+              setModificationPanelOpen(
+                false,
+              );
+              setModificationDraft("");
+              setModificationStatus(null);
+              pendingModificationRef.current =
+                null;
 
               done = true;
               break;
@@ -4771,6 +5036,13 @@ export default function ChatPage() {
       setIsThinking(false);
       setActiveGenerationId(null);
       setCanModifyActiveGeneration(false);
+      setActiveGenerationStarted(false);
+      setActiveRequestMessageId(null);
+      setModificationPanelOpen(false);
+      setModificationDraft("");
+      setModificationStatus(null);
+      pendingModificationRef.current =
+        null;
     }
   }
 
@@ -4869,7 +5141,194 @@ export default function ChatPage() {
           ]}
         >
           <MessageCopyButton value={copyValue} language={language} />
+
+          {item.role === "user" &&
+          isThinking &&
+          item.id === activeRequestMessageId ? (
+            <Pressable
+              onPress={() => {
+                setModificationPanelOpen(
+                  true,
+                );
+                setModificationDraft(
+                  "",
+                );
+                setModificationStatus(
+                  null,
+                );
+                setError(null);
+              }}
+              style={styles.modifyMessageButton}
+              accessibilityRole="button"
+              accessibilityLabel={t.modify}
+            >
+              <Ionicons
+                name="create-outline"
+                size={13}
+                color={themedIconColor(
+                  "#777771",
+                  isDark,
+                )}
+              />
+              <Text
+                style={
+                  styles.modifyMessageButtonText
+                }
+              >
+                {t.modify}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
+
+        {item.role === "user" &&
+        isThinking &&
+        item.id === activeRequestMessageId &&
+        modificationPanelOpen ? (
+          <View style={styles.modificationCard}>
+            <Text
+              style={
+                styles.modificationTitle
+              }
+            >
+              {t.modifyCurrentResponse}
+            </Text>
+
+            <Text
+              style={
+                styles.modificationHelp
+              }
+            >
+              {t.modifyHelp}
+            </Text>
+
+            <TextInput
+              autoFocus
+              multiline
+              value={modificationDraft}
+              onChangeText={
+                setModificationDraft
+              }
+              placeholder={
+                t.modifyPlaceholder
+              }
+              placeholderTextColor={
+                themedIconColor(
+                  "#92928c",
+                  isDark,
+                )
+              }
+              editable={
+                !isApplyingModification
+              }
+              style={
+                styles.modificationInput
+              }
+              returnKeyType="default"
+              textAlignVertical="top"
+            />
+
+            <Text
+              style={
+                styles.modificationHint
+              }
+            >
+              {!activeGenerationStarted
+                ? t.modificationWaitingStart
+                : canModifyActiveGeneration
+                  ? t.modificationCurrentGeneration
+                  : t.modificationLiveUnavailable}
+            </Text>
+
+            <View
+              style={
+                styles.modificationActions
+              }
+            >
+              <Pressable
+                onPress={() => {
+                  setModificationPanelOpen(
+                    false,
+                  );
+                  setModificationDraft(
+                    "",
+                  );
+                }}
+                disabled={
+                  isApplyingModification
+                }
+                style={
+                  styles.modificationCancelButton
+                }
+              >
+                <Text
+                  style={
+                    styles.modificationCancelText
+                  }
+                >
+                  {t.cancel}
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() =>
+                  void handleApplyActiveRequestModification()
+                }
+                disabled={
+                  !modificationDraft.trim() ||
+                  isApplyingModification ||
+                  (activeGenerationStarted &&
+                    !canModifyActiveGeneration)
+                }
+                style={({ pressed }) => [
+                  styles.modificationApplyButton,
+                  (
+                    !modificationDraft.trim() ||
+                    isApplyingModification ||
+                    (activeGenerationStarted &&
+                      !canModifyActiveGeneration)
+                  ) &&
+                    styles.modificationApplyButtonDisabled,
+                  pressed &&
+                    styles.modificationApplyButtonPressed,
+                ]}
+              >
+                {isApplyingModification ? (
+                  <ActivityIndicator
+                    size="small"
+                    color="#ffffff"
+                  />
+                ) : null}
+
+                <Text
+                  style={
+                    styles.modificationApplyText
+                  }
+                >
+                  {isApplyingModification
+                    ? t.applying
+                    : t.apply}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
+        {item.role === "user" &&
+        isThinking &&
+        item.id === activeRequestMessageId &&
+        modificationStatus ? (
+          <Text
+            style={
+              styles.modificationStatus
+            }
+          >
+            {modificationStatus ===
+            "queued"
+              ? t.modificationQueued
+              : t.modificationApplied}
+          </Text>
+        ) : null}
 
         {media ? (
           <View style={styles.mediaMessage}>
@@ -6292,6 +6751,108 @@ const baseStyles = StyleSheet.create({
     fontSize: 10,
     color: "#777771",
     fontWeight: "500",
+  },
+  modifyMessageButton: {
+    minHeight: 28,
+    paddingHorizontal: 8,
+    borderRadius: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  modifyMessageButtonText: {
+    fontSize: 10,
+    color: "#777771",
+    fontWeight: "500",
+  },
+  modificationCard: {
+    marginTop: 7,
+    width: "94%",
+    maxWidth: 520,
+    borderWidth: 1,
+    borderColor: "#deded9",
+    borderRadius: 17,
+    backgroundColor: "#ffffff",
+    padding: 12,
+  },
+  modificationTitle: {
+    color: "#22221f",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  modificationHelp: {
+    marginTop: 4,
+    color: "#777771",
+    fontSize: 10,
+    lineHeight: 15,
+  },
+  modificationInput: {
+    marginTop: 10,
+    minHeight: 88,
+    maxHeight: 150,
+    borderWidth: 1,
+    borderColor: "#deded9",
+    borderRadius: 13,
+    backgroundColor: "#f7f7f4",
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    color: "#171715",
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  modificationHint: {
+    marginTop: 8,
+    color: "#777771",
+    fontSize: 9,
+    lineHeight: 14,
+  },
+  modificationActions: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 8,
+  },
+  modificationCancelButton: {
+    minHeight: 36,
+    paddingHorizontal: 13,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modificationCancelText: {
+    color: "#666661",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  modificationApplyButton: {
+    minHeight: 36,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: "#111111",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+  },
+  modificationApplyButtonDisabled: {
+    opacity: 0.35,
+  },
+  modificationApplyButtonPressed: {
+    opacity: 0.82,
+  },
+  modificationApplyText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  modificationStatus: {
+    marginTop: 4,
+    maxWidth: "94%",
+    color: "#777771",
+    fontSize: 9,
+    lineHeight: 13,
+    textAlign: "right",
   },
   messageBubble: {
     maxWidth: "85%",
