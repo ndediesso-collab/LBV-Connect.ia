@@ -719,6 +719,7 @@ type MediaCapability = {
 type MediaCapabilitiesResponse = {
   success: boolean;
   pack_id?: string | null;
+  pack_active?: boolean;
   images?: string[];
   videos?: string[];
   media?: Array<string | MediaCapability>;
@@ -811,7 +812,7 @@ const MEDIA_GENERATION_CONFIGS = [
     label: "Image Essentielle",
     description: "Génération rapide avec GPT Image 2",
     configuration: "Qualité basse",
-    packs: ["light_pack"],
+    packs: ["light_pack", "intermediate_pack"],
     model: "GPT Image 2",
   },
   {
@@ -1227,31 +1228,41 @@ function getLocalMediaCapabilities(packId: string | null): MediaCapability[] {
     }));
 }
 
-function normalizeMediaCapability(
-  item: string | MediaCapability,
-): MediaCapability | null {
-  if (typeof item === "string") {
-    const config = getMediaGenerationConfig(item);
-    return config
-      ? {
-          action: config.action,
-          type: config.type,
-          model: config.model,
-        }
-      : null;
-  }
+function normalizeMediaCapability(item: unknown): MediaCapability | null {
+  // Le backend actuel renvoie des identifiants : "image_480", "video_lite"...
+  // Une future version peut aussi renvoyer des objets enrichis.
+  const raw = typeof item === "string" ? { action: item } : item;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
 
-  if (!item?.action) return null;
-
-  const config = getMediaGenerationConfig(item.action);
-  if (!config && item.type !== "image" && item.type !== "video") {
-    return null;
-  }
+  const record = raw as Record<string, unknown>;
+  const action = typeof record.action === "string" ? record.action : "";
+  const config = getMediaGenerationConfig(action);
+  // Ne jamais proposer une action inconnue de l'interface.
+  if (!config) return null;
 
   return {
-    ...item,
-    type: item.type ?? config!.type,
-    model: item.model ?? config?.model ?? null,
+    action: config.action,
+    type: config.type,
+    model:
+      typeof record.model === "string" && record.model.trim()
+        ? record.model
+        : config.model,
+    estimated_credits:
+      typeof record.estimated_credits === "number" &&
+      Number.isFinite(record.estimated_credits) && record.estimated_credits >= 0
+        ? record.estimated_credits
+        : null,
+    credits:
+      typeof record.credits === "number" &&
+      Number.isFinite(record.credits) && record.credits >= 0
+        ? record.credits
+        : null,
+    quality: typeof record.quality === "string" ? record.quality : null,
+    seconds:
+      typeof record.seconds === "string" || typeof record.seconds === "number"
+        ? record.seconds
+        : null,
+    size: typeof record.size === "string" ? record.size : null,
   };
 }
 
@@ -2888,7 +2899,7 @@ export default function ChatPage() {
     [wallet?.pack_id, trials],
   );
 
-  const hasActivePack = Boolean(wallet?.pack_id);
+  const hasActivePack = wallet?.is_pack_active === true;
 
   // Comme sur le Web, le solde affiché représente uniquement les crédits
   // réellement utilisables. Un ancien solde peut rester dans la base, mais
@@ -3395,9 +3406,12 @@ export default function ChatPage() {
   }
 
   async function loadMediaCapabilities() {
-    try {
-      setIsLoadingMediaCapabilities(true);
+    setIsLoadingMediaCapabilities(true);
+    // Aucune option locale ne doit rester sélectionnée pendant le chargement.
+    setMediaCapabilities([]);
+    setSelectedMediaAction("");
 
+    try {
       const data = await apiFetch<MediaCapabilitiesResponse>(
         "/ai/media-capabilities",
       );
@@ -3414,11 +3428,15 @@ export default function ChatPage() {
         .map(normalizeMediaCapability)
         .filter((item): item is MediaCapability => item !== null);
 
-      const fallback = getLocalMediaCapabilities(
-        data.pack_id ?? wallet?.pack_id ?? null,
-      );
+      // La réponse serveur prévaut, y compris lorsque "media" est vide.
+      // Le pack doit être actif à la fois dans le wallet et sur le serveur.
+      const packIsActive =
+        data.success === true &&
+        data.pack_active === true &&
+        wallet?.is_pack_active === true &&
+        data.pack_id === wallet.pack_id;
 
-      const available = normalized.length > 0 ? normalized : fallback;
+      const available = packIsActive ? normalized : [];
 
       setMediaCapabilities(available);
       setSelectedMediaAction((current) =>
@@ -3429,7 +3447,11 @@ export default function ChatPage() {
     } catch (requestError) {
       console.warn("Capacités média indisponibles :", requestError);
 
-      const fallback = getLocalMediaCapabilities(wallet?.pack_id ?? null);
+      // Fallback uniquement si la requête a échoué : jamais après une
+      // réponse valide indiquant 0 capacité ou un pack inactif.
+      const fallback = wallet?.is_pack_active
+        ? getLocalMediaCapabilities(wallet.pack_id)
+        : [];
       setMediaCapabilities(fallback);
       setSelectedMediaAction((current) =>
         current && fallback.some((item) => item.action === current)
@@ -4064,7 +4086,7 @@ export default function ChatPage() {
   }
 
   async function handleGenerateMedia(promptOverride?: string) {
-    if (!hasActivePack) {
+    if (!hasActivePack || isLoadingMediaCapabilities) {
       setError(t.activePackRequired);
       return;
     }
@@ -4077,20 +4099,10 @@ export default function ChatPage() {
       return;
     }
 
-    const capability =
-      mediaCapabilities.find(
-        (item) => item.action === selectedMediaAction,
-      ) ??
-      (() => {
-        const config = getMediaGenerationConfig(selectedMediaAction);
-        return config
-          ? {
-              action: config.action,
-              type: config.type,
-              model: config.model,
-            }
-          : undefined;
-      })();
+    // Ne pas contourner les autorisations réellement chargées depuis l'API.
+    const capability = mediaCapabilities.find(
+      (item) => item.action === selectedMediaAction,
+    );
 
     if (!capability) {
       setError(t.creationOptionMissing);
@@ -5072,11 +5084,8 @@ export default function ChatPage() {
       setActiveCapability("Création");
       setMediaMenuOpen(true);
       setError(null);
-      setSelectedMediaAction((current) =>
-        current ||
-        getLocalMediaCapabilities(wallet?.pack_id ?? null)[0]?.action ||
-        "",
-      );
+      setMediaCapabilities([]);
+      setSelectedMediaAction("");
       if (hasActivePack) {
         void loadMediaCapabilities();
       }
@@ -5846,6 +5855,13 @@ export default function ChatPage() {
                   </View>
                 ) : null}
 
+                {hasActivePack &&
+                (isLoadingMediaCapabilities || mediaCapabilities.length === 0) ? (
+                  <Text style={styles.smallMuted}>
+                    {isLoadingMediaCapabilities ? t.loading : t.noCreationOption}
+                  </Text>
+                ) : null}
+
                 <View style={styles.mediaTypeRow}>
                   {(["image", "video"] as const).map((type) => {
                     const configurationsForType =
@@ -5861,9 +5877,9 @@ export default function ChatPage() {
                     return (
                       <Pressable
                         key={type}
-                        disabled={!hasActivePack || configurationsForType.length === 0}
+                        disabled={!hasActivePack || isLoadingMediaCapabilities || configurationsForType.length === 0}
                         onPress={() => {
-                          if (hasActivePack && configurationsForType.length > 0) {
+                          if (hasActivePack && !isLoadingMediaCapabilities && configurationsForType.length > 0) {
                             setSelectedMediaAction(
                               configurationsForType[0].action,
                             );
@@ -5874,7 +5890,7 @@ export default function ChatPage() {
                           styles.mediaTypeButton,
                           selectedType === type &&
                             styles.mediaTypeButtonActive,
-                          (!hasActivePack || configurationsForType.length === 0) &&
+                          (!hasActivePack || isLoadingMediaCapabilities || configurationsForType.length === 0) &&
                             styles.mediaTypeButtonLocked,
                         ]}
                       >
@@ -5939,7 +5955,7 @@ export default function ChatPage() {
                           return (
                             <Pressable
                               key={config.action}
-                              disabled={!hasActivePack}
+                              disabled={!hasActivePack || isLoadingMediaCapabilities}
                               onPress={() =>
                                 setSelectedMediaAction(config.action)
                               }
@@ -6006,7 +6022,7 @@ export default function ChatPage() {
                           : t.imagePrompt
                       }
                       multiline
-                      editable={hasActivePack && !isThinking}
+                      editable={hasActivePack && !isThinking && !isLoadingMediaCapabilities}
                       style={[
                         styles.mediaPrompt,
                         !hasActivePack && styles.mediaPromptLocked,
@@ -6047,6 +6063,7 @@ export default function ChatPage() {
                       <Pressable
                         disabled={
                           !hasActivePack ||
+                          isLoadingMediaCapabilities ||
                           !mediaPrompt.trim() ||
                           !selectedMediaAction ||
                           isThinking
@@ -6056,7 +6073,9 @@ export default function ChatPage() {
                         }
                         style={[
                           styles.generateButton,
-                          (!mediaPrompt.trim() ||
+                          (!hasActivePack ||
+                            isLoadingMediaCapabilities ||
+                            !mediaPrompt.trim() ||
                             !selectedMediaAction ||
                             isThinking) &&
                             styles.generateButtonDisabled,

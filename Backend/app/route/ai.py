@@ -1542,6 +1542,22 @@ def get_media_capabilities(
 
 
 
+    # Le pack peut rester lié au portefeuille après expiration.
+    # Dans ce cas, aucune création ne doit être annoncée comme disponible.
+    # On conserve le pack_id pour que les frontends affichent le bon état.
+    if not wallet.is_pack_active:
+        return {
+            "success": True,
+            "user_id": authenticated_user_id,
+            "pack_id": wallet.pack_id,
+            "pack_active": False,
+            "images": [],
+            "videos": [],
+            "media": [],
+        }
+
+
+
     allowed_media = PACK_ALLOWED_MEDIA.get(wallet.pack_id, set())
 
 

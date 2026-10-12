@@ -78,7 +78,12 @@ type MediaCapability = {
 type MediaCapabilitiesResponse = {
   success: boolean;
   pack_id: string | null;
-  media: MediaCapability[];
+  pack_active?: boolean;
+  // L'API renvoie principalement des identifiants, pas des objets.
+  // Certaines versions peuvent aussi renvoyer des objets enrichis.
+  images?: unknown[];
+  videos?: unknown[];
+  media?: unknown[];
 };
 
 type GeneratedMedia = {
@@ -428,7 +433,7 @@ const MEDIA_GENERATION_CONFIGS = [
   {
     action: "image_480", type: "image", label: "Image Essentielle",
     description: "Génération rapide avec GPT Image 2", configuration: "Qualité basse",
-    packs: ["light_pack"], model: "GPT Image 2",
+    packs: ["light_pack", "intermediate_pack"], model: "GPT Image 2",
   },
   {
     action: "image_720", type: "image", label: "Image Plus",
@@ -529,6 +534,50 @@ type MediaGenerationType = (typeof MEDIA_GENERATION_CONFIGS)[number]["type"];
 
 function getMediaGenerationConfig(action: string) {
   return MEDIA_GENERATION_CONFIGS.find((item) => item.action === action);
+}
+
+// La réponse réelle de /ai/media-capabilities est une liste d'actions
+// (ex. "image_480"). On accepte aussi les objets enrichis pour compatibilité.
+// La configuration locale sert uniquement aux libellés et aux métadonnées :
+// les actions réellement accessibles proviennent de l'API.
+function normalizeMediaCapability(raw: unknown): MediaCapability | null {
+  const item = typeof raw === "string" ? { action: raw } : raw;
+
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return null;
+  }
+
+  const record = item as Record<string, unknown>;
+  const action = typeof record.action === "string" ? record.action : "";
+  const config = getMediaGenerationConfig(action);
+
+  if (!config) return null;
+
+  return {
+    action: config.action,
+    type: config.type,
+    model:
+      typeof record.model === "string" && record.model.trim()
+        ? record.model
+        : config.model,
+    estimated_credits:
+      typeof record.estimated_credits === "number" &&
+      Number.isFinite(record.estimated_credits) &&
+      record.estimated_credits >= 0
+        ? record.estimated_credits
+        : null,
+    credits:
+      typeof record.credits === "number" &&
+      Number.isFinite(record.credits) && record.credits >= 0
+        ? record.credits
+        : null,
+    quality: typeof record.quality === "string" ? record.quality : null,
+    seconds:
+      typeof record.seconds === "string" || typeof record.seconds === "number"
+        ? record.seconds
+        : null,
+    size: typeof record.size === "string" ? record.size : null,
+  };
 }
 
 const ORIA_MEDIA_MARKER_REGEX =
@@ -2545,9 +2594,10 @@ export default function ChatPage() {
     setCurrentUserId,
   ] = useState<string | null>(null);
 
-  // Les configurations locales permettent au bouton « Création »
-  // de rester immédiatement utilisable. Le backend reste l'autorité
-  // finale pour le pack, les droits, le coût et le débit.
+  // Seules les actions annoncées par le backend sont affichées en temps
+  // normal. En cas d'échec réseau, le fallback local reste disponible
+  // uniquement si le wallet local indique un pack actif.
+  // Le backend contrôle toujours l'autorisation lors de la génération.
   const [mediaCapabilities, setMediaCapabilities] =
     useState<MediaCapability[]>([]);
 
@@ -2644,6 +2694,9 @@ export default function ChatPage() {
         data.wallet;
 
       setWallet(walletData);
+      // Ne pas conserver les capacités d'un éventuel ancien pack.
+      setMediaCapabilities([]);
+      setSelectedMediaAction("");
 
       const availableModels =
         getSelectableModels(
@@ -2671,6 +2724,11 @@ export default function ChatPage() {
         "Erreur chargement wallet :",
         requestError,
       );
+
+      // Une session sans wallet vérifié ne doit pas réutiliser des droits périmés.
+      setWallet(null);
+      setMediaCapabilities([]);
+      setSelectedMediaAction("");
 
       setError(
         requestError instanceof Error
@@ -3547,16 +3605,36 @@ export default function ChatPage() {
   async function loadMediaCapabilities(): Promise<void> {
     try {
       setIsLoadingMediaCapabilities(true);
+      // Une ancienne sélection ne doit pas rester utilisable pendant la requête.
+      setMediaCapabilities([]);
+      setSelectedMediaAction("");
 
       const data = await apiFetch<MediaCapabilitiesResponse>(
         "/ai/media-capabilities",
       );
 
-      const available = Array.isArray(data.media) ? data.media : [];
-      const fallback = getLocalMediaCapabilities(
-        data.pack_id ?? wallet?.pack_id ?? null,
-      );
-      const next = available.length > 0 ? available : fallback;
+      const rawMedia =
+        Array.isArray(data.media) && data.media.length > 0
+          ? data.media
+          : [
+              ...(Array.isArray(data.images) ? data.images : []),
+              ...(Array.isArray(data.videos) ? data.videos : []),
+            ];
+
+      const normalized = rawMedia
+        .map(normalizeMediaCapability)
+        .filter((item): item is MediaCapability => item !== null);
+
+      // Une liste vide fournie par le backend est une vraie réponse :
+      // ne jamais réactiver les actions avec le fallback dans ce cas.
+      // De même, ne rien afficher pour un pack inactif ou différent du wallet.
+      const packIsActive =
+        data.success === true &&
+        data.pack_active === true &&
+        wallet?.is_pack_active === true &&
+        data.pack_id === wallet.pack_id;
+
+      const next = packIsActive ? normalized : [];
 
       setMediaCapabilities(next);
       setSelectedMediaAction((current) =>
@@ -3570,7 +3648,12 @@ export default function ChatPage() {
         requestError,
       );
 
-      const fallback = getLocalMediaCapabilities(wallet?.pack_id ?? null);
+      // Secours en cas d'erreur réseau uniquement, jamais en remplacement
+      // d'une réponse valide (même vide) du backend.
+      const fallback = wallet?.is_pack_active
+        ? getLocalMediaCapabilities(wallet.pack_id)
+        : [];
+
       setMediaCapabilities(fallback);
       setSelectedMediaAction((current) =>
         current && fallback.some((item) => item.action === current)
@@ -3816,23 +3899,17 @@ export default function ChatPage() {
       return;
     }
 
-    // Si l'endpoint de capacités est indisponible, on peut tout de même
-    // utiliser la configuration locale. Le backend décidera ensuite si
-    // l'action est réellement autorisée pour le compte.
-    const capability =
-      mediaCapabilities.find(
-        (item) => item.action === selectedMediaAction,
-      ) ??
-      (() => {
-        const localConfig = getMediaGenerationConfig(selectedMediaAction);
-        return localConfig
-          ? {
-              action: localConfig.action,
-              type: localConfig.type,
-              model: localConfig.model,
-            }
-          : undefined;
-      })();
+    if (!wallet?.is_pack_active || isLoadingMediaCapabilities) {
+      setError("Un pack actif est nécessaire pour créer un média.");
+      return;
+    }
+
+    // Ne jamais envoyer une action absente des capacités réellement affichées.
+    // En cas d'indisponibilité de l'API, celles-ci peuvent provenir du
+    // fallback local restreint au pack actif ; le backend vérifie les droits.
+    const capability = mediaCapabilities.find(
+      (item) => item.action === selectedMediaAction,
+    );
 
     if (!capability) {
       setError(
@@ -6357,15 +6434,8 @@ export default function ChatPage() {
 
     <div className="mt-4 grid grid-cols-2 gap-3">
       {(["image", "video"] as const).map((type) => {
-        const fallbackForType = getLocalMediaCapabilities(wallet?.pack_id ?? null)
-          .filter((item) => item.type === type);
-
-        const available = mediaCapabilities.filter((item) => item.type === type);
-
-        const selectable =
-          available.length > 0
-            ? available
-            : fallbackForType;
+        // Une catégorie absente de la réponse serveur reste indisponible.
+        const selectable = mediaCapabilities.filter((item) => item.type === type);
 
         const selectedType = selectedMediaAction
           ? mediaCapabilities.find(
@@ -6415,19 +6485,9 @@ export default function ChatPage() {
                 )?.type ??
                 getMediaGenerationConfig(selectedMediaAction)?.type;
 
-              const fallbackForType = selectedType
-                ? getLocalMediaCapabilities(wallet?.pack_id ?? null)
-                    .filter((item) => item.type === selectedType)
-                : [];
-
-              const configurations =
-                mediaCapabilities.filter(
-                  (item) => item.type === selectedType,
-                ).length > 0
-                  ? mediaCapabilities.filter(
-                      (item) => item.type === selectedType,
-                    )
-                  : fallbackForType;
+              const configurations = mediaCapabilities.filter(
+                (item) => item.type === selectedType,
+              );
 
               return configurations.map((media) => {
                 const config = getMediaGenerationConfig(media.action);
@@ -6495,7 +6555,7 @@ export default function ChatPage() {
               ? UI[language].preciseVideo
               : UI[language].preciseImage
           }
-          disabled={isThinking}
+          disabled={isThinking || isLoadingMediaCapabilities || !wallet?.is_pack_active}
           className="mt-4 w-full resize-none rounded-xl border border-border bg-transparent px-4 py-3 text-sm leading-6 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
         />
 
@@ -6530,6 +6590,8 @@ export default function ChatPage() {
             disabled={
               !mediaPrompt.trim() ||
               !selectedMediaAction ||
+              !wallet?.is_pack_active ||
+              isLoadingMediaCapabilities ||
               isThinking
             }
             className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-accent px-5 py-3 text-xs font-semibold text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
