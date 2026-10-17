@@ -6,6 +6,15 @@ import {
   ChevronDown,
   Download,
   FileText,
+  Code2,
+  Maximize2,
+  Mic,
+  Square,
+  Play,
+  Pause,
+  RotateCcw,
+  ExternalLink,
+  Loader2,
   Globe,
   Image as ImageIcon,
   Menu,
@@ -61,6 +70,7 @@ type ChatResponse = {
   requires_critical_warning: boolean;
   response?: string;
   message?: string;
+  web_images?: WebIllustration[];
 };
 
 type MediaCapability = {
@@ -132,6 +142,7 @@ type ConversationResponse = {
 type MessagesResponse = {
   messages: ChatMessage[];
   artifacts?: Array<Record<string, unknown>>;
+  voice_notes?: Array<Record<string, unknown>>;
 };
 
 /**
@@ -147,6 +158,94 @@ type ChatAttachment = {
   kind: "image" | "file";
   previewUrl: string | null;
 };
+
+type WebIllustration = {
+  image_url: string;
+  source_url: string;
+  caption: string;
+  alt: string;
+  after_paragraph: number;
+};
+
+type VoiceNote = {
+  audio_id: string;
+  message_id?: string | null;
+  conversation_id?: string | null;
+  duration_ms?: number | null;
+  transcription_status: string;
+  billing_status: string;
+  transcription?: string | null;
+  delivery_mode?: string | null;
+  playback_url?: string | null;
+  credit_cost?: number | null;
+};
+
+type VoiceDraft = VoiceNote & {
+  localUrl: string;
+  editedText: string;
+  busy: boolean;
+};
+
+type CodePreviewData = { title: string; language: string; code: string };
+
+const CODE_PREVIEW_EXTENSIONS = new Set([
+  "py", "js", "jsx", "ts", "tsx", "html", "css", "json", "sql",
+  "xml", "yaml", "yml", "toml", "md", "sh", "ps1", "java",
+  "c", "cpp", "h", "hpp", "cs", "go", "rs", "php", "rb", "svg", "env",
+]);
+
+function normalizeWebImages(raw: unknown): WebIllustration[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  return raw.slice(0, 12).flatMap((value): WebIllustration[] => {
+    if (!value || typeof value !== "object") return [];
+    const item = value as Record<string, unknown>;
+    const image_url = typeof item.image_url === "string" ? item.image_url.trim() : "";
+    const source_url = typeof item.source_url === "string" ? item.source_url.trim() : "";
+    try {
+      const image = new URL(image_url);
+      const source = new URL(source_url);
+      if (image.protocol !== "https:" || source.protocol !== "https:" ||
+          !image.hostname.includes(".") || !source.hostname.includes(".") ||
+          image.username || source.username || seen.has(image_url)) return [];
+    } catch { return []; }
+    seen.add(image_url);
+    return [{ image_url, source_url,
+      caption: String(item.caption || "").slice(0, 500),
+      alt: String(item.alt || item.caption || "Illustration Web").slice(0, 300),
+      after_paragraph: typeof item.after_paragraph === "number" && Number.isFinite(item.after_paragraph)
+        ? Math.max(0, Math.min(200, Math.floor(item.after_paragraph))) : 0 }];
+  }).slice(0, 3);
+}
+
+function normalizeVoiceNote(raw: Record<string, unknown>): VoiceNote | null {
+  const audio_id = typeof raw.audio_id === "string" ? raw.audio_id :
+    typeof raw.id === "string" ? raw.id : "";
+  if (!audio_id) return null;
+  return {
+    audio_id,
+    message_id: typeof raw.message_id === "string" ? raw.message_id : null,
+    conversation_id: typeof raw.conversation_id === "string" ? raw.conversation_id : null,
+    duration_ms: typeof raw.duration_ms === "number" ? raw.duration_ms : null,
+    transcription_status: String(raw.transcription_status || "queued"),
+    billing_status: String(raw.billing_status || "none"),
+    transcription: typeof raw.transcription === "string" ? raw.transcription : null,
+    delivery_mode: typeof raw.delivery_mode === "string" ? raw.delivery_mode : null,
+    playback_url: typeof raw.playback_url === "string" ? raw.playback_url : null,
+    credit_cost: typeof raw.credit_cost === "number" ? raw.credit_cost : null,
+  };
+}
+
+function mergeVoiceNotes(current: VoiceNote[], incoming: VoiceNote[]): VoiceNote[] {
+  const notes = new Map(current.map((note) => [note.audio_id, note]));
+  for (const note of incoming) notes.set(note.audio_id, { ...notes.get(note.audio_id), ...note });
+  return [...notes.values()];
+}
+
+function prettyDuration(ms: number | null | undefined) {
+  const seconds = Math.max(0, Math.floor((ms || 0) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
 
 const MAX_ATTACHMENTS = 3;
 
@@ -602,6 +701,29 @@ function extractMediaIdFromMessage(
   );
 }
 
+const ORIA_AUDIO_MARKER_REGEX = /\[\[ORIA_AUDIO_ID:([^\]]+)\]\]/;
+const ORIA_WEB_IMAGES_MARKER_REGEX = /\[\[ORIA_WEB_IMAGES:([A-Za-z0-9+/=]+)\]\]/;
+
+function extractAudioIdFromMessage(content: string): string | null {
+  return content.match(ORIA_AUDIO_MARKER_REGEX)?.[1] || null;
+}
+
+function webImagesMarker(images: WebIllustration[]): string {
+  if (!images.length) return "";
+  const bytes = new TextEncoder().encode(JSON.stringify(images));
+  return `[[ORIA_WEB_IMAGES:${btoa(Array.from(bytes, (value) => String.fromCharCode(value)).join(""))}]]`;
+}
+
+function extractWebImagesFromMessage(content: string): WebIllustration[] {
+  const marker = content.match(ORIA_WEB_IMAGES_MARKER_REGEX)?.[1];
+  if (!marker) return [];
+  try {
+    const binary = atob(marker);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return normalizeWebImages(JSON.parse(new TextDecoder().decode(bytes)));
+  } catch { return []; }
+}
+
 const ORIA_ARTIFACT_MARKER_REGEX =
   /\[\[ORIA_ARTIFACT_ID:([^\]]+)\]\]/g;
 
@@ -648,6 +770,8 @@ function getVisibleMessageContent(
       /\s*\[\[ORIA_ARTIFACT_ID:[^\]]+\]\]\s*/g,
       "\n",
     )
+    .replace(/\s*\[\[ORIA_WEB_IMAGES:[A-Za-z0-9+/=]+\]\]/g, "")
+    .replace(/\s*\[\[ORIA_AUDIO_ID:[^\]]+\]\]/g, "")
     .trimEnd();
 }
 
@@ -2041,6 +2165,201 @@ function CollapsibleUserMessage({
   );
 }
 
+/* ============================================================
+ * ORIA — Code viewer, Web illustrations and private audio
+ * ============================================================ */
+
+function codeFileName(lang: string, hint = ""): string {
+  const candidate = hint.match(/([\w./-]+\.[a-z0-9]{1,8})/i)?.[1];
+  if (candidate) return candidate;
+  const ext: Record<string, string> = {
+    python: "py", javascript: "js", typescript: "ts", bash: "sh",
+    shell: "sh", json: "json", tsx: "tsx", jsx: "jsx", html: "html", css: "css",
+  };
+  return `code_oria.${ext[lang.toLowerCase()] || lang.toLowerCase() || "txt"}`;
+}
+
+const CODE_WORDS = new Set([
+  "const", "let", "var", "function", "class", "return", "if", "else", "try", "catch",
+  "finally", "throw", "new", "async", "await", "import", "export", "default", "from",
+  "interface", "type", "extends", "implements", "public", "private", "static", "def",
+  "self", "None", "True", "False", "pass", "for", "while", "in", "of", "as",
+  "with", "yield", "lambda", "raise", "except", "elif", "print", "SELECT", "WHERE",
+  "FROM", "INSERT", "UPDATE", "DELETE", "CREATE", "TABLE", "AND", "OR", "JOIN",
+]);
+
+function highlightedCode(source: string): ReactNode {
+  // Le source entier reste téléchargeable/copier, même quand il est très long.
+  // Au-delà de 160 Ko, limiter uniquement la coloration (jamais le contenu).
+  if (source.length > 160_000) return source;
+  const token = /(\/\/[^\n]*|#[^\n]*|--[^\n]*|\/\*[\s\S]*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_$][\w$]*\b)/g;
+  const chunks: ReactNode[] = [];
+  let at = 0;
+  let n = 0;
+  for (const match of source.matchAll(token)) {
+    const index = match.index ?? 0;
+    if (index > at) chunks.push(source.slice(at, index));
+    const value = match[0];
+    const className = /^(\/\/|#|--|\/\*)/.test(value)
+      ? "text-emerald-500/90" : /^["'`]/.test(value)
+        ? "text-amber-600 dark:text-amber-300" : /^\d/.test(value)
+          ? "text-sky-600 dark:text-sky-300" : CODE_WORDS.has(value)
+            ? "text-violet-600 dark:text-violet-300 font-semibold" : "";
+    chunks.push(className ? <span key={n++} className={className}>{value}</span> : value);
+    at = index + value.length;
+  }
+  if (at < source.length) chunks.push(source.slice(at));
+  return chunks;
+}
+
+function downloadSource(code: string, filename: string) {
+  const url = URL.createObjectURL(new Blob([code], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename.replace(/[\/\\]/g, "_");
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function CodePreviewModal({ preview, onClose, language }: {
+  preview: CodePreviewData; onClose: () => void; language: OriaLanguage;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div role="dialog" aria-modal="true" aria-label={preview.title}
+      className="fixed inset-0 z-[90] flex flex-col bg-background text-foreground">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-surface px-4 py-3 sm:px-7">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-secondary"><Code2 size={19}/></div>
+          <div className="min-w-0"><p className="truncate text-sm font-semibold">{preview.title}</p>
+            <p className="text-[11px] text-muted">{preview.language.toUpperCase()} · {preview.code.split("\n").length} {language === "fr" ? "lignes" : "lines"}</p></div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <CopyButton value={preview.code} language={language}/>
+          <button type="button" onClick={() => downloadSource(preview.code, preview.title)}
+            className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs hover:bg-surface-secondary"><Download size={15}/><span className="hidden sm:inline">{UI[language].download}</span></button>
+          <button type="button" aria-label={language === "fr" ? "Fermer" : "Close"} onClick={onClose}
+            className="rounded-xl p-2.5 transition hover:bg-surface-secondary"><X size={20}/></button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto bg-surface-secondary/35 p-4 sm:p-7">
+        <pre className="min-w-max whitespace-pre text-[12px] leading-[1.9] tabular-nums sm:text-[13px]"><code>{highlightedCode(preview.code)}</code></pre>
+      </div>
+    </div>
+  );
+}
+
+function CodeBlockCard({ language, code, title, onExpand, uiLanguage }: {
+  language: string; code: string; title: string;
+  onExpand: (preview: CodePreviewData) => void; uiLanguage: OriaLanguage;
+}) {
+  return (
+    <div className="mb-4 overflow-hidden rounded-2xl border border-border bg-surface-secondary last:mb-0">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+        <span className="min-w-0 truncate text-[11px] font-medium text-muted-strong"><Code2 size={13} className="mr-1.5 inline"/>{title}</span>
+        <div className="flex items-center gap-1.5"><CopyButton value={code} language={uiLanguage}/>
+          <button type="button" onClick={() => onExpand({ title, language, code })}
+            className="inline-flex items-center gap-1 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[11px] hover:bg-surface-tertiary"
+            aria-label={uiLanguage === "fr" ? "Ouvrir le lecteur" : "Open code viewer"}>
+            <Maximize2 size={13}/>{uiLanguage === "fr" ? "Ouvrir" : "Open"}</button>
+        </div>
+      </div>
+      <pre className="max-h-72 overflow-auto p-4 text-xs leading-6"><code className="whitespace-pre">{highlightedCode(code)}</code></pre>
+    </div>
+  );
+}
+
+function WebImageGallery({ images, language }: { images: WebIllustration[]; language: OriaLanguage }) {
+  if (!images.length) return null;
+  return (
+    <div className="my-4 grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
+      {images.map((item) => (
+        <a key={item.image_url} href={item.source_url} target="_blank" rel="noopener noreferrer"
+          className="group overflow-hidden rounded-2xl border border-border bg-surface shadow-sm transition hover:border-muted-strong">
+          <div className="aspect-[16/10] w-full overflow-hidden bg-surface-secondary">
+            <img src={item.image_url} alt={item.alt} loading="lazy" referrerPolicy="no-referrer"
+              className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.025]"/>
+          </div>
+          <div className="flex items-start gap-2 p-3"><p className="min-w-0 flex-1 text-xs leading-5 text-muted-strong">
+            {item.caption || item.alt}</p><ExternalLink size={13} className="mt-1 shrink-0 text-muted"/></div>
+          <p className="px-3 pb-3 text-[10px] text-muted">{language === "fr" ? "Voir la source" : "View source"} · {new URL(item.source_url).hostname}</p>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function AudioWaveBars({ active = false }: { active?: boolean }) {
+  return <div aria-hidden="true" className="flex h-8 flex-1 items-center justify-center gap-[3px]">
+    {Array.from({length: 28}, (_, index) => (
+      <span key={index} className={`w-[3px] rounded-full bg-current opacity-60 ${active ? "animate-pulse" : ""}`}
+        style={{height: `${5 + ((index * 17 + 9) % 25)}px`, animationDelay: `${index * 40}ms`}}/>
+    ))}
+  </div>;
+}
+
+function VoiceMessageBubble({ note, language, onLoad }: {
+  note: VoiceNote; language: OriaLanguage; onLoad: (id: string) => Promise<string>;
+}) {
+  const [url, setUrl] = useState<string | null>(note.playback_url || null);
+  const pendingPlaybackRef = useRef(false);
+  useEffect(() => {
+    if (url && pendingPlaybackRef.current && audioRef.current) {
+      pendingPlaybackRef.current = false;
+      void audioRef.current.play().catch(() => setError(true));
+    }
+  }, [url]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  async function toggle() {
+    if (playing) { audioRef.current?.pause(); return; }
+    if (!url) {
+      setLoading(true); setError(false);
+      try {
+        const next = await onLoad(note.audio_id);
+        pendingPlaybackRef.current = true;
+        setUrl(next);
+      } catch { setError(true); } finally { setLoading(false); }
+    } else {
+      try { await audioRef.current?.play(); } catch { setError(true); }
+    }
+  }
+  return (
+    <div className="w-full max-w-[310px] rounded-2xl border border-border bg-surface p-3 text-foreground shadow-sm">
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={() => void toggle()} aria-label={playing ? "Pause" : "Play"}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground">
+          {loading ? <Loader2 size={17} className="animate-spin"/> : playing ? <Pause size={17}/> : <Play size={17}/>}</button>
+        <div className="min-w-0 flex-1 text-accent"><AudioWaveBars active={playing}/>
+          <div className="flex items-center justify-between text-[10px] text-muted">
+            <span>{language === "fr" ? "Note vocale" : "Voice note"}</span><span>{prettyDuration(note.duration_ms)}</span>
+          </div>
+        </div>
+      </div>
+      {url && <audio ref={audioRef} src={url} preload="none"
+        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
+        onEnded={() => { setPlaying(false); setProgress(0); }}
+        onError={() => { setPlaying(false); setUrl(null); setError(true); }}
+        onTimeUpdate={(event) => {
+          const audio = event.currentTarget;
+          setProgress(audio.duration ? (audio.currentTime / audio.duration) * 100 : 0);
+        }}/>} 
+      {url ? <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-tertiary">
+        <div className="h-full rounded-full bg-accent" style={{width: `${progress}%`}}/></div> : null}
+      {error ? <p className="mt-2 text-[11px] text-red-500">{language === "fr" ? "Lecture indisponible. Réessayez." : "Playback unavailable. Try again."}</p> : null}
+    </div>
+  );
+}
+
 /*
  * ============================================================
  * MARKDOWN MESSAGE
@@ -2050,9 +2369,13 @@ function CollapsibleUserMessage({
 function MarkdownMessage({
   content,
   language = "fr",
+  onOpenCode,
+  webImages = [],
 }: {
   content: string;
   language?: OriaLanguage;
+  onOpenCode?: (preview: CodePreviewData) => void;
+  webImages?: WebIllustration[];
 }) {
   const normalized =
     content
@@ -2077,10 +2400,22 @@ function MarkdownMessage({
     [];
 
   let codeLanguage = "";
+  let codeTitle = "";
+  let lastCodeHeading = "";
 
   let inCodeBlock = false;
 
   let blockIndex = 0;
+  let paragraphIndex = 0;
+  const placedImageUrls = new Set<string>();
+
+  function addWebImages(upToParagraph: number) {
+    const due = webImages.filter((item) => !placedImageUrls.has(item.image_url) &&
+      item.after_paragraph <= upToParagraph);
+    if (!due.length) return;
+    due.forEach((item) => placedImageUrls.add(item.image_url));
+    blocks.push(<WebImageGallery key={`web-${blockIndex++}`} images={due} language={language}/>);
+  }
 
   function flushParagraph() {
     if (paragraph.length === 0) {
@@ -2102,6 +2437,7 @@ function MarkdownMessage({
     );
 
     blockIndex++;
+    addWebImages(paragraphIndex++);
     paragraph = [];
   }
 
@@ -2180,35 +2516,23 @@ function MarkdownMessage({
       return;
     }
 
+    const code = codeLines.join("\n");
+    const title = codeFileName(codeLanguage, codeTitle);
     blocks.push(
-      <div
+      <CodeBlockCard
         key={`code-${blockIndex}`}
-        className="mb-4 overflow-hidden rounded-2xl border border-border bg-surface-secondary last:mb-0"
-      >
-        <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
-          <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted">
-            {codeLanguage || "Code"}
-          </span>
-
-          <CopyButton
-            value={codeLines.join("\n")}
-            language={language}
-          />
-        </div>
-
-        <div className="max-h-[360px] overflow-auto">
-          <pre className="min-w-max p-4 text-xs leading-6">
-            <code>
-              {codeLines.join("\n")}
-            </code>
-          </pre>
-        </div>
-      </div>,
+        code={code}
+        language={codeLanguage || "text"}
+        title={title}
+        uiLanguage={language}
+        onExpand={onOpenCode || (() => undefined)}
+      />,
     );
 
     blockIndex++;
     codeLines = [];
     codeLanguage = "";
+    codeTitle = "";
     inCodeBlock = false;
   }
 
@@ -2233,8 +2557,8 @@ function MarkdownMessage({
           codeLanguage =
             trimmed
               .slice(3)
-              .trim();
-
+              .trim().split(/\s+/)[0];
+          codeTitle = lastCodeHeading;
           return;
         }
 
@@ -2420,6 +2744,11 @@ function MarkdownMessage({
         return;
       }
 
+      // Retient un titre de fichier éventuel pour le lecteur de code.
+      if (/\.[a-z0-9]{1,8}(?:`|\*\*)?$/i.test(trimmed)) {
+        lastCodeHeading = trimmed;
+      }
+
       /*
        * PARAGRAPHE
        *
@@ -2445,6 +2774,7 @@ function MarkdownMessage({
 
   flushAllLists();
   flushParagraph();
+  addWebImages(Number.MAX_SAFE_INTEGER);
 
   /*
    * Si le modèle est encore en train de streamer et que le
@@ -2618,6 +2948,43 @@ export default function ChatPage() {
 
   const [mediaMenuOpen, setMediaMenuOpen] =
     useState(false);
+
+  // Ajouts Chat Web : lecteur source, images de recherche, notes vocales.
+  const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
+  const [webImagesByMessage, setWebImagesByMessage] = useState<Record<string, WebIllustration[]>>({});
+  const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
+  const [voiceDraft, setVoiceDraft] = useState<VoiceDraft | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStartedAtRef = useRef(0);
+  const audioUploadBusyRef = useRef(false);
+
+  // Seul l'identifiant est conservé en session, jamais l'audio ni sa transcription.
+  useEffect(() => {
+    if (!currentUserId) return;
+    const key = `oria_audio_draft_v1_${currentUserId}`;
+    const id = window.sessionStorage.getItem(key);
+    if (!id) return;
+    let closed = false;
+    void apiFetch<VoiceNote>(`/ai/audio/${encodeURIComponent(id)}`)
+      .then((result) => {
+        if (closed) return;
+        if (result.delivery_mode && result.delivery_mode !== "draft") {
+          window.sessionStorage.removeItem(key);
+          return;
+        }
+        const note = normalizeVoiceNote(result as unknown as Record<string, unknown>);
+        if (note) setVoiceDraft((current) => current || {
+          ...note, localUrl: result.playback_url || "",
+          editedText: result.transcription || "", busy: false,
+        });
+      }).catch(() => { /* État indisponible : pas de second appel OpenAI. */ });
+    return () => { closed = true; };
+  }, [currentUserId]);
 
   /*
    * ==========================================================
@@ -3166,6 +3533,11 @@ export default function ChatPage() {
       const remoteMessages =
         data.messages || [];
 
+      const remoteVoiceNotes = (data.voice_notes || [])
+        .map(normalizeVoiceNote)
+        .filter((note): note is VoiceNote => note !== null);
+      setVoiceNotes((current) => mergeVoiceNotes(current, remoteVoiceNotes));
+
       const remoteArtifacts =
         (data.artifacts || [])
           .map((item) =>
@@ -3479,6 +3851,214 @@ export default function ChatPage() {
           ? requestError.message
           : "Téléchargement impossible.",
       );
+    }
+  }
+
+  async function openArtifactSource(artifact: GeneratedArtifact) {
+    if (!CODE_PREVIEW_EXTENSIONS.has(artifact.extension.toLowerCase())) return;
+    try {
+      const response = await apiFetch<{artifact?: Record<string, unknown>}>(`/artifacts/${artifact.id}`);
+      const renewed = response.artifact ? normalizeGeneratedArtifact(response.artifact) : null;
+      const url = renewed?.downloadUrl || artifact.downloadUrl;
+      if (!url) throw new Error("Fichier inaccessible.");
+      const fileResponse = await fetch(url);
+      if (!fileResponse.ok) throw new Error("Fichier inaccessible.");
+      const blob = await fileResponse.blob();
+      if (blob.size > 2 * 1024 * 1024) {
+        throw new Error(language === "fr" ? "Prévisualisation limitée à 2 Mo. Le téléchargement reste disponible." : "Preview limited to 2 MB. Download remains available.");
+      }
+      setCodePreview({ title: artifact.filename, language: artifact.extension, code: await blob.text() });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Impossible d'ouvrir le fichier.");
+    }
+  }
+
+  async function loadPrivateVoiceUrl(audioId: string): Promise<string> {
+    const response = await apiFetch<VoiceNote>(`/ai/audio/${encodeURIComponent(audioId)}`);
+    if (!response.playback_url) throw new Error("Lien vocal indisponible.");
+    return response.playback_url;
+  }
+
+  function voiceNoteForMessage(item: ChatMessage): VoiceNote | null {
+    if (item.role !== "user") return null;
+    const markerId = extractAudioIdFromMessage(item.content || "");
+    const stored = voiceNotes.find((note) => note.message_id === item.id ||
+      (markerId && note.audio_id === markerId));
+    // Le marqueur local permet la réécoute après un rechargement :
+    // l'URL signée reste obtenue à la demande auprès du backend.
+    return stored || (markerId ? {
+      audio_id: markerId, transcription_status: "complete", billing_status: "settled",
+      message_id: item.id, delivery_mode: "voice",
+    } : null);
+  }
+
+  function stopRecorder() {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+    recordingIntervalRef.current = null;
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+    setRecording(false);
+  }
+
+  async function startVoiceRecording() {
+    if (isThinking || recording || voiceDraft || audioUploadBusyRef.current) return;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        throw new Error(language === "fr" ? "Le microphone n'est pas disponible sur ce navigateur." : "Microphone unavailable in this browser.");
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+      const bestMime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm", "audio/ogg;codecs=opus"]
+        .find((mime) => MediaRecorder.isTypeSupported(mime));
+      const recorder = bestMime ? new MediaRecorder(stream, { mimeType: bestMime }) : new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      chunksRef.current = [];
+      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
+      recorder.onerror = () => { setError("Échec de l'enregistrement vocal."); stopRecorder(); };
+      recorder.onstop = () => {
+        const audio = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        chunksRef.current = [];
+        stream.getTracks().forEach((track) => track.stop());
+        if (audio.size > 0) void uploadVoiceDraft(audio);
+      };
+      recorder.start(250);
+      recordingStartedAtRef.current = Date.now();
+      setRecordingSeconds(0);
+      setRecording(true);
+      recordingIntervalRef.current = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - recordingStartedAtRef.current) / 1000);
+        setRecordingSeconds(elapsed);
+        if (elapsed >= 300) stopRecorder();
+      }, 500);
+      setError(null);
+    } catch (cause) {
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+      setError(cause instanceof Error ? cause.message : "Microphone indisponible.");
+    }
+  }
+
+  async function uploadVoiceDraft(blob: Blob) {
+    if (audioUploadBusyRef.current) return;
+    audioUploadBusyRef.current = true;
+    const localUrl = URL.createObjectURL(blob);
+    setVoiceDraft({ audio_id: "", transcription_status: "uploading", billing_status: "none",
+      localUrl, editedText: "", busy: true });
+    try {
+      let conversationId = activeConversationId;
+      if (!conversationId) {
+        const created = await createConversationRemote(language === "fr" ? "Note vocale" : "Voice note");
+        conversationId = created.id;
+        setConversations((current) => [created, ...current]);
+        setActiveConversationId(created.id);
+      }
+      const mime = blob.type.split(";", 1)[0] || "audio/webm";
+      const ext = mime === "audio/mp4" ? "m4a" : mime.includes("ogg") ? "ogg" : "webm";
+      const form = new FormData();
+      form.append("audio", new File([blob], `oria-voice.${ext}`, { type: mime }));
+      form.append("request_id", crypto.randomUUID());
+      form.append("conversation_id", conversationId);
+      const response = await apiFetch<VoiceNote>("/ai/audio/prepare", { method: "POST", body: form });
+      const note = normalizeVoiceNote(response as unknown as Record<string, unknown>);
+      if (!note) throw new Error("Le serveur n'a pas retourné d'identifiant audio.");
+      if (currentUserId) window.sessionStorage.setItem(`oria_audio_draft_v1_${currentUserId}`, note.audio_id);
+      setVoiceDraft({ ...note, localUrl, editedText: "", busy: false });
+    } catch (cause) {
+      setVoiceDraft(null);
+      URL.revokeObjectURL(localUrl);
+      setError(cause instanceof Error ? cause.message : "Échec du transfert audio.");
+    } finally {
+      audioUploadBusyRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    const id = voiceDraft?.audio_id;
+    if (!id || voiceDraft?.busy || (voiceDraft.transcription_status === "complete" && voiceDraft.billing_status === "settled") ||
+      voiceDraft?.transcription_status === "failed") return;
+    let disposed = false;
+    let polling = false;
+    let elapsed = 0;
+    const poll = async () => {
+      if (polling || disposed) return;
+      polling = true;
+      try {
+        let result = await apiFetch<VoiceNote>(`/ai/audio/${encodeURIComponent(id)}`);
+        if (result.transcription_status === "complete" && result.billing_status === "settlement_pending") {
+          result = await apiFetch<VoiceNote>(`/ai/audio/${encodeURIComponent(id)}/reconcile`, {method:"POST"});
+        }
+        if (!disposed) {
+          setVoiceDraft((current) => current?.audio_id === id
+            ? { ...current, ...normalizeVoiceNote(result as unknown as Record<string, unknown>),
+                editedText: current.editedText || result.transcription || "" } : current);
+        }
+      } catch (cause) {
+        console.warn("En attente du traitement vocal Oria :", cause);
+      } finally { polling = false; }
+    };
+    void poll();
+    const timer = window.setInterval(() => {
+      elapsed += 4;
+      if (elapsed <= 240) void poll();
+    }, 4000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [voiceDraft?.audio_id, voiceDraft?.transcription_status, voiceDraft?.billing_status, voiceDraft?.busy]);
+
+  async function discardVoiceDraft() {
+    const draft = voiceDraft;
+    if (!draft || draft.busy) return;
+    try {
+      if (draft.audio_id) await apiFetch(`/ai/audio/${encodeURIComponent(draft.audio_id)}`, {method:"DELETE"});
+      if (draft.localUrl.startsWith("blob:")) URL.revokeObjectURL(draft.localUrl);
+      if (currentUserId) window.sessionStorage.removeItem(`oria_audio_draft_v1_${currentUserId}`);
+      setVoiceDraft(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Suppression momentanément indisponible.");
+    }
+  }
+
+  async function retryVoiceDraft() {
+    if (!voiceDraft?.audio_id) return;
+    try {
+      let result: VoiceNote;
+      if (voiceDraft.billing_status === "release_pending") {
+        result = await apiFetch<VoiceNote>(`/ai/audio/${voiceDraft.audio_id}/reconcile-release`, {method:"POST"});
+      } else if (voiceDraft.billing_status === "settlement_pending") {
+        result = await apiFetch<VoiceNote>(`/ai/audio/${voiceDraft.audio_id}/reconcile`, {method:"POST"});
+      } else {
+        result = await apiFetch<VoiceNote>(`/ai/audio/${voiceDraft.audio_id}/retry`, {method:"POST"});
+      }
+      setVoiceDraft((current) => current ? { ...current, ...normalizeVoiceNote(result as unknown as Record<string, unknown>) } : current);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Reprise indisponible.");
+    }
+  }
+
+  async function deliverVoiceDraft(mode: "voice" | "text") {
+    const draft = voiceDraft;
+    if (!draft?.audio_id || draft.transcription_status !== "complete" || draft.billing_status !== "settled" || isThinking) return;
+    if (draft.conversation_id !== activeConversationId) {
+      setError(language === "fr" ? "Rouvrez la conversation où le vocal a été enregistré." : "Open the conversation where the voice note was recorded.");
+      return;
+    }
+    try {
+      setVoiceDraft((current) => current ? { ...current, busy: true } : current);
+      const edited = draft.editedText.trim() || draft.transcription || "";
+      await apiFetch(`/ai/audio/${draft.audio_id}/send`, {
+        method: "POST", body: JSON.stringify({mode, edited_text: mode === "text" ? edited : null}),
+      });
+      const note = { ...draft, delivery_mode: mode };
+      if (mode === "voice") setVoiceNotes((current) => mergeVoiceNotes(current, [note]));
+      // L'IA lit le transcript ; le message utilisateur reste un vocal si mode=voice.
+      await handleSendMessage({content: mode === "text" ? edited : (draft.transcription || edited),
+        voice: mode === "voice" ? note : undefined});
+      if (draft.localUrl.startsWith("blob:")) URL.revokeObjectURL(draft.localUrl);
+      if (currentUserId) window.sessionStorage.removeItem(`oria_audio_draft_v1_${currentUserId}`);
+      setVoiceDraft(null);
+    } catch (cause) {
+      setVoiceDraft((current) => current ? { ...current, busy: false } : current);
+      setError(cause instanceof Error ? cause.message : "Envoi du vocal impossible.");
     }
   }
 
@@ -4361,9 +4941,9 @@ export default function ChatPage() {
     }
   }
 
-  async function handleSendMessage() {
+  async function handleSendMessage(options?: {content?: string; voice?: VoiceNote}) {
     const content =
-      message.trim();
+      (options?.content ?? message).trim();
 
     // Garde-fou supplémentaire : même si un collage massif contourne
     // l'événement onPaste (autofill, extension navigateur, etc.),
@@ -4564,7 +5144,7 @@ export default function ChatPage() {
       id: userMessageId,
       conversationId,
       role: "user",
-      content: `${content}${attachmentSummary}`.trim(),
+      content: `${content}${attachmentSummary}${options?.voice ? `\n[[ORIA_AUDIO_ID:${options.voice.audio_id}]]` : ""}`.trim(),
       createdAt: now,
     };
 
@@ -4650,7 +5230,17 @@ export default function ChatPage() {
       const userMessageSavePromise =
         saveMessageRemote(
           userMessage,
-        ).catch(
+        ).then(async (savedMessage) => {
+          if (options?.voice && savedMessage?.id) {
+            await apiFetch(`/ai/audio/${options.voice.audio_id}/attach-message`, {
+              method: "POST", body: JSON.stringify({message_id: savedMessage.id}),
+            });
+            setVoiceNotes((current) => mergeVoiceNotes(current, [
+              { ...options.voice!, message_id: savedMessage.id },
+            ]));
+          }
+          return savedMessage;
+        }).catch(
           (saveError) => {
             console.error(
               "Erreur sauvegarde message utilisateur :",
@@ -4740,6 +5330,7 @@ export default function ChatPage() {
       let streamBuffer = "";
       let streamDone = false;
       let streamedArtifacts: GeneratedArtifact[] = [];
+      let streamedWebImages: WebIllustration[] = [];
       setMessages(
         (current) => [
           ...current,
@@ -4933,6 +5524,8 @@ export default function ChatPage() {
             "generation_restarted"
           ) {
             assistantContent = "";
+            streamedWebImages = [];
+            setWebImagesByMessage((current) => ({ ...current, [assistantId]: [] }));
 
             setMessages(
               (current) =>
@@ -4984,6 +5577,12 @@ export default function ChatPage() {
             );
           }
 
+          if (eventName === "web_images") {
+            streamedWebImages = normalizeWebImages(eventData.images);
+            setWebImagesByMessage((current) => ({...current, [assistantId]: streamedWebImages}));
+            continue;
+          }
+
           if (
             eventName ===
             "artifact"
@@ -5033,6 +5632,10 @@ export default function ChatPage() {
             eventName ===
             "done"
           ) {
+            if (Array.isArray(eventData.web_images)) {
+              streamedWebImages = normalizeWebImages(eventData.web_images);
+              setWebImagesByMessage((current) => ({...current, [assistantId]: streamedWebImages}));
+            }
             const doneArtifacts =
               Array.isArray(
                 eventData.artifacts,
@@ -5126,10 +5729,9 @@ export default function ChatPage() {
           streamedArtifacts,
         );
 
+      const webMarker = webImagesMarker(streamedWebImages);
       const persistedAssistantContent =
-        artifactMarkers
-          ? `${assistantContent}\n\n${artifactMarkers}`
-          : assistantContent;
+        [assistantContent, artifactMarkers, webMarker].filter(Boolean).join("\n\n");
 
       // On remplace le contenu live par sa version persistable contenant
       // les marqueurs invisibles qui permettront de retrouver les fichiers
@@ -5413,6 +6015,7 @@ export default function ChatPage() {
 
   return (
     <main className="min-h-dvh overflow-hidden bg-background text-foreground">
+      {codePreview ? <CodePreviewModal preview={codePreview} onClose={() => setCodePreview(null)} language={language}/> : null}
       {sidebarOpen && (
         <button
           type="button"
@@ -5771,6 +6374,8 @@ export default function ChatPage() {
                             <>
                               <MarkdownMessage
                                 language={language}
+                                onOpenCode={setCodePreview}
+                                webImages={webImagesByMessage[item.id] || extractWebImagesFromMessage(item.content || "")}
                                 content={getVisibleMessageContent(
                                   item.content,
                                 )}
@@ -5790,12 +6395,26 @@ export default function ChatPage() {
                              * Le message utilisateur reste simple
                              * et conserve les retours à la ligne.
                              */
-                            <CollapsibleUserMessage
-                              content={
-                                item.content
-                              }
-                              language={language}
-                            />
+                            <>
+                              {voiceNoteForMessage(item) ? (
+                                <div className="flex flex-col gap-2">
+                                  <VoiceMessageBubble
+                                    note={voiceNoteForMessage(item)!}
+                                    language={language}
+                                    onLoad={loadPrivateVoiceUrl}
+                                  />
+                                  <details className="max-w-[310px] text-[11px] opacity-80">
+                                    <summary className="cursor-pointer">{language === "fr" ? "Voir la transcription" : "View transcript"}</summary>
+                                    <p className="pt-2 whitespace-pre-wrap">{getVisibleMessageContent(item.content)}</p>
+                                  </details>
+                                </div>
+                              ) : (
+                                <CollapsibleUserMessage
+                                  content={getVisibleMessageContent(item.content)}
+                                  language={language}
+                                />
+                              )}
+                            </>
                           )}
                         </div>
 
@@ -6074,6 +6693,13 @@ export default function ChatPage() {
                                       </p>
                                     </div>
 
+                                    {CODE_PREVIEW_EXTENSIONS.has(artifact.extension.toLowerCase()) ? (
+                                      <button type="button" onClick={() => void openArtifactSource(artifact)}
+                                        className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-xs font-medium hover:bg-surface-tertiary"
+                                        title={language === "fr" ? "Lire le code" : "Read code"}>
+                                        <Code2 size={14}/><span className="hidden sm:inline">{language === "fr" ? "Lire" : "View"}</span>
+                                      </button>
+                                    ) : null}
                                     <button
                                       type="button"
                                       onClick={() =>
@@ -6620,6 +7246,57 @@ export default function ChatPage() {
 
             <div className="mx-auto mt-4 w-full max-w-3xl">
               <div className="overflow-hidden rounded-[28px] border border-border-strong bg-surface shadow-[0_12px_40px_var(--shadow-color)] transition focus-within:border-muted-strong">
+                {recording ? (
+                  <div className="mx-3 mt-3 flex items-center gap-3 rounded-2xl border border-red-500/20 bg-red-500/5 px-3 py-2.5">
+                    <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500"/>
+                    <div className="min-w-0 flex-1 text-red-500"><AudioWaveBars active/></div>
+                    <span className="shrink-0 text-xs font-semibold tabular-nums">{prettyDuration(recordingSeconds * 1000)}</span>
+                    <button type="button" onClick={stopRecorder} className="flex h-9 w-9 items-center justify-center rounded-xl bg-red-500 text-white" aria-label="Stop recording"><Square size={15}/></button>
+                  </div>
+                ) : null}
+                {voiceDraft ? (
+                  <div className="mx-3 mt-3 rounded-2xl border border-border bg-surface-secondary/70 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="flex items-center gap-2 text-xs font-semibold"><Mic size={15}/>{language === "fr" ? "Votre note vocale" : "Your voice note"}</p>
+                      <button type="button" onClick={() => void discardVoiceDraft()} disabled={voiceDraft.busy || ["reserved", "settlement_pending", "release_pending"].includes(voiceDraft.billing_status) || voiceDraft.transcription_status === "processing"}
+                        className="rounded-lg p-1.5 text-muted hover:bg-surface-tertiary disabled:opacity-30" aria-label="Discard voice note"><X size={15}/></button>
+                    </div>
+                    <audio controls className="mt-3 h-10 w-full" src={voiceDraft.localUrl} preload="metadata"/>
+                    <p className="mt-2 text-[11px] text-muted">
+                      {voiceDraft.transcription_status === "uploading" ? (language === "fr" ? "Transfert privé en cours…" : "Uploading privately…") :
+                       voiceDraft.transcription_status === "failed" ? (language === "fr" ? "Transcription interrompue." : "Transcription interrupted.") :
+                       voiceDraft.billing_status === "settlement_pending" ? (language === "fr" ? "Finalisation des crédits…" : "Settling credits…") :
+                       voiceDraft.transcription_status === "complete" && voiceDraft.billing_status === "settled" ? (language === "fr" ? "Transcription prête · choisissez le format d’envoi" : "Transcript ready · choose how to send") :
+                       (language === "fr" ? "Transcription en cours…" : "Transcribing…")}
+                    </p>
+                    {voiceDraft.transcription_status === "complete" && voiceDraft.billing_status === "settled" ? (
+                      <>
+                        <textarea rows={3} className="mt-3 w-full resize-y rounded-xl border border-border bg-surface p-3 text-xs leading-5 outline-none focus:border-muted-strong"
+                          value={voiceDraft.editedText} onChange={(event) => setVoiceDraft((current) => current ? {...current, editedText: event.target.value} : current)}
+                          placeholder={language === "fr" ? "Corrigez le texte avant l'envoi…" : "Edit text before sending…"}/>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button type="button" disabled={voiceDraft.busy || isThinking} onClick={() => void deliverVoiceDraft("voice")}
+                            className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground disabled:opacity-40"><Mic size={14}/>{language === "fr" ? "Envoyer en vocal" : "Send voice"}</button>
+                          <button type="button" disabled={voiceDraft.busy || isThinking || !voiceDraft.editedText.trim()} onClick={() => void deliverVoiceDraft("text")}
+                            className="rounded-xl border border-border bg-surface px-3 py-2 text-xs font-medium disabled:opacity-40">{language === "fr" ? "Envoyer le texte corrigé" : "Send edited text"}</button>
+                        </div>
+                      </>
+                    ) : null}
+                    {voiceDraft.audio_id && !voiceDraft.busy && ["queued", "processing"].includes(voiceDraft.transcription_status) ? (
+                      <button type="button" onClick={() => void apiFetch<VoiceNote>(`/ai/audio/${voiceDraft.audio_id}`)
+                        .then((result) => setVoiceDraft((current) => current ? {
+                          ...current, ...normalizeVoiceNote(result as unknown as Record<string, unknown>),
+                          editedText: current.editedText || result.transcription || "",
+                        } : current)).catch(() => setError(language === "fr" ? "Statut audio indisponible." : "Audio status unavailable."))}
+                        className="mt-2 inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs">
+                        <RotateCcw size={13}/>{language === "fr" ? "Actualiser le statut" : "Refresh status"}
+                      </button>
+                    ) : null}
+                    {(voiceDraft.transcription_status === "failed" || ["release_pending", "settlement_pending"].includes(voiceDraft.billing_status)) ? (
+                      <button type="button" onClick={() => void retryVoiceDraft()} className="mt-2 inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs"><RotateCcw size={13}/>{language === "fr" ? "Réparer / relancer" : "Repair / retry"}</button>
+                    ) : null}
+                  </div>
+                ) : null}
                 {attachments.length > 0 && (
                   <div className="flex flex-wrap gap-2 px-4 pt-4">
                     {attachments.map((attachment) => (
@@ -6788,12 +7465,19 @@ export default function ChatPage() {
                     )}
                   </div>
 
+                  {!recording ? (
+                    <button type="button" aria-label={language === "fr" ? "Enregistrer une note vocale" : "Record voice note"}
+                      title={language === "fr" ? "Note vocale" : "Voice note"} onClick={() => void startVoiceRecording()}
+                      disabled={isThinking || Boolean(voiceDraft) || !wallet?.is_pack_active}
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary transition hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-30"><Mic size={18}/></button>
+                  ) : (
+                    <button type="button" onClick={stopRecorder} aria-label="Stop recording"
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-red-500 text-white"><Square size={17}/></button>
+                  )}
                   <button
                     type="button"
                     aria-label={UI[language].send}
-                    onClick={
-                      handleSendMessage
-                    }
+                    onClick={() => void handleSendMessage()}
                     disabled={
                       (!message.trim() &&
                         attachments.length === 0) ||

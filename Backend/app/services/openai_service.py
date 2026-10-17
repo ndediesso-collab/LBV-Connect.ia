@@ -2852,6 +2852,63 @@ class OpenAIService:
 
 
     @classmethod
+    def _extract_web_images(cls, response: Any) -> list[dict[str, Any]]:
+        """Images citées par le véritable outil OpenAI web_search.
+
+        Aucune URL issue du texte libre du modèle n'est acceptée ici.
+        Le routeur ai.py revalide ensuite ces URLs avant exposition publique.
+        """
+        from urllib.parse import urlsplit
+        from ipaddress import ip_address
+
+        def public_https(raw: Any) -> bool:
+            value = str(raw or "").strip()
+            try:
+                parts = urlsplit(value)
+                host = (parts.hostname or "").lower()
+                if parts.scheme != "https" or not host or "." not in host:
+                    return False
+                if parts.username or parts.password or len(value) > 2048:
+                    return False
+                if host.endswith((".local", ".internal")) or host == "localhost":
+                    return False
+                try:
+                    if not ip_address(host).is_global:
+                        return False
+                except ValueError:
+                    pass
+                return True
+            except ValueError:
+                return False
+
+        images: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in cls._value(response, "output", []) or []:
+            if cls._value(item, "type") != "web_search_call":
+                continue
+            for result in cls._value(item, "results", []) or []:
+                if cls._value(result, "type") != "image_result":
+                    continue
+                image_url = str(cls._value(result, "image_url", "") or "").strip()
+                source_url = str(cls._value(result, "source_website_url", "") or "").strip()
+                if not (public_https(image_url) and public_https(source_url)):
+                    continue
+                if image_url in seen:
+                    continue
+                seen.add(image_url)
+                caption = str(cls._value(result, "caption", "") or "").strip()[:500]
+                images.append({
+                    "image_url": image_url,
+                    "source_url": source_url,
+                    "caption": caption,
+                    "alt": caption or "Illustration issue du Web",
+                    "after_paragraph": 0,
+                })
+                if len(images) >= 3:
+                    return images
+        return images
+
+    @classmethod
 
 
 
@@ -3220,6 +3277,7 @@ class OpenAIService:
 
 
             "usage": usage,
+            "web_images": cls._extract_web_images(response) if web else [],
 
 
 
@@ -3260,94 +3318,19 @@ class OpenAIService:
 
 
     @staticmethod
+    def _build_tools(web: bool) -> list[dict[str, Any]]:
+        """Recherche Web facultative. Les résultats images restent optionnels.
 
-
-
-
-
-
-
-    def _build_tools(
-
-
-
-
-
-
-
-        web: bool,
-
-
-
-
-
-
-
-    ) -> list[dict[str, str]]:
-
-
-
-
-
-
-
-        """Construit les outils OpenAI utilisés par la requête."""
-
-
-
-
-
-
-
+        `web_search_call.results` (activé dans les requêtes) fournit les URLs
+        réellement retournées, sans génération ou invention de liens.
+        """
         if not web:
-
-
-
-
-
-
-
             return []
-
-
-
-
-
-
-
-        return [
-
-
-
-
-
-
-
-            {
-
-
-
-
-
-
-
-                "type": "web_search",
-
-
-
-
-
-
-
-            }
-
-
-
-
-
-
-
-        ]
+        return [{
+            "type": "web_search",
+            "search_content_types": ["text", "image"],
+            "image_settings": {"max_results": 3, "caption": True},
+        }]
 
 
 
@@ -3612,6 +3595,7 @@ class OpenAIService:
 
 
             request["tools"] = tools
+            request["include"] = ["web_search_call.results"]
 
 
 
@@ -3804,6 +3788,7 @@ class OpenAIService:
         tools = self._build_tools(web)
         if tools:
             request["tools"] = tools
+            request["include"] = ["web_search_call.results"]
 
         resolved_reasoning_effort = self._apply_reasoning_to_request(
             request,
@@ -3896,6 +3881,17 @@ class OpenAIService:
                 self._value(completed_response, "model", model) or model
             )
 
+            # Fournit séparément les résultats visuels réellement collectés.
+            # Aucun résultat n'est transmis si Recherche Web est désactivée.
+            web_images = self._extract_web_images(completed_response) if web else []
+            if web_images:
+                yield {
+                    "type": "web_images",
+                    "images": web_images,
+                    "generation_id": generation_id,
+                    "response_id": response_id,
+                }
+
             yield {
                 "type": "usage",
                 "usage": usage,
@@ -3977,6 +3973,7 @@ class OpenAIService:
         tools = self._build_tools(web)
         if tools:
             request["tools"] = tools
+            request["include"] = ["web_search_call.results"]
 
         resolved_reasoning_effort = self._apply_reasoning_to_request(
             request,
@@ -4007,6 +4004,7 @@ class OpenAIService:
             "total_tokens": 0,
         }
         cumulative_web_search_calls = 0
+        cumulative_web_images: dict[str, dict[str, Any]] = {}
         accounted_response_ids: set[str] = set()
         accounted_response_order: list[str] = []
 
@@ -4039,6 +4037,9 @@ class OpenAIService:
                 cumulative_web_search_calls += (
                     self._count_web_search_calls(response)
                 )
+                for img in self._extract_web_images(response):
+                    if len(cumulative_web_images) < 3:
+                        cumulative_web_images.setdefault(img["image_url"], img)
 
             accounted_response_ids.add(response_key)
             accounted_response_order.append(
@@ -4345,6 +4346,14 @@ class OpenAIService:
                     self._value(final_response, "model", model) or model
                 )
 
+                if cumulative_web_images:
+                    yield {
+                        "type": "web_images",
+                        "images": list(cumulative_web_images.values()),
+                        "generation_id": generation_id,
+                        "response_id": active_response_id,
+                    }
+
                 yield {
                     "type": "usage",
                     "usage": dict(cumulative_usage),
@@ -4376,6 +4385,66 @@ class OpenAIService:
 
 
 
+
+    # ========================================================
+    # AUDIO — CONVERSION DE NOTE VOCALE EN TEXTE
+    # ========================================================
+
+    def transcribe_audio(
+        self,
+        *,
+        data: bytes,
+        filename: str,
+        mime_type: str,
+        model: str = "gpt-4o-mini-transcribe",
+    ) -> dict[str, Any]:
+        """Transcrit un enregistrement déjà validé et payé par audio_service.
+
+        Ne sauvegarde pas l'audio et ne débite aucun crédit ; ces responsabilités
+        appartiennent au service audio du backend, avant cet appel payant.
+        """
+        from pathlib import PurePath
+
+        allowed_models = {"gpt-4o-mini-transcribe", "gpt-4o-transcribe", "gpt-transcribe", "whisper-1"}
+        allowed_mime_types = {
+            "audio/webm", "audio/ogg", "audio/mpeg", "audio/mp3",
+            "audio/mp4", "audio/x-m4a", "audio/m4a", "audio/wav",
+            "audio/x-wav", "audio/flac",
+        }
+        if model not in allowed_models:
+            raise ValueError("Modèle de transcription non autorisé.")
+        mime = (mime_type or "").split(";", 1)[0].strip().lower()
+        if mime not in allowed_mime_types:
+            raise ValueError("Format audio non directement accepté pour la transcription.")
+        if not data or len(data) > 20 * 1024 * 1024:
+            raise ValueError("Enregistrement vide ou supérieur à 20 Mo.")
+
+        safe_name = PurePath(str(filename or "audio").replace("\\", "/")).name
+        accepted_extensions = {".webm", ".ogg", ".mp3", ".mp4", ".m4a", ".wav", ".flac", ".mpeg", ".mpga"}
+        extension = "." + safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+        if extension not in accepted_extensions:
+            suffix = {
+                "audio/webm": ".webm", "audio/ogg": ".ogg",
+                "audio/mpeg": ".mp3", "audio/mp3": ".mp3",
+                "audio/mp4": ".mp4", "audio/x-m4a": ".m4a",
+                "audio/m4a": ".m4a", "audio/wav": ".wav",
+                "audio/x-wav": ".wav", "audio/flac": ".flac",
+            }[mime]
+            safe_name = "note-oria" + suffix
+
+        try:
+            transcript = self.client.audio.transcriptions.create(
+                model=model,
+                file=(safe_name, data, mime),
+                response_format="json",
+            )
+        except Exception as error:
+            raise RuntimeError("Échec de la transcription OpenAI.") from error
+
+        text = str(self._value(transcript, "text", "") or "").strip()
+        if not text:
+            raise RuntimeError("OpenAI n'a retourné aucun texte transcrit.")
+        return {"text": text, "model": model}
 
     # ========================================================
 

@@ -1743,8 +1743,8 @@ def consume_my_credits(
     """
     Endpoint legacy réservé aux éventuelles actions à coût fixe.
 
-    Le Chat, les images et les vidéos utilisent désormais leur propre
-    facturation dynamique :
+    Le Chat, les images, les vidéos et la transcription audio utilisent
+    désormais leur propre facturation dynamique :
 
         estimation -> reserve -> exécution -> settle/release.
 
@@ -1774,6 +1774,7 @@ def consume_my_credits(
             "chat_",
             "image_",
             "video_",
+            "audio_",
         )
     ):
         raise HTTPException(
@@ -3785,6 +3786,113 @@ def get_conversation(
 
 
 # ============================================================
+# NOTES VOCALES LIÉES À L'HISTORIQUE
+# ============================================================
+
+
+def _voice_note_history_payload(note: dict) -> dict:
+    """Métadonnées publiques : jamais de chemin Storage ni d'URL permanente.
+
+    Les liens temporaires sont demandés via GET /ai/audio/{audio_id} lorsque
+    le frontend doit réellement lire un vocal.
+    """
+    paid = note.get("billing_status") == "settled"
+    transcribed = note.get("transcription_status") == "complete"
+    return {
+        "audio_id": note.get("id"),
+        "message_id": note.get("message_id"),
+        "conversation_id": note.get("conversation_id"),
+        "duration_ms": note.get("duration_ms"),
+        "mime_type": note.get("mime_type"),
+        "size_bytes": note.get("size_bytes"),
+        "transcription_status": note.get("transcription_status"),
+        "transcription": note.get("transcription") if paid and transcribed else None,
+        "billing_status": note.get("billing_status"),
+        "delivery_mode": "voice",
+        "created_at": note.get("created_at"),
+        "playback_url": None,
+    }
+
+
+def _conversation_voice_notes(
+    *, conversation_id: str, user_id: str,
+    message_ids: set[str],
+) -> list[dict]:
+    """Charge les vocaux réellement envoyés et liés à un message visible.
+
+    Une migration audio non encore appliquée ne doit jamais bloquer la lecture
+    des conversations et fichiers qui existaient avant cette fonctionnalité.
+    """
+    if not message_ids:
+        return []
+
+    notes: list[dict] = []
+    batch_size = 500
+    max_history = PACK_HISTORY_LIMITS["business_pack"]
+    try:
+        for offset in range(0, max_history, batch_size):
+            result = (
+                supabase.table("oria_voice_notes")
+                .select("id,message_id,conversation_id,duration_ms,mime_type,"
+                        "size_bytes,transcription_status,transcription,"
+                        "billing_status,delivery_mode,created_at")
+                .eq("user_id", user_id)
+                .eq("conversation_id", conversation_id)
+                .eq("delivery_mode", "voice")
+                .order("created_at", desc=False)
+                .range(offset, offset + batch_size - 1)
+                .execute()
+            )
+            rows = result.data or []
+            for note in rows:
+                if str(note.get("message_id") or "") in message_ids:
+                    notes.append(_voice_note_history_payload(note))
+            if len(rows) < batch_size:
+                break
+    except Exception:
+        # Les notes sont facultatives pour l'historique classique. Aucune
+        # information privée ni exception SQL n'est envoyée au frontend.
+        import logging
+        logging.getLogger("oria.audio").warning(
+            "Chargement des notes vocales indisponible pour une conversation."
+        )
+        return []
+    return notes
+
+
+def _detach_conversation_voice_notes(
+    *, conversation_id: str, user_id: str,
+    message_ids: list[str] | None = None,
+) -> None:
+    """Conserve les audios privés lorsque leurs messages sont effacés.
+
+    Sans `message_ids`, la conversation entière va être supprimée : on retire
+    aussi la référence `conversation_id`, comme pour generated_artifacts.
+    """
+    try:
+        query = (
+            supabase.table("oria_voice_notes")
+            .update(
+                {"message_id": None} if message_ids is not None
+                else {"message_id": None, "conversation_id": None}
+            )
+            .eq("user_id", user_id)
+            .eq("conversation_id", conversation_id)
+        )
+        if message_ids is not None:
+            if not message_ids:
+                return
+            query = query.in_("message_id", message_ids)
+        query.execute()
+    except Exception:
+        # Ancien déploiement sans migration audio : ne perturbe pas le chat.
+        import logging
+        logging.getLogger("oria.audio").warning(
+            "Détachement des notes vocales non disponible."
+        )
+
+
+# ============================================================
 # GET /conversations/{conversation_id}/messages
 # ============================================================
 
@@ -3828,6 +3936,13 @@ def get_conversation_messages(
         .execute()
     )
 
+    message_rows = response.data or []
+    voice_notes = _conversation_voice_notes(
+        conversation_id=conversation_id,
+        user_id=authenticated_user_id,
+        message_ids={str(row["id"]) for row in message_rows if row.get("id")},
+    )
+
     # Les fichiers générés sont renvoyés séparément des messages.
     # Aucune URL signée n'est créée ici : cela évite de ralentir
     # l'ouverture d'une conversation et évite de générer des liens
@@ -3857,7 +3972,8 @@ def get_conversation_messages(
     return {
         "success": True,
         "conversation_id": conversation_id,
-        "messages": response.data or [],
+        "messages": message_rows,
+        "voice_notes": voice_notes,
         "artifacts": [
             _artifact_response(item)
             for item in artifacts
@@ -3968,6 +4084,12 @@ def create_conversation_message(
             for row in stored_messages[:overflow]
             if row.get("id")
         ]
+
+        _detach_conversation_voice_notes(
+            conversation_id=conversation_id,
+            user_id=authenticated_user_id,
+            message_ids=oldest_message_ids,
+        )
 
         for message_id in oldest_message_ids:
             supabase.table("messages").delete().eq(
@@ -4083,6 +4205,13 @@ def delete_conversation(
             f"error={str(error)!r}",
             flush=True,
         )
+
+    # Conserver les fichiers vocaux privés, mais retirer leur rattachement
+    # à cette conversation devenue inaccessible (comme pour les artifacts).
+    _detach_conversation_voice_notes(
+        conversation_id=conversation_id,
+        user_id=authenticated_user_id,
+    )
 
     # Suppression explicite des messages afin de ne pas dépendre
     # d'une configuration CASCADE particulière.

@@ -17,10 +17,13 @@ from typing import Any
 import re
 
 import unicodedata
+from pathlib import PurePath
+from urllib.parse import urlsplit
+from ipaddress import ip_address
 
 
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Header, HTTPException, Request, UploadFile
 
 from fastapi.responses import StreamingResponse
 
@@ -313,6 +316,7 @@ class ChatResponse(BaseModel):
     artifacts: list[dict[str, Any]] | None = None
 
     artifact_errors: list[str] | None = None
+    web_images: list[dict[str, Any]] | None = None
 
 
 
@@ -624,6 +628,185 @@ _CODE_EXTENSION_BY_LANGUAGE = {
 }
 
 
+# Formats de fichiers source : l'affichage se fera dans le lecteur du Chat.
+# La création physique reste confiée à ArtifactService.
+_CODE_SOURCE_EXTENSIONS = frozenset({
+    "py", "js", "jsx", "ts", "tsx", "html", "css", "sql", "xml",
+    "yaml", "yml", "toml", "svg", "sh", "ps1", "java", "c", "cpp",
+    "cs", "go", "rs", "php", "rb",
+})
+_CODE_EDIT_INTENT = re.compile(
+    r"\b(?:corrig\w*|r[ée]par\w*|d[ée]bog\w*|d[ée]bug\w*|"
+    r"fix\w*|debug\w*|optimis\w*|am[ée]lior\w*|refactor\w*|"
+    r"modifi\w*|r[ée][ée]cri\w*|cr[ée]\w*|g[ée]n[ée]r\w*|"
+    r"[ée]cri\w*|d[ée]velopp\w*|impl[ée]ment\w*|build|write)\b",
+    flags=re.IGNORECASE,
+)
+_CODE_CONTEXT = re.compile(
+    r"\b(?:code|backend|frontend|script|fonction|programme|application|"
+    r"python|javascript|typescript|java|html|css|react|fastapi|node(?:\.js)?|"
+    r"api|sql|php|rust|go|site\s+web)\b|"
+    r"\.(?:py|js|jsx|ts|tsx|html|css|sql|xml|yaml|yml|toml|"
+    r"svg|sh|ps1|java|c|cpp|cs|go|rs|php|rb)\b",
+    flags=re.IGNORECASE,
+)
+_CODE_FENCE = re.compile(
+    r"^```(?P<language>[A-Za-z0-9_+.-]*)[^\n]*\n"
+    r"(?P<code>.*?)^```[ \t]*$",
+    flags=re.MULTILINE | re.DOTALL,
+)
+_CODE_LABEL = re.compile(
+    r"(?:^#{1,6}\s*|^\*\*|^fichier\s*:\s*|^file\s*:\s*)"
+    r"(?P<filename>[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,8}|\.[A-Za-z0-9_-]{2,20})",
+    flags=re.IGNORECASE,
+)
+
+
+def _is_code_task(
+    message: str,
+    attachments: list[ChatAttachment],
+) -> bool:
+    """Ne transforme pas une simple demande d'explication en fichier."""
+    if not _CODE_EDIT_INTENT.search(message):
+        return False
+    # Une demande de document sur le codage ne doit pas être détournée en
+    # création automatique de fichiers source.
+    if re.search(
+        r"\b(?:rapport|pr[ée]sentation|powerpoint|pdf|docx|excel)\b",
+        message, flags=re.IGNORECASE,
+    ) and not re.search(
+        r"\b(?:corrig\w*|r[ée]par\w*|d[ée]bug\w*|debug\w*|fix\w*)\b",
+        message, flags=re.IGNORECASE,
+    ):
+        return False
+    if _CODE_CONTEXT.search(message):
+        return True
+    for attachment in attachments:
+        name = str(attachment.name or "")
+        if name.lower().rsplit(".", 1)[-1] in _CODE_SOURCE_EXTENSIONS:
+            return True
+    return False
+
+
+def _code_output_instruction(
+    message: str,
+    attachments: list[ChatAttachment],
+) -> str:
+    """Demande un format exploitable sans changer le message sauvegardé."""
+    if not _is_code_task(message, attachments):
+        return message
+    return (
+        message + "\n\n"
+        "Pour chaque fichier de code réellement créé ou corrigé, donne "
+        "son nom dans un titre Markdown, puis son contenu COMPLET dans "
+        "un bloc de code balisé avec le langage. Garde les explications "
+        "hors des blocs de code. Si tu ne peux pas fournir le fichier "
+        "complet, indique explicitement ce qui manque et ne présente "
+        "pas un extrait comme un fichier complet."
+    )
+
+
+def _response_code_blocks(
+    response_text: str, *, include_named_empty: bool = False,
+) -> list[dict[str, str | None]]:
+    """Extrait les blocs Markdown et les noms de fichiers explicitement indiqués."""
+    blocks = []
+    text = str(response_text or "")
+    for match in _CODE_FENCE.finditer(text):
+        code = match.group("code")
+        language = (match.group("language") or "").lower()
+        extension = _CODE_EXTENSION_BY_LANGUAGE.get(language)
+        preceding = text[:match.start()].rstrip().splitlines()[-2:]
+        filename = None
+        for line in reversed(preceding):
+            label = _CODE_LABEL.search(line.strip())
+            if label:
+                # Préserver un chemin de projet explicite : src/App.tsx.
+                filename = label.group("filename").replace("\\", "/")
+                break
+        if not code.strip() and not (include_named_empty and filename):
+            continue
+        if filename and "." in filename:
+            extension = filename.rsplit(".", 1)[-1].lower()
+        blocks.append({
+            "code": code.rstrip("\n") + "\n" if code.strip() else "",
+            "filename": filename,
+            "extension": extension,
+        })
+    return blocks
+
+
+def _code_source_from_response(file_type: str, response_text: str) -> str:
+    """Empêche d'écrire une explication complète dans un fichier source."""
+    blocks = _response_code_blocks(response_text)
+    matching = [block for block in blocks if block["extension"] == file_type]
+    if len(matching) == 1:
+        return str(matching[0]["code"])
+    if len(blocks) == 1 and not blocks[0]["extension"]:
+        return str(blocks[0]["code"])
+    if len(matching) > 1:
+        raise ValueError(
+            "Plusieurs blocs pour un même langage : demander des noms "
+            "de fichiers distincts ou exporter en ZIP."
+        )
+    if blocks:
+        raise ValueError(
+            "Aucun bloc de code ne correspond au format de fichier demandé."
+        )
+    raise ValueError(
+        "Aucun bloc de code complet n'a été identifié : ORIA ne créera "
+        "pas un faux fichier contenant l'explication."
+    )
+
+
+def _code_artifact_requests_after_response(
+    *,
+    message: str,
+    attachments: list[ChatAttachment],
+    response_text: str,
+    existing: list[dict[str, str | None]],
+) -> list[dict[str, str | None]]:
+    """Ajoute automatiquement un fichier source uniquement pour un tour de code."""
+    if existing or not _is_code_task(message, attachments):
+        return existing
+    blocks = _response_code_blocks(response_text)
+    if not blocks:
+        return existing
+    if len(blocks) > 1:
+        # Sans noms distincts, deux blocs d'un même langage peuvent être
+        # simplement deux extraits, et non deux fichiers complets.
+        named_files = all(item["filename"] for item in blocks)
+        if not named_files:
+            raise ValueError(
+                "Plusieurs blocs de code sans nom de fichier explicite : "
+                "impossible de créer un projet ZIP fiable."
+            )
+        if len(blocks) > ArtifactService.MAX_ARCHIVE_FILES:
+            raise ValueError(
+                "Trop de fichiers pour une seule archive. Diviser le projet "
+                "en plusieurs générations pour éviter toute troncature."
+            )
+        return [{"file_type": "zip", "filename": "code_oria.zip"}]
+
+    extension = blocks[0]["extension"]
+    if extension not in _CODE_SOURCE_EXTENSIONS:
+        return existing
+    filename = blocks[0]["filename"]
+    if not filename:
+        source_names = [
+            PurePath(str(a.name or "").replace("\\", "/")).name
+            for a in attachments
+            if str(a.name or "").lower().endswith("." + extension)
+        ]
+        if len(source_names) == 1:
+            original = source_names[0]
+            stem = original.rsplit(".", 1)[0]
+            filename = f"{stem}_corrige.{extension}"
+    if not filename:
+        filename = f"code_oria.{extension}"
+    return [{"file_type": extension, "filename": filename}]
+
+
 def _artifact_filename_from_message(
     message: str,
     *,
@@ -847,62 +1030,40 @@ def _markdown_table_rows(
 def _zip_content_from_response(
     response_text: str,
 ) -> dict[str, Any]:
-    """
-    Transforme des blocs de code Markdown en fichiers d'une archive ZIP.
+    """Assemble des fichiers de projet nommés sans perdre leur arborescence.
 
-    Si la réponse n'est pas structurée en plusieurs fichiers, l'archive contient
-    simplement `README.md` avec la réponse complète.
+    L'extraction réutilise le même parseur que l'export source individuel.
+    Un ZIP demandé sans code conserve l'ancien comportement README.md.
+    Un projet multi-fichiers ambigu est refusé au lieu d'inventer des noms.
     """
-    files: list[dict[str, Any]] = []
     text_value = str(response_text or "")
-
-    pattern = re.compile(
-        r"""(?ms)
-        (?:
-            ^\s*\#{1,6}\s+
-            (?P<heading>[^\n`]+?\.[A-Za-z0-9_+-]{1,12})
-            \s*\n
-        )?
-        ^```(?P<language>[A-Za-z0-9_+.-]*)[^\n]*\n
-        (?P<code>.*?)
-        ^```\s*$
-        """,
-        re.VERBOSE,
-    )
-
-    for index, match in enumerate(pattern.finditer(text_value), start=1):
-        heading = (match.group("heading") or "").strip()
-        language = (match.group("language") or "").strip().lower()
-        code = match.group("code")
-
-        if heading:
-            filename = heading.split("/")[-1].strip()
-            extension = filename.rsplit(".", 1)[-1].lower()
-        else:
-            extension = _CODE_EXTENSION_BY_LANGUAGE.get(
-                language,
-                "txt",
-            )
-            filename = f"fichier-{index}.{extension}"
-
-        files.append(
-            {
-                "name": filename,
-                "file_type": extension,
-                "content": code,
-            }
+    blocks = _response_code_blocks(text_value, include_named_empty=True)
+    files: list[dict[str, Any]] = []
+    if blocks and len(blocks) > 1 and not all(item["filename"] for item in blocks):
+        raise ValueError(
+            "Chaque bloc de code d'un projet ZIP doit avoir un nom de fichier "
+            "explicite pour préserver les imports et les sous-dossiers."
         )
-
+    for index, item in enumerate(blocks, start=1):
+        name = item["filename"] or f"fichier-{index}.{item['extension'] or 'txt'}"
+        extension = item["extension"] or "txt"
+        files.append({
+            "name": name,
+            "file_type": extension,
+            "content": item["code"],
+        })
     if not files:
-        files.append(
-            {
-                "name": "README.md",
-                "file_type": "md",
-                "content": text_value,
-            }
+        files.append({
+            "name": "README.md",
+            "file_type": "md",
+            "content": text_value,
+        })
+    if len(files) > ArtifactService.MAX_ARCHIVE_FILES:
+        raise ValueError(
+            "L'archive dépasse le nombre de fichiers autorisés : aucun fichier "
+            "ne doit être supprimé silencieusement."
         )
-
-    return {"files": files[:ArtifactService.MAX_ARCHIVE_FILES]}
+    return {"files": files}
 
 
 def _artifact_content_from_response(
@@ -916,6 +1077,8 @@ def _artifact_content_from_response(
     Le coût utilisateur reste donc le coût du tour Chat déjà calculé.
     """
     normalized_type = str(file_type).lower().lstrip(".")
+    if normalized_type in _CODE_SOURCE_EXTENSIONS:
+        return _code_source_from_response(normalized_type, response_text)
     cleaned = _strip_outer_code_fence(response_text)
 
     if normalized_type in {"xlsx", "ods", "csv", "tsv"}:
@@ -1936,6 +2099,52 @@ def _as_mapping(value: Any) -> dict[str, Any] | None:
             return dumped
 
     return None
+
+
+# Résultats structurés provenant du service de recherche (pas du texte IA).
+def _public_web_images(value: Any, *, enabled: bool) -> list[dict[str, Any]]:
+    if not enabled or not isinstance(value, list):
+        return []
+    images: list[dict[str, Any]] = []
+    for item in value[:12]:
+        if not isinstance(item, dict):
+            continue
+        image_url = str(item.get("image_url") or "").strip()
+        source_url = str(item.get("source_url") or "").strip()
+        if not (_safe_public_https_url(image_url) and
+                _safe_public_https_url(source_url)):
+            continue
+        images.append({
+            "image_url": image_url,
+            "source_url": source_url,
+            "alt": str(item.get("alt") or "Illustration Web")[:300],
+            "caption": str(item.get("caption") or "")[:500],
+            "after_paragraph": max(0, min(int(item.get("after_paragraph") or 0), 200))
+            if str(item.get("after_paragraph") or "0").isdigit() else 0,
+        })
+    return images
+
+
+def _safe_public_https_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        hostname = (parsed.hostname or "").lower()
+        try:
+            public_host = ip_address(hostname).is_global
+        except ValueError:
+            public_host = True
+        return (
+            public_host
+            and parsed.scheme == "https"
+            and bool(hostname)
+            and "." in hostname
+            and hostname not in {"localhost", "127.0.0.1"}
+            and not hostname.endswith((".local", ".internal"))
+            and not parsed.username
+            and len(value) <= 2048
+        )
+    except ValueError:
+        return False
 
 
 def _calculate_real_chat_cost(
@@ -3095,7 +3304,7 @@ async def chat(
     try:
         openai_response = openai_service.chat(
             model=MODEL_OPENAI_IDS[model],
-            message=message,
+            message=_code_output_instruction(message, attachments),
             web=web,
             attachments=_attachments_for_openai(attachments),
             history=history,
@@ -3143,6 +3352,20 @@ async def chat(
 
     generated_artifacts: list[dict[str, Any]] = []
     artifact_errors: list[str] = []
+    try:
+        artifact_requests = _code_artifact_requests_after_response(
+            message=message,
+            attachments=attachments,
+            response_text=response_text,
+            existing=artifact_requests,
+        )
+    except ValueError as error:
+        artifact_errors.append(str(error))
+    web_images = _public_web_images(
+        _as_mapping(openai_response).get("web_images")
+        if _as_mapping(openai_response) else None,
+        enabled=web,
+    )
 
     for artifact_request in artifact_requests:
         try:
@@ -3179,6 +3402,7 @@ async def chat(
         trials_remaining=trials_remaining,
         artifacts=generated_artifacts or None,
         artifact_errors=artifact_errors or None,
+        web_images=web_images or None,
     )
 
 
@@ -4538,6 +4762,250 @@ def get_trials(
 
 
 # ============================================================
+# AUDIO — NOTES VOCALES PRIVEES ET TRANSCRIPTION
+# ============================================================
+
+MAX_AUDIO_UPLOAD_BYTES = 20 * 1024 * 1024
+_ALLOWED_AUDIO_MIME_TYPES = frozenset({
+    "audio/webm", "audio/ogg", "audio/mpeg", "audio/mp3", "audio/mp4",
+    "audio/x-m4a", "audio/m4a", "audio/wav", "audio/x-wav", "audio/aac", "audio/3gpp",
+})
+
+
+class AudioDeliveryRequest(BaseModel):
+    mode: str  # "voice" ou "text"
+    edited_text: str | None = None
+
+
+class AudioMessageLinkRequest(BaseModel):
+    message_id: str
+
+
+def _audio_service():
+    # Chargement tardif : le Chat actuel ne dépend pas du service vocal.
+    try:
+        from app.services.audio_service import AudioService
+    except ImportError as error:
+        raise HTTPException(status_code=503, detail="Service vocal non installé.") from error
+    return AudioService()
+
+
+def _audio_error(error: Exception) -> HTTPException:
+    from app.services.audio_service import (
+        AudioUnavailable, AudioInvalid, AudioNotFound, AudioConflict,
+        AudioInsufficientCredits, AudioPackInactive,
+    )
+    if isinstance(error, AudioUnavailable):
+        return HTTPException(status_code=503, detail=str(error))
+    if isinstance(error, AudioInsufficientCredits):
+        return HTTPException(status_code=402, detail=str(error))
+    if isinstance(error, AudioPackInactive):
+        return HTTPException(status_code=403, detail=str(error))
+    if isinstance(error, (AudioInvalid, ValueError)):
+        return HTTPException(status_code=422, detail=str(error))
+    if isinstance(error, AudioNotFound):
+        return HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, AudioConflict):
+        return HTTPException(status_code=409, detail=str(error))
+    return HTTPException(status_code=502, detail="Échec du service audio privé.")
+
+
+def _authenticated_audio_user(user_id: str | None, authorization: str | None) -> str:
+    return _authenticate_chat_user(user_id=user_id, authorization=authorization)
+
+
+def _process_audio_in_background(service: Any, *, user_id: str, audio_id: str) -> None:
+    """L'erreur reste dans l'état du job ; pas de stacktrace après réponse HTTP.
+
+    Les vrais traitements durables sont rattrapés par audio_worker quand ils
+    sont encore `queued`. Un job `processing` incertain n'est jamais relancé.
+    """
+    try:
+        service.process_audio(user_id=user_id, audio_id=audio_id)
+    except Exception:
+        # Ne jamais loguer l'enregistrement, le texte ni des jetons secrets.
+        import logging
+        logging.getLogger("oria.audio").warning(
+            "Traitement de note vocale non finalisé (audio_id=%s).", audio_id
+        )
+
+
+@router.post("/audio/prepare")
+async def prepare_voice_note(
+    background_tasks: BackgroundTasks,
+    audio: UploadFile = File(...),
+    conversation_id: str | None = Form(default=None),
+    request_id: str | None = Form(default=None),
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Upload privé + mise en file de transcription, sans bloquer la réponse.
+
+    La transcription ne sera réellement appelée qu'après réservation atomique
+    des crédits par AudioService.process_audio().
+    """
+    authenticated_user_id = _authenticated_audio_user(user_id, authorization)
+    if conversation_id:
+        owned = (supabase.table("conversations").select("id")
+                 .eq("id", conversation_id).eq("user_id", authenticated_user_id)
+                 .limit(1).execute())
+        if not owned.data:
+            raise HTTPException(status_code=404, detail="Conversation introuvable ou non autorisée.")
+
+    mime = (audio.content_type or "").split(";", 1)[0].strip().lower()
+    if mime not in _ALLOWED_AUDIO_MIME_TYPES:
+        raise HTTPException(status_code=415, detail="Format audio non pris en charge.")
+    try:
+        data = await audio.read(MAX_AUDIO_UPLOAD_BYTES + 1)
+    finally:
+        await audio.close()
+    if not data or len(data) > MAX_AUDIO_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Note vocale vide ou trop volumineuse (20 Mo max).")
+
+    service = _audio_service()
+    try:
+        result = await asyncio.to_thread(
+            service.prepare_audio,
+            user_id=authenticated_user_id, conversation_id=conversation_id,
+            request_id=request_id,
+            filename=str(audio.filename or "note-vocale"), mime_type=mime, data=data,
+        )
+    except Exception as error:
+        raise _audio_error(error) from error
+    if not isinstance(result, dict) or not result.get("audio_id"):
+        raise HTTPException(status_code=502, detail="Réponse audio invalide.")
+    if result.get("transcription_status") == "queued":
+        background_tasks.add_task(
+            _process_audio_in_background, service, user_id=authenticated_user_id,
+            audio_id=result["audio_id"],
+        )
+    return {"success": True, **result}
+
+
+@router.get("/audio/{audio_id}")
+async def get_voice_note(
+    audio_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Statut/transcription et nouvelle URL privée pour la réécoute."""
+    uid = _authenticated_audio_user(user_id, authorization)
+    try:
+        result = await asyncio.to_thread(_audio_service().get_audio, user_id=uid, audio_id=audio_id)
+    except Exception as error:
+        raise _audio_error(error) from error
+    return {"success": True, **result}
+
+
+@router.post("/audio/{audio_id}/send")
+async def choose_voice_delivery(
+    audio_id: str, payload: AudioDeliveryRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Sélectionne note vocale ou texte édité ; n'effectue PAS d'appel Chat IA.
+
+    Le frontend transmet ensuite le texte validé à /ai/chat(/stream) et
+    conserve la facturation Chat habituelle, sans double débit.
+    """
+    uid = _authenticated_audio_user(user_id, authorization)
+    try:
+        result = await asyncio.to_thread(
+            _audio_service().send_audio, user_id=uid, audio_id=audio_id,
+            mode=payload.mode, edited_text=payload.edited_text,
+        )
+    except Exception as error:
+        raise _audio_error(error) from error
+    return {"success": True, **result}
+
+
+@router.post("/audio/{audio_id}/attach-message")
+async def link_voice_note_to_message(
+    audio_id: str, payload: AudioMessageLinkRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    uid = _authenticated_audio_user(user_id, authorization)
+    try:
+        result = await asyncio.to_thread(
+            _audio_service().attach_message, user_id=uid, audio_id=audio_id,
+            message_id=payload.message_id,
+        )
+    except Exception as error:
+        raise _audio_error(error) from error
+    return {"success": True, **result}
+
+
+@router.post("/audio/{audio_id}/retry")
+async def retry_voice_transcription(
+    audio_id: str, background_tasks: BackgroundTasks,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    uid = _authenticated_audio_user(user_id, authorization)
+    service = _audio_service()
+    try:
+        result = await asyncio.to_thread(service.queue_retry, user_id=uid, audio_id=audio_id)
+    except Exception as error:
+        raise _audio_error(error) from error
+    background_tasks.add_task(_process_audio_in_background, service, user_id=uid, audio_id=audio_id)
+    return {"success": True, **result}
+
+
+@router.post("/audio/{audio_id}/reconcile")
+async def reconcile_voice_billing(
+    audio_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Finalise une réservation en attente SANS rappeler OpenAI."""
+    uid = _authenticated_audio_user(user_id, authorization)
+    try:
+        result = await asyncio.to_thread(_audio_service().reconcile_billing,
+                                         user_id=uid, audio_id=audio_id)
+    except Exception as error:
+        raise _audio_error(error) from error
+    return {"success": True, **result}
+
+
+@router.post("/audio/{audio_id}/reconcile-release")
+async def reconcile_voice_credit_release(
+    audio_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Libère une réservation échouée sans relancer la transcription OpenAI.
+
+    AudioService autorise cette action uniquement pour une transcription
+    échouée, sans texte, et avec billing_status == release_pending.
+    """
+    uid = _authenticated_audio_user(user_id, authorization)
+    try:
+        result = await asyncio.to_thread(
+            _audio_service().reconcile_release,
+            user_id=uid, audio_id=audio_id,
+        )
+    except Exception as error:
+        raise _audio_error(error) from error
+    return {"success": True, **result}
+
+
+@router.delete("/audio/{audio_id}")
+async def discard_voice_draft(
+    audio_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Supprime seulement les brouillons sans facturation en attente."""
+    uid = _authenticated_audio_user(user_id, authorization)
+    try:
+        await asyncio.to_thread(_audio_service().delete_draft, user_id=uid, audio_id=audio_id)
+    except Exception as error:
+        raise _audio_error(error) from error
+    return {"success": True, "audio_id": audio_id, "deleted": True}
+
+
+# ============================================================
 # POST /ai/chat/control
 # ============================================================
 
@@ -4781,11 +5249,12 @@ async def chat_stream(
         final_usage = None
         final_web_search_calls = None
         final_openai_timing: dict[str, Any] = {}
+        final_web_images: list[dict[str, Any]] = []
         settled = False
         first_delta_server_ms: float | None = None
 
         current_reasoning_mode = reasoning_mode
-        original_message = message
+        original_message = _code_output_instruction(message, attachments)
         modification_instructions: list[str] = []
 
         restart_count = 0
@@ -4835,6 +5304,7 @@ async def chat_stream(
                 final_usage = None
                 final_web_search_calls = None
                 final_openai_timing = {}
+                final_web_images = []
 
                 if websocket_available:
                     stream_result = openai_service.chat_stream_websocket(
@@ -4889,7 +5359,17 @@ async def chat_stream(
                                 )
                                 continue
 
+                            if item_type in {"web_images", "image_results"}:
+                                final_web_images = _public_web_images(
+                                    payload.get("images"), enabled=web,
+                                )
+                                continue
+
                             if item_type == "usage":
+                                if "web_images" in payload:
+                                    final_web_images = _public_web_images(
+                                        payload.get("web_images"), enabled=web,
+                                    )
                                 final_usage = payload.get("usage")
                                 final_web_search_calls = payload.get(
                                     "web_search_calls"
@@ -4924,6 +5404,10 @@ async def chat_stream(
                                 restart_request = payload
                                 break
 
+                            if item_type == "response_meta" and "web_images" in payload:
+                                final_web_images = _public_web_images(
+                                    payload.get("web_images"), enabled=web,
+                                )
                             if item_type in {
                                 "response_meta",
                                 "steer_sent",
@@ -5034,7 +5518,17 @@ async def chat_stream(
                             )
                             continue
 
+                        if item_type in {"web_images", "image_results"}:
+                            final_web_images = _public_web_images(
+                                payload.get("images"), enabled=web,
+                            )
+                            continue
+
                         if item_type == "usage":
+                            if "web_images" in payload:
+                                final_web_images = _public_web_images(
+                                    payload.get("web_images"), enabled=web,
+                                )
                             final_usage = payload.get("usage")
                             final_web_search_calls = payload.get(
                                 "web_search_calls"
@@ -5050,6 +5544,10 @@ async def chat_stream(
                             continue
 
                         if item_type == "response_meta":
+                            if "web_images" in payload:
+                                final_web_images = _public_web_images(
+                                    payload.get("web_images"), enabled=web,
+                                )
                             forwarded = dict(payload)
                             forwarded["generation_id"] = generation_id
                             forwarded["attempt_id"] = attempt_id
@@ -5207,6 +5705,25 @@ async def chat_stream(
 
             generated_artifacts: list[dict[str, Any]] = []
             artifact_errors: list[str] = []
+            try:
+                artifact_requests = _code_artifact_requests_after_response(
+                    message=message,
+                    attachments=attachments,
+                    response_text=full_response,
+                    existing=artifact_requests,
+                )
+            except ValueError as error:
+                artifact_errors.append(str(error))
+
+            if final_web_images:
+                yield _sse(
+                    "web_images",
+                    {
+                        "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                        "images": final_web_images,
+                    },
+                )
 
             for artifact_request in artifact_requests:
                 file_type = str(
@@ -5288,6 +5805,7 @@ async def chat_stream(
                     "transport": transport,
                     "artifacts": generated_artifacts,
                     "artifact_errors": artifact_errors,
+                    "web_images": final_web_images,
                     "timing": {
                         **final_openai_timing,
                         "first_delta_server_ms": first_delta_server_ms,

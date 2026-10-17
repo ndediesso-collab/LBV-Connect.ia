@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import logging
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from app.core.supabase import supabase
+
+
+logger = logging.getLogger(__name__)
 
 
 class SupabaseArtifactRepository:
@@ -190,13 +195,11 @@ class SupabaseArtifactRepository:
         if not normalized_artifact_id:
             raise ValueError("artifact_id est obligatoire.")
 
-        if not storage_path.startswith(
-            f"{normalized_user_id}/artifacts/"
-        ):
-            raise ValueError(
-                "Le chemin Storage de l'artifact n'appartient pas "
-                "à l'utilisateur courant."
-            )
+        self._assert_owned_storage_path(
+            storage_path=storage_path,
+            user_id=normalized_user_id,
+            artifact_id=normalized_artifact_id,
+        )
 
         if size_bytes < 0:
             raise ValueError("size_bytes ne peut pas être négatif.")
@@ -274,11 +277,22 @@ class SupabaseArtifactRepository:
             else str(uuid4())
         )
 
+        # Contrôles avant tout upload : les métadonnées du fichier source
+        # doivent correspondre exactement aux octets réellement stockés.
+        if not isinstance(file_bytes, (bytes, bytearray)) or not file_bytes:
+            raise ValueError("Le fichier artifact est vide ou invalide.")
+
         resolved_size = (
             int(size_bytes)
             if size_bytes is not None
             else len(file_bytes)
         )
+        if resolved_size != len(file_bytes):
+            raise ValueError("size_bytes ne correspond pas au fichier envoyé.")
+
+        actual_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        if str(sha256 or "").strip().lower() != actual_sha256:
+            raise ValueError("sha256 ne correspond pas au fichier envoyé.")
 
         storage_path = self.upload_file(
             user_id=user_id,
@@ -313,8 +327,21 @@ class SupabaseArtifactRepository:
             raise
 
         result = dict(artifact)
-        result["download_url"] = self.create_signed_url(storage_path)
-        result["url"] = result["download_url"]
+        # La persistance a réussi : un incident temporaire de signature ne
+        # doit pas faire croire à ai.py que le fichier a été perdu. Le lien
+        # pourra être régénéré via GET /ai/artifacts/{artifact_id}.
+        try:
+            download_url = self.create_signed_url(storage_path)
+        except Exception:
+            logger.warning(
+                "Signature indisponible pour l'artifact %s ; "
+                "son enregistrement a réussi.",
+                resolved_artifact_id,
+            )
+            download_url = None
+
+        result["download_url"] = download_url
+        result["url"] = download_url
         return result
 
     def get_artifact(
@@ -362,6 +389,11 @@ class SupabaseArtifactRepository:
         storage_path = result.get("storage_path")
 
         if storage_path:
+            self._assert_owned_storage_path(
+                storage_path=str(storage_path),
+                user_id=user_id,
+                artifact_id=artifact_id,
+            )
             download_url = self.create_signed_url(
                 str(storage_path),
                 expires_in=expires_in,
@@ -437,6 +469,11 @@ class SupabaseArtifactRepository:
 
             if storage_path:
                 try:
+                    self._assert_owned_storage_path(
+                        storage_path=str(storage_path),
+                        user_id=user_id,
+                        artifact_id=row.get("id"),
+                    )
                     download_url = self.create_signed_url(
                         str(storage_path)
                     )
@@ -472,6 +509,11 @@ class SupabaseArtifactRepository:
         storage_path = artifact.get("storage_path")
 
         if storage_path:
+            self._assert_owned_storage_path(
+                storage_path=str(storage_path),
+                user_id=user_id,
+                artifact_id=artifact_id,
+            )
             self.delete_file(str(storage_path))
 
         try:
@@ -496,6 +538,30 @@ class SupabaseArtifactRepository:
     # ============================================================
 
     @staticmethod
+    def _assert_owned_storage_path(
+        *,
+        storage_path: str,
+        user_id: str | UUID,
+        artifact_id: str | UUID,
+    ) -> None:
+        """Refuse toute signature/suppression hors du chemin de cet artifact."""
+        prefix = (
+            f"{str(user_id).strip()}/artifacts/"
+            f"{str(artifact_id).strip()}/"
+        )
+        relative_name = storage_path[len(prefix):] if storage_path.startswith(prefix) else ""
+        if (
+            not relative_name
+            or "/" in relative_name
+            or "\\" in relative_name
+            or relative_name in {".", ".."}
+        ):
+            raise ValueError(
+                "Le chemin Storage ne correspond pas à l'artifact "
+                "de l'utilisateur courant."
+            )
+
+    @staticmethod
     def _safe_filename(
         filename: str,
     ) -> str:
@@ -513,9 +579,11 @@ class SupabaseArtifactRepository:
             char
             for char in value
             if ord(char) >= 32
-        ).strip(" .")
+        ).strip().rstrip(" .")
 
-        return value[:180] or "document-oria"
+        # Préserver les noms techniques de projets : .env, .gitignore, etc.
+        # Le chemin est déjà réduit au seul basename ci-dessus.
+        return value[:180] if value and value not in {".", ".."} else "document-oria"
 
     @staticmethod
     def _extract_signed_url(

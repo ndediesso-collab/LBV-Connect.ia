@@ -101,12 +101,27 @@ class ArtifactService:
 
     MAX_ARTIFACT_BYTES = 50 * 1024 * 1024
     MAX_ARCHIVE_FILES = 100
+    # Empêche qu'un petit ZIP fortement compressé contienne des centaines
+    # de Mo de fichiers source en mémoire. Indépendant de la taille du ZIP.
+    MAX_ARCHIVE_UNCOMPRESSED_BYTES = 4 * MAX_ARTIFACT_BYTES
     MAX_ARCHIVE_DEPTH = 2
     MAX_FILENAME_LENGTH = 140
 
     DEFAULT_TEXT_ENCODING = "utf-8"
 
     TYPE_ALIASES = {
+        # Noms de langages courants acceptés en plus des extensions.
+        "python": "py",
+        "javascript": "js",
+        "typescript": "ts",
+        "bash": "sh",
+        "c++": "cpp",
+        "csharp": "cs",
+        "golang": "go",
+        "rust": "rs",
+        "ruby": "rb",
+        "shell": "sh",
+        "powershell": "ps1",
         "text": "txt",
         "plaintext": "txt",
         "markdown": "md",
@@ -225,6 +240,16 @@ class ArtifactService:
         "svg", "ics", "vcf",
     }
 
+    # Sous-ensemble des formats textuels à traiter comme des sources. Ne
+    # change pas leur catégorie publique (text), pour rester compatible avec
+    # les frontends et les repositories déjà déployés.
+    CODE_SOURCE_TYPES = frozenset({
+        "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "html", "htm",
+        "css", "sql", "xml", "yaml", "yml", "toml", "svg", "sh",
+        "ps1", "bat", "java", "c", "h", "cpp", "hpp", "cs",
+        "go", "rs", "php", "rb", "ini", "env",
+    })
+
     BINARY_TYPES = {
         "pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp",
         "epub", "sqlite", "zip",
@@ -303,6 +328,18 @@ class ArtifactService:
         elif normalized_type in {"jsonl", "ndjson"}:
             data = self._create_jsonl(content)
         elif normalized_type in self.KNOWN_TEXT_TYPES:
+            # ai.py fournit déjà un bloc de source extrait du Markdown.
+            # Si une réponse Oria est accidentellement un dictionnaire/liste,
+            # ne pas fabriquer un fichier .py/.js contenant du JSON trompeur.
+            if (
+                normalized_type in self.CODE_SOURCE_TYPES
+                and (metadata or {}).get("source") == "oria-chat"
+                and not isinstance(content, (str, bytes))
+            ):
+                raise ArtifactError(
+                    "Un fichier source ORIA doit contenir du code texte "
+                    "ou des octets, pas un objet structuré."
+                )
             data = self._create_text(content)
         elif allow_text_fallback:
             if self._looks_binary_extension(normalized_type):
@@ -387,7 +424,10 @@ class ArtifactService:
         extension: str,
     ) -> str:
         base = str(filename or title or "document-oria").strip()
-        base = PurePosixPath(base).name
+        base = PurePosixPath(base.replace("\\", "/")).name
+        # Un fichier .env est un nom de configuration réel, pas env.env.
+        if filename and base == ".env" and extension == "env":
+            return base
         base = re.sub(r"[\x00-\x1f<>:\"/\\|?*]+", "-", base)
         base = re.sub(r"\s+", " ", base).strip(" .-_")
 
@@ -1303,6 +1343,8 @@ class ArtifactService:
             compresslevel=6,
         ) as archive:
             used_names: set[str] = set()
+            used_code_names_casefold: set[str] = set()
+            total_uncompressed_bytes = 0
 
             for index, item in enumerate(files, start=1):
                 if not isinstance(item, dict):
@@ -1316,35 +1358,74 @@ class ArtifactService:
                     or f"fichier-{index}.txt"
                 )
                 archive_name = self._safe_archive_name(item_name)
-
-                if archive_name in used_names:
-                    archive_name = self._deduplicate_filename(
-                        archive_name,
-                        used_names,
-                    )
-
                 item_type = str(
                     item.get("file_type")
                     or item.get("type")
                     or PurePosixPath(archive_name).suffix.lstrip(".")
                     or "txt"
                 )
+                normalized_type = self._normalize_type(item_type, archive_name)
+                is_code_source = normalized_type in self.CODE_SOURCE_TYPES
 
-                generated = self.create(
-                    file_type=item_type,
-                    content=item.get("content", ""),
-                    filename=archive_name,
-                    title=item.get("title"),
-                    metadata=item.get("metadata"),
-                    allow_text_fallback=True,
-                    _archive_depth=depth + 1,
-                )
+                if is_code_source:
+                    # Pour un projet exécutable, altérer silencieusement un
+                    # chemin ou renommer un module peut casser les imports.
+                    self._validate_project_archive_name(item_name, archive_name)
+                    declared_suffix = PurePosixPath(archive_name).suffix.lstrip(".")
+                    if declared_suffix and declared_suffix != normalized_type:
+                        raise ArtifactError(
+                            f"Extension incohérente pour '{archive_name}' : "
+                            f"le contenu est déclaré '{normalized_type}'."
+                        )
+                    casefold_name = archive_name.casefold()
+                    if (
+                        archive_name in used_names
+                        or casefold_name in used_code_names_casefold
+                    ):
+                        raise ArtifactError(
+                            f"Fichier source dupliqué dans le ZIP : "
+                            f"{archive_name}."
+                        )
+                elif archive_name in used_names:
+                    # Comportement historique conservé pour les autres ZIP.
+                    archive_name = self._deduplicate_filename(
+                        archive_name, used_names,
+                    )
 
-                archive.writestr(
-                    archive_name,
-                    generated.data,
-                )
+                item_content = item.get("content", "")
+                if is_code_source and not isinstance(item_content, (str, bytes)):
+                    raise ArtifactError(
+                        f"Le fichier source '{archive_name}' attend du "
+                        "texte ou des octets."
+                    )
+
+                if is_code_source and item_content in ("", b""):
+                    # `__init__.py` vide est parfaitement valide. Le validateur
+                    # générique refuse les fichiers vides : exception ZIP ciblée.
+                    generated_data = b""
+                else:
+                    generated = self.create(
+                        file_type=item_type,
+                        content=item_content,
+                        filename=archive_name,
+                        title=item.get("title"),
+                        metadata=item.get("metadata"),
+                        allow_text_fallback=True,
+                        _archive_depth=depth + 1,
+                    )
+                    generated_data = generated.data
+
+                total_uncompressed_bytes += len(generated_data)
+                if total_uncompressed_bytes > self.MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+                    raise ArtifactError(
+                        "Le contenu décompressé de l'archive dépasse la "
+                        "limite autorisée. Diviser le projet en plusieurs ZIP."
+                    )
+
+                archive.writestr(archive_name, generated_data)
                 used_names.add(archive_name)
+                if is_code_source:
+                    used_code_names_casefold.add(archive_name.casefold())
 
         return buffer.getvalue()
 
@@ -1823,6 +1904,26 @@ class ArtifactService:
         cleaned = "/".join(parts)
         cleaned = re.sub(r"[\x00-\x1f<>:\"|?*]+", "-", cleaned)
         return cleaned[:240]
+
+    @staticmethod
+    def _validate_project_archive_name(
+        original_name: str,
+        archive_name: str,
+    ) -> None:
+        """Refuse les noms dangereux ou altérés pour les fichiers source ZIP."""
+        raw = original_name.replace("\\", "/").strip()
+        parts = raw.split("/")
+        if (
+            not raw
+            or raw.startswith("/")
+            or re.match(r"^[A-Za-z]:", raw)
+            or any(part in {"", ".", ".."} for part in parts)
+            or len(raw) > 240
+            or raw != archive_name
+        ):
+            raise ArtifactError(
+                f"Chemin de fichier source ZIP invalide : {original_name!r}."
+            )
 
     @staticmethod
     def _deduplicate_filename(

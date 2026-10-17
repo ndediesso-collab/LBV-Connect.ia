@@ -278,7 +278,22 @@ class CreditAction(str, Enum):
 
 
 
-# ============================================================
+    # ========================================================
+
+    # AUDIO — TRANSCRIPTION DES NOTES VOCALES
+
+    # ========================================================
+
+    # L'audio est facture selon sa duree reelle dans audio_service.py.
+    # Le tarif par minute est configure sur le serveur avec la variable
+    # ORIA_AUDIO_CREDITS_PER_MINUTE (entier positif).
+    # Ne pas ajouter de cout fixe dans CREDIT_COSTS : la duree varie.
+
+    AUDIO_TRANSCRIPTION = "audio_transcription"
+
+
+
+# ========================================================
 
 
 

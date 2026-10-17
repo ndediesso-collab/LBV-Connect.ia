@@ -1,4 +1,5 @@
 from datetime import datetime
+import os
 
 
 
@@ -155,6 +156,21 @@ class SupabaseCreditRepository(CreditRepository):
         )
 
 
+
+    # Vérification défensive des réponses RPC reserve / settle / release.
+    # La sécurité des écritures (propriétaire + idempotence) doit rester
+    # garantie atomiquement dans les fonctions PostgreSQL correspondantes.
+    def _checked_reservation_wallet(
+        self,
+        wallet_data: dict,
+        user_id: str,
+    ) -> CreditWallet:
+        if str(wallet_data.get("user_id") or "") != str(user_id).strip():
+            raise RuntimeError(
+                "La RPC de crédits a retourné un portefeuille qui "
+                "n'appartient pas à l'utilisateur demandé."
+            )
+        return self._wallet_from_data(wallet_data)
 
     # ========================================================
 
@@ -568,19 +584,63 @@ class SupabaseCreditRepository(CreditRepository):
 
         reference_id: str,
 
+        *,
+
+        ttl_seconds: int | None = None,
+
     ) -> CreditWallet:
 
-        """Réserve atomiquement des crédits avant l'appel IA."""
+        """Réserve atomiquement des crédits avant l'appel IA.
 
-        if amount <= 0:
+        Le chat et les médias existants conservent le TTL SQL par défaut
+        (900 secondes). Pour AUDIO_TRANSCRIPTION uniquement, le TTL est
+        configurable et vaut 3600 secondes par défaut.
+        """
 
-            raise ValueError("Le montant à réserver doit être supérieur à zéro.")
+        if not str(user_id or "").strip():
+            raise ValueError("user_id est obligatoire pour réserver des crédits.")
 
-        if not reference_id:
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+            raise ValueError("Le montant à réserver doit être un entier positif.")
 
+        if not isinstance(action, CreditAction):
+            raise ValueError("L'action de crédits doit être une CreditAction valide.")
+
+        if not isinstance(reference_id, str) or not reference_id.strip():
             raise ValueError("La référence de réservation est obligatoire.")
 
+        # Le défaut SQL (15 min) reste intact pour toutes les autres actions.
+        # La RPC existante accepte déjà p_ttl_seconds avec valeur par défaut 900.
+        rpc_params = {
+            "p_user_id": user_id,
+            "p_amount": amount,
+            "p_action": action.value,
+            "p_reservation_id": reference_id,
+        }
+        audio_action = getattr(CreditAction, "AUDIO_TRANSCRIPTION", None)
+        if action == audio_action:
+            if ttl_seconds is None:
+                raw_ttl = os.getenv("ORIA_AUDIO_RESERVATION_TTL_SECONDS", "3600")
+                try:
+                    resolved_ttl = int(raw_ttl)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "ORIA_AUDIO_RESERVATION_TTL_SECONDS doit être un entier."
+                    ) from exc
+            else:
+                resolved_ttl = ttl_seconds
 
+            if (isinstance(resolved_ttl, bool)
+                    or not isinstance(resolved_ttl, int)
+                    or not 900 <= resolved_ttl <= 7200):
+                raise ValueError(
+                    "Le délai audio doit être un entier entre 900 et 7200 secondes."
+                )
+            rpc_params["p_ttl_seconds"] = resolved_ttl
+        elif ttl_seconds is not None:
+            raise ValueError(
+                "Le délai personnalisé est réservé à AUDIO_TRANSCRIPTION."
+            )
 
         response = (
 
@@ -590,17 +650,7 @@ class SupabaseCreditRepository(CreditRepository):
 
                 "reserve_credits",
 
-                {
-
-                    "p_user_id": user_id,
-
-                    "p_amount": amount,
-
-                    "p_action": action.value,
-
-                    "p_reservation_id": reference_id,
-
-                },
+                rpc_params,
 
             )
 
@@ -650,7 +700,7 @@ class SupabaseCreditRepository(CreditRepository):
 
 
 
-        return self._wallet_from_data(wallet_data)
+        return self._checked_reservation_wallet(wallet_data, user_id)
 
 
 
@@ -668,12 +718,15 @@ class SupabaseCreditRepository(CreditRepository):
 
         """Finalise une réservation avec le coût réel."""
 
-        if actual_amount <= 0:
+        if not str(user_id or "").strip():
+            raise ValueError("user_id est obligatoire pour régler des crédits.")
 
-            raise ValueError("Le coût réel doit être supérieur à zéro.")
+        if (isinstance(actual_amount, bool)
+                or not isinstance(actual_amount, int)
+                or actual_amount <= 0):
+            raise ValueError("Le coût réel doit être un entier positif.")
 
-        if not reference_id:
-
+        if not isinstance(reference_id, str) or not reference_id.strip():
             raise ValueError("La référence de réservation est obligatoire.")
 
 
@@ -748,7 +801,7 @@ class SupabaseCreditRepository(CreditRepository):
 
 
 
-        return self._wallet_from_data(wallet_data)
+        return self._checked_reservation_wallet(wallet_data, user_id)
 
 
 
@@ -764,8 +817,10 @@ class SupabaseCreditRepository(CreditRepository):
 
         """Libère une réservation lorsque l'appel IA échoue."""
 
-        if not reference_id:
+        if not str(user_id or "").strip():
+            raise ValueError("user_id est obligatoire pour libérer des crédits.")
 
+        if not isinstance(reference_id, str) or not reference_id.strip():
             raise ValueError("La référence de réservation est obligatoire.")
 
 
@@ -838,7 +893,7 @@ class SupabaseCreditRepository(CreditRepository):
 
 
 
-        return self._wallet_from_data(wallet_data)
+        return self._checked_reservation_wallet(wallet_data, user_id)
 
 
 

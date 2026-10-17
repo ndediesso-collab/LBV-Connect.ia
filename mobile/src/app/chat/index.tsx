@@ -26,6 +26,15 @@ import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { VideoView, useVideoPlayer } from "expo-video";
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioPlayer,
+  useAudioPlayerStatus,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from "expo-audio";
 import { supabase } from "@/lib/supabase/client";
 import * as SecureStore from "expo-secure-store";
 import { File as ExpoFile, Paths } from "expo-file-system";
@@ -340,6 +349,22 @@ const CHAT_TEXT = {
     file: "Fichier",
     open: "Ouvrir",
     download: "Télécharger",
+    codePreview: "Lire le code",
+    codeViewer: "Lecteur de code",
+    vocal: "Note vocale",
+    microphone: "Enregistrer une note vocale",
+    recordStop: "Arrêter l'enregistrement",
+    voiceUploading: "Envoi de l'enregistrement...",
+    transcriptionWaiting: "Transcription en cours...",
+    transcriptionFailed: "Transcription non terminée",
+    sendAsVoice: "Envoyer le vocal",
+    sendAsText: "Envoyer le texte",
+    voiceEditHint: "Corrigez le texte avant de l'envoyer si nécessaire.",
+    voiceRetry: "Réessayer / réparer",
+    voiceDiscard: "Supprimer le brouillon",
+    audioPermission: "Autorisez le microphone dans les réglages pour enregistrer.",
+    audioBusy: "Le message vocal est en cours de traitement.",
+    webImageSource: "Source",
     showMore: "Afficher la suite",
     showLess: "Réduire",
     longPasteConverted:
@@ -482,6 +507,22 @@ const CHAT_TEXT = {
     file: "File",
     open: "Open",
     download: "Download",
+    codePreview: "Read code",
+    codeViewer: "Code viewer",
+    vocal: "Voice note",
+    microphone: "Record a voice note",
+    recordStop: "Stop recording",
+    voiceUploading: "Uploading recording...",
+    transcriptionWaiting: "Transcribing...",
+    transcriptionFailed: "Transcription not finished",
+    sendAsVoice: "Send voice note",
+    sendAsText: "Send as text",
+    voiceEditHint: "Edit the transcript before sending if needed.",
+    voiceRetry: "Retry / recover",
+    voiceDiscard: "Discard draft",
+    audioPermission: "Allow microphone access in settings to record.",
+    audioBusy: "The voice note is being processed.",
+    webImageSource: "Source",
     showMore: "Show more",
     showLess: "Show less",
     longPasteConverted:
@@ -761,6 +802,40 @@ type GeneratedArtifact = {
   messageId?: string | null;
 };
 
+type WebIllustration = {
+  image_url: string;
+  source_url: string;
+  alt: string;
+  caption: string;
+  after_paragraph: number;
+};
+
+type VoiceNote = {
+  audio_id: string;
+  message_id?: string | null;
+  conversation_id?: string | null;
+  duration_ms?: number | null;
+  transcription_status: string;
+  billing_status: string;
+  transcription?: string | null;
+  delivery_mode?: string | null;
+  playback_url?: string | null;
+  credit_cost?: number | null;
+};
+
+type VoiceDraft = VoiceNote & {
+  localUri: string | null;
+  editedText: string;
+  busy: boolean;
+};
+
+type CodePreviewData = {
+  title: string;
+  language: string;
+  code: string;
+  downloadUrl?: string | null;
+};
+
 type ChatAttachment = {
   id: string;
   uri: string;
@@ -1030,6 +1105,8 @@ function getVisibleMessageContent(content: string) {
       /\s*\[\[ORIA_ARTIFACT_ID:[^\]]+\]\]\s*/g,
       "\n",
     )
+    .replace(/\s*\[\[ORIA_WEB_IMAGES:[A-Za-z0-9+/=]+\]\]/g, "")
+    .replace(/\s*\[\[ORIA_AUDIO_ID:[^\]]+\]\]/g, "")
     .trimEnd();
 }
 
@@ -1055,6 +1132,142 @@ function extractArtifactIdsFromMessage(
   }
 
   return ids;
+}
+
+// ORIA: métadonnées de recherche Web persistées avec le message assistant.
+// Format Base64 compatible avec le Chat Web (UTF-8), sans nouvelle dépendance.
+const ORIA_WEB_IMAGES_MARKER_REGEX = /\[\[ORIA_WEB_IMAGES:([A-Za-z0-9+/=]+)\]\]/;
+const ORIA_AUDIO_MARKER_REGEX = /\[\[ORIA_AUDIO_ID:([^\]]+)\]\]/;
+const CODE_PREVIEW_EXTENSIONS = new Set([
+  "py", "js", "jsx", "ts", "tsx", "html", "css", "json", "sql", "xml",
+  "yaml", "yml", "toml", "md", "sh", "ps1", "java", "c", "cpp",
+  "cs", "go", "rs", "php", "rb", "svg", "env",
+]);
+const VOICE_DRAFT_CACHE_PREFIX = "oria_voice_draft_v1_";
+
+function encodeBase64Utf8(value: string): string {
+  const bytes = encodeURIComponent(value).replace(/%([0-9A-F]{2})/g, (_, code: string) =>
+    String.fromCharCode(parseInt(code, 16)));
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let encoded = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes.charCodeAt(i);
+    const b = i + 1 < bytes.length ? bytes.charCodeAt(i + 1) : 0;
+    const c = i + 2 < bytes.length ? bytes.charCodeAt(i + 2) : 0;
+    encoded += alphabet[a >> 2] + alphabet[((a & 3) << 4) | (b >> 4)];
+    encoded += i + 1 < bytes.length ? alphabet[((b & 15) << 2) | (c >> 6)] : "=";
+    encoded += i + 2 < bytes.length ? alphabet[c & 63] : "=";
+  }
+  return encoded;
+}
+
+function decodeBase64Utf8(value: string): string | null {
+  try {
+    if (value.length > 20000 || value.length % 4 !== 0) return null;
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let escaped = "";
+    for (let i = 0; i < value.length; i += 4) {
+      const a = alphabet.indexOf(value[i]);
+      const b = alphabet.indexOf(value[i + 1]);
+      const c = value[i + 2] === "=" ? 0 : alphabet.indexOf(value[i + 2]);
+      const d = value[i + 3] === "=" ? 0 : alphabet.indexOf(value[i + 3]);
+      if ([a, b, c, d].some((n) => n < 0)) return null;
+      const triple = (a << 18) | (b << 12) | (c << 6) | d;
+      const bytes = [(triple >> 16) & 255];
+      if (value[i + 2] !== "=") bytes.push((triple >> 8) & 255);
+      if (value[i + 3] !== "=") bytes.push(triple & 255);
+      escaped += bytes.map((byte) => `%${byte.toString(16).padStart(2, "0")}`).join("");
+    }
+    return decodeURIComponent(escaped);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeWebImages(raw: unknown): WebIllustration[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  return raw.slice(0, 12).flatMap((value): WebIllustration[] => {
+    if (!value || typeof value !== "object") return [];
+    const item = value as Record<string, unknown>;
+    const image_url = typeof item.image_url === "string" ? item.image_url.trim() : "";
+    const source_url = typeof item.source_url === "string" ? item.source_url.trim() : "";
+    if (!/^https:\/\/[^/]+\.[^/]+/i.test(image_url) ||
+        !/^https:\/\/[^/]+\.[^/]+/i.test(source_url) || seen.has(image_url)) return [];
+    seen.add(image_url);
+    return [{ image_url, source_url,
+      alt: String(item.alt || item.caption || "Illustration Web").slice(0, 300),
+      caption: String(item.caption || "").slice(0, 500),
+      after_paragraph: typeof item.after_paragraph === "number" && Number.isFinite(item.after_paragraph)
+        ? Math.max(0, Math.min(200, Math.floor(item.after_paragraph))) : 0,
+    }];
+  }).slice(0, 3);
+}
+
+function buildWebImageMarker(images: WebIllustration[]) {
+  return images.length ? `[[ORIA_WEB_IMAGES:${encodeBase64Utf8(JSON.stringify(images))}]]` : "";
+}
+
+function extractWebImages(content: string): WebIllustration[] {
+  const marker = content.match(ORIA_WEB_IMAGES_MARKER_REGEX)?.[1];
+  if (!marker) return [];
+  const decoded = decodeBase64Utf8(marker);
+  if (!decoded) return [];
+  try { return normalizeWebImages(JSON.parse(decoded)); } catch { return []; }
+}
+
+function extractAudioIdFromMessage(content: string): string | null {
+  return content.match(ORIA_AUDIO_MARKER_REGEX)?.[1]?.trim() || null;
+}
+
+function normalizeVoiceNote(raw: Record<string, unknown>): VoiceNote | null {
+  const audio_id = typeof raw.audio_id === "string" ? raw.audio_id :
+    typeof raw.id === "string" ? raw.id : "";
+  if (!audio_id) return null;
+  return {
+    audio_id,
+    message_id: typeof raw.message_id === "string" ? raw.message_id : null,
+    conversation_id: typeof raw.conversation_id === "string" ? raw.conversation_id : null,
+    duration_ms: typeof raw.duration_ms === "number" ? raw.duration_ms : null,
+    transcription_status: String(raw.transcription_status || "queued"),
+    billing_status: String(raw.billing_status || "none"),
+    transcription: typeof raw.transcription === "string" ? raw.transcription : null,
+    delivery_mode: typeof raw.delivery_mode === "string" ? raw.delivery_mode : null,
+    playback_url: typeof raw.playback_url === "string" ? raw.playback_url : null,
+    credit_cost: typeof raw.credit_cost === "number" ? raw.credit_cost : null,
+  };
+}
+
+function mergeVoiceNotes(current: VoiceNote[], incoming: VoiceNote[]): VoiceNote[] {
+  const notes = new Map(current.map((note) => [note.audio_id, note]));
+  for (const note of incoming) {
+    notes.set(note.audio_id, { ...notes.get(note.audio_id), ...note });
+  }
+  return [...notes.values()];
+}
+
+function prettyAudioDuration(ms?: number | null) {
+  const seconds = Math.max(0, Math.floor((ms || 0) / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+async function readVoiceDraftId(userId: string): Promise<string | null> {
+  const key = VOICE_DRAFT_CACHE_PREFIX + userId;
+  return Platform.OS === "web"
+    ? getWebStorage()?.getItem(key) || null
+    : SecureStore.getItemAsync(key);
+}
+
+async function writeVoiceDraftId(userId: string, id: string | null) {
+  const key = VOICE_DRAFT_CACHE_PREFIX + userId;
+  if (Platform.OS === "web") {
+    if (id) getWebStorage()?.setItem(key, id);
+    else getWebStorage()?.removeItem(key);
+  } else if (id) {
+    await SecureStore.setItemAsync(key, id);
+  } else {
+    await SecureStore.deleteItemAsync(key);
+  }
 }
 
 function normalizeGeneratedArtifact(
@@ -2239,9 +2452,11 @@ function InlineMarkdown({
 function MarkdownMessage({
   content,
   language: uiLanguage,
+  onCodeOpen,
 }: {
   content: string;
   language: OriaLanguage;
+  onCodeOpen?: (code: string, language: string) => void;
 }) {
   const styles = useThemedStyles();
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -2336,7 +2551,8 @@ function MarkdownMessage({
     if (!inCode) return;
 
     blocks.push(
-      <CodeBlock key={`code-${index}`} language={codeLanguage} value={code.join("\n")} uiLanguage={uiLanguage} />,
+      <CodeBlock key={`code-${index}`} language={codeLanguage} value={code.join("\n")}
+        uiLanguage={uiLanguage} onExpand={onCodeOpen} />,
     );
 
     index++;
@@ -2524,10 +2740,12 @@ function CodeBlock({
   language,
   value,
   uiLanguage,
+  onExpand,
 }: {
   language: string;
   value: string;
   uiLanguage: OriaLanguage;
+  onExpand?: (code: string, language: string) => void;
 }) {
   const styles = useThemedStyles();
   const [copied, setCopied] = useState(false);
@@ -2542,9 +2760,17 @@ function CodeBlock({
     <View style={styles.codeBlock}>
       <View style={styles.codeHeader}>
         <Text style={styles.codeLanguage}>{language || "Code"}</Text>
-        <Pressable onPress={copy} style={styles.copyButton}>
-          <Text style={styles.copyText}>{copied ? CHAT_TEXT[uiLanguage].copied : CHAT_TEXT[uiLanguage].copy}</Text>
-        </Pressable>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          {onExpand ? (
+            <Pressable onPress={() => onExpand(value, language)} style={styles.copyButton}
+              accessibilityLabel={CHAT_TEXT[uiLanguage].codePreview}>
+              <Ionicons name="expand-outline" size={16} color="#eeeeee" />
+            </Pressable>
+          ) : null}
+          <Pressable onPress={copy} style={styles.copyButton}>
+            <Text style={styles.copyText}>{copied ? CHAT_TEXT[uiLanguage].copied : CHAT_TEXT[uiLanguage].copy}</Text>
+          </Pressable>
+        </View>
       </View>
       <ScrollView
         style={styles.codeScrollArea}
@@ -2663,6 +2889,170 @@ function AttachmentCard({
     </View>
   );
 }
+
+// === ORIA MOBILE : illustrations Web, lecteur de code, lecture vocale privée ===
+function WebIllustratedMessage({
+  content, images, language, onCodeOpen,
+}: {
+  content: string;
+  images: WebIllustration[];
+  language: OriaLanguage;
+  onCodeOpen: (code: string, language: string) => void;
+}) {
+  if (!images.length) {
+    return <MarkdownMessage content={content} language={language} onCodeOpen={onCodeOpen} />;
+  }
+  // Les paragraphes restent dans leur ordre, les illustrations se placent
+  // selon after_paragraph. Le rendu Markdown original est préservé par bloc.
+  const paragraphs = content.includes("```") ? [content] : content.split(/\n\s*\n/);
+  const displayed = new Set<string>();
+  const nodes: React.ReactNode[] = [];
+  for (let i = 0; i < paragraphs.length; i++) {
+    if (paragraphs[i].trim()) {
+      nodes.push(<MarkdownMessage key={`web-text-${i}`} content={paragraphs[i]}
+        language={language} onCodeOpen={onCodeOpen} />);
+    }
+    for (const image of images.filter((item) => item.after_paragraph === i)) {
+      if (displayed.has(image.image_url)) continue;
+      displayed.add(image.image_url);
+      nodes.push(<View key={`web-img-${displayed.size}`} style={mobileExtras.webImageCard}>
+        <Image source={{ uri: image.image_url }} style={mobileExtras.webImage} resizeMode="cover" />
+        {image.caption ? <Text style={mobileExtras.webImageCaption}>{image.caption}</Text> : null}
+        <Pressable onPress={() => void Linking.openURL(image.source_url).catch(() => undefined)}
+          style={mobileExtras.webImageLink} accessibilityRole="link">
+          <Ionicons name="link-outline" size={13} color="#666" />
+          <Text style={mobileExtras.webImageLinkText}>{CHAT_TEXT[language].webImageSource}</Text>
+        </Pressable>
+      </View>);
+    }
+  }
+  for (const image of images) {
+    if (displayed.has(image.image_url)) continue;
+    displayed.add(image.image_url);
+    nodes.push(<View key={`web-img-${displayed.size}`} style={mobileExtras.webImageCard}>
+      <Image source={{ uri: image.image_url }} style={mobileExtras.webImage} resizeMode="cover" />
+      {image.caption ? <Text style={mobileExtras.webImageCaption}>{image.caption}</Text> : null}
+      <Pressable onPress={() => void Linking.openURL(image.source_url).catch(() => undefined)}
+        style={mobileExtras.webImageLink} accessibilityRole="link">
+        <Ionicons name="link-outline" size={13} color="#666" />
+        <Text style={mobileExtras.webImageLinkText}>{CHAT_TEXT[language].webImageSource}</Text>
+      </Pressable>
+    </View>);
+  }
+  return <View style={{ gap: 8 }}>{nodes}</View>;
+}
+
+function PrivateVoicePlayback({
+  note, language, onLoad,
+}: {
+  note: VoiceNote;
+  language: OriaLanguage;
+  onLoad: (id: string) => Promise<string>;
+}) {
+  const player = useAudioPlayer(null);
+  const status = useAudioPlayerStatus(player);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  async function toggle() {
+    if (status.playing) { player.pause(); return; }
+    try {
+      setLoading(true);
+      if (!loaded || status.didJustFinish) {
+        if (!loaded) {
+          // Chaque lecture privée redemande un lien signé à durée limitée.
+          const url = await onLoad(note.audio_id);
+          player.replace({ uri: url });
+          setLoaded(true);
+        } else {
+          await player.seekTo(0);
+        }
+      }
+      player.play();
+      setError(false);
+    } catch {
+      setError(true);
+      setLoaded(false);
+    } finally {
+      setLoading(false);
+    }
+  }
+  const duration = status.duration > 0 ? Math.ceil(status.duration * 1000) : note.duration_ms;
+  return (
+    <View style={mobileExtras.voiceBubble}>
+      <Pressable style={mobileExtras.voicePlay} onPress={() => void toggle()}
+        disabled={loading} accessibilityRole="button"
+        accessibilityLabel={status.playing ? "Pause" : "Play"}>
+        {loading ? <ActivityIndicator size="small" color="#ffffff" /> :
+          <Ionicons name={status.playing ? "pause" : "play"} size={18} color="#ffffff" />}
+      </Pressable>
+      <View style={{ flex: 1 }}>
+        <View style={mobileExtras.waveBars}>
+          {Array.from({ length: 28 }, (_, i) => (
+            <View key={i} style={[mobileExtras.waveBar, {
+              height: 5 + ((i * 17 + 9) % 17), opacity: status.playing ? 1 : .65,
+            }]} />
+          ))}
+        </View>
+        <Text style={mobileExtras.voiceMeta}>
+          {language === "fr" ? "Vocal" : "Voice"} · {prettyAudioDuration(duration)}
+          {error ? (language === "fr" ? " · Lecture impossible" : " · Playback failed") : ""}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function HighlightedCode({ code }: { code: string }) {
+  // Coloration légère pure React Native, sans WebView distante ni paquet supplémentaire.
+  const tokens = code.match(/(\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|\b(?:const|let|var|function|return|class|import|from|export|default|async|await|if|else|for|while|try|catch|def|self|True|False|None|public|private|interface|type|new|throw|switch|case|break|SELECT|INSERT|UPDATE|DELETE|CREATE|TABLE|WHERE|JOIN)\b|\b\d+(?:\.\d+)?\b|[\s\S])/g) || [];
+  return <Text style={mobileExtras.codeText} selectable>{tokens.map((token, index) => {
+    const color = /^(?:\/\*|\/\/|#)/.test(token) ? "#8a99a9" :
+      /^["'`]/.test(token) ? "#a5e3c5" :
+      /^\d/.test(token) ? "#f6ca88" :
+      /^(?:[A-Za-z_]+)$/.test(token) && token.length > 1 ? "#99bffa" : "#e9e9ef";
+    return <Text key={index} style={{ color }}>{token}</Text>;
+  })}</Text>;
+}
+
+const mobileExtras = StyleSheet.create({
+  webImageCard: { borderRadius: 14, overflow: "hidden", borderWidth: 1,
+    borderColor: "#deded9", backgroundColor: "#f6f6f6", marginVertical: 6 },
+  webImage: { width: "100%", height: 178, backgroundColor: "#ddd" },
+  webImageCaption: { fontSize: 12, lineHeight: 17, color: "#555", paddingHorizontal: 11, paddingTop: 8 },
+  webImageLink: { flexDirection: "row", gap: 5, alignItems: "center", padding: 11 },
+  webImageLinkText: { fontSize: 12, fontWeight: "600", color: "#555" },
+  voiceBubble: { minHeight: 64, maxWidth: 310, padding: 11, borderRadius: 18,
+    backgroundColor: "#ecece9", flexDirection: "row", alignItems: "center", gap: 11 },
+  voicePlay: { width: 39, height: 39, borderRadius: 20,
+    backgroundColor: "#222222", alignItems: "center", justifyContent: "center" },
+  voiceMeta: { color: "#777", fontSize: 11, marginTop: 5 },
+  waveBars: { height: 25, flexDirection: "row", alignItems: "center", gap: 2 },
+  waveBar: { width: 3, borderRadius: 2, backgroundColor: "#5e6664" },
+  draftCard: { borderWidth: 1, borderColor: "#d7d7d2", backgroundColor: "#f7f7f5",
+    borderRadius: 17, padding: 12, gap: 9, marginBottom: 10 },
+  draftTitle: { fontSize: 13, color: "#252525", fontWeight: "700" },
+  draftHint: { fontSize: 12, color: "#777", lineHeight: 18 },
+  draftTextarea: { backgroundColor: "#fff", borderColor: "#deded9", borderWidth: 1,
+    borderRadius: 11, padding: 10, color: "#222", minHeight: 65, maxHeight: 130,
+    fontSize: 14, textAlignVertical: "top" },
+  draftActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
+  draftAction: { paddingVertical: 10, paddingHorizontal: 12, backgroundColor: "#232323",
+    borderRadius: 11, flexDirection: "row", alignItems: "center", gap: 6 },
+  draftActionSecondary: { backgroundColor: "#e4e4e0" },
+  draftActionText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  draftActionTextSecondary: { color: "#333" },
+  microphoneButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: "#ededeb",
+    alignItems: "center", justifyContent: "center" },
+  microphoneActive: { backgroundColor: "#c53a48" },
+  codeModal: { flex: 1, backgroundColor: "#121318" },
+  codeModalBar: { paddingHorizontal: 14, paddingVertical: 12, flexDirection: "row",
+    alignItems: "center", gap: 10, backgroundColor: "#202126" },
+  codeModalTitle: { flex: 1, color: "#f5f5f5", fontWeight: "700", fontSize: 14 },
+  codeModalButton: { padding: 7, borderRadius: 8, backgroundColor: "#34353a" },
+  codeText: { fontSize: 12, lineHeight: 20, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+});
 
 export default function ChatPage() {
   const router = useRouter();
@@ -2890,6 +3280,14 @@ export default function ChatPage() {
     useState<GeneratedMedia[]>([]);
   const [generatedArtifacts, setGeneratedArtifacts] =
     useState<GeneratedArtifact[]>([]);
+  const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
+  const [voiceDraft, setVoiceDraft] = useState<VoiceDraft | null>(null);
+  const [voiceUploading, setVoiceUploading] = useState(false);
+  const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder);
+  const audioBusyRef = useRef(false);
+  const stoppingRecordingRef = useRef(false);
   const [mediaMenuOpen, setMediaMenuOpen] = useState(false);
   const [isLoadingMediaCapabilities, setIsLoadingMediaCapabilities] =
     useState(false);
@@ -3254,6 +3652,254 @@ export default function ChatPage() {
     }
   }
 
+  // ORIA audio : les brouillons ne sont jamais mis dans le cache des messages.
+  // Seul l'UUID est conservé, la transcription/audio reste dans Supabase privé.
+  useEffect(() => {
+    if (!currentUserId) return;
+    let active = true;
+    void readVoiceDraftId(currentUserId).then(async (id) => {
+      if (!id) return;
+      try {
+        const response = await apiFetch<Record<string, unknown>>(`/ai/audio/${encodeURIComponent(id)}`);
+        const restored = normalizeVoiceNote(response);
+        if (active && restored && restored.delivery_mode === "draft") {
+          setVoiceDraft({ ...restored, localUri: null, editedText: restored.transcription || "", busy: false });
+        } else if (active && (!restored || restored.delivery_mode !== "draft")) {
+          await writeVoiceDraftId(currentUserId, null);
+        }
+      } catch (cause) {
+        console.warn("Brouillon vocal non restauré", cause);
+      }
+    });
+    return () => { active = false; };
+  }, [currentUserId]);
+
+  useEffect(() => {
+    if (!voiceDraft?.audio_id || voiceDraft.busy ||
+        !(["queued", "processing"].includes(voiceDraft.transcription_status) ||
+          voiceDraft.billing_status === "settlement_pending")) return;
+    let cancelled = false;
+    const id = voiceDraft.audio_id;
+    const poll = async () => {
+      try {
+        let response = await apiFetch<Record<string, unknown>>(`/ai/audio/${encodeURIComponent(id)}`);
+        if (response.billing_status === "settlement_pending") {
+          response = await apiFetch<Record<string, unknown>>(
+            `/ai/audio/${encodeURIComponent(id)}/reconcile`, { method: "POST" });
+        }
+        const note = normalizeVoiceNote(response);
+        if (!cancelled && note) {
+          setVoiceDraft((current) => current?.audio_id === id ? {
+            ...current, ...note,
+            editedText: current.editedText || note.transcription || "",
+          } : current);
+        }
+      } catch (cause) {
+        console.warn("Statut vocal indisponible", cause);
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 3500);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [voiceDraft?.audio_id, voiceDraft?.transcription_status,
+      voiceDraft?.billing_status, voiceDraft?.busy]);
+
+  useEffect(() => {
+    if (recorderState.isRecording && recorderState.durationMillis >= 300000) {
+      void stopVoiceRecording();
+    }
+  }, [recorderState.isRecording, recorderState.durationMillis]);
+
+  async function startVoiceRecording() {
+    if (isThinking || voiceDraft || voiceUploading || audioBusyRef.current ||
+        stoppingRecordingRef.current || recorderState.isRecording) return;
+    if (!hasActivePack) {
+      setError(t.activePackRequired);
+      return;
+    }
+    try {
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
+      if (!permission.granted) { setError(t.audioPermission); return; }
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      setComposerExpanded(false);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t.audioPermission);
+    }
+  }
+
+  async function stopVoiceRecording() {
+    if (!recorderState.isRecording || stoppingRecordingRef.current) return;
+    stoppingRecordingRef.current = true;
+    try {
+      await recorder.stop();
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      if (!recorder.uri) throw new Error("Aucun enregistrement audio n'a été produit.");
+      await uploadVoiceDraft(recorder.uri);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Enregistrement audio impossible.");
+    } finally {
+      stoppingRecordingRef.current = false;
+    }
+  }
+
+  async function uploadVoiceDraft(uri: string) {
+    if (audioBusyRef.current) return;
+    audioBusyRef.current = true;
+    setVoiceUploading(true);
+    let conversationId = activeConversationId;
+    try {
+      // Le lien conversation est obligatoire pour que l'audio puisse être
+      // rattaché au futur message sans mélange entre conversations.
+      if (!conversationId) {
+        const remote = await createConversationRemote("Nouvelle conversation");
+        conversationId = remote.id;
+        setConversations((current) => [remote, ...current]);
+        setActiveConversationId(remote.id);
+      }
+      const filename = uri.split(/[\/?#]/).pop() || "oria-vocal.m4a";
+      const extension = filename.split(".").pop()?.toLowerCase();
+      if (!extension || !["m4a", "mp4", "webm", "ogg", "3gp", "wav", "mp3", "aac"].includes(extension)) {
+        throw new Error("Ce format d'enregistrement n'est pas pris en charge.");
+      }
+      const form = new FormData();
+      form.append("conversation_id", conversationId);
+      const file = new ExpoFile(uri);
+      if (file.size > 20 * 1024 * 1024) {
+        throw new Error("Le vocal dépasse la limite de 20 Mo.");
+      }
+      form.append("audio", file, filename);
+      // expo/fetch sait envoyer un ExpoFile natif comme Blob multipart.
+      // Il ne faut pas utiliser les objets {uri,type,name} classiques ici.
+      const session = await getSessionOrThrow();
+      const response = await expoFetch(`${API_URL}/ai/audio/prepare`, {
+        method: "POST",
+        headers: {
+          "user-id": session.user.id,
+          authorization: `Bearer ${session.access_token}`,
+        },
+        body: form,
+      });
+      const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+      if (!response.ok) {
+        throw new Error(typeof payload?.detail === "string" ? payload.detail :
+          "Envoi audio refusé par le serveur.");
+      }
+      const note = payload ? normalizeVoiceNote(payload) : null;
+      if (!note) throw new Error("Le serveur n'a pas retourné d'identifiant audio.");
+      // Expo Audio HIGH_QUALITY produit du m4a sur iOS/Android, webm sur Web.
+      // Le MIME du Blob natif est défini par l'enregistreur Expo.
+      if (currentUserId) await writeVoiceDraftId(currentUserId, note.audio_id);
+      setVoiceDraft({ ...note, localUri: uri, editedText: note.transcription || "", busy: false });
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Envoi audio impossible.");
+    } finally {
+      audioBusyRef.current = false;
+      setVoiceUploading(false);
+    }
+  }
+
+  async function loadPrivateVoiceUrl(audioId: string) {
+    const result = await apiFetch<Record<string, unknown>>(`/ai/audio/${encodeURIComponent(audioId)}`);
+    const url = result.playback_url;
+    if (typeof url !== "string" || !url.startsWith("https://")) {
+      throw new Error("La lecture privée du vocal est indisponible.");
+    }
+    return url;
+  }
+
+  async function removeVoiceDraft() {
+    const draft = voiceDraft;
+    if (!draft || draft.busy) return;
+    try {
+      if (draft.audio_id) await apiFetch(`/ai/audio/${encodeURIComponent(draft.audio_id)}`, { method: "DELETE" });
+      if (currentUserId) await writeVoiceDraftId(currentUserId, null);
+      setVoiceDraft(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Suppression du brouillon impossible.");
+    }
+  }
+
+  async function recoverVoiceDraft() {
+    const draft = voiceDraft;
+    if (!draft?.audio_id) return;
+    try {
+      const path = draft.billing_status === "release_pending" ? "reconcile-release" :
+        draft.billing_status === "settlement_pending" ? "reconcile" : "retry";
+      const result = await apiFetch<Record<string, unknown>>(
+        `/ai/audio/${encodeURIComponent(draft.audio_id)}/${path}`, { method: "POST" });
+      const note = normalizeVoiceNote(result);
+      if (note) setVoiceDraft((current) => current ? { ...current, ...note } : current);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Reprise de la note vocale impossible.");
+    }
+  }
+
+  async function deliverVoiceDraft(mode: "voice" | "text") {
+    const draft = voiceDraft;
+    if (!draft || draft.busy || isThinking || draft.transcription_status !== "complete" ||
+        draft.billing_status !== "settled") return;
+    if (!draft.conversation_id || draft.conversation_id !== activeConversationId) {
+      setError(language === "fr" ? "Rouvrez la conversation de ce vocal avant de l'envoyer." :
+        "Open the conversation for this voice note before sending.");
+      return;
+    }
+    const edited = draft.editedText.trim() || draft.transcription?.trim() || "";
+    if (!edited) { setError("La transcription ne contient aucun texte."); return; }
+    try {
+      setVoiceDraft((current) => current ? { ...current, busy: true } : current);
+      await apiFetch(`/ai/audio/${encodeURIComponent(draft.audio_id)}/send`, {
+        method: "POST", body: JSON.stringify({ mode, edited_text: mode === "text" ? edited : null }),
+      });
+      const note = { ...draft, delivery_mode: mode };
+      if (mode === "voice") setVoiceNotes((current) => mergeVoiceNotes(current, [note]));
+      const sent = await handleSendMessage({
+        contentOverride: mode === "text" ? edited : (draft.transcription || edited),
+        voice: mode === "voice" ? note : undefined,
+      });
+      if (sent !== true) throw new Error("Message non confirmé : le brouillon a été conservé.");
+      if (currentUserId) await writeVoiceDraftId(currentUserId, null);
+      setVoiceDraft(null);
+    } catch (cause) {
+      setVoiceDraft((current) => current ? { ...current, busy: false } : current);
+      setError(cause instanceof Error ? cause.message : "Envoi vocal impossible.");
+    }
+  }
+
+  function findVoiceForMessage(item: ChatMessage): VoiceNote | null {
+    if (item.role !== "user") return null;
+    const marker = extractAudioIdFromMessage(item.content || "");
+    const found = voiceNotes.find((note) => note.message_id === item.id ||
+      (marker && note.audio_id === marker));
+    return found || (marker ? {
+      audio_id: marker, billing_status: "settled", transcription_status: "complete", delivery_mode: "voice",
+    } : null);
+  }
+
+  async function previewCodeArtifact(artifact: GeneratedArtifact) {
+    try {
+      const response = await apiFetch<{ artifact?: Record<string, unknown> }>(
+        `/artifacts/${encodeURIComponent(artifact.id)}`);
+      const refreshed = response.artifact ? normalizeGeneratedArtifact(response.artifact, artifact.messageId) : null;
+      const url = refreshed?.downloadUrl || artifact.downloadUrl;
+      if (!url) throw new Error("Lien de lecture introuvable.");
+      const download = await fetch(url);
+      if (!download.ok) throw new Error("Ce fichier ne peut pas être lu actuellement.");
+      const size = Number(download.headers.get("content-length") || 0);
+      if (size > 800000) throw new Error("Fichier trop volumineux pour la prévisualisation.");
+      const code = await download.text();
+      if (code.length > 800000) throw new Error("Prévisualisation limitée à 800 Ko.");
+      setCodePreview({ title: artifact.filename, language: artifact.extension,
+        code, downloadUrl: url });
+      if (refreshed) setGeneratedArtifacts((current) => mergeGeneratedArtifacts(current, [refreshed]));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Lecture du code indisponible.");
+    }
+  }
+
   function findArtifactsForMessage(
     item: ChatMessage,
   ) {
@@ -3544,11 +4190,15 @@ export default function ChatPage() {
       const data = await apiFetch<{
         messages: ChatMessage[];
         artifacts?: Array<Record<string, unknown>>;
+        voice_notes?: Array<Record<string, unknown>>;
       }>(
         `/conversations/${conversationId}/messages`,
       );
 
       const remote = data.messages || [];
+      const remoteVoiceNotes = (data.voice_notes ?? []).map(normalizeVoiceNote)
+        .filter((note): note is VoiceNote => note !== null);
+      setVoiceNotes((current) => mergeVoiceNotes(current, remoteVoiceNotes));
 
       const remoteArtifacts =
         (data.artifacts ?? [])
@@ -4296,14 +4946,17 @@ export default function ChatPage() {
     }
   }
 
-  async function handleSendMessage() {
-    const content = message.trim();
+  async function handleSendMessage(options?: { contentOverride?: string; voice?: VoiceNote }): Promise<boolean | undefined> {
+    const content = (options?.contentOverride ?? message).trim();
+    // L'envoi d'un vocal/transcrit ne consomme pas les pièces jointes ou le
+    // brouillon texte que l'utilisateur a éventuellement déjà préparés.
+    const outgoingAttachments = options?.contentOverride !== undefined ? [] : attachments;
 
     // Garde-fou : si un très long texte a contourné la détection de collage
     // (autofill, clavier tiers, etc.), il devient un fichier avant envoi.
     if (
-      content.length >=
-      LONG_PASTE_THRESHOLD
+      options?.contentOverride === undefined &&
+      content.length >= LONG_PASTE_THRESHOLD
     ) {
       const created =
         await createPastedTextAttachment(
@@ -4328,13 +4981,13 @@ export default function ChatPage() {
     }
 
     if (
-      (!content && attachments.length === 0) ||
-      isThinking
+      (!content && outgoingAttachments.length === 0) ||
+      isThinking || recorderState.isRecording || voiceUploading
     ) {
       return;
     }
 
-    if (activeCapability === "Création") {
+    if (activeCapability === "Création" && options?.contentOverride === undefined) {
       setMediaPrompt(content);
       await handleGenerateMedia(content);
       return;
@@ -4398,8 +5051,8 @@ export default function ChatPage() {
     const webEnabled = activeCapability === "Recherche Web";
 
     const attachmentSummary =
-      attachments.length > 0
-        ? `\n\n[${t.attachmentsSummary} : ${attachments
+      outgoingAttachments.length > 0
+        ? `\n\n[${t.attachmentsSummary} : ${outgoingAttachments
             .map((attachment) => attachment.name)
             .join(", ")}]`
         : "";
@@ -4416,7 +5069,7 @@ export default function ChatPage() {
       id: userMessageId,
       conversationId,
       role: "user",
-      content: `${content}${attachmentSummary}`.trim(),
+      content: `${content}${attachmentSummary}${options?.voice ? `\n[[ORIA_AUDIO_ID:${options.voice.audio_id}]]` : ""}`.trim(),
       createdAt: now,
     };
 
@@ -4444,7 +5097,7 @@ export default function ChatPage() {
       ...current,
       userMessage,
     ]);
-    setMessage("");
+    if (options?.contentOverride === undefined) setMessage("");
     setComposerExpanded(false);
     setComposerInputHeight(112);
     setIsThinking(true);
@@ -4456,7 +5109,21 @@ export default function ChatPage() {
       const userMessageSavePromise =
         saveMessageRemote(
           userMessage,
-        ).catch(
+        ).then(async (savedMessage) => {
+          if (options?.voice && savedMessage?.id) {
+            try {
+              await apiFetch(`/ai/audio/${encodeURIComponent(options.voice.audio_id)}/attach-message`, {
+                method: "POST", body: JSON.stringify({ message_id: savedMessage.id }),
+              });
+              setVoiceNotes((current) => mergeVoiceNotes(current, [
+                { ...options.voice!, message_id: savedMessage.id },
+              ]));
+            } catch (cause) {
+              console.warn("Association du vocal différée", cause);
+            }
+          }
+          return savedMessage;
+        }).catch(
           (saveError) => {
             console.error(
               "Erreur sauvegarde message utilisateur :",
@@ -4475,7 +5142,7 @@ export default function ChatPage() {
       formData.append("reasoning_mode", reasoningMode);
       formData.append("generation_id", generationId);
 
-      for (const attachment of attachments) {
+      for (const attachment of outgoingAttachments) {
         /*
          * Do NOT append the React Native `{ uri, type, name }` shape here.
          * Expo's multipart implementation can reject that object with:
@@ -4504,6 +5171,7 @@ export default function ChatPage() {
 
       let assistantContent = "";
       let streamedArtifacts: GeneratedArtifact[] = [];
+      let streamedWebImages: WebIllustration[] = [];
 
       setMessages((current) => [
         ...current,
@@ -4660,6 +5328,7 @@ export default function ChatPage() {
               "generation_restarted"
             ) {
               assistantContent = "";
+              streamedWebImages = [];
 
               setMessages(
                 (current) =>
@@ -4676,6 +5345,10 @@ export default function ChatPage() {
               continue;
             }
 
+            if (eventName === "web_images") {
+              streamedWebImages = normalizeWebImages(eventData.images);
+              continue;
+            }
             if (eventName === "artifact") {
               const artifact =
                 normalizeGeneratedArtifact(
@@ -4749,6 +5422,9 @@ export default function ChatPage() {
             }
 
             if (eventName === "done") {
+              if (Array.isArray(eventData.web_images)) {
+                streamedWebImages = normalizeWebImages(eventData.web_images);
+              }
               const doneArtifacts =
                 Array.isArray(
                   eventData.artifacts,
@@ -4886,6 +5562,7 @@ export default function ChatPage() {
             "generation_restarted"
           ) {
             assistantContent = "";
+            streamedWebImages = [];
             continue;
           }
 
@@ -4916,6 +5593,9 @@ export default function ChatPage() {
             }
           }
 
+          if (eventName === "done" && Array.isArray(eventData.web_images)) {
+            streamedWebImages = normalizeWebImages(eventData.web_images);
+          }
           if (
             eventName === "done" &&
             Array.isArray(
@@ -4976,10 +5656,9 @@ export default function ChatPage() {
           streamedArtifacts,
         );
 
-      const persistedAssistantContent =
-        artifactMarkers
-          ? `${assistantContent}\n\n${artifactMarkers}`
-          : assistantContent;
+      const webImageMarker = buildWebImageMarker(streamedWebImages);
+      const persistedAssistantContent = [assistantContent, artifactMarkers, webImageMarker]
+        .filter(Boolean).join("\n\n");
 
       const assistantMessage: ChatMessage = {
         id: assistantId,
@@ -5022,10 +5701,11 @@ export default function ChatPage() {
         ),
       );
 
-      setAttachments([]);
+      if (options?.contentOverride === undefined) setAttachments([]);
 
       const refreshedTrials = await loadTrials();
       await loadWallet(refreshedTrials);
+      return true;
     } catch (requestError) {
       const errorMessage =
         requestError instanceof Error
@@ -5044,6 +5724,7 @@ export default function ChatPage() {
         ...current,
         assistantMessage,
       ]);
+      return false;
     } finally {
       setIsThinking(false);
       setActiveGenerationId(null);
@@ -5104,6 +5785,8 @@ export default function ChatPage() {
   }
 
   function renderMessage({ item }: { item: ChatMessage }) {
+    const voice = findVoiceForMessage(item);
+    const webImages = item.role === "assistant" ? extractWebImages(item.content || "") : [];
     const media = findMediaForMessage(item);
     const artifactsForMessage =
       findArtifactsForMessage(item);
@@ -5129,13 +5812,21 @@ export default function ChatPage() {
           }
         >
           {item.role === "assistant" ? (
-            <MarkdownMessage
+            <WebIllustratedMessage
               content={getVisibleMessageContent(item.content)}
+              images={webImages}
               language={language}
+              onCodeOpen={(code, codeLanguage) => setCodePreview({
+                title: codeLanguage ? `${codeLanguage.toUpperCase()} · Code` : "Code ORIA",
+                language: codeLanguage, code,
+              })}
             />
+          ) : voice ? (
+            <PrivateVoicePlayback key={voice.audio_id} note={voice} language={language}
+              onLoad={loadPrivateVoiceUrl} />
           ) : (
             <CollapsibleUserMessage
-              content={item.content}
+              content={getVisibleMessageContent(item.content)}
               language={language}
             />
           )}
@@ -5405,6 +6096,14 @@ export default function ChatPage() {
                     </Text>
                   </View>
 
+                  {CODE_PREVIEW_EXTENSIONS.has(artifact.extension.toLowerCase()) ? (
+                    <Pressable onPress={() => void previewCodeArtifact(artifact)}
+                      style={styles.artifactDownloadButton}
+                      accessibilityRole="button" accessibilityLabel={t.codePreview}>
+                      <Ionicons name="code-slash-outline" size={17}
+                        color={themedIconColor("#111111", isDark)} />
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     onPress={() =>
                       void openArtifact(
@@ -5443,6 +6142,39 @@ export default function ChatPage() {
 
   return (
     <OriaThemeContext.Provider value={theme}>
+      <Modal visible={Boolean(codePreview)} animationType="slide"
+        onRequestClose={() => setCodePreview(null)}>
+        <SafeAreaView style={mobileExtras.codeModal} edges={["top", "bottom"]}>
+          <View style={mobileExtras.codeModalBar}>
+            <Pressable onPress={() => setCodePreview(null)} style={mobileExtras.codeModalButton}>
+              <Ionicons name="close" size={21} color="#fff" />
+            </Pressable>
+            <Text style={mobileExtras.codeModalTitle} numberOfLines={1}>
+              {codePreview?.title || t.codeViewer}
+            </Text>
+            <Pressable style={mobileExtras.codeModalButton} onPress={() =>
+              void Clipboard.setStringAsync(codePreview?.code || "")}
+              accessibilityLabel={t.copy}>
+              <Ionicons name="copy-outline" size={19} color="#fff" />
+            </Pressable>
+            {codePreview?.downloadUrl ? (
+              <Pressable style={mobileExtras.codeModalButton}
+                onPress={() => {
+                  const url = codePreview?.downloadUrl;
+                  if (url) void Linking.openURL(url).catch(() => undefined);
+                }}
+                accessibilityLabel={t.download}>
+                <Ionicons name="download-outline" size={19} color="#fff" />
+              </Pressable>
+            ) : null}
+          </View>
+          <ScrollView style={{ flex: 1 }} nestedScrollEnabled>
+            <ScrollView horizontal contentContainerStyle={{ padding: 17 }} nestedScrollEnabled>
+              <HighlightedCode code={codePreview?.code || ""} />
+            </ScrollView>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
       <SafeAreaView
         style={styles.safe}
         edges={["top", "left", "right"]}
@@ -5576,6 +6308,85 @@ export default function ChatPage() {
               },
             ]}
           >
+            {recorderState.isRecording ? (
+              <View style={mobileExtras.draftCard}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
+                  <Ionicons name="radio-button-on" size={18} color="#c53a48" />
+                  <Text style={mobileExtras.draftTitle}>
+                    {t.vocal} · {prettyAudioDuration(recorderState.durationMillis)} / 5:00
+                  </Text>
+                </View>
+                <Text style={mobileExtras.draftHint}>
+                  {language === "fr" ? "Enregistrement en cours. Appuyez sur le bouton rouge pour terminer."
+                    : "Recording. Tap the red button to finish."}
+                </Text>
+              </View>
+            ) : null}
+            {voiceUploading ? (
+              <View style={[mobileExtras.draftCard, { flexDirection: "row", alignItems: "center" }]}>
+                <ActivityIndicator size="small" color="#333" />
+                <Text style={mobileExtras.draftHint}>{t.voiceUploading}</Text>
+              </View>
+            ) : null}
+            {voiceDraft && !recorderState.isRecording ? (
+              <View style={mobileExtras.draftCard}>
+                <Text style={mobileExtras.draftTitle}>
+                  {t.vocal} · {prettyAudioDuration(voiceDraft.duration_ms)}
+                </Text>
+                <PrivateVoicePlayback key={`draft-${voiceDraft.audio_id}`}
+                  note={voiceDraft} language={language}
+                  onLoad={async (id) => {
+                    if (voiceDraft.localUri) return voiceDraft.localUri;
+                    return loadPrivateVoiceUrl(id);
+                  }} />
+                {voiceDraft.transcription_status === "complete" &&
+                 voiceDraft.billing_status === "settled" ? (
+                  <>
+                    <Text style={mobileExtras.draftHint}>{t.voiceEditHint}</Text>
+                    <TextInput style={mobileExtras.draftTextarea} multiline
+                      value={voiceDraft.editedText}
+                      onChangeText={(text) => setVoiceDraft((current) =>
+                        current ? { ...current, editedText: text } : current)}
+                      editable={!voiceDraft.busy} />
+                    <View style={mobileExtras.draftActions}>
+                      <Pressable style={mobileExtras.draftAction} disabled={voiceDraft.busy || isThinking}
+                        onPress={() => void deliverVoiceDraft("voice")}>
+                        <Ionicons name="mic-outline" size={16} color="#fff" />
+                        <Text style={mobileExtras.draftActionText}>{t.sendAsVoice}</Text>
+                      </Pressable>
+                      <Pressable style={mobileExtras.draftAction} disabled={voiceDraft.busy || isThinking}
+                        onPress={() => void deliverVoiceDraft("text")}>
+                        <Ionicons name="chatbubble-outline" size={16} color="#fff" />
+                        <Text style={mobileExtras.draftActionText}>{t.sendAsText}</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <Text style={mobileExtras.draftHint}>
+                      {["queued", "processing"].includes(voiceDraft.transcription_status) ?
+                        t.transcriptionWaiting : voiceDraft.billing_status === "settlement_pending" ?
+                          (language === "fr" ? "Finalisation des crédits..." : "Finalizing credits...") :
+                          t.transcriptionFailed}
+                    </Text>
+                    {voiceDraft.transcription_status === "failed" ||
+                      voiceDraft.billing_status === "settlement_pending" ? (
+                      <Pressable style={[mobileExtras.draftAction, mobileExtras.draftActionSecondary]}
+                        onPress={() => void recoverVoiceDraft()}>
+                        <Text style={mobileExtras.draftActionTextSecondary}>{t.voiceRetry}</Text>
+                      </Pressable>
+                    ) : null}
+                  </>
+                )}
+                {!voiceDraft.busy &&
+                 voiceDraft.transcription_status !== "processing" &&
+                 !["reserved", "settlement_pending", "release_pending"].includes(voiceDraft.billing_status) ? (
+                  <Pressable onPress={() => void removeVoiceDraft()} style={{ alignSelf: "flex-start", padding: 4 }}>
+                    <Text style={mobileExtras.draftHint}>{t.voiceDiscard}</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
             <View style={styles.modelSelectorWrap}>
               {modelMenuOpen ? (
                 <View style={styles.modelMenu}>
@@ -6294,6 +7105,15 @@ export default function ChatPage() {
                   </ScrollView>
 
                   <Pressable
+                    style={[mobileExtras.microphoneButton,
+                      recorderState.isRecording && mobileExtras.microphoneActive]}
+                    disabled={isThinking || voiceUploading || (Boolean(voiceDraft) && !recorderState.isRecording)}
+                    onPress={() => void (recorderState.isRecording ? stopVoiceRecording() : startVoiceRecording())}
+                    accessibilityLabel={recorderState.isRecording ? t.recordStop : t.microphone}>
+                    <Ionicons name={recorderState.isRecording ? "stop" : "mic-outline"}
+                      size={21} color={recorderState.isRecording ? "#fff" : themedIconColor("#444", isDark)} />
+                  </Pressable>
+                  <Pressable
                     style={[
                       styles.sendButton,
                       ((!message.trim() && attachments.length === 0) ||
@@ -6313,6 +7133,16 @@ export default function ChatPage() {
                   </Pressable>
                 </View>
               ) : (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Pressable
+                    style={[mobileExtras.microphoneButton,
+                      recorderState.isRecording && mobileExtras.microphoneActive]}
+                    disabled={isThinking || voiceUploading || (Boolean(voiceDraft) && !recorderState.isRecording)}
+                    onPress={() => void (recorderState.isRecording ? stopVoiceRecording() : startVoiceRecording())}
+                    accessibilityLabel={recorderState.isRecording ? t.recordStop : t.microphone}>
+                    <Ionicons name={recorderState.isRecording ? "stop" : "mic-outline"} size={21}
+                      color={recorderState.isRecording ? "#fff" : themedIconColor("#444", isDark)} />
+                  </Pressable>
                 <Pressable
                   style={[
                     styles.restingSendButton,
@@ -6335,6 +7165,7 @@ export default function ChatPage() {
                     />
                   )}
                 </Pressable>
+                </View>
               )}
             </View>
 
