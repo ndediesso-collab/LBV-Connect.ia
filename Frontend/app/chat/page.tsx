@@ -2962,6 +2962,11 @@ export default function ChatPage() {
   const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingStartedAtRef = useRef(0);
   const audioUploadBusyRef = useRef(false);
+  // Enregistrement local : aucun transfert ni coût avant « Continuer vers l'envoi ».
+  const localVoiceBlobRef = useRef<Blob | null>(null);
+  // Même identifiant lors d'une relance après erreur réseau : protège l'idempotence.
+  const localVoiceRequestIdRef = useRef<string | null>(null);
+  const [voicePackWarning, setVoicePackWarning] = useState(false);
 
   // Seul l'identifiant est conservé en session, jamais l'audio ni sa transcription.
   useEffect(() => {
@@ -3920,7 +3925,17 @@ export default function ChatPage() {
         const audio = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
         chunksRef.current = [];
         stream.getTracks().forEach((track) => track.stop());
-        if (audio.size > 0) void uploadVoiceDraft(audio);
+        if (audio.size > 0) {
+          localVoiceBlobRef.current = audio;
+          localVoiceRequestIdRef.current = crypto.randomUUID();
+          setVoicePackWarning(false);
+          setVoiceDraft({
+            audio_id: "", transcription_status: "local", billing_status: "none",
+            localUrl: URL.createObjectURL(audio), editedText: "", busy: false,
+          });
+        } else {
+          setError(language === "fr" ? "Enregistrement vocal vide." : "Empty voice recording.");
+        }
       };
       recorder.start(250);
       recordingStartedAtRef.current = Date.now();
@@ -3940,11 +3955,22 @@ export default function ChatPage() {
   }
 
   async function uploadVoiceDraft(blob: Blob) {
-    if (audioUploadBusyRef.current) return;
+    if (audioUploadBusyRef.current || voiceDraft?.transcription_status !== "local") return;
+    // La vérification n'empêche jamais d'enregistrer et de réécouter en local.
+    // Le backend revalide indépendamment le pack avant toute transcription.
+    if (!wallet?.is_pack_active) {
+      setVoicePackWarning(true);
+      setError(language === "fr"
+        ? "Pack inactif : activez un pack ORIA pour envoyer ou transcrire ce vocal. L'enregistrement reste disponible ici."
+        : "Inactive pack: activate an ORIA pack to send or transcribe this voice note. Your recording stays here.");
+      return;
+    }
+    setVoicePackWarning(false);
     audioUploadBusyRef.current = true;
-    const localUrl = URL.createObjectURL(blob);
-    setVoiceDraft({ audio_id: "", transcription_status: "uploading", billing_status: "none",
-      localUrl, editedText: "", busy: true });
+    const localUrl = voiceDraft.localUrl;
+    setVoiceDraft((current) => current ? {
+      ...current, transcription_status: "uploading", busy: true,
+    } : current);
     try {
       let conversationId = activeConversationId;
       if (!conversationId) {
@@ -3957,16 +3983,20 @@ export default function ChatPage() {
       const ext = mime === "audio/mp4" ? "m4a" : mime.includes("ogg") ? "ogg" : "webm";
       const form = new FormData();
       form.append("audio", new File([blob], `oria-voice.${ext}`, { type: mime }));
-      form.append("request_id", crypto.randomUUID());
+      form.append("request_id", localVoiceRequestIdRef.current || crypto.randomUUID());
       form.append("conversation_id", conversationId);
       const response = await apiFetch<VoiceNote>("/ai/audio/prepare", { method: "POST", body: form });
       const note = normalizeVoiceNote(response as unknown as Record<string, unknown>);
       if (!note) throw new Error("Le serveur n'a pas retourné d'identifiant audio.");
       if (currentUserId) window.sessionStorage.setItem(`oria_audio_draft_v1_${currentUserId}`, note.audio_id);
+      localVoiceBlobRef.current = null;
+      localVoiceRequestIdRef.current = null;
       setVoiceDraft({ ...note, localUrl, editedText: "", busy: false });
     } catch (cause) {
-      setVoiceDraft(null);
-      URL.revokeObjectURL(localUrl);
+      // Une erreur réseau ou un pack expiré ne fait pas perdre le brouillon local.
+      setVoiceDraft((current) => current ? {
+        ...current, transcription_status: "local", busy: false,
+      } : current);
       setError(cause instanceof Error ? cause.message : "Échec du transfert audio.");
     } finally {
       audioUploadBusyRef.current = false;
@@ -4011,6 +4041,9 @@ export default function ChatPage() {
     try {
       if (draft.audio_id) await apiFetch(`/ai/audio/${encodeURIComponent(draft.audio_id)}`, {method:"DELETE"});
       if (draft.localUrl.startsWith("blob:")) URL.revokeObjectURL(draft.localUrl);
+      localVoiceBlobRef.current = null;
+      localVoiceRequestIdRef.current = null;
+      setVoicePackWarning(false);
       if (currentUserId) window.sessionStorage.removeItem(`oria_audio_draft_v1_${currentUserId}`);
       setVoiceDraft(null);
     } catch (cause) {
@@ -7263,12 +7296,31 @@ export default function ChatPage() {
                     </div>
                     <audio controls className="mt-3 h-10 w-full" src={voiceDraft.localUrl} preload="metadata"/>
                     <p className="mt-2 text-[11px] text-muted">
-                      {voiceDraft.transcription_status === "uploading" ? (language === "fr" ? "Transfert privé en cours…" : "Uploading privately…") :
+                      {voiceDraft.transcription_status === "local" ? (language === "fr" ? "Prêt à envoyer · enregistré uniquement sur cet appareil" : "Ready to send · stored only on this device") :
+                       voiceDraft.transcription_status === "uploading" ? (language === "fr" ? "Transfert privé en cours…" : "Uploading privately…") :
                        voiceDraft.transcription_status === "failed" ? (language === "fr" ? "Transcription interrompue." : "Transcription interrupted.") :
                        voiceDraft.billing_status === "settlement_pending" ? (language === "fr" ? "Finalisation des crédits…" : "Settling credits…") :
                        voiceDraft.transcription_status === "complete" && voiceDraft.billing_status === "settled" ? (language === "fr" ? "Transcription prête · choisissez le format d’envoi" : "Transcript ready · choose how to send") :
                        (language === "fr" ? "Transcription en cours…" : "Transcribing…")}
                     </p>
+                    {voiceDraft.transcription_status === "local" ? (
+                      <>
+                        <button type="button"
+                          disabled={voiceDraft.busy || isThinking}
+                          onClick={() => {
+                            const audio = localVoiceBlobRef.current;
+                            if (audio) void uploadVoiceDraft(audio);
+                          }}
+                          className="mt-3 inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground disabled:opacity-40"
+                        ><ArrowUp size={14}/>{language === "fr" ? "Continuer vers l'envoi" : "Continue to send"}</button>
+                        {voicePackWarning ? (
+                          <p role="alert" className="mt-2 text-xs text-red-500">
+                            {language === "fr" ? "Pack inactif : activez un pack pour envoyer ou transcrire ce vocal. Le brouillon reste disponible." : "Inactive pack: activate a pack to send or transcribe this note. Your draft is preserved."}
+                            {" "}<Link href="/credits" className="font-semibold underline underline-offset-2">{language === "fr" ? "Voir les packs" : "View plans"}</Link>
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
                     {voiceDraft.transcription_status === "complete" && voiceDraft.billing_status === "settled" ? (
                       <>
                         <textarea rows={3} className="mt-3 w-full resize-y rounded-xl border border-border bg-surface p-3 text-xs leading-5 outline-none focus:border-muted-strong"
@@ -7468,7 +7520,7 @@ export default function ChatPage() {
                   {!recording ? (
                     <button type="button" aria-label={language === "fr" ? "Enregistrer une note vocale" : "Record voice note"}
                       title={language === "fr" ? "Note vocale" : "Voice note"} onClick={() => void startVoiceRecording()}
-                      disabled={isThinking || Boolean(voiceDraft) || !wallet?.is_pack_active}
+                      disabled={isThinking || Boolean(voiceDraft) || audioUploadBusyRef.current}
                       className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary transition hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-30"><Mic size={18}/></button>
                   ) : (
                     <button type="button" onClick={stopRecorder} aria-label="Stop recording"

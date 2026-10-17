@@ -362,6 +362,9 @@ const CHAT_TEXT = {
     voiceEditHint: "Corrigez le texte avant de l'envoyer si nécessaire.",
     voiceRetry: "Réessayer / réparer",
     voiceDiscard: "Supprimer le brouillon",
+    voiceLocalReady: "Votre note est prête. La transcription et l'envoi nécessitent un pack actif.",
+    voicePrepareSend: "Continuer vers l'envoi",
+    voicePackRequiredToSend: "Activez un pack ORIA pour envoyer et transcrire cette note vocale. L'enregistrement reste disponible ici.",
     audioPermission: "Autorisez le microphone dans les réglages pour enregistrer.",
     audioBusy: "Le message vocal est en cours de traitement.",
     webImageSource: "Source",
@@ -520,6 +523,9 @@ const CHAT_TEXT = {
     voiceEditHint: "Edit the transcript before sending if needed.",
     voiceRetry: "Retry / recover",
     voiceDiscard: "Discard draft",
+    voiceLocalReady: "Your recording is ready. Transcription and sending require an active pack.",
+    voicePrepareSend: "Continue to send",
+    voicePackRequiredToSend: "Activate an ORIA pack to send and transcribe this voice note. Your recording remains available here.",
     audioPermission: "Allow microphone access in settings to record.",
     audioBusy: "The voice note is being processed.",
     webImageSource: "Source",
@@ -827,6 +833,12 @@ type VoiceDraft = VoiceNote & {
   localUri: string | null;
   editedText: string;
   busy: boolean;
+};
+
+// Un enregistrement non envoyé reste local, sans appel OpenAI ni réservation de crédits.
+type LocalVoiceDraft = {
+  uri: string;
+  duration_ms: number;
 };
 
 type CodePreviewData = {
@@ -3282,6 +3294,7 @@ export default function ChatPage() {
     useState<GeneratedArtifact[]>([]);
   const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraft | null>(null);
+  const [localVoiceDraft, setLocalVoiceDraft] = useState<LocalVoiceDraft | null>(null);
   const [voiceUploading, setVoiceUploading] = useState(false);
   const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -3711,12 +3724,9 @@ export default function ChatPage() {
   }, [recorderState.isRecording, recorderState.durationMillis]);
 
   async function startVoiceRecording() {
-    if (isThinking || voiceDraft || voiceUploading || audioBusyRef.current ||
+    if (isThinking || voiceDraft || localVoiceDraft || voiceUploading || audioBusyRef.current ||
         stoppingRecordingRef.current || recorderState.isRecording) return;
-    if (!hasActivePack) {
-      setError(t.activePackRequired);
-      return;
-    }
+    // Le microphone reste utilisable sans pack ; seul l'envoi sera contrôlé.
     try {
       const permission = await AudioModule.requestRecordingPermissionsAsync();
       if (!permission.granted) { setError(t.audioPermission); return; }
@@ -3734,10 +3744,13 @@ export default function ChatPage() {
     if (!recorderState.isRecording || stoppingRecordingRef.current) return;
     stoppingRecordingRef.current = true;
     try {
+      const duration_ms = recorderState.durationMillis;
       await recorder.stop();
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
       if (!recorder.uri) throw new Error("Aucun enregistrement audio n'a été produit.");
-      await uploadVoiceDraft(recorder.uri);
+      // Le fichier reste sur l'appareil : aucune requête serveur à cette étape.
+      setLocalVoiceDraft({ uri: recorder.uri, duration_ms });
+      setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Enregistrement audio impossible.");
     } finally {
@@ -3745,7 +3758,21 @@ export default function ChatPage() {
     }
   }
 
+  async function submitLocalVoiceDraft() {
+    if (!localVoiceDraft || isThinking || voiceUploading || audioBusyRef.current) return;
+    if (!hasActivePack) {
+      setError(t.voicePackRequiredToSend);
+      return;
+    }
+    await uploadVoiceDraft(localVoiceDraft.uri);
+  }
+
   async function uploadVoiceDraft(uri: string) {
+    // Double contrôle : sans abonnement, aucun upload ni transcription payante.
+    if (!hasActivePack) {
+      setError(t.voicePackRequiredToSend);
+      return;
+    }
     if (audioBusyRef.current) return;
     audioBusyRef.current = true;
     setVoiceUploading(true);
@@ -3793,6 +3820,7 @@ export default function ChatPage() {
       // Le MIME du Blob natif est défini par l'enregistreur Expo.
       if (currentUserId) await writeVoiceDraftId(currentUserId, note.audio_id);
       setVoiceDraft({ ...note, localUri: uri, editedText: note.transcription || "", busy: false });
+      setLocalVoiceDraft(null);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Envoi audio impossible.");
@@ -6328,6 +6356,36 @@ export default function ChatPage() {
                 <Text style={mobileExtras.draftHint}>{t.voiceUploading}</Text>
               </View>
             ) : null}
+            {localVoiceDraft && !recorderState.isRecording && !voiceUploading ? (
+              <View style={mobileExtras.draftCard}>
+                <Text style={mobileExtras.draftTitle}>
+                  {t.vocal} · {prettyAudioDuration(localVoiceDraft.duration_ms)}
+                </Text>
+                <PrivateVoicePlayback key={`local-draft-${localVoiceDraft.uri}`}
+                  note={{
+                    audio_id: "local-preview",
+                    duration_ms: localVoiceDraft.duration_ms,
+                    transcription_status: "local",
+                    billing_status: "none",
+                    delivery_mode: "draft",
+                  }}
+                  language={language}
+                  onLoad={async () => localVoiceDraft.uri} />
+                <Text style={mobileExtras.draftHint}>{t.voiceLocalReady}</Text>
+                <View style={mobileExtras.draftActions}>
+                  <Pressable style={mobileExtras.draftAction}
+                    disabled={isThinking || voiceUploading}
+                    onPress={() => void submitLocalVoiceDraft()}>
+                    <Ionicons name="arrow-up" size={16} color="#fff" />
+                    <Text style={mobileExtras.draftActionText}>{t.voicePrepareSend}</Text>
+                  </Pressable>
+                  <Pressable style={[mobileExtras.draftAction, mobileExtras.draftActionSecondary]}
+                    onPress={() => { setLocalVoiceDraft(null); setError(null); }}>
+                    <Text style={mobileExtras.draftActionTextSecondary}>{t.voiceDiscard}</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
             {voiceDraft && !recorderState.isRecording ? (
               <View style={mobileExtras.draftCard}>
                 <Text style={mobileExtras.draftTitle}>
@@ -7107,7 +7165,7 @@ export default function ChatPage() {
                   <Pressable
                     style={[mobileExtras.microphoneButton,
                       recorderState.isRecording && mobileExtras.microphoneActive]}
-                    disabled={isThinking || voiceUploading || (Boolean(voiceDraft) && !recorderState.isRecording)}
+                    disabled={isThinking || voiceUploading || (Boolean(voiceDraft || localVoiceDraft) && !recorderState.isRecording)}
                     onPress={() => void (recorderState.isRecording ? stopVoiceRecording() : startVoiceRecording())}
                     accessibilityLabel={recorderState.isRecording ? t.recordStop : t.microphone}>
                     <Ionicons name={recorderState.isRecording ? "stop" : "mic-outline"}
@@ -7137,7 +7195,7 @@ export default function ChatPage() {
                   <Pressable
                     style={[mobileExtras.microphoneButton,
                       recorderState.isRecording && mobileExtras.microphoneActive]}
-                    disabled={isThinking || voiceUploading || (Boolean(voiceDraft) && !recorderState.isRecording)}
+                    disabled={isThinking || voiceUploading || (Boolean(voiceDraft || localVoiceDraft) && !recorderState.isRecording)}
                     onPress={() => void (recorderState.isRecording ? stopVoiceRecording() : startVoiceRecording())}
                     accessibilityLabel={recorderState.isRecording ? t.recordStop : t.microphone}>
                     <Ionicons name={recorderState.isRecording ? "stop" : "mic-outline"} size={21}
