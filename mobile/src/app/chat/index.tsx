@@ -21,7 +21,7 @@ import {
   View,
 } from "react-native";
 import { Stack, useFocusEffect, useNavigation, useRouter } from "expo-router";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -6170,38 +6170,53 @@ export default function ChatPage() {
 
   return (
     <OriaThemeContext.Provider value={theme}>
-      <Modal visible={Boolean(codePreview)} animationType="slide"
-        onRequestClose={() => setCodePreview(null)}>
-        <SafeAreaView style={mobileExtras.codeModal} edges={["top", "bottom"]}>
-          <View style={mobileExtras.codeModalBar}>
-            <Pressable onPress={() => setCodePreview(null)} style={mobileExtras.codeModalButton}>
-              <Ionicons name="close" size={21} color="#fff" />
-            </Pressable>
-            <Text style={mobileExtras.codeModalTitle} numberOfLines={1}>
-              {codePreview?.title || t.codeViewer}
-            </Text>
-            <Pressable style={mobileExtras.codeModalButton} onPress={() =>
-              void Clipboard.setStringAsync(codePreview?.code || "")}
-              accessibilityLabel={t.copy}>
-              <Ionicons name="copy-outline" size={19} color="#fff" />
-            </Pressable>
-            {codePreview?.downloadUrl ? (
-              <Pressable style={mobileExtras.codeModalButton}
-                onPress={() => {
-                  const url = codePreview?.downloadUrl;
-                  if (url) void Linking.openURL(url).catch(() => undefined);
-                }}
-                accessibilityLabel={t.download}>
-                <Ionicons name="download-outline" size={19} color="#fff" />
+      <Modal
+        visible={Boolean(codePreview)}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        statusBarTranslucent={Platform.OS === "android"}
+        navigationBarTranslucent={Platform.OS === "android"}
+        onRequestClose={() => setCodePreview(null)}
+      >
+        {/* Une Modal ouvre une fenêtre native distincte. Son propre Provider
+            mesure les vraies zones système sur iOS ET Android (encoche,
+            barre d'état et navigation), sans marge fixe ni double padding. */}
+        <SafeAreaProvider style={mobileExtras.codeModal}>
+          <StatusBar barStyle="light-content" backgroundColor="#121318" />
+          <SafeAreaView
+            style={mobileExtras.codeModal}
+            edges={["top", "bottom", "left", "right"]}
+          >
+            <View style={mobileExtras.codeModalBar}>
+              <Pressable onPress={() => setCodePreview(null)} style={mobileExtras.codeModalButton}>
+                <Ionicons name="close" size={21} color="#fff" />
               </Pressable>
-            ) : null}
-          </View>
-          <ScrollView style={{ flex: 1 }} nestedScrollEnabled>
-            <ScrollView horizontal contentContainerStyle={{ padding: 17 }} nestedScrollEnabled>
-              <HighlightedCode code={codePreview?.code || ""} />
+              <Text style={mobileExtras.codeModalTitle} numberOfLines={1}>
+                {codePreview?.title || t.codeViewer}
+              </Text>
+              <Pressable style={mobileExtras.codeModalButton} onPress={() =>
+                void Clipboard.setStringAsync(codePreview?.code || "")}
+                accessibilityLabel={t.copy}>
+                <Ionicons name="copy-outline" size={19} color="#fff" />
+              </Pressable>
+              {codePreview?.downloadUrl ? (
+                <Pressable style={mobileExtras.codeModalButton}
+                  onPress={() => {
+                    const url = codePreview?.downloadUrl;
+                    if (url) void Linking.openURL(url).catch(() => undefined);
+                  }}
+                  accessibilityLabel={t.download}>
+                  <Ionicons name="download-outline" size={19} color="#fff" />
+                </Pressable>
+              ) : null}
+            </View>
+            <ScrollView style={{ flex: 1 }} nestedScrollEnabled>
+              <ScrollView horizontal contentContainerStyle={{ padding: 17 }} nestedScrollEnabled>
+                <HighlightedCode code={codePreview?.code || ""} />
+              </ScrollView>
             </ScrollView>
-          </ScrollView>
-        </SafeAreaView>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
       <SafeAreaView
         style={styles.safe}
