@@ -2432,9 +2432,11 @@ function InlineMarkdown({
           <Text
             key={index}
             style={[textStyle, styles.link]}
-            onPress={() =>
-              Linking.openURL(url).catch(() => undefined)
-            }
+            onPress={() => {
+              if (/^(https?:\/\/|mailto:)/i.test(url)) {
+                void Linking.openURL(url).catch(() => undefined);
+              }
+            }}
           >
             {label}
           </Text>,
@@ -2461,6 +2463,397 @@ function InlineMarkdown({
   return <Text style={textStyle}>{parts}</Text>;
 }
 
+/* ============================================================
+ * ORIA VISUAL V1 — EXPO / REACT NATIVE
+ * Compatible avec le contrat Web : oria-chart, oria-stats,
+ * oria-diagram, oria-geometry + tableaux Markdown GFM.
+ * Aucune exécution de code fourni par le modèle : seules des
+ * primitives SVG construites localement sont autorisées.
+ * ============================================================ */
+
+type OriaVisualRecord = Record<string, unknown>;
+
+function oriaMobileRecord(value: unknown): OriaVisualRecord | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as OriaVisualRecord : null;
+}
+
+function oriaMobileString(value: unknown, fallback = "", max = 160): string {
+  return typeof value === "string" ? value.slice(0, max) : fallback;
+}
+
+function oriaMobileNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 1e12
+    ? value : null;
+}
+
+function oriaMobileSvgNumber(value: number): string {
+  return String(Math.round(Math.max(-1e7, Math.min(1e7, value)) * 1000) / 1000);
+}
+
+function oriaMobileSvgEscape(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const ORIA_VISUAL_PALETTE = ["#2563eb", "#0d9488", "#d97706", "#7c3aed", "#db2777", "#64748b"];
+const ORIA_VISUAL_FENCES = new Set(["oria-chart", "oria-stats", "oria-diagram", "oria-geometry"]);
+
+function oriaMobileTableCells(line: string): string[] {
+  const source = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let cell = "";
+  let inCode = false;
+  for (let pos = 0; pos < source.length; pos++) {
+    if (source[pos] === "\\" && source[pos + 1] === "|") {
+      cell += "|";
+      pos++;
+    } else if (source[pos] === "`") {
+      inCode = !inCode;
+      cell += "`";
+    } else if (source[pos] === "|" && !inCode) {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += source[pos];
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function oriaMobileIsTableDivider(line: string): boolean {
+  const cells = oriaMobileTableCells(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+const oriaVisualStyles = StyleSheet.create({
+  tableFrame: { borderWidth: 1, borderColor: "#dddddf", borderRadius: 13, overflow: "hidden", marginVertical: 5 },
+  tableToolbar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 8, paddingHorizontal: 10, backgroundColor: "#f4f4f5" },
+  tableRow: { flexDirection: "row", alignItems: "stretch" },
+  tableCell: { width: 142, minHeight: 40, paddingVertical: 9, paddingHorizontal: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, borderColor: "#e0e0e3", justifyContent: "center" },
+  tableText: { fontSize: 12, lineHeight: 19, color: "#242428" },
+  smallLabel: { fontSize: 11, fontWeight: "600", color: "#66666d" },
+  actionText: { fontSize: 11, fontWeight: "600", color: "#2563eb" },
+  callout: { borderLeftWidth: 4, borderRadius: 10, padding: 12, gap: 5, marginVertical: 4, backgroundColor: "#f5f5f7" },
+  calloutHeading: { fontSize: 12, fontWeight: "700", color: "#25252a" },
+  card: { borderWidth: 1, borderColor: "#e0e0e4", backgroundColor: "#ffffff", borderRadius: 14, padding: 12, gap: 10, marginVertical: 5 },
+  title: { fontSize: 15, fontWeight: "700", color: "#1e1e22" },
+  statGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginVertical: 5 },
+  statCard: { width: "48%", flexGrow: 1, borderWidth: 1, borderColor: "#e0e0e4", backgroundColor: "#ffffff", borderRadius: 12, padding: 12, gap: 4 },
+  statLabel: { fontSize: 11, color: "#696971" },
+  statValue: { fontSize: 20, fontWeight: "700", color: "#1b1b1f" },
+  caption: { fontSize: 11, lineHeight: 17, color: "#696971" },
+  checklistRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
+  checkBox: { width: 17, height: 17, borderRadius: 4, borderWidth: 1.3, borderColor: "#888890", alignItems: "center", justifyContent: "center", marginTop: 2 },
+});
+
+function OriaMobileTable({ headers, rows, alignment, language }: {
+  headers: string[]; rows: string[][];
+  alignment: Array<"left" | "center" | "right">; language: OriaLanguage;
+}) {
+  const dark = useIsDarkTheme();
+  const [copied, setCopied] = useState(false);
+  const background = dark ? "#17171a" : "#ffffff";
+  const headerBackground = dark ? "#242428" : "#f4f4f5";
+  const textColor = dark ? "#f0f0f2" : "#242428";
+  const borderColor = dark ? "#36363d" : "#e0e0e3";
+  const tsv = [headers, ...rows].map((row) => headers.map((_, index) =>
+    (row[index] ?? "").replace(/[\t\r\n]/g, " ")).join("\t")).join("\n");
+  const renderRow = (row: string[], rowIndex: number, header: boolean) => (
+    <View key={`${header ? "h" : "r"}-${rowIndex}`} style={oriaVisualStyles.tableRow}>
+      {headers.map((_, col) => (
+        <View key={col} style={[oriaVisualStyles.tableCell, { borderColor,
+          backgroundColor: header ? headerBackground : background, width: 142 }]}>
+          <Text style={[oriaVisualStyles.tableText, { color: textColor,
+            fontWeight: header ? "700" : "400", textAlign: alignment[col] ?? "left" }]}
+            selectable>{row[col] ?? ""}</Text>
+        </View>
+      ))}
+    </View>
+  );
+  return (
+    <View style={[oriaVisualStyles.tableFrame, { borderColor, backgroundColor: background }]}>
+      <View style={[oriaVisualStyles.tableToolbar, { backgroundColor: headerBackground }]}>
+        <Text style={[oriaVisualStyles.smallLabel, { color: textColor }]}>
+          {language === "fr" ? "Tableau" : "Table"} · {rows.length} {language === "fr" ? "lignes" : "rows"}
+        </Text>
+        <Pressable accessibilityRole="button" accessibilityLabel={language === "fr" ? "Copier le tableau" : "Copy table"}
+          onPress={() => void Clipboard.setStringAsync(tsv).then(() => {
+            setCopied(true); setTimeout(() => setCopied(false), 1400);
+          }).catch(() => undefined)}>
+          <Text style={oriaVisualStyles.actionText}>{copied ? (language === "fr" ? "Copié" : "Copied") : (language === "fr" ? "Copier" : "Copy")}</Text>
+        </Pressable>
+      </View>
+      <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator
+        contentContainerStyle={{ minWidth: headers.length * 142 }}>
+        <View>
+          {renderRow(headers, 0, true)}
+          {rows.map((row, index) => renderRow(row, index, false))}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+function OriaMobileCallout({ kind, lines, language }: {
+  kind: string; lines: string[]; language: OriaLanguage;
+}) {
+  const dark = useIsDarkTheme();
+  const entries: Record<string, [string, string, string]> = {
+    NOTE: ["#0284c7", "Note", "Note"],
+    TIP: ["#059669", "Conseil", "Tip"],
+    IMPORTANT: ["#7c3aed", "Important", "Important"],
+    WARNING: ["#d97706", "Attention", "Warning"],
+    CAUTION: ["#dc2626", "Prudence", "Caution"],
+  };
+  const [color, fr, en] = entries[kind] ?? entries.NOTE;
+  return <View style={[oriaVisualStyles.callout, {
+    borderLeftColor: color, backgroundColor: dark ? "#242428" : "#f5f5f7" }]}>
+    <Text style={[oriaVisualStyles.calloutHeading, { color: dark ? "#f4f4f5" : "#25252a" }]}>{language === "fr" ? fr : en}</Text>
+    {lines.map((line, index) => <InlineMarkdown key={index} text={line} />)}
+  </View>;
+}
+
+function OriaMobileSvg({ svg, width, height, description }: {
+  svg: string; width: number; height: number; description: string;
+}) {
+  const dark = useIsDarkTheme();
+  const { width: screenWidth } = useWindowDimensions();
+  // Hauteur déterministe : pas de JS ni d'écoute d'événements depuis la WebView.
+  const displayWidth = Math.max(230, Math.min(screenWidth - 62, 620));
+  const displayHeight = Math.max(145, Math.min(380, displayWidth * height / width));
+  const ink = dark ? "#eeeeef" : "#22222a";
+  const html = `<!doctype html><html><head><meta charset="utf-8"/>` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1"/>` +
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"/>` +
+    `<style>html,body{padding:0;margin:0;background:transparent;width:100%;height:100%;overflow:hidden}` +
+    `svg{display:block;width:100%;height:100%;color:${ink};font-family:system-ui,Arial,sans-serif}</style>` +
+    `</head><body><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${oriaMobileSvgNumber(width)} ${oriaMobileSvgNumber(height)}" role="img" aria-label="${oriaMobileSvgEscape(description)}">` +
+    svg + `</svg></body></html>`;
+  return <View accessible accessibilityLabel={description} style={{ height: displayHeight, width: "100%" }}>
+    <WebView source={{ html, baseUrl: "about:blank" }}
+      javaScriptEnabled={false} domStorageEnabled={false}
+      originWhitelist={["about:blank"]} scrollEnabled={false}
+      showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}
+      style={{ backgroundColor: "transparent", width: "100%", height: displayHeight }} />
+  </View>;
+}
+
+function OriaMobileChart({ data, language }: { data: OriaVisualRecord; language: OriaLanguage }) {
+  const dark = useIsDarkTheme();
+  const [showData, setShowData] = useState(false);
+  const kind = oriaMobileString(data.type || data.chartType).toLowerCase();
+  if (!["bar", "line", "pie", "scatter"].includes(kind) || !Array.isArray(data.data)) return null;
+  const points = data.data.slice(0, 36).map(oriaMobileRecord)
+    .filter((item): item is OriaVisualRecord => item !== null)
+    .map((item) => ({
+      label: oriaMobileString(item.label ?? item.name ?? item.x, "", 48),
+      x: oriaMobileNumber(item.x), y: oriaMobileNumber(item.value ?? item.y),
+    })).filter((point): point is { label: string; x: number | null; y: number } => point.y !== null);
+  if (!points.length) return null;
+  const W = 640, H = 310, left = 66, right = 20, top = 20, bottom = 66;
+  const plotW = W - left - right, plotH = H - top - bottom;
+  const format = (value: number) => Number(value.toFixed(2)).toLocaleString(language === "fr" ? "fr-FR" : "en-US");
+  let svg = "";
+  if (kind === "pie") {
+    const positives = points.filter((point) => point.y > 0);
+    const sum = positives.reduce((total, point) => total + point.y, 0);
+    if (!sum || !Number.isFinite(sum)) return null;
+    let angle = -Math.PI / 2;
+    svg = positives.map((point, index) => {
+      const ratio = point.y / sum;
+      const sweep = ratio * Math.PI * 2;
+      const start = angle;
+      angle += sweep;
+      const cx = 320, cy = 155, radius = 111;
+      const fill = ORIA_VISUAL_PALETTE[index % ORIA_VISUAL_PALETTE.length];
+      if (ratio >= 0.999999) return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="${fill}"/>`;
+      const x1 = cx + radius * Math.cos(start), y1 = cy + radius * Math.sin(start);
+      const x2 = cx + radius * Math.cos(angle), y2 = cy + radius * Math.sin(angle);
+      return `<path d="M ${cx} ${cy} L ${oriaMobileSvgNumber(x1)} ${oriaMobileSvgNumber(y1)} A ${radius} ${radius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${oriaMobileSvgNumber(x2)} ${oriaMobileSvgNumber(y2)} Z" fill="${fill}"/>`;
+    }).join("");
+  } else {
+    const minY = Math.min(0, ...points.map((point) => point.y));
+    const maxY = Math.max(0, ...points.map((point) => point.y));
+    const span = maxY - minY || 1;
+    const yPos = (value: number) => top + (maxY - value) / span * plotH;
+    const xs = points.map((point, index) => kind === "scatter" ? (point.x ?? index) : index);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const xPos = (x: number) => minX === maxX ? left + plotW / 2 : left + (x - minX) / (maxX - minX) * plotW;
+    svg += Array.from({ length: 5 }, (_, index) => {
+      const value = minY + span * index / 4, y = yPos(value);
+      return `<line x1="${left}" y1="${oriaMobileSvgNumber(y)}" x2="${W-right}" y2="${oriaMobileSvgNumber(y)}" stroke="currentColor" stroke-opacity=".12"/>` +
+        `<text x="${left-8}" y="${oriaMobileSvgNumber(y + 4)}" font-size="12" fill="currentColor" opacity=".75" text-anchor="end">${oriaMobileSvgEscape(format(value))}</text>`;
+    }).join("");
+    if (kind === "bar") {
+      const step = plotW / points.length;
+      svg += points.map((point, index) => {
+        const zero = yPos(0), y = yPos(point.y), x = left + index * step + step * 0.16;
+        return `<rect x="${oriaMobileSvgNumber(x)}" y="${oriaMobileSvgNumber(Math.min(zero,y))}" width="${oriaMobileSvgNumber(step * .68)}" height="${oriaMobileSvgNumber(Math.max(1, Math.abs(zero-y)))}" rx="3" fill="${ORIA_VISUAL_PALETTE[index % ORIA_VISUAL_PALETTE.length]}"/>`;
+      }).join("");
+    }
+    if (kind === "line") {
+      svg += `<polyline points="${points.map((point, index) => `${oriaMobileSvgNumber(xPos(xs[index]))},${oriaMobileSvgNumber(yPos(point.y))}`).join(" ")}" fill="none" stroke="${ORIA_VISUAL_PALETTE[0]}" stroke-width="3" stroke-linejoin="round"/>`;
+    }
+    if (kind === "line" || kind === "scatter") {
+      svg += points.map((point, index) => `<circle cx="${oriaMobileSvgNumber(xPos(xs[index]))}" cy="${oriaMobileSvgNumber(yPos(point.y))}" r="${kind === "scatter" ? 5 : 4}" fill="${ORIA_VISUAL_PALETTE[index % ORIA_VISUAL_PALETTE.length]}"/>`).join("");
+    }
+    svg += points.map((point, index) => {
+      if (points.length > 14 && index % Math.ceil(points.length / 12) !== 0) return "";
+      const x = kind === "bar" ? left + (index + .5) * plotW / points.length : xPos(xs[index]);
+      return `<text x="${oriaMobileSvgNumber(x)}" y="${H-bottom+23}" font-size="11" text-anchor="middle" opacity=".8" fill="currentColor">${oriaMobileSvgEscape(point.label.slice(0, 12))}</text>`;
+    }).join("");
+  }
+  const foreground = dark ? "#eeeeef" : "#1e1e22";
+  return <View style={[oriaVisualStyles.card, { backgroundColor: dark ? "#17171a" : "#ffffff", borderColor: dark ? "#36363d" : "#e0e0e4" }]}>
+    <Text style={[oriaVisualStyles.title, { color: foreground }]}>{oriaMobileString(data.title, language === "fr" ? "Graphique" : "Chart")}</Text>
+    <OriaMobileSvg svg={svg} width={W} height={H} description={oriaMobileString(data.title, "Chart")} />
+    {kind === "pie" ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 9 }}>
+      {points.filter((point) => point.y > 0).map((point, index) => <View key={index} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+        <View style={{ width: 9, height: 9, borderRadius: 2, backgroundColor: ORIA_VISUAL_PALETTE[index % ORIA_VISUAL_PALETTE.length] }}/>
+        <Text style={[oriaVisualStyles.caption, { color: foreground }]}>{point.label}: {format(point.y)}</Text>
+      </View>)}
+    </View> : null}
+    <Pressable accessibilityRole="button" onPress={() => setShowData((value) => !value)}>
+      <Text style={oriaVisualStyles.actionText}>{showData ? (language === "fr" ? "Masquer les données" : "Hide data") : (language === "fr" ? "Voir les données" : "View data")}</Text>
+    </Pressable>
+    {showData ? points.map((point, index) => <Text key={index} style={[oriaVisualStyles.caption, { color: foreground }]}>
+      {point.label || index + 1}: {format(point.y)}
+    </Text>) : null}
+  </View>;
+}
+
+function OriaMobileStats({ data, language }: { data: OriaVisualRecord; language: OriaLanguage }) {
+  const dark = useIsDarkTheme();
+  if (!Array.isArray(data.items)) return null;
+  const items = data.items.slice(0, 12).map(oriaMobileRecord).filter((item): item is OriaVisualRecord => item !== null);
+  if (!items.length) return null;
+  return <View style={{ gap: 6 }}>
+    {data.title ? <Text style={[oriaVisualStyles.title, { color: dark ? "#f0f0f2" : "#1e1e22" }]}>
+      {oriaMobileString(data.title, language === "fr" ? "Statistiques" : "Statistics")}</Text> : null}
+    <View style={oriaVisualStyles.statGrid}>
+      {items.map((item, index) => <View key={index} style={[oriaVisualStyles.statCard, { backgroundColor: dark ? "#17171a" : "#ffffff", borderColor: dark ? "#36363d" : "#e0e0e4" }]}>
+        <Text style={[oriaVisualStyles.statLabel, { color: dark ? "#aaaaaf" : "#696971" }]}>{oriaMobileString(item.label)}</Text>
+        <Text style={[oriaVisualStyles.statValue, { color: dark ? "#f2f2f4" : "#1b1b1f" }]}>{oriaMobileString(item.value, String(oriaMobileNumber(item.value) ?? "—"), 60)}</Text>
+        {item.detail ? <Text style={[oriaVisualStyles.caption, { color: dark ? "#aaaaaf" : "#696971" }]}>{oriaMobileString(item.detail)}</Text> : null}
+      </View>)}
+    </View>
+  </View>;
+}
+
+function OriaMobileDiagram({ data, language }: { data: OriaVisualRecord; language: OriaLanguage }) {
+  const dark = useIsDarkTheme();
+  if (!Array.isArray(data.nodes)) return null;
+  const nodes = data.nodes.slice(0, 12).map(oriaMobileRecord).filter((item): item is OriaVisualRecord => item !== null)
+    .map((item, index) => ({ id: oriaMobileString(item.id, String(index)), label: oriaMobileString(item.label, "Étape", 64) }));
+  if (!nodes.length) return null;
+  const edges = Array.isArray(data.edges) ? data.edges.slice(0, 24).map(oriaMobileRecord)
+    .filter((item): item is OriaVisualRecord => item !== null) : [];
+  const known = new Set(nodes.map((node) => node.id));
+  const connections = edges.filter((edge) => known.has(oriaMobileString(edge.from)) && known.has(oriaMobileString(edge.to)));
+  const foreground = dark ? "#f1f1f3" : "#1f1f24";
+  const background = dark ? "#202027" : "#f6f8ff";
+  const borderColor = dark ? "#41414a" : "#d6dce8";
+  return <View style={[oriaVisualStyles.card, {
+    backgroundColor: dark ? "#17171a" : "#ffffff", borderColor: dark ? "#36363d" : "#e0e0e4"
+  }]}>
+    <Text style={[oriaVisualStyles.title, { color: foreground }]}>
+      {oriaMobileString(data.title, language === "fr" ? "Diagramme" : "Diagram")}
+    </Text>
+    {nodes.map((node, index) => <View key={`${node.id}-${index}`} style={{ alignItems: "center", gap: 4 }}>
+      {index > 0 && connections.some((edge) => edge.from === nodes[index - 1].id && edge.to === node.id)
+        ? <Ionicons name="arrow-down-outline" color="#64748b" size={17}/>
+        : index > 0 ? <View style={{ height: 9 }} /> : null}
+      <View style={{ alignSelf: "stretch", alignItems: "center", justifyContent: "center",
+        borderRadius: 11, borderWidth: 1, borderColor, backgroundColor: background,
+        paddingHorizontal: 12, paddingVertical: 11 }}>
+        <Text style={{ fontSize: 13, lineHeight: 19, color: foreground, fontWeight: "600", textAlign: "center" }}>{node.label}</Text>
+      </View>
+    </View>)}
+    {connections.length > 0 ? <View style={{ gap: 5, paddingTop: 5 }}>
+      <Text style={[oriaVisualStyles.smallLabel, { color: foreground }]}>
+        {language === "fr" ? "Relations" : "Connections"}
+      </Text>
+      {connections.map((edge, index) => <Text key={index} style={[oriaVisualStyles.caption, { color: foreground }]}>
+        {nodes.find((node) => node.id === edge.from)?.label} → {nodes.find((node) => node.id === edge.to)?.label}
+        {edge.label ? ` · ${oriaMobileString(edge.label, "", 60)}` : ""}
+      </Text>)}
+    </View> : null}
+  </View>;
+}
+
+function OriaMobileGeometry({ data, language }: { data: OriaVisualRecord; language: OriaLanguage }) {
+  const dark = useIsDarkTheme();
+  if (!Array.isArray(data.elements)) return null;
+  const W = Math.min(1200, Math.max(100, oriaMobileNumber(data.width) ?? 600));
+  const H = Math.min(900, Math.max(100, oriaMobileNumber(data.height) ?? 360));
+  const elements = data.elements.slice(0, 80).map(oriaMobileRecord).filter((item): item is OriaVisualRecord => item !== null);
+  const n = (item: OriaVisualRecord, key: string) => oriaMobileNumber(item[key]);
+  const palette = (item: OriaVisualRecord) => ORIA_VISUAL_PALETTE[
+    Math.max(0, Math.min(ORIA_VISUAL_PALETTE.length - 1, Math.floor(n(item, "colorIndex") ?? 0)))];
+  let svg = "";
+  for (const item of elements) {
+    const color = palette(item);
+    const type = oriaMobileString(item.type);
+    if (type === "line") {
+      const v = [n(item, "x1"), n(item, "y1"), n(item, "x2"), n(item, "y2")];
+      if (v.every((value) => value !== null)) svg += `<line x1="${oriaMobileSvgNumber(v[0]!)}" y1="${oriaMobileSvgNumber(v[1]!)}" x2="${oriaMobileSvgNumber(v[2]!)}" y2="${oriaMobileSvgNumber(v[3]!)}" stroke="${color}" stroke-width="2.5"/>`;
+    } else if (type === "circle") {
+      const cx = n(item, "cx"), cy = n(item, "cy"), r = n(item, "r");
+      if (cx !== null && cy !== null && r !== null && r > 0 && r < 2000) svg += `<circle cx="${oriaMobileSvgNumber(cx)}" cy="${oriaMobileSvgNumber(cy)}" r="${oriaMobileSvgNumber(r)}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
+    } else if (type === "rect") {
+      const x = n(item, "x"), y = n(item, "y"), width = n(item, "width"), height = n(item, "height");
+      if ([x, y, width, height].every((value) => value !== null) && width! > 0 && height! > 0) svg += `<rect x="${oriaMobileSvgNumber(x!)}" y="${oriaMobileSvgNumber(y!)}" width="${oriaMobileSvgNumber(width!)}" height="${oriaMobileSvgNumber(height!)}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
+    } else if (type === "polygon" && Array.isArray(item.points)) {
+      const points = item.points.slice(0, 25).filter((point) => Array.isArray(point) && point.length === 2 && point.every((v) => oriaMobileNumber(v) !== null)) as number[][];
+      if (points.length >= 3) svg += `<polygon points="${points.map((p) => `${oriaMobileSvgNumber(p[0])},${oriaMobileSvgNumber(p[1])}`).join(" ")}" fill="${color}" fill-opacity=".1" stroke="${color}" stroke-width="2.5"/>`;
+    } else if (type === "point" || type === "text") {
+      const x = n(item, "x"), y = n(item, "y");
+      if (x === null || y === null) continue;
+      if (type === "point") svg += `<circle cx="${oriaMobileSvgNumber(x)}" cy="${oriaMobileSvgNumber(y)}" r="4.5" fill="${color}"/>`;
+      svg += `<text x="${oriaMobileSvgNumber(x+(type === "point" ? 10 : 0))}" y="${oriaMobileSvgNumber(y-(type === "point" ? 8 : 0))}" font-size="14" fill="currentColor">${oriaMobileSvgEscape(oriaMobileString(item.label, "", 60))}</text>`;
+    }
+  }
+  if (!svg) return null;
+  return <View style={[oriaVisualStyles.card, { backgroundColor: dark ? "#17171a" : "#ffffff", borderColor: dark ? "#36363d" : "#e0e0e4" }]}>
+    <Text style={[oriaVisualStyles.title, { color: dark ? "#eeeeef" : "#1e1e22" }]}>{oriaMobileString(data.title, language === "fr" ? "Figure géométrique" : "Geometry")}</Text>
+    <OriaMobileSvg svg={svg} width={W} height={H} description={oriaMobileString(data.title, "Figure géométrique")}/>
+    {data.caption ? <Text style={[oriaVisualStyles.caption, { color: dark ? "#aaaaaf" : "#696971" }]}>{oriaMobileString(data.caption, "", 280)}</Text> : null}
+  </View>;
+}
+
+function oriaMobileVisualRenderable(kind: string, data: OriaVisualRecord): boolean {
+  if (kind === "oria-chart") {
+    const chartType = oriaMobileString(data.type ?? data.chartType).toLowerCase();
+    if (!["bar", "line", "pie", "scatter"].includes(chartType) || !Array.isArray(data.data)) return false;
+    const values = data.data.slice(0, 36).map(oriaMobileRecord)
+      .filter((point): point is OriaVisualRecord => point !== null)
+      .map((point) => oriaMobileNumber(point.value ?? point.y))
+      .filter((value): value is number => value !== null);
+    return chartType === "pie" ? values.some((value) => value > 0) : values.length > 0;
+  }
+  if (kind === "oria-stats") return Array.isArray(data.items) && data.items.some((item) => oriaMobileRecord(item) !== null);
+  if (kind === "oria-diagram") return Array.isArray(data.nodes) && data.nodes.some((item) => oriaMobileRecord(item) !== null);
+  if (kind === "oria-geometry") return Array.isArray(data.elements) && data.elements.some((item) =>
+    oriaMobileRecord(item) !== null && ["line", "circle", "rect", "polygon", "point", "text"].includes(
+      oriaMobileString((item as OriaVisualRecord).type)));
+  return false;
+}
+
+function OriaMobileVisualBlock({ kind, raw, language }: { kind: string; raw: string; language: OriaLanguage }) {
+  let data: OriaVisualRecord | null = null;
+  if (raw.length > 60000) return null;
+  try { data = oriaMobileRecord(JSON.parse(raw)); } catch { return null; }
+  if (!data || !oriaMobileVisualRenderable(kind, data)) return null;
+  if (kind === "oria-chart") return <OriaMobileChart data={data} language={language}/>;
+  if (kind === "oria-stats") return <OriaMobileStats data={data} language={language}/>;
+  if (kind === "oria-diagram") return <OriaMobileDiagram data={data} language={language}/>;
+  if (kind === "oria-geometry") return <OriaMobileGeometry data={data} language={language}/>;
+  return null;
+}
+
 function MarkdownMessage({
   content,
   language: uiLanguage,
@@ -2484,6 +2877,7 @@ function MarkdownMessage({
   let inCode = false;
   let inMath = false;
   let index = 0;
+  const consumedVisualLines = new Set<number>();
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -2505,9 +2899,14 @@ function MarkdownMessage({
       <View key={`b-${index}`} style={styles.listBlock}>
         {bullets.map((item, i) => (
           <View key={i} style={styles.listRow}>
-            <Text style={styles.bullet}>•</Text>
+            {/^\[([ xX])\]\s+/.test(item) ? (
+              <View style={[oriaVisualStyles.checkBox, /^\[[xX]\]/.test(item)
+                ? { backgroundColor: "#2563eb", borderColor: "#2563eb" } : null]}>
+                {/\[[xX]\]/.test(item) ? <Ionicons name="checkmark" size={13} color="#ffffff" /> : null}
+              </View>
+            ) : <Text style={styles.bullet}>•</Text>}
             <View style={styles.listContent}>
-              <InlineMarkdown text={item} />
+              <InlineMarkdown text={item.replace(/^\[[ xX]\]\s+/, "")} />
             </View>
           </View>
         ))}
@@ -2559,21 +2958,42 @@ function MarkdownMessage({
     inMath = false;
   };
 
-  const flushCode = () => {
+  const flushCode = (complete = true) => {
     if (!inCode) return;
-
-    blocks.push(
-      <CodeBlock key={`code-${index}`} language={codeLanguage} value={code.join("\n")}
-        uiLanguage={uiLanguage} onExpand={onCodeOpen} />,
-    );
-
+    const source = code.join("\n");
+    const visualLanguage = codeLanguage.trim().toLowerCase().split(/\s+/)[0];
+    // Les vrais blocs de code conservent intégralement leur lecteur existant.
+    if (ORIA_VISUAL_FENCES.has(visualLanguage)) {
+      // Pendant le streaming, ne pas afficher du JSON incomplet à l'écran.
+      if (!complete) {
+        blocks.push(<Text key={`visual-pending-${index}`} style={oriaVisualStyles.smallLabel}>
+          {uiLanguage === "fr" ? "Préparation du visuel…" : "Preparing visualization…"}
+        </Text>);
+      } else {
+        let valid = false;
+        try {
+          const parsed = source.length <= 60000 ? oriaMobileRecord(JSON.parse(source)) : null;
+          valid = parsed !== null && oriaMobileVisualRenderable(visualLanguage, parsed);
+        } catch { /* Fallback code ci-dessous. */ }
+        if (valid) {
+          blocks.push(<OriaMobileVisualBlock key={`visual-${index}`} kind={visualLanguage} raw={source} language={uiLanguage}/>);
+        } else {
+          blocks.push(<CodeBlock key={`code-${index}`} language={codeLanguage} value={source}
+            uiLanguage={uiLanguage} onExpand={onCodeOpen} />);
+        }
+      }
+    } else {
+      blocks.push(<CodeBlock key={`code-${index}`} language={codeLanguage} value={source}
+        uiLanguage={uiLanguage} onExpand={onCodeOpen} />);
+    }
     index++;
     code = [];
     codeLanguage = "";
     inCode = false;
   };
 
-  lines.forEach((line) => {
+  lines.forEach((line, lineIndex) => {
+    if (consumedVisualLines.has(lineIndex)) return;
     const trimmed = line.trim();
 
     const singleDisplayMath = trimmed.match(/^\\\[(.*)\\\]$/);
@@ -2644,6 +3064,47 @@ function MarkdownMessage({
 
     if (inCode) {
       code.push(line);
+      return;
+    }
+
+    // Tableaux GFM : en-tête + séparateurs + lignes délimitées par |.
+    if (lineIndex + 1 < lines.length && trimmed.includes("|") &&
+        oriaMobileIsTableDivider(lines[lineIndex + 1].trim())) {
+      const headers = oriaMobileTableCells(trimmed);
+      const separators = oriaMobileTableCells(lines[lineIndex + 1].trim());
+      if (headers.length >= 2 && headers.length <= 16 && separators.length === headers.length) {
+        flushLists(); flushParagraph();
+        const alignment = separators.map((cell): "left" | "center" | "right" =>
+          cell.startsWith(":") && cell.endsWith(":") ? "center" :
+          cell.endsWith(":") ? "right" : "left");
+        const rows: string[][] = [];
+        consumedVisualLines.add(lineIndex + 1);
+        for (let rowIndex = lineIndex + 2; rowIndex < lines.length && rows.length < 250; rowIndex++) {
+          const row = lines[rowIndex].trim();
+          if (!row || !row.includes("|") || row.startsWith("```")) break;
+          rows.push(oriaMobileTableCells(row).slice(0, headers.length));
+          consumedVisualLines.add(rowIndex);
+        }
+        blocks.push(<OriaMobileTable key={`table-${index++}`} headers={headers} rows={rows}
+          alignment={alignment} language={uiLanguage}/>);
+        return;
+      }
+    }
+
+    // Encadrés GitHub-style : > [!TIP], > [!WARNING], etc.
+    const admonition = trimmed.match(/^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i);
+    if (admonition) {
+      flushLists(); flushParagraph();
+      const calloutLines: string[] = [];
+      for (let cursor = lineIndex + 1; cursor < lines.length; cursor++) {
+        const next = lines[cursor].trim();
+        if (!next.startsWith(">")) break;
+        const body = next.replace(/^>\s?/, "").trim();
+        if (body) calloutLines.push(body);
+        consumedVisualLines.add(cursor);
+      }
+      blocks.push(<OriaMobileCallout key={`callout-${index++}`}
+        kind={admonition[1].toUpperCase()} lines={calloutLines} language={uiLanguage}/>);
       return;
     }
 
@@ -2740,7 +3201,7 @@ function MarkdownMessage({
     paragraph.push(trimmed);
   });
 
-  if (inCode) flushCode();
+  if (inCode) flushCode(false);
   if (inMath) flushMath();
   flushLists();
   flushParagraph();
@@ -5169,6 +5630,8 @@ export default function ChatPage() {
       formData.append("conversation_id", conversationId);
       formData.append("reasoning_mode", reasoningMode);
       formData.append("generation_id", generationId);
+      // ORIA Visual V1 : le rendu Expo prend en charge les blocs déclaratifs.
+      formData.append("visual_mode", "true");
 
       for (const attachment of outgoingAttachments) {
         /*

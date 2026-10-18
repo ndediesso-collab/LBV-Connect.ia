@@ -80,6 +80,62 @@ from app.services.prompt_service import build_output_prompt
 
 
 
+
+
+# Contrat de rendu pour ORIA Visual V1 (le moteur Web actuel).
+# L'activation doit être décidée par la route APRÈS vérification des capacités
+# du client. Expo ne gère pas encore ces blocs : valeur par défaut False.
+ORIA_VISUAL_OUTPUT_INSTRUCTIONS = """
+<oria_visual_output_contract>
+ORIA peut afficher des visuels déclaratifs dans la réponse, en plus du texte.
+Utilise du Markdown normal pour les titres, listes et citations.
+Pour un tableau, utilise Markdown GFM : une ligne d'en-têtes avec |, puis
+une ligne de séparation avec --- pour chaque colonne ; 2 à 16 colonnes.
+Pour un encadré, écris par exemple :
+> [!TIP]
+> Conseil utile et précis.
+Types : NOTE, TIP, IMPORTANT, WARNING, CAUTION.
+Pour une liste à cocher : - [ ] à faire ou - [x] terminé.
+
+Si un graphique apporte une valeur réelle à la demande, insère dans le texte
+un bloc fenced portant exactement l'étiquette oria-chart, avec du JSON VALIDE :
+```oria-chart
+{"type":"bar","title":"Ventes mensuelles","data":[{"label":"Jan","value":120},{"label":"Fév","value":180}]}
+```
+Types autorisés : bar, line, pie, scatter. Pour scatter, les entrées
+peuvent contenir x et y numériques et un label facultatif.
+Pour des indicateurs chiffrés :
+```oria-stats
+{"title":"Indicateurs","items":[{"label":"Total","value":"300","detail":"Unités"}]}
+```
+Pour représenter des étapes ou liens entre éléments :
+```oria-diagram
+{"title":"Processus","nodes":[{"id":"a","label":"Début"},{"id":"b","label":"Fin"}],"edges":[{"from":"a","to":"b","label":"Suite"}]}
+```
+Pour une figure géométrique simple, uniquement des primitives :
+```oria-geometry
+{"title":"Triangle ABC","width":400,"height":260,"elements":[{"type":"polygon","points":[[35,230],[360,230],[150,30]]},{"type":"point","x":35,"y":230,"label":"A"},{"type":"point","x":360,"y":230,"label":"B"},{"type":"point","x":150,"y":30,"label":"C"}]}
+```
+Primitives de géométrie autorisées : line(x1,y1,x2,y2), circle(cx,cy,r),
+rect(x,y,width,height), polygon(points:[[x,y],...]), point(x,y,label),
+text(x,y,label). Les coordonnées et valeurs numériques doivent être finies.
+
+Contraintes impératives :
+- N'invente ni chiffres, ni statistiques, ni sources ; si un exemple est
+  hypothétique, indique explicitement « données fictives ».
+- Un visuel doit être pertinent, lisible et accompagné d'une courte explication.
+- JSON strict à guillemets doubles : aucune virgule finale, aucun commentaire,
+  aucun balisage HTML, SVG libre, JavaScript ou code exécutable dans ces blocs.
+- Pour chaque visuel, limite à 36 données de graphique, 12 indicateurs,
+  12 noeuds, 24 liens, 80 éléments géométriques.
+- Ne transforme JAMAIS un vrai programme demandé par l'utilisateur en bloc
+  visuel : conserve les blocs de code informatique dans leur langage habituel.
+- Si les données sont insuffisantes ou si un visuel n'est pas pertinent,
+  réponds normalement en Markdown, sans bloc spécial.
+- Respecte la langue et les consignes de la conversation.
+</oria_visual_output_contract>
+"""
+
 _SHARED_OPENAI_CLIENT: OpenAI | None = None
 _SHARED_ASYNC_OPENAI_CLIENT: AsyncOpenAI | None = None
 
@@ -668,6 +724,7 @@ class OpenAIService:
 
 
         history: list[dict[str, Any]] | None = None,
+        visual_mode: bool = False,
 
 
 
@@ -1020,6 +1077,13 @@ class OpenAIService:
 
 
         )
+
+        # Activation explicite uniquement : aucun JSON visuel envoyé aux
+        # anciennes applications Expo, même pendant le streaming.
+        if visual_mode:
+            formatted_message = (
+                f"{formatted_message}\n\n{ORIA_VISUAL_OUTPUT_INSTRUCTIONS}"
+            )
 
 
 
@@ -3426,6 +3490,7 @@ class OpenAIService:
 
 
 
+        visual_mode: bool = False,
     ) -> dict[str, Any]:
 
 
@@ -3507,6 +3572,7 @@ class OpenAIService:
 
 
             history=history,
+            visual_mode=visual_mode,
 
 
 
@@ -3760,6 +3826,7 @@ class OpenAIService:
         history: list[dict[str, Any]] | None = None,
         reasoning_mode: str = "balanced",
         generation_id: str | None = None,
+        visual_mode: bool = False,
     ) -> Iterator[dict[str, Any]]:
         """
         Streaming HTTP classique de la Responses API.
@@ -3776,6 +3843,7 @@ class OpenAIService:
             attachments=attachments,
             web=web,
             history=history,
+            visual_mode=visual_mode,
         )
 
         request: dict[str, Any] = {
@@ -3929,6 +3997,7 @@ class OpenAIService:
         reasoning_mode: str = "balanced",
         generation_id: str | None = None,
         control_queue: asyncio.Queue[dict[str, Any]] | None = None,
+        visual_mode: bool = False,
     ) -> AsyncIterator[dict[str, Any]]:
         """
         Streaming Responses WebSocket pilotable pendant la génération.
@@ -3961,6 +4030,7 @@ class OpenAIService:
             attachments=attachments,
             web=web,
             history=history,
+            visual_mode=visual_mode,
         )
 
         request: dict[str, Any] = {

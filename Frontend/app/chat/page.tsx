@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
 import { createClient } from "@/lib/supabase/client";
@@ -1950,20 +1950,12 @@ function renderInlineMarkdown(
         );
 
       if (linkMatch) {
-        const [, label, url] =
-          linkMatch;
-
-        parts.push(
-          <a
-            key={index}
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-medium underline underline-offset-2 hover:opacity-70"
-          >
-            {label}
-          </a>,
-        );
+        const [, label, url] = linkMatch;
+        const safeUrl = oriaSafeUrl(url);
+        parts.push(safeUrl ? (
+          <a key={index} href={safeUrl} target="_blank" rel="noopener noreferrer"
+            className="font-medium underline underline-offset-2 hover:opacity-70">{label}</a>
+        ) : <span key={index}>{label}</span>);
       }
     }
 
@@ -2360,6 +2352,279 @@ function VoiceMessageBubble({ note, language, onLoad }: {
   );
 }
 
+/* ============================================================
+ * ORIA — VISUAL RESPONSE BLOCKS (Web)
+ * Safe, declarative visualizations: no executable markup, no raw SVG/HTML.
+ * Schema is intentionally small so frontend and backend can evolve together.
+ * ============================================================ */
+
+type OriaRecord = Record<string, unknown>;
+
+function oriaRecord(value: unknown): OriaRecord | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as OriaRecord : null;
+}
+
+function oriaLabel(value: unknown, fallback = "", max = 160): string {
+  return typeof value === "string" ? value.slice(0, max) : fallback;
+}
+
+function oriaFinite(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function oriaSafeUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    return ["https:", "http:"].includes(url.protocol) && !!url.hostname ? url.href : null;
+  } catch { return null; }
+}
+
+function oriaTableCells(line: string): string[] {
+  const source = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let current = "";
+  let codeOpen = false;
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    if (char === "\\" && source[index + 1] === "|") {
+      current += "|";
+      index++;
+    } else if (char === "`") {
+      codeOpen = !codeOpen;
+      current += char;
+    } else if (char === "|" && !codeOpen) {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function oriaIsTableDivider(line: string): boolean {
+  const cells = oriaTableCells(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function OriaDataTable({ headers, rows, alignment, language }: {
+  headers: string[];
+  rows: string[][];
+  alignment: Array<"left" | "center" | "right">;
+  language: OriaLanguage;
+}) {
+  const [copied, setCopied] = useState(false);
+  const asTsv = [headers, ...rows].map((row) => row.map((cell) =>
+    cell.replace(/\t/g, " ").replace(/\r?\n/g, " ")).join("\t")).join("\n");
+  const alignClass = (index: number) => alignment[index] === "right" ? "text-right" :
+    alignment[index] === "center" ? "text-center" : "text-left";
+  return <section className="my-4 min-w-0 overflow-hidden rounded-2xl border border-border bg-surface shadow-sm" aria-label={language === "fr" ? "Tableau de données" : "Data table"}>
+    <div className="flex items-center justify-between border-b border-border bg-surface-secondary/40 px-3 py-2">
+      <span className="inline-flex items-center gap-2 text-xs font-medium text-muted"><FileText size={14}/>{language === "fr" ? "Tableau" : "Table"}</span>
+      <button type="button" onClick={() => { void navigator.clipboard.writeText(asTsv).then(() => {
+        setCopied(true); window.setTimeout(() => setCopied(false), 1500);
+      }).catch(() => setCopied(false)); }} className="rounded-lg border border-border px-2.5 py-1 text-[11px] font-medium hover:bg-surface-tertiary">
+        {copied ? (language === "fr" ? "Copié" : "Copied") : (language === "fr" ? "Copier" : "Copy")}
+      </button>
+    </div>
+    <div className="max-w-full overflow-x-auto" role="region" tabIndex={0} aria-label={language === "fr" ? "Tableau défilable" : "Scrollable table"}>
+      <table className="w-full min-w-max border-collapse text-[13px] leading-5">
+        <thead><tr className="bg-surface-secondary/70">{headers.map((cell, index) =>
+          <th scope="col" key={index} className={`whitespace-nowrap border-b border-border px-4 py-3 font-semibold ${alignClass(index)}`}>{renderInlineMarkdown(cell)}</th>)}</tr></thead>
+        <tbody>{rows.map((row, rowIndex) => <tr key={rowIndex} className="even:bg-surface-secondary/30">{headers.map((_, index) =>
+          <td key={index} className={`max-w-[360px] border-b border-border/50 px-4 py-2.5 align-top last:border-b-0 ${alignClass(index)}`}>{renderInlineMarkdown(row[index] || "")}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+  </section>;
+}
+
+function OriaCallout({ kind, lines, language }: {kind: string; lines: string[]; language: OriaLanguage}) {
+  const variants: Record<string, { color: string; title: string }> = {
+    NOTE: { color: "border-sky-500/50", title: language === "fr" ? "Note" : "Note" },
+    TIP: { color: "border-emerald-500/50", title: language === "fr" ? "Conseil" : "Tip" },
+    IMPORTANT: { color: "border-violet-500/50", title: language === "fr" ? "Important" : "Important" },
+    WARNING: { color: "border-amber-500/60", title: language === "fr" ? "Attention" : "Warning" },
+    CAUTION: { color: "border-red-500/60", title: language === "fr" ? "Prudence" : "Caution" },
+  };
+  const variant = variants[kind] || variants.NOTE;
+  return <aside className={`my-4 rounded-xl border-l-4 ${variant.color} bg-surface-secondary/50 p-3.5`}>
+    <p className="mb-1 text-xs font-bold tracking-wide">{variant.title}</p>
+    <div className="space-y-1 text-[13px]">{lines.map((line, index) => <p key={index}>{renderInlineMarkdown(line)}</p>)}</div>
+  </aside>;
+}
+
+const ORIA_PALETTE = ["#2563eb", "#0d9488", "#d97706", "#7c3aed", "#db2777", "#64748b"];
+
+function OriaChart({ data, language }: { data: OriaRecord; language: OriaLanguage }) {
+  const kind = oriaLabel(data.type || data.chartType).toLowerCase();
+  if (!["bar", "line", "pie", "scatter"].includes(kind) || !Array.isArray(data.data)) return null;
+  const title = oriaLabel(data.title, language === "fr" ? "Graphique" : "Chart");
+  const items = data.data.slice(0, 36).map(oriaRecord).filter((item): item is OriaRecord => !!item);
+  const values = items.map((item) => oriaFinite(item.value ?? item.y));
+  const points = items.filter((_, index) => values[index] !== null).map((item) => ({
+    label: oriaLabel(item.label ?? item.name ?? item.x, "", 48),
+    x: oriaFinite(item.x),
+    y: oriaFinite(item.value ?? item.y) as number,
+  }));
+  if (!points.length) return null;
+  const W = 640, H = 320, left = 55, right = 18, top = 24, bottom = 65;
+  const plotW = W - left - right, plotH = H - top - bottom;
+  const minY = Math.min(0, ...points.map((item) => item.y));
+  const maxY = Math.max(0, ...points.map((item) => item.y));
+  const scaleMin = minY === maxY ? minY - 1 : minY;
+  const scaleMax = minY === maxY ? maxY + 1 : maxY;
+  const yToPx = (value: number) => top + (scaleMax - value) / (scaleMax - scaleMin) * plotH;
+  const labelFor = (value: number) => Number(value.toFixed(2)).toLocaleString(language === "fr" ? "fr-FR" : "en-US");
+  let marks: ReactNode = null;
+  if (kind === "pie") {
+    const positive = points.filter((point) => point.y > 0);
+    const sum = positive.reduce((total, item) => total + item.y, 0);
+    if (!sum) return null;
+    let cursor = -Math.PI / 2;
+    marks = <>{positive.map((item, index) => {
+      const ratio = item.y / sum;
+      const angle = Math.PI * 2 * ratio;
+      const start = cursor;
+      cursor += angle;
+      const cx = 300, cy = 155, radius = 115;
+      if (ratio >= 0.99999) return <circle key={index} cx={cx} cy={cy} r={radius} fill={ORIA_PALETTE[index % ORIA_PALETTE.length]}/>;
+      const x1 = cx + radius * Math.cos(start), y1 = cy + radius * Math.sin(start);
+      const x2 = cx + radius * Math.cos(cursor), y2 = cy + radius * Math.sin(cursor);
+      return <path key={index} d={`M${cx} ${cy} L${x1} ${y1} A${radius} ${radius} 0 ${angle > Math.PI ? 1 : 0} 1 ${x2} ${y2} Z`}
+        fill={ORIA_PALETTE[index % ORIA_PALETTE.length]}><title>{item.label}: {labelFor(item.y)}</title></path>;
+    })}</>;
+  } else {
+    const xs = points.map((point, index) => kind === "scatter" ? (point.x ?? index) : index);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const xToPx = (x: number) => minX === maxX ? left + plotW / 2 : left + (x - minX) / (maxX - minX) * plotW;
+    const step = plotW / points.length;
+    const linePoints = points.map((point, index) => `${xToPx(xs[index])},${yToPx(point.y)}`).join(" ");
+    marks = <>
+      {Array.from({length: 5}, (_, index) => {
+        const value = scaleMin + (scaleMax - scaleMin) * index / 4;
+        return <g key={index}><line x1={left} y1={yToPx(value)} x2={W - right} y2={yToPx(value)} stroke="currentColor" strokeOpacity="0.12"/>
+          <text x={left - 8} y={yToPx(value) + 4} fontSize="12" textAnchor="end" fill="currentColor" opacity="0.7">{labelFor(value)}</text></g>;
+      })}
+      {kind === "bar" ? points.map((item, index) => {
+        const x = left + index * step + step * 0.16;
+        const barWidth = step * 0.68;
+        const zeroY = yToPx(0), pointY = yToPx(item.y);
+        return <rect key={index} x={x} y={Math.min(zeroY, pointY)} width={barWidth} height={Math.max(1, Math.abs(zeroY - pointY))} rx="3" fill={ORIA_PALETTE[index % ORIA_PALETTE.length]}>
+          <title>{item.label}: {labelFor(item.y)}</title></rect>;
+      }) : null}
+      {kind === "line" ? <polyline fill="none" stroke={ORIA_PALETTE[0]} strokeWidth="3" strokeLinejoin="round" points={linePoints}/> : null}
+      {kind === "line" || kind === "scatter" ? points.map((item, index) => <circle key={index} cx={xToPx(xs[index])} cy={yToPx(item.y)} r={kind === "scatter" ? 5 : 4} fill={ORIA_PALETTE[index % ORIA_PALETTE.length]}>
+        <title>{item.label}: {labelFor(item.y)}</title></circle>) : null}
+      {points.map((item, index) => points.length <= 14 || index % Math.ceil(points.length / 12) === 0 ?
+        <text key={index} x={kind === "bar" ? left + step * (index + .5) : xToPx(xs[index])} y={H - bottom + 21}
+          fontSize="11" fill="currentColor" opacity=".75" textAnchor="middle">{item.label.slice(0, 12)}</text> : null)}
+    </>;
+  }
+  return <figure className="my-4 min-w-0 overflow-hidden rounded-2xl border border-border bg-surface p-3 sm:p-4">
+    <figcaption className="mb-2 font-semibold">{title}</figcaption>
+    <div className="max-w-full overflow-x-auto"><svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={title} className="w-full min-w-[320px]" xmlns="http://www.w3.org/2000/svg">{marks}</svg></div>
+    {kind === "pie" ? <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">{points.filter((point) => point.y > 0).map((point, index) =>
+      <span key={index} className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm" style={{backgroundColor: ORIA_PALETTE[index % ORIA_PALETTE.length]}}/>{point.label}: {labelFor(point.y)}</span>)}</div> : null}
+    <details className="mt-2 text-xs text-muted"><summary className="cursor-pointer">{language === "fr" ? "Voir les données" : "View data"}</summary>
+      <div className="mt-2 max-h-36 overflow-auto">{points.map((point, index) => <p key={index}>{point.label || index + 1}: {labelFor(point.y)}</p>)}</div>
+    </details>
+  </figure>;
+}
+
+function OriaStats({ data }: { data: OriaRecord }) {
+  if (!Array.isArray(data.items)) return null;
+  const items = data.items.slice(0, 12).map(oriaRecord).filter((item): item is OriaRecord => !!item);
+  if (!items.length) return null;
+  return <section className="my-4 grid grid-cols-2 gap-2 sm:grid-cols-3" aria-label={oriaLabel(data.title, "Statistiques")}>
+    {items.map((item, index) => <div key={index} className="min-w-0 rounded-xl border border-border bg-surface p-3">
+      <p className="truncate text-[11px] text-muted">{oriaLabel(item.label)}</p>
+      <p className="mt-1 break-words text-xl font-semibold tabular-nums">{oriaLabel(item.value, String(oriaFinite(item.value) ?? "—"), 60)}</p>
+      {item.detail ? <p className="mt-1 text-xs text-muted">{oriaLabel(item.detail)}</p> : null}
+    </div>)}
+  </section>;
+}
+
+function OriaDiagram({ data }: { data: OriaRecord }) {
+  if (!Array.isArray(data.nodes)) return null;
+  const nodes = data.nodes.slice(0, 12).map(oriaRecord).filter((item): item is OriaRecord => !!item)
+    .map((node, index) => ({id: oriaLabel(node.id, String(index)), label: oriaLabel(node.label, "Étape", 64)}));
+  if (!nodes.length) return null;
+  const edges = Array.isArray(data.edges) ? data.edges.slice(0, 24).map(oriaRecord).filter((item): item is OriaRecord => !!item) : [];
+  const width = 600, row = 92, height = nodes.length * row + 28;
+  const indexes = new Map(nodes.map((node, index) => [node.id, index]));
+  return <figure className="my-4 overflow-hidden rounded-2xl border border-border bg-surface p-3">
+    <figcaption className="mb-2 font-semibold">{oriaLabel(data.title, "Diagramme")}</figcaption>
+    <div className="overflow-x-auto"><svg viewBox={`0 0 ${width} ${height}`} className="w-full min-w-[320px]" role="img" aria-label={oriaLabel(data.title, "Diagramme")}>
+      {edges.map((edge, index) => {
+        const from = indexes.get(oriaLabel(edge.from)), to = indexes.get(oriaLabel(edge.to));
+        if (from === undefined || to === undefined || from === to) return null;
+        const y1 = from * row + 71, y2 = to * row + 19;
+        return <g key={index}><path d={`M300 ${y1} L300 ${y2}`} fill="none" stroke="#64748b" strokeWidth="1.5"/>
+          <polygon points={y2 >= y1 ? `294,${y2 - 9} 306,${y2 - 9} 300,${y2}` : `294,${y2 + 9} 306,${y2 + 9} 300,${y2}`} fill="#64748b"/>
+          {edge.label ? <text x="310" y={(y1 + y2) / 2} fontSize="11" fill="currentColor">{oriaLabel(edge.label, "", 30)}</text> : null}</g>;
+      })}
+      {nodes.map((node, index) => <g key={node.id}><rect x="120" y={index * row + 18} width="360" height="54" rx="14" fill="#2563eb" fillOpacity=".08" stroke="#64748b" strokeOpacity=".6"/>
+        <text x="300" y={index * row + 49} fill="currentColor" fontSize="14" textAnchor="middle">{node.label}</text></g>)}
+    </svg></div>
+  </figure>;
+}
+
+function OriaGeometry({ data }: { data: OriaRecord }) {
+  if (!Array.isArray(data.elements)) return null;
+  const width = Math.min(1200, Math.max(100, oriaFinite(data.width) ?? 600));
+  const height = Math.min(900, Math.max(100, oriaFinite(data.height) ?? 360));
+  const shapes = data.elements.slice(0, 80).map(oriaRecord).filter((item): item is OriaRecord => !!item);
+  const number = (item: OriaRecord, key: string) => oriaFinite(item[key]);
+  const color = (item: OriaRecord) => ORIA_PALETTE[Math.min(ORIA_PALETTE.length - 1, Math.max(0, Math.floor(oriaFinite(item.colorIndex) ?? 0)))];
+  return <figure className="my-4 overflow-hidden rounded-2xl border border-border bg-surface p-3">
+    <figcaption className="mb-2 font-semibold">{oriaLabel(data.title, "Figure géométrique")}</figcaption>
+    <div className="overflow-x-auto"><svg viewBox={`0 0 ${width} ${height}`} className="w-full min-w-[320px]" role="img" aria-label={oriaLabel(data.title, "Figure géométrique")}>
+      {shapes.map((item, index) => {
+        const type = oriaLabel(item.type);
+        const stroke = color(item);
+        if (type === "line") {
+          const x1 = number(item,"x1"), y1 = number(item,"y1"), x2 = number(item,"x2"), y2 = number(item,"y2");
+          return [x1,y1,x2,y2].every((v) => v !== null) ? <line key={index} x1={x1!} y1={y1!} x2={x2!} y2={y2!} stroke={stroke} strokeWidth="2.5"/> : null;
+        }
+        if (type === "circle") {
+          const cx = number(item,"cx"), cy = number(item,"cy"), r = number(item,"r");
+          return cx !== null && cy !== null && r !== null && r > 0 && r < 2000 ? <circle key={index} cx={cx} cy={cy} r={r} fill="none" stroke={stroke} strokeWidth="2.5"/> : null;
+        }
+        if (type === "rect") {
+          const x = number(item,"x"), y = number(item,"y"), w = number(item,"width"), h = number(item,"height");
+          return x !== null && y !== null && w !== null && h !== null && w > 0 && h > 0 ? <rect key={index} x={x} y={y} width={w} height={h} fill="none" stroke={stroke} strokeWidth="2.5"/> : null;
+        }
+        if (type === "polygon" && Array.isArray(item.points)) {
+          const coordinates = item.points.slice(0, 25).filter((point) => Array.isArray(point) && point.length === 2 && point.every((n) => oriaFinite(n) !== null)) as number[][];
+          return coordinates.length >= 3 ? <polygon key={index} points={coordinates.map((p) => p.join(",")).join(" ")} fill={stroke} fillOpacity=".1" stroke={stroke} strokeWidth="2.5"/> : null;
+        }
+        if (type === "point" || type === "text") {
+          const x = number(item,"x"), y = number(item,"y");
+          if (x === null || y === null) return null;
+          return <g key={index}>{type === "point" ? <circle cx={x} cy={y} r="4.5" fill={stroke}/> : null}
+            <text x={x + (type === "point" ? 10 : 0)} y={y - (type === "point" ? 8 : 0)} fill="currentColor" fontSize="14">{oriaLabel(item.label, "", 60)}</text></g>;
+        }
+        return null;
+      })}
+    </svg></div>
+    {data.caption ? <p className="mt-2 text-xs text-muted">{oriaLabel(data.caption, "", 280)}</p> : null}
+  </figure>;
+}
+
+function oriaRenderVisualBlock(kind: string, raw: string, language: OriaLanguage): ReactNode | null {
+  if (raw.length > 60000) return null;
+  let data: OriaRecord | null;
+  try { data = oriaRecord(JSON.parse(raw)); } catch { return null; }
+  if (!data) return null;
+  if (kind === "oria-chart") return <OriaChart data={data} language={language}/>;
+  if (kind === "oria-stats") return <OriaStats data={data}/>;
+  if (kind === "oria-diagram") return <OriaDiagram data={data}/>;
+  if (kind === "oria-geometry") return <OriaGeometry data={data}/>;
+  return null;
+}
+
 /*
  * ============================================================
  * MARKDOWN MESSAGE
@@ -2402,6 +2667,7 @@ function MarkdownMessage({
   let codeLanguage = "";
   let codeTitle = "";
   let lastCodeHeading = "";
+  const consumedTableLines = new Set<number>();
 
   let inCodeBlock = false;
 
@@ -2459,9 +2725,13 @@ function MarkdownMessage({
               key={`bullet-item-${index}`}
               className="pl-1"
             >
-              {renderInlineMarkdown(
-                item,
-              )}
+              {/^\[([ xX])\]\s+/.test(item) ? (
+                <label className="inline-flex items-start gap-2">
+                  <input type="checkbox" checked={/^\[[xX]\]/.test(item)} readOnly
+                    className="mt-1.5 h-3.5 w-3.5 accent-blue-600"/>
+                  <span>{renderInlineMarkdown(item.replace(/^\[[ xX]\]\s+/, ""))}</span>
+                </label>
+              ) : renderInlineMarkdown(item)}
             </li>
           ),
         )}
@@ -2518,7 +2788,11 @@ function MarkdownMessage({
 
     const code = codeLines.join("\n");
     const title = codeFileName(codeLanguage, codeTitle);
-    blocks.push(
+    // ORIA visual blocks are declarative JSON, not executable HTML or SVG.
+    // If a block is incomplete/invalid, show it as ordinary code, never lose data.
+    const visual = ["oria-chart", "oria-stats", "oria-diagram", "oria-geometry"].includes(codeLanguage)
+      ? oriaRenderVisualBlock(codeLanguage, code, language) : null;
+    blocks.push(visual ? <Fragment key={`visual-${blockIndex}`}>{visual}</Fragment> :
       <CodeBlockCard
         key={`code-${blockIndex}`}
         code={code}
@@ -2526,8 +2800,7 @@ function MarkdownMessage({
         title={title}
         uiLanguage={language}
         onExpand={onOpenCode || (() => undefined)}
-      />,
-    );
+      />);
 
     blockIndex++;
     codeLines = [];
@@ -2538,6 +2811,7 @@ function MarkdownMessage({
 
   lines.forEach(
     (line, index) => {
+      if (consumedTableLines.has(index)) return;
       const trimmed =
         line.trim();
 
@@ -2569,6 +2843,38 @@ function MarkdownMessage({
       if (inCodeBlock) {
         codeLines.push(line);
         return;
+      }
+
+      /*
+       * TABLEAUX GFM : détection en streaming, sans casser les blocs de code.
+       */
+      if (trimmed.includes("|") && index + 1 < lines.length &&
+          oriaIsTableDivider(lines[index + 1].trim())) {
+        const headers = oriaTableCells(trimmed);
+        const separators = oriaTableCells(lines[index + 1].trim());
+        if (headers.length >= 2 && headers.length <= 16 &&
+            headers.length === separators.length) {
+          flushAllLists();
+          flushParagraph();
+          consumedTableLines.add(index + 1);
+          const alignment = separators.map((separator): "left" | "center" | "right" =>
+            separator.startsWith(":") && separator.endsWith(":") ? "center" :
+              separator.endsWith(":") ? "right" : "left");
+          const rows: string[][] = [];
+          let cursor = index + 2;
+          while (cursor < lines.length && rows.length < 200 &&
+              lines[cursor].trim() !== "" && lines[cursor].includes("|")) {
+            const cells = oriaTableCells(lines[cursor]);
+            if (cells.length !== headers.length) break;
+            rows.push(cells);
+            consumedTableLines.add(cursor);
+            cursor++;
+          }
+          blocks.push(<OriaDataTable key={`table-${blockIndex}`} headers={headers}
+            rows={rows} alignment={alignment} language={language}/>);
+          blockIndex++;
+          return;
+        }
       }
 
       /*
@@ -2720,26 +3026,28 @@ function MarkdownMessage({
       }
 
       /*
-       * CITATION
+       * Citations multiligne et encadrés [!NOTE], [!TIP], etc.
        */
-
-      if (
-        trimmed.startsWith("> ")
-      ) {
+      if (trimmed.startsWith(">")) {
         flushAllLists();
         flushParagraph();
-
-        blocks.push(
-          <blockquote
-            key={`quote-${blockIndex}`}
-            className="mb-4 border-l-2 border-border-strong pl-4 text-muted-strong last:mb-0"
-          >
-            {renderInlineMarkdown(
-              trimmed.slice(2),
-            )}
-          </blockquote>,
-        );
-
+        const quoteLines: string[] = [];
+        let cursor = index;
+        while (cursor < lines.length && lines[cursor].trimStart().startsWith(">")) {
+          quoteLines.push(lines[cursor].trimStart().replace(/^>\s?/, ""));
+          if (cursor !== index) consumedTableLines.add(cursor);
+          cursor++;
+        }
+        const marker = quoteLines[0]?.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/i);
+        if (marker) {
+          blocks.push(<OriaCallout key={`callout-${blockIndex}`} kind={marker[1].toUpperCase()}
+            lines={quoteLines.slice(1).filter(Boolean)} language={language}/>);
+        } else {
+          blocks.push(<blockquote key={`quote-${blockIndex}`}
+            className="mb-4 border-l-2 border-border-strong pl-4 text-muted-strong last:mb-0">
+            {quoteLines.map((value, position) => <p key={position}>{renderInlineMarkdown(value)}</p>)}
+          </blockquote>);
+        }
         blockIndex++;
         return;
       }
@@ -5329,6 +5637,13 @@ export default function ChatPage() {
       formData.append(
         "reasoning_mode",
         reasoningMode,
+      );
+
+      // ORIA Visual V1 : compatible avec le rendu visuel de ce Chat Web.
+      // Le backend garde visual_mode=False pour les anciens clients Expo.
+      formData.append(
+        "visual_mode",
+        "true",
       );
 
       for (

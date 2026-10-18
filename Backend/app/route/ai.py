@@ -317,6 +317,7 @@ class ChatResponse(BaseModel):
 
     artifact_errors: list[str] | None = None
     web_images: list[dict[str, Any]] | None = None
+    visual_mode: bool = False  # Indique si les sorties visuelles ont été demandées
 
 
 
@@ -3252,6 +3253,7 @@ async def chat(
     model: str = Form(...),
     message: str = Form(""),
     web: bool = Form(False),
+    visual_mode: bool = Form(False),  # ORIA Visual V1 : opt-in des clients compatibles
     conversation_id: str | None = Form(default=None),
     reasoning_mode: str = Form("balanced"),
     artifact_type: str | None = Form(default=None),
@@ -3309,6 +3311,7 @@ async def chat(
             attachments=_attachments_for_openai(attachments),
             history=history,
             reasoning_mode=reasoning_mode,
+            visual_mode=visual_mode,
         )
     except Exception as error:
         try:
@@ -3403,6 +3406,7 @@ async def chat(
         artifacts=generated_artifacts or None,
         artifact_errors=artifact_errors or None,
         web_images=web_images or None,
+        visual_mode=visual_mode,
     )
 
 
@@ -5136,6 +5140,7 @@ async def chat_stream(
     model: str = Form(...),
     message: str = Form(""),
     web: bool = Form(False),
+    visual_mode: bool = Form(False),  # ORIA Visual V1 : opt-in des clients compatibles
     conversation_id: str | None = Form(default=None),
     reasoning_mode: str = Form("balanced"),
     generation_id: str | None = Form(default=None),
@@ -5271,6 +5276,7 @@ async def chat_stream(
                     "model": model,
                     "openai_model": openai_model,
                     "web": web,
+                    "visual_mode": visual_mode,
                     "attachments": len(openai_attachments),
                     "generation_id": generation_id,
                     "attempt_id": attempt_id,
@@ -5316,6 +5322,7 @@ async def chat_stream(
                         reasoning_mode=current_reasoning_mode,
                         generation_id=attempt_id,
                         control_queue=generation_state.control_queue,
+                        visual_mode=visual_mode,
                     )
 
                     try:
@@ -5448,6 +5455,7 @@ async def chat_stream(
                         history=history,
                         reasoning_mode=current_reasoning_mode,
                         generation_id=attempt_id,
+                        visual_mode=visual_mode,
                     )
 
                     for item in stream_result:
@@ -5786,6 +5794,7 @@ async def chat_stream(
                     "model": model,
                     "openai_model": openai_model,
                     "action": result.action.value,
+                    "visual_mode": visual_mode,
                     "cost": result.cost,
                     "previous_balance": result.previous_balance,
                     "credits_remaining": result.new_balance,
