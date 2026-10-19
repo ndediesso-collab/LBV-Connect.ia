@@ -26,11 +26,33 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
 import { createClient } from "@/lib/supabase/client";
 import type { ChatMessage, Conversation } from "@/types/lbv";
+
+// Moteur avance charge uniquement si une reponse contient un bloc visuel.
+// Le composant historique reste disponible comme solution de secours.
+const OriaVisualAdvanced = dynamic(
+  () => import("@/components/oria-visual/OriaVisualAdvanced"),
+  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted">Chargement du visuel interactif…</div> },
+);
+
+// Moteurs visuels complémentaires, chargés uniquement pour les blocs concernés.
+const OriaVisualCore = dynamic(
+  () => import("@/components/oria-visual/OriaVisualCore"),
+  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted">Chargement du visuel…</div> },
+);
+const OriaVisual3D = dynamic(
+  () => import("@/components/oria-visual/OriaVisual3D"),
+  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted">Chargement de la scène 3D…</div> },
+);
+const OriaVisualMaps = dynamic(
+  () => import("@/components/oria-visual/OriaVisualMaps"),
+  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted">Chargement de la carte…</div> },
+);
 
 /*
  * ============================================================
@@ -2788,19 +2810,36 @@ function MarkdownMessage({
 
     const code = codeLines.join("\n");
     const title = codeFileName(codeLanguage, codeTitle);
-    // ORIA visual blocks are declarative JSON, not executable HTML or SVG.
-    // If a block is incomplete/invalid, show it as ordinary code, never lose data.
+    // Le rendu historique reste disponible en secours pour les anciens formats.
     const visual = ["oria-chart", "oria-stats", "oria-diagram", "oria-geometry"].includes(codeLanguage)
       ? oriaRenderVisualBlock(codeLanguage, code, language) : null;
-    blocks.push(visual ? <Fragment key={`visual-${blockIndex}`}>{visual}</Fragment> :
-      <CodeBlockCard
-        key={`code-${blockIndex}`}
-        code={code}
-        language={codeLanguage || "text"}
-        title={title}
-        uiLanguage={language}
-        onExpand={onOpenCode || (() => undefined)}
-      />);
+    const codeFallback = <CodeBlockCard
+      code={code}
+      language={codeLanguage || "text"}
+      title={title}
+      uiLanguage={language}
+      onExpand={onOpenCode || (() => undefined)}
+    />;
+    const fallback = visual ?? codeFallback;
+    const advancedKinds = ["oria-chart", "oria-diagram", "oria-grid"];
+    const coreKinds = ["oria-stats", "oria-geometry", "oria-callout", "oria-table"];
+    // Un JSON mal formé reste visible sous forme de code au lieu d'une zone vide.
+    const validVisualJson = (() => {
+      if (![...advancedKinds, ...coreKinds, "oria-3d", "oria-map"].includes(codeLanguage)) return false;
+      try {
+        const value: unknown = JSON.parse(code);
+        return value !== null && typeof value === "object" && !Array.isArray(value);
+      } catch { return false; }
+    })();
+    blocks.push(!validVisualJson
+      ? <Fragment key={`code-${blockIndex}`}>{codeFallback}</Fragment>
+      : advancedKinds.includes(codeLanguage)
+        ? <OriaVisualAdvanced key={`advanced-${blockIndex}`} kind={codeLanguage} raw={code} language={language} fallback={fallback} />
+        : coreKinds.includes(codeLanguage)
+          ? <OriaVisualCore key={`core-${blockIndex}`} kind={codeLanguage} raw={code} language={language} fallback={fallback} />
+          : codeLanguage === "oria-3d"
+            ? <OriaVisual3D key={`3d-${blockIndex}`} kind={codeLanguage} raw={code} language={language} fallback={codeFallback} />
+            : <OriaVisualMaps key={`map-${blockIndex}`} kind={codeLanguage} raw={code} language={language} fallback={codeFallback} />);
 
     blockIndex++;
     codeLines = [];
