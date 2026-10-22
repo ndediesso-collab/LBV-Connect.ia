@@ -3233,11 +3233,12 @@ function courseErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Impossible de terminer cette opération.";
 }
 
-function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh }: {
+function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }: {
   language: OriaLanguage;
   wallet: WalletData | null;
   userId: string | null;
   onWalletRefresh: () => void;
+  onClose: () => void;
 }) {
   const en = language === "en";
   const tr = (fr: string, eng: string) => en ? eng : fr;
@@ -3649,6 +3650,10 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh }: {
 
   const totalMs = segments.reduce((sum, item) => sum + item.duration_ms, 0);
   const canChangeDraft = !recording && !uploading && segmentQueueRef.current.length === 0 && !busy;
+  // Ne pas démonter le panneau tant qu'un audio ou une opération critique est actif.
+  // Les cours déjà enregistrés sont retrouvés à la réouverture par leur ID local.
+  const canReturnToChat = !recording && !recordingActiveRef.current && !uploading &&
+    !uploadLockRef.current && segmentQueueRef.current.length === 0 && !busy;
   const hasValidQuote = quote && Date.parse(quote.expires_at) > Date.now();
   const status = job?.status || course?.status || "uploading";
   const isCourseComplete = job?.status === "completed";
@@ -3663,7 +3668,17 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh }: {
             <p className="mt-1 text-sm text-muted">{tr("Enregistrez un cours, obtenez une transcription et un document pédagogique en PDF ou Word.",
               "Record a lecture and receive a transcript and a structured PDF or Word document.")}</p>
           </div>
-          <span className="rounded-xl bg-surface-secondary px-2.5 py-1.5 text-[11px] font-medium">{tr("4 h max", "4 h max")}</span>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <span className="rounded-xl bg-surface-secondary px-2.5 py-1.5 text-[11px] font-medium">{tr("4 h max", "4 h max")}</span>
+            <button type="button" onClick={onClose} disabled={!canReturnToChat}
+              title={!canReturnToChat ? tr("Terminez l'enregistrement ou le transfert avant de revenir au Chat.",
+                "Finish the recording or upload before returning to Chat.") : undefined}
+              aria-label={tr("Retour au Chat", "Back to Chat")}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-semibold transition hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-40">
+              <X size={15} aria-hidden="true" />
+              <span>{tr("Retour au Chat", "Back to Chat")}</span>
+            </button>
+          </div>
         </div>
         {loading ? <p role="status" className="mt-4 text-sm text-muted">{UI[language].loading}</p> : null}
         {recentCourses.length > 0 ? (
@@ -8349,7 +8364,8 @@ export default function ChatPage() {
 
             {activeCapability === "Cours" ? (
               <OriaCoursesPanel language={language} wallet={wallet} userId={currentUserId}
-                onWalletRefresh={() => { void loadWallet(); }} />
+                onWalletRefresh={() => { void loadWallet(); }}
+                onClose={() => setActiveCapability(null)} />
             ) : null}
 
             {/* ==================================================
