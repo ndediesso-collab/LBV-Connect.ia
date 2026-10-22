@@ -379,6 +379,12 @@ MAX_CHAT_INPUT_TOKENS = 250_000
 
 MAX_CHAT_OUTPUT_TOKENS = 32_000
 
+# ORIA COURS UNIQUEMENT : plafond de génération PAR SECTION pédagogique.
+# Le devis CourseService utilise exactement cette même borne que
+# OpenAIService.compose_course_section. Inclut les tokens de raisonnement.
+# Ne change pas la limite de 32 000 tokens du Chat général.
+COURSE_MAX_OUTPUT_TOKENS = 12_288
+
 
 
 LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
@@ -1330,10 +1336,10 @@ COMPLEMENTARY_CREDIT_PACKS = {
 #   1. Enregistrement local, jusqu'a quatre heures ;
 #   2. Upload des fragments puis bouton « Envoyer » ;
 #   3. Controle du manifeste COMPLET et estimation des credits ;
-#   4. Reservation atomique des credits AVANT l'appel OpenAI ;
-#   5. Transcription + redaction du document ;
-#   6. Sauvegarde du resultat, puis reglement du cout reel et liberation
-#      de l'excedent reserve ; reprise/reconciliation sans double debit.
+#   4. Reservation audio, transcription, reglement et liberation du surplus ;
+#   5. Reservation de la redaction Luna, puis appels pedagogiques ;
+#   6. Reglement de la redaction, export par ArtifactService et sauvegarde ;
+#      reprise/reconciliation sans double debit (orchestration dans CourseService).
 #
 # IMPORTANT : le present module ne reserve, ne debite, ni ne rembourse
 # aucun credit. Le prix de transcription ci-dessous est une estimation
@@ -1374,27 +1380,22 @@ COURSE_TRANSCRIPTION_DEFAULT_MODEL = "gpt-4o-mini-transcribe"
 
 # La redaction pedagogique utilise le systeme de cout dynamique du Chat :
 #   usage OpenAI -> cout USD -> cout XAF -> credits ORIA.
-# Le modele de redaction est choisi EXPLICITEMENT par l'utilisateur ; il
-# n'existe aucun modele de redaction implicite/fallback dans ORIA Cours.
-# Le serveur recontrole ce choix sur son propre wallet au moment de l'envoi.
-# Ce mapping doit rester aligne avec PACK_ALLOWED_MODELS (config/openai.py).
+# Le redacteur pedagogique ORIA Cours est TOUJOURS Luna, pour les quatre
+# packs actifs. Cette exception est STRICTEMENT limitee au service Cours :
+# les droits du Chat restent controles separement par PACK_ALLOWED_MODELS.
+# Le serveur recontrole le pack reel depuis le wallet avant de reserver.
 # Ne jamais importer config/openai.py ici : son import exige une cle API.
 COURSE_DOCUMENT_BILLING_ACTION = CreditAction.COURSE_DOCUMENT_GENERATION
 
-# IDs publics des seuls modeles de redaction : memes IDs que le Chat ORIA.
-# Le moteur de transcription n'y figure pas : il est utilise en interne.
-COURSE_WRITING_MODEL_IDS: tuple[str, ...] = (
-    "luna",
-    "gpt-5",
-    "gpt-5.6-terra",
-    "gpt-6-sol",
-    "gpt-6-astra",
-)
+# Le modele de redaction pedagogique est fixe cote serveur.
+# Luna n'est pas pour autant debloque dans le Chat general du pack.
+COURSE_DEFAULT_WRITING_MODEL = "luna"
+COURSE_WRITING_MODEL_IDS: tuple[str, ...] = (COURSE_DEFAULT_WRITING_MODEL,)
 COURSE_WRITING_MODELS_BY_PACK: dict[str, tuple[str, ...]] = {
-    "light_pack": ("luna",),
-    "intermediate_pack": ("luna", "gpt-5"),
-    "pro_pack": ("luna", "gpt-5.6-terra", "gpt-6-sol"),
-    "business_pack": ("gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"),
+    "light_pack": (COURSE_DEFAULT_WRITING_MODEL,),
+    "intermediate_pack": (COURSE_DEFAULT_WRITING_MODEL,),
+    "pro_pack": (COURSE_DEFAULT_WRITING_MODEL,),
+    "business_pack": (COURSE_DEFAULT_WRITING_MODEL,),
 }
 
 
@@ -1409,23 +1410,26 @@ def available_course_writing_models(pack_id: str) -> tuple[str, ...]:
     return COURSE_WRITING_MODELS_BY_PACK.get(pack_id.strip(), ())
 
 
-def validate_course_writing_model(pack_id: str, model: str) -> str:
-    """Valide le choix explicite du redacteur, sans selection automatique.
+def validate_course_writing_model(pack_id: str, model: str | None = None) -> str:
+    """Fixe Luna uniquement pour ORIA Cours, sans debloquer le Chat.
 
-    Cette verification doit etre refaite sur le serveur avec le pack REEL
-    issu du wallet. Ne jamais faire confiance au pack fourni par le client.
-    Le modele valide doit etre fige avec le devis puis utilise pour tous les
-    appels de redaction et le reglement des tokens consommes.
+    None ou une chaine vide indiquent que l'interface laisse le serveur
+    choisir le modele par defaut. Un autre modele explicitement transmis
+    est rejete et ne declenche aucune reservation.
+
+    La couche metier doit fournir le pack REEL issu du wallet, jamais un
+    pack declare par le client. Le choix valide reste fige avec le devis.
     """
-    if not isinstance(model, str) or not model.strip():
-        raise ValueError("Choisir un modele de redaction ORIA avant l'envoi.")
-    chosen = model.strip().lower()
-    if chosen not in COURSE_WRITING_MODEL_IDS:
-        raise ValueError("Modele de redaction ORIA inconnu ou non disponible.")
+    allowed = available_course_writing_models(pack_id)
+    if not allowed:
+        raise ValueError("Pack non autorise pour ORIA Cours.")
+    if model is not None and not isinstance(model, str):
+        raise ValueError("Modele de redaction ORIA invalide.")
+    chosen = (model.strip().lower() if model is not None else "") or COURSE_DEFAULT_WRITING_MODEL
+    if chosen not in COURSE_WRITING_MODEL_IDS or chosen not in allowed:
+        raise ValueError("Seul GPT-6 Luna est disponible pour ORIA Cours.")
     if chosen not in MODEL_TOKEN_PRICING_USD_PER_MILLION:
         raise ValueError("Le modele de redaction ne possede aucun tarif configure.")
-    if chosen not in available_course_writing_models(pack_id):
-        raise ValueError("Ce modele de redaction n'est pas autorise par votre pack.")
     return chosen
 
 
@@ -1491,9 +1495,10 @@ def estimate_course_transcription_credits(
     """Estime les credits de transcription pour une session ENTIERE.
 
     Arrondit la duree une seule fois, pas pour chaque fragment.
-    Ce devis seul ne suffit PAS a autoriser un traitement : le futur
-    CourseService doit egalement reserver la redaction, controler le
-    wallet/pack actif et obtenir l'accord avant la premiere API.
+    Ce devis seul ne suffit PAS a autoriser un traitement : CourseService
+    doit controler le wallet/pack actif, obtenir l'accord puis reserver
+    la transcription avant l'appel audio. La redaction sera reservee
+    ulterieurement, apres reglement de la transcription.
 
     Ne jamais utiliser cette fonction comme debit definitif sans verifier
     les regles fournisseur et les consommations effectivement relevees.
@@ -1549,11 +1554,12 @@ def combine_course_reservation_credits(
     transcription: CourseTranscriptionEstimate,
     document_reservation_credits: int,
 ) -> int:
-    """Additionne deux provisions distinctes pour un cours complet.
+    """Somme indicative des plafonds de deux phases, NON simultanees.
 
-    Le montant de la redaction doit venir d'une estimation conservatrice du
-    TokenBillingService. Il est INTERDIT de lancer le traitement avec une
-    provision audio seulement, faute de garantie sur la generation du cours.
+    Conserve le contrat numerique historique de calcul du devis ; ce total
+    ne doit PAS etre exige comme solde disponible lors de la confirmation.
+    CourseService reserve d'abord l'audio, le regle, puis reserve la
+    redaction Luna dans la limite des credits disponibles.
     """
     if not isinstance(transcription, CourseTranscriptionEstimate):
         raise TypeError("Une estimation audio de cours est obligatoire.")
@@ -1564,11 +1570,11 @@ def combine_course_reservation_credits(
 
 @dataclass(frozen=True)
 class CourseCreditQuote:
-    """Devis prepare cote serveur, pour un modele de redaction choisi.
+    """Devis indicatif prepare cote serveur pour le redacteur Luna.
 
-    La provision document vient de TokenBillingService (non de l'UI),
-    et peut differer pour deux modeles avec la meme transcription.
-    Aucun debit n'est declenche par la construction de ce devis.
+    total_reservation_credits conserve pour compatibilite la SOMME des
+    plafonds des deux phases ; il ne decrit pas leur blocage simultane.
+    Aucun debit n'est declenche par la construction du devis.
     """
     pack_id: str
     writing_model: str
@@ -1582,6 +1588,12 @@ class CourseCreditQuote:
     total_estimated_credits: int
     total_reservation_credits: int
 
+    @property
+    def maximum_simultaneous_reservation_credits(self) -> int:
+        """Pic theorique en deux phases NON simultanees."""
+        return max(self.transcription_reservation_credits,
+                   self.document_reservation_credits)
+
 
 def build_course_credit_quote(
     *,
@@ -1592,16 +1604,16 @@ def build_course_credit_quote(
     document_reservation_credits: int,
     document_format: str | None = None,
 ) -> CourseCreditQuote:
-    """Assemble le devis audio + redaction sans inventer de prix de tokens.
+    """Assemble le devis audio + redaction Luna, sans prix fictif.
 
     L'appelant (backend uniquement) doit :
-    - lire et verifier le pack de l'utilisateur depuis son wallet ;
-    - fournir les estimations de tokens du modele CHOISI, calculees par
-      TokenBillingService, y compris tous les appels necessaires aux 4 h ;
-    - conserver le modele et les deux provisions lors de la confirmation ;
-    - revalider les droits et bloquer les credits avant tout appel OpenAI ;
-    - regulariser le cout reel sans jamais double-facturer les segments.
-    Le montant ne doit PAS etre construit a partir de prix envoyes par l'UI.
+    - lire et verifier le pack reel de l'utilisateur depuis son wallet ;
+    - estimer les tokens Luna avec TokenBillingService ;
+    - obtenir le consentement avant tout appel OpenAI facturable ;
+    - reserver / regler l'audio, puis reserver / regler la redaction ;
+    - ne pas reexecuter les appels deja regles ;
+    - ne jamais utiliser comme argent bloque le total de deux phases.
+    Les prix ne doivent PAS provenir de l'interface utilisateur.
     """
     chosen = validate_course_writing_model(pack_id, writing_model)
     fmt = normalize_course_document_format(document_format)

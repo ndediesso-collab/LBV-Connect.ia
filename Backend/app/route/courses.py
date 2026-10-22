@@ -23,7 +23,7 @@ import hmac
 import json
 import logging
 import os
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
@@ -73,8 +73,10 @@ class CreateCourseBody(BaseModel):
 
 
 class QuoteBody(BaseModel):
+    # Champ toléré pour les clients Web/Mobile précédents, mais il ne donne
+    # PLUS accès à un choix de modèle. Le serveur impose toujours Luna.
     model_config = ConfigDict(extra="forbid")
-    writing_model: str = Field(min_length=1, max_length=80)
+    writing_model: Literal["luna"] | None = None
 
 
 class ConfirmBody(BaseModel):
@@ -256,14 +258,36 @@ def configure_course_dispatcher(dispatcher: Callable[[str, str], None] | None) -
 def _safe_public_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(job, dict):
         return None
+    status = job.get("status")
+    transcript_settled = job.get("transcription_reservation_status") == "settled"
+    document_status = job.get("document_reservation_status")
+    plan = job.get("plan") if isinstance(job.get("plan"), dict) else {}
+    required = plan.get("document_reservation_credits")
+    # Ceci représente la provision à immobiliser, pas le coût définitif ni
+    # le déficit du solde. Jamais de texte du cours / identifiant fournisseur.
+    writing_reservation = (
+        required if (status == "awaiting_credits"
+                     and type(required) is int and required > 0) else None
+    )
     return {
-        "status": job.get("status"),
+        "status": status,
+        "writing_model": "luna" if plan.get("writing_model") == "luna" else None,
         "transcription_reservation_status": job.get("transcription_reservation_status"),
-        "document_reservation_status": job.get("document_reservation_status"),
+        "document_reservation_status": document_status,
+        "transcription_paid": transcript_settled,
+        "awaiting_credits": status == "awaiting_credits",
+        "resume_available": False,  # sera activé seulement après migration SQL
+        "writing_reservation_required_credits": writing_reservation,
+        "next_action": (
+            "add_credits" if status == "awaiting_credits"
+            else "manual_review" if status == "reconciliation_required"
+            else "download" if status == "completed"
+            else "wait"
+        ),
         "document_ready": bool(isinstance(job.get("output"), dict)
                                and isinstance(job["output"].get("artifact"), dict)
                                and job["output"]["artifact"].get("id")),
-        "requires_manual_review": job.get("status") == "reconciliation_required",
+        "requires_manual_review": status == "reconciliation_required",
     }
 
 
@@ -277,9 +301,15 @@ def course_capabilities(
         wallet = deps.service.credits.get_wallet(uid)
         active = bool(wallet is not None and wallet.is_pack_active)
         pack_id = str(wallet.pack_id or "") if active else ""
+        course_models = list(available_course_writing_models(pack_id))
         return {
             "pack_active": active,
-            "writing_models": list(available_course_writing_models(pack_id)),
+            # Les anciens clients peuvent encore lire writing_models ;
+            # les nouvelles interfaces masquent entièrement le sélecteur.
+            "writing_models": course_models,
+            "writing_model": "luna" if course_models else None,
+            "writing_model_selectable": False,
+            "course_resume_supported": False,  # RPC de reprise non migrée
             "document_formats": ["pdf", "docx"], "default_document_format": "pdf",
             "maximum_duration_ms": CourseAudioPolicy.MAX_COURSE_DURATION_MS,
             "maximum_segment_duration_ms": CourseAudioPolicy.MAX_SEGMENT_DURATION_SECONDS * 1000,
@@ -426,9 +456,9 @@ def quote_course(
     cid = _course_id(course_id)
     try:
         _owned_course(deps, uid, cid)
-        plan = deps.service.prepare_quote(
-            user_id=uid, course_id=cid, writing_model=payload.writing_model,
-        )
+        # Le client ne détermine plus le modèle ; QuoteBody rejette tout
+        # ancien modèle différent de Luna avant le moindre devis.
+        plan = deps.service.prepare_quote(user_id=uid, course_id=cid)
         token, expires_at = _issue_quote_token(plan)
         return {"quote": plan.public_quote(), "quote_token": token,
                 "expires_at": expires_at}
@@ -459,6 +489,9 @@ def confirm_course(
     token = _verify_quote_token(payload.quote_token, uid=uid, cid=cid)
     try:
         _owned_course(deps, uid, cid)
+        existing = deps.jobs.get_job(user_id=uid, course_id=cid)
+        if isinstance(existing, dict) and existing.get("status") == "awaiting_credits":
+            raise HTTPException(409, "Cours en attente de crédits ; recharge puis reprise sécurisée requise.")
         plan = deps.service.prepare_quote(user_id=uid, course_id=cid,
                                            writing_model=token["model"])
         if not hmac.compare_digest(_plan_hash(plan), token["plan_sha256"]):
@@ -472,6 +505,11 @@ def confirm_course(
                     "queued": False, "message": "Cours deja termine."}
         if job.get("status") == "reconciliation_required":
             raise HTTPException(409, "Rapprochement manuel du cours requis.")
+        if job.get("status") == "awaiting_credits":
+            # Important : un second POST /confirm ne doit JAMAIS relancer
+            # le cours alors que la queue attend une recharge. Une route
+            # /resume sera prévue après la migration SQL et sa RPC dédiée.
+            raise HTTPException(409, "Cours en attente de crédits ; reprise sécurisée non activée.")
         if job.get("status") == "processing":
             return {"course_id": cid, "status": "processing",
                     "queued": False, "message": "Cours deja en traitement."}

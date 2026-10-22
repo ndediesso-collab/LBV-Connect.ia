@@ -49,6 +49,7 @@ from app.config.credit_costs import (
 
 
     MAX_CHAT_OUTPUT_TOKENS,
+    COURSE_MAX_OUTPUT_TOKENS,
 
 
 
@@ -4426,14 +4427,16 @@ class OpenAIService:
     ) -> dict[str, Any]:
         """Rédige UNE section pédagogique à partir d'une transcription.
 
-        `model` est le modèle public sélectionné et déjà autorisé par la
-        route Cours ; il n'est pas le modèle interne de transcription.
+        `model` est conservé pour compatibilité avec les appels existants,
+        mais seul GPT-6 Luna est autorisé pour ORIA Cours, quel que soit
+        le pack. Cela n'autorise PAS Luna dans le Chat général.
         La section source est plafonnée : le pipeline de quatre heures
         fournit plusieurs sections puis assemble le PDF/DOCX ailleurs.
         L'usage token réel est renvoyé pour règlement par le service Cours.
         """
-        if not isinstance(model, str) or not model.strip():
-            raise ValueError("Modèle de rédaction du cours obligatoire.")
+        if not isinstance(model, str) or model.strip().lower() != "gpt-6-luna":
+            raise ValueError("ORIA Cours utilise exclusivement GPT-6 Luna.")
+        course_model = "gpt-6-luna"
         if not isinstance(transcript, str) or not transcript.strip():
             raise ValueError("Transcription de section vide.")
         if len(transcript) > self.MAX_COURSE_SECTION_CHARS:
@@ -4448,9 +4451,9 @@ class OpenAIService:
             raise ValueError("Contexte précédent trop long pour cette section.")
 
         request: dict[str, Any] = {
-            "model": model.strip(),
+            "model": course_model,
             "store": False,
-            "max_output_tokens": MAX_CHAT_OUTPUT_TOKENS,
+            "max_output_tokens": COURSE_MAX_OUTPUT_TOKENS,
             "input": build_course_section_messages(
                 transcript=transcript,
                 section_index=section_index,
@@ -4459,7 +4462,7 @@ class OpenAIService:
             ),
         }
         self._apply_reasoning_to_request(
-            request, model=model.strip(), reasoning_mode=reasoning_mode,
+            request, model=course_model, reasoning_mode=reasoning_mode,
         )
         try:
             response = self.client.responses.create(**request)
@@ -4477,8 +4480,8 @@ class OpenAIService:
             "message": message,
             "usage": usage,
             "web_search_calls": 0,
-            "model": model.strip(),
-            "openai_model": str(self._value(response, "model", model) or model),
+            "model": course_model,
+            "openai_model": str(self._value(response, "model", course_model) or course_model),
             "complete": status == "completed" and bool(message),
             "status": status,
             "incomplete_reason": str(reason) if reason is not None else None,

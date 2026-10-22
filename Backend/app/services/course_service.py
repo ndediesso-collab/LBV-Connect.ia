@@ -8,8 +8,12 @@ operations sont atomiques. Ne pas deployer avec un registre en memoire :
 les checkpoints de generation et de facturation doivent survivre au reboot.
 
 Parcours : enregistrement LOCAL -> upload segmente -> submit SQL -> devis
-serveur -> accord explicite -> double reservation -> transcription interne
--> redaction avec le modele choisi -> preparation pour PDF/DOCX.
+serveur -> accord explicite -> reservation AUDIO -> transcription interne
+-> reglement AUDIO -> reservation REDACTION Luna -> redaction -> PDF/DOCX.
+
+ATTENTION : le worker et les RPC Supabase doivent egalement etre adaptes
+pour accepter une reservation de document apres la transcription. NE PAS
+activer ce service isole avec l'ancien controle des deux reservations.
 
 Le traitement ne genere pas encore le PDF/DOCX lui-meme. Le texte assemble,
 la transcription et le format choisi sont transmis a un renderiseur injecte.
@@ -31,7 +35,7 @@ from app.config.credit_costs import (
     COURSE_TRANSCRIPTION_DEFAULT_MODEL,
     COURSE_TRANSCRIPTION_USD_PER_MINUTE,
     CreditAction,
-    MAX_CHAT_OUTPUT_TOKENS,
+    COURSE_MAX_OUTPUT_TOKENS,
     ORIA_CREDIT_VALUE_XAF,
     PACK_API_SAFETY_RESERVE_RATIO,
     normalize_course_document_format,
@@ -64,24 +68,21 @@ class CourseNeedsReconciliation(CourseError):
     """Appel fournisseur ou règlement incertain : NE PAS refaire l'appel."""
 
 
-# Mapping identique aux choix publics du Chat (ai.py). A mutualiser avec
-# une configuration commune avant de deployer plusieurs routes indépendantes.
-COURSE_PROVIDER_MODELS = {
-    "luna": "gpt-6-luna",
-    "gpt-5": "gpt-5",
-    "gpt-5.6-terra": "gpt-5.6-terra",
-    "gpt-6-sol": "gpt-6-sol",
-    "gpt-6-astra": "gpt-6-astra",
-}
+# Cette autorisation vaut pour ORIA Cours UNIQUEMENT, jamais pour le Chat.
+COURSE_PROVIDER_MODELS = {"luna": "gpt-6-luna"}
+COURSE_WRITING_MODEL = "luna"
 
-# Nombre de sections de redaction PREAUTORISEES par tranche d'environ 15 min.
-# Un transcript qui requiert plus de sections devra etre re-devisé ; aucun
-# appel de redaction supplementaire ne sera lance sans nouvelle approbation.
-SECTION_MINUTES_FOR_QUOTE = 15
+# Decoupage plus court, pour que les devis de cours ne supposent pas des
+# transcriptions de 60 000 tokens par section. La vraie transcription est
+# encore inconnue a l'etape devis : un depassement stoppe la redaction.
+SECTION_MINUTES_FOR_QUOTE = 10
 MAX_COURSE_SECTIONS = 120
-SECTION_MAX_CHARS = 50_000  # inferieur au plafond OpenAIService (60 000)
-SECTION_CONTEXT_CHARS = 8_000
-INPUT_TOKENS_QUOTE_PER_SECTION = 60_000  # borne conservative (texte+contexte)
+SECTION_MAX_CHARS = 12_500
+SECTION_CONTEXT_CHARS = 2_000
+INPUT_TOKENS_QUOTE_PER_SECTION = 18_000
+# Plafond commun au devis ET à l'appel OpenAI de chaque section Cours.
+# Ne pas utiliser le plafond du Chat général (32 000 tokens).
+OUTPUT_TOKENS_QUOTE_PER_SECTION = COURSE_MAX_OUTPUT_TOKENS
 
 
 class CourseJobStore(Protocol):
@@ -149,12 +150,19 @@ class CoursePlan:
             "duration_ms": self.duration_ms,
             "segments": self.segment_count,
             "estimated_total_credits": self.estimated_total_credits,
-            "maximum_reserved_credits": (
-                self.transcription_reservation_credits
-                + self.document_reservation_credits
+            # Montant maximal immobilise a la fois, et non somme des etapes.
+            "maximum_reserved_credits": max(
+                self.transcription_reservation_credits,
+                self.document_reservation_credits,
             ),
+            "transcription_reservation_credits": self.transcription_reservation_credits,
+            "document_reservation_credits": self.document_reservation_credits,
             "requires_confirmation": True,
-            "note": "Devis conservateur. En cas de besoin supplementaire, nouveau consentement requis.",
+            "note": (
+                "Devis initial a deux etapes : transcription puis redaction Luna. "
+                "Les reservations ne sont pas simultanees. "
+                "Un supplement exige un nouvel accord."
+            ),
         }
 
 
@@ -283,7 +291,7 @@ class CourseService:
             )
 
     def prepare_quote(
-        self, *, user_id: str, course_id: str, writing_model: str,
+        self, *, user_id: str, course_id: str, writing_model: str = COURSE_WRITING_MODEL,
     ) -> CoursePlan:
         uid, cid = _uid(user_id), _uid(course_id)
         course = self.courses.get_course(user_id=uid, course_id=cid)
@@ -301,7 +309,11 @@ class CourseService:
         if wallet is None or not wallet.is_pack_active:
             raise CourseInsufficientCredits()
         pack_id = str(wallet.pack_id or "")
-        selected = validate_course_writing_model(pack_id, writing_model)
+        if writing_model != COURSE_WRITING_MODEL:
+            raise CourseInvalid("ORIA Cours utilise exclusivement GPT-6 Luna.")
+        # Cet appel depend du credit_costs.py version Luna-pour-tous-les-packs.
+        # Ne pas passer en production avant mise a jour de cette configuration.
+        selected = validate_course_writing_model(pack_id, COURSE_WRITING_MODEL)
         provider_model = str(self.model_resolver(selected))
         if not provider_model or provider_model == COURSE_TRANSCRIPTION_DEFAULT_MODEL:
             raise CourseUnavailable("Le modele de redaction ne peut pas etre utilise.")
@@ -313,13 +325,12 @@ class CourseService:
         sections = max(
             1,
             math.ceil(duration_ms / (SECTION_MINUTES_FOR_QUOTE * 60_000)),
-            math.ceil(len(segments) / 4),
         )
         if sections > MAX_COURSE_SECTIONS:
             raise CourseInvalid("Nombre de sections trop important.")
         writing_steps = [CourseWritingStep(
             estimated_input_tokens=INPUT_TOKENS_QUOTE_PER_SECTION,
-            max_output_tokens=MAX_CHAT_OUTPUT_TOKENS,
+            max_output_tokens=OUTPUT_TOKENS_QUOTE_PER_SECTION,
         ) for _ in range(sections)]
         document_estimate = CourseBillingService.estimate_document(
             pack_id=pack_id, writing_model=selected, steps=writing_steps,
@@ -360,7 +371,74 @@ class CourseService:
             document_reservation_id=_deterministic_reference(cid, "document"),
         )
 
+    @staticmethod
+    def _reserve_stage(
+        *, uid: str, cid: str, plan: CoursePlan, stage: str,
+        jobs: CourseJobStore, credits: Any,
+    ) -> dict[str, Any]:
+        """Une etape a la fois. La RPC reserve les credits atomiquement.
+
+        `reserved` et `settled` sont des etats monotones. Une reponse reseau
+        incertaine impose un rapprochement ; ne jamais faire une deuxieme
+        reservation aveugle avec un autre identifiant.
+        """
+        if stage not in ("transcription", "document"):
+            raise CourseInvalid("Etape de reservation inconnue.")
+        state = jobs.get_job(user_id=uid, course_id=cid)
+        if state is None or state.get("plan") != asdict(plan):
+            raise CourseNeedsReconciliation("Plan confirme absent ou modifie.")
+        status = state.get(f"{stage}_reservation_status")
+        if status in ("reserved", "settled"):
+            return state
+        if status not in (None, "", "pending"):
+            raise CourseNeedsReconciliation("Etat financier de l'etape inconnu.")
+        if stage == "document" and state.get("transcription_reservation_status") != "settled":
+            raise CourseUnavailable("Transcription non reglee avant redaction.")
+
+        wallet = credits.get_wallet(uid)
+        amount = getattr(plan, f"{stage}_reservation_credits")
+        if (wallet is None or not wallet.is_pack_active
+                or type(wallet.balance) is not int or wallet.balance < amount):
+            raise CourseInsufficientCredits()
+        action = (CreditAction.COURSE_TRANSCRIPTION if stage == "transcription"
+                  else CreditAction.COURSE_DOCUMENT_GENERATION)
+        reference = getattr(plan, f"{stage}_reservation_id")
+        cost_xaf = getattr(plan, f"{stage}_reservation_api_xaf")
+        try:
+            credits.reserve_credits(
+                uid, amount, action, reference,
+                ttl_seconds=21600, api_reservation_xaf=cost_xaf,
+            )
+        except Exception as exc:
+            # Une exception SQL/HTTP peut signifier que le debit est deja
+            # persiste : ne pas la considerer comme un simple refus de solde.
+            jobs.flag_reconciliation(
+                user_id=uid, course_id=cid,
+                detail=f"Reservation {stage} non confirmee",
+            )
+            raise CourseNeedsReconciliation(
+                "Reservation non confirmee : verification necessaire."
+            ) from exc
+        try:
+            jobs.update_reservation(
+                user_id=uid, course_id=cid, stage=stage, status="reserved",
+            )
+        except Exception as exc:
+            jobs.flag_reconciliation(
+                user_id=uid, course_id=cid,
+                detail=f"Confirmation SQL de reservation {stage} incertaine",
+            )
+            raise CourseNeedsReconciliation(
+                "Confirmation de reservation non certaine."
+            ) from exc
+        return jobs.get_job(user_id=uid, course_id=cid) or state
+
     def confirm_and_reserve(self, *, plan: CoursePlan, approved: bool) -> dict[str, Any]:
+        """Au depart, immobilise UNIQUEMENT le devis de transcription.
+
+        L'utilisateur accepte le devis global presentant aussi la redaction,
+        mais celle-ci sera reservee seulement APRES le reglement de l'audio.
+        """
         if not approved:
             raise CourseInvalid("Confirmation explicite du devis necessaire.")
         self._require_credits_only()
@@ -369,82 +447,46 @@ class CourseService:
             writing_model=plan.writing_model,
         )
         if fresh != plan:
-            raise CourseInvalid("Le devis a change ; une nouvelle confirmation est necessaire.")
+            raise CourseInvalid("Le devis a change ; nouvelle confirmation requise.")
         existing = self.jobs.get_job(user_id=plan.user_id, course_id=plan.course_id)
-        if existing is not None:
-            if existing.get("plan") != asdict(plan):
-                raise CourseInvalid("Conflit de devis pour ce cours.")
-            if all(existing.get(f"{stage}_reservation_status") in {"reserved", "settled"}
-                   for stage in ("transcription", "document")):
-                return existing
-        # Prélecture ergonomique du solde total du devis (pack + compléments).
-        # Elle ne garantit pas l'atomicité : chaque réserve_credits SQL doit
-        # revalider sous verrou wallet le solde restant, l'action et le pack.
+        if existing is not None and existing.get("plan") != asdict(plan):
+            raise CourseInvalid("Conflit de devis pour ce cours.")
+        if existing and existing.get("status") == "completed":
+            return existing
+        # Verifier sans debit que la premiere operation est finançable.
         wallet = self.credits.get_wallet(plan.user_id)
-        if wallet is None or not wallet.is_pack_active:
+        if (wallet is None or not wallet.is_pack_active
+                or type(wallet.balance) is not int):
             raise CourseInsufficientCredits()
-        if existing and existing.get("transcription_reservation_status") in {"reserved", "settled"}:
-            remaining_stages = ("document",)
-        else:
-            remaining_stages = ("transcription", "document")
-        remaining_credits = sum(
-            getattr(plan, f"{stage}_reservation_credits")
-            for stage in remaining_stages
-            if not existing or existing.get(f"{stage}_reservation_status") not in {"reserved", "settled"}
-        )
-        if (type(wallet.balance) is not int
-                or wallet.balance < remaining_credits):
+        if (not existing or existing.get("transcription_reservation_status")
+                not in ("reserved", "settled")) and (
+                wallet.balance < plan.transcription_reservation_credits):
             raise CourseInsufficientCredits()
-
-        job = self.jobs.ensure_job(
-            user_id=plan.user_id, course_id=plan.course_id, plan=asdict(plan)
+        job = existing or self.jobs.ensure_job(
+            user_id=plan.user_id, course_id=plan.course_id, plan=asdict(plan),
         )
         if job.get("status") == "completed":
             return job
-        for stage, action, amount, api_xaf, reservation_id in (
-            ("transcription", CreditAction.COURSE_TRANSCRIPTION,
-             plan.transcription_reservation_credits,
-             plan.transcription_reservation_api_xaf, plan.transcription_reservation_id),
-            ("document", CreditAction.COURSE_DOCUMENT_GENERATION,
-             plan.document_reservation_credits,
-             plan.document_reservation_api_xaf, plan.document_reservation_id),
-        ):
-            state = self.jobs.get_job(user_id=plan.user_id, course_id=plan.course_id)
-            if state is None:
-                raise CourseNeedsReconciliation("Etat de reservation perdu.")
-            if state.get(f"{stage}_reservation_status") in {"reserved", "settled"}:
-                continue
-            try:
-                self.credits.reserve_credits(
-                    plan.user_id, amount, action, reservation_id,
-                    ttl_seconds=21600, api_reservation_xaf=api_xaf,
-                )
-            except Exception as exc:
-                # Ne jamais liberer aveuglement l'autre reservation : une
-                # erreur reseau ne prouve pas l'absence d'ecriture SQL.
-                self.jobs.flag_reconciliation(
-                    user_id=plan.user_id, course_id=plan.course_id,
-                    detail=f"Reservation {stage} non confirmee",
-                )
-                if "insufficient" in str(exc).lower() or "inactive_pack" in str(exc).lower():
-                    raise CourseInsufficientCredits() from exc
-                raise CourseNeedsReconciliation("Reservation non confirmee : reconciliation requise.") from exc
-            self.jobs.update_reservation(
-                user_id=plan.user_id, course_id=plan.course_id,
-                stage=stage, status="reserved",
-            )
-        return self.jobs.get_job(user_id=plan.user_id, course_id=plan.course_id) or job
+        return self._reserve_stage(
+            uid=plan.user_id, cid=plan.course_id, plan=plan,
+            stage="transcription", jobs=self.jobs, credits=self.credits,
+        )
 
-    def _load_plan(self, uid: str, cid: str) -> CoursePlan:
+    def _load_plan(self, uid: str, cid: str, *, stage: str = "transcription") -> CoursePlan:
         state = self.jobs.get_job(user_id=uid, course_id=cid)
         if not state or not isinstance(state.get("plan"), dict):
             raise CourseUnavailable("Cours non confirme ou suivi persistant absent.")
         plan = CoursePlan(**state["plan"])
         if plan.user_id != uid or plan.course_id != cid:
             raise CourseUnavailable("Plan de cours incoherent.")
-        if any(state.get(f"{stage}_reservation_status") not in {"reserved", "settled"}
-               for stage in ("transcription", "document")):
-            raise CourseUnavailable("Les deux provisions ne sont pas confirmees.")
+        if plan.writing_model != COURSE_WRITING_MODEL or plan.provider_model != COURSE_PROVIDER_MODELS[COURSE_WRITING_MODEL]:
+            raise CourseUnavailable("Ancien devis multi-modeles incompatible.")
+        if state.get("transcription_reservation_status") not in ("reserved", "settled"):
+            raise CourseUnavailable("Reservation de transcription non confirmee.")
+        if stage == "document" and (
+                state.get("transcription_reservation_status") != "settled"
+                or state.get("document_reservation_status") not in ("reserved", "settled")):
+            raise CourseUnavailable("Reservation de redaction non confirmee.")
         return plan
 
     def _step_result(self, *, uid: str, cid: str, stage: str, index: int,
@@ -478,7 +520,7 @@ class CourseService:
 
     def transcribe_submitted_course(self, *, user_id: str, course_id: str) -> dict[str, Any]:
         uid, cid = _uid(user_id), _uid(course_id)
-        plan = self._load_plan(uid, cid)
+        plan = self._load_plan(uid, cid, stage="transcription")
         segments = self.courses.list_segments(user_id=uid, course_id=cid)
         if _fingerprint(segments) != plan.segment_manifest_sha256:
             raise CourseNeedsReconciliation("Le manifeste des segments a change.")
@@ -524,7 +566,7 @@ class CourseService:
 
     def write_course(self, *, user_id: str, course_id: str) -> dict[str, Any]:
         uid, cid = _uid(user_id), _uid(course_id)
-        plan = self._load_plan(uid, cid)
+        plan = self._load_plan(uid, cid, stage="transcription")
         state = self.jobs.get_job(user_id=uid, course_id=cid) or {}
         if state.get("transcription_reservation_status") != "settled":
             raise CourseUnavailable("Transcription non terminee ou non reglee.")
@@ -539,10 +581,39 @@ class CourseService:
             transcripts.append(saved["text"])
         parts = _split_sections(transcripts)
         if len(parts) > plan.max_writing_sections:
-            # Aucun appel de redaction additionnel sans nouveau devis et accord.
-            raise CourseUnavailable("Cours plus long que prevu : nouveau devis necessaire.")
+            # Aucun appel supplementaire en l'absence de devis valide.
+            raise CourseUnavailable("Transcription plus longue que prevu : nouveau devis necessaire.")
+        # La provision audio est deja reglee. Ne reserver la redaction qu'ici.
+        # Avec Luna le montant reste celui du devis accepte par l'utilisateur.
+        self._reserve_stage(
+            uid=uid, cid=cid, plan=plan, stage="document",
+            jobs=self.jobs, credits=self.credits,
+        )
+        self._load_plan(uid, cid, stage="document")
         results: list[dict[str, Any]] = []
         for index, chunk in enumerate(parts):
+            # Les consommations reelles constatees sur les sections precedentes
+            # ne doivent jamais permettre un appel de plus que le devis accepte.
+            if results:
+                spent = CourseBillingService.calculate_document_actual(
+                    pack_id=plan.pack_id, writing_model=plan.writing_model,
+                    usages=[entry["usage"] for entry in results],
+                )
+                prior = self.jobs.get_call(
+                    user_id=uid, course_id=cid, stage="document", index=index,
+                )
+                next_quote = CourseBillingService.estimate_document(
+                    pack_id=plan.pack_id, writing_model=plan.writing_model,
+                    steps=[CourseWritingStep(
+                        estimated_input_tokens=INPUT_TOKENS_QUOTE_PER_SECTION,
+                        max_output_tokens=OUTPUT_TOKENS_QUOTE_PER_SECTION,
+                    )],
+                )
+                if (prior is None and spent.credits + next_quote.reservation_credits
+                        > plan.document_reservation_credits):
+                    raise CourseUnavailable(
+                        "Budget de redaction autorise atteint : nouvelle approbation requise."
+                    )
             context = "\n\n".join(item.get("message", "")[-2000:] for item in results[-4:])
             context = context[-SECTION_CONTEXT_CHARS:]
             def perform(part: str = chunk, i: int = index, ctx: str = context) -> dict[str, Any]:
@@ -567,6 +638,12 @@ class CourseService:
             pack_id=plan.pack_id, writing_model=plan.writing_model,
             usages=[part["usage"] for part in results],
         )
+        if actual.credits > plan.document_reservation_credits:
+            self.jobs.flag_reconciliation(
+                user_id=uid, course_id=cid,
+                detail="Cout final de redaction superieur au devis confirme",
+            )
+            raise CourseNeedsReconciliation("Cout de redaction a rapprocher.")
         state = self.jobs.get_job(user_id=uid, course_id=cid) or {}
         if state.get("document_reservation_status") != "settled":
             self.credits.settle_credit_reservation(

@@ -22,6 +22,8 @@ from time import monotonic
 from typing import Any, Callable
 from uuid import UUID
 
+from app.services.course_worker import CourseWorkerAwaitingCredits
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,7 +41,9 @@ class CourseQueueConsumerLeaseLost(CourseQueueConsumerError):
 
 @dataclass(frozen=True)
 class CourseQueueConsumerOutcome:
-    status: str  # empty, completed, review, pending_review, pending_ack
+    # awaiting_credits est confirme UNIQUEMENT apres reponse SQL atomique.
+    # pending_credit_pause indique une transition incertaine, PAS un statut SQL.
+    status: str  # empty, completed, awaiting_credits, pending_credit_pause, review, pending_review, pending_ack
     course_id: str | None = None
 
 
@@ -204,11 +208,14 @@ class CourseQueueConsumer:
         return self.queue_factory().reconcile_stalled(limit=limit)
 
     def run_once(self) -> CourseQueueConsumerOutcome:
-        """Une unique tentative claim -> traitement -> ACK, sans retry.
+        """Une livraison sous double bail, sans retry d'appel fournisseur.
 
-        En cas de doute apres claim, une revue manuelle est demandee. Si ACK
-        echoue APRES confirmation du job completed, la maintenance SQL peut
-        terminer cette entree sans re-executer le fournisseur.
+        Un succes demande un ACK SQL. Un manque de credits apres transcription
+        est distingue d'un incident : il demande la transition atomique SQL
+        ``awaiting_credits`` (aucun ACK, aucune nouvelle generation IA).
+        Si cette transition n'est pas confirmee, on retourne pending_credit_pause
+        et on laisse le bail expirer pour rapprochement : aucun redemarrage
+        implicite ne doit etre effectue par le consommateur.
         """
         _require_enabled()  # ne pas claimant un cours impossible a traiter
         queue = self.queue_factory()
@@ -252,6 +259,39 @@ class CourseQueueConsumer:
                 logger.exception("ACK de cours termine incertain course_id=%s", cid)
                 return CourseQueueConsumerOutcome("pending_ack", cid)
             return CourseQueueConsumerOutcome("completed", cid)
+        except CourseWorkerAwaitingCredits:
+            # CourseWorker ne leve cette exception qu'APRES transcription
+            # confirmee/reglee et AVANT tout appel de redaction Luna.
+            # Il a deja libere son bail de job; la queue detient encore le sien.
+            # La future RPC de pause doit verifier ATOMIQUEMENT :
+            #   - proprietaire, bail de queue courant et statut running ;
+            #   - audio settled, document pending et AUCUN appel document started ;
+            #   - checkpoints audio finis et absence de reconciliation requise ;
+            #   - statut queue ET job = awaiting_credits, baux effaces.
+            # Elle ne relance aucun traitement et ne reserve aucun credit.
+            try:
+                heartbeat.ensure_healthy()
+                paused = queue.pause_for_credits(
+                    user_id=uid, course_id=cid, lease_token=token,
+                )
+                if (not isinstance(paused, dict)
+                        or paused.get("status") != "awaiting_credits"
+                        or str(paused.get("user_id")) != uid
+                        or str(paused.get("course_id")) != cid):
+                    raise CourseQueueConsumerError(
+                        "Mise en attente de credits non confirmee par SQL."
+                    )
+                logger.info("ORIA Cours en attente de credits course_id=%s", cid)
+                return CourseQueueConsumerOutcome("awaiting_credits", cid)
+            except Exception:
+                # L'appel SQL peut avoir reussi malgre un timeout de reseau.
+                # Ne jamais faire un second RPC de pause/ACK/review a l'aveugle.
+                # Une queue encore 'running' sera rapprochee a expiration ;
+                # une queue deja 'awaiting_credits' restera en attente.
+                logger.exception(
+                    "Pause credits ORIA Cours non confirmee course_id=%s", cid
+                )
+                return CourseQueueConsumerOutcome("pending_credit_pause", cid)
         except Exception:
             logger.exception("Traitement ORIA Cours interrompu course_id=%s", cid)
             if completed_by_worker:

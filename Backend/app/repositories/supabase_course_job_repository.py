@@ -2,7 +2,9 @@
 
 Destination: Backend/app/repositories/supabase_course_job_repository.py
 
-A installer AVEC `ORIA_12_COURSE_JOB_STORE_STAGING.sql` dans une base de test.
+A installer UNIQUEMENT apres migration incrementale SQL de la file/job
+avec prise en charge du parcours audio -> redaction Luna. Ne pas rejouer
+`ORIA_12_COURSE_JOB_STORE_STAGING.sql` sur une base existante.
 Utiliser uniquement un client Supabase côté SERVEUR (service_role) et jamais
 transmettre les checkpoints de transcription au navigateur directement.
 
@@ -52,6 +54,9 @@ class SupabaseCourseJobRepository:
     RPC_GET_CALL = "oria_course_job_get_call"
     STAGES = frozenset({"transcription", "document"})
     RESERVATION_STATES = frozenset({"reserved"})
+    # Les statuts `awaiting_credits` concernent le JOB, pas une reservation.
+    # La pause du job et de la file est atomique dans la RPC de queue
+    # `oria_course_queue_pause_for_credits`, jamais ici.
     MAX_CALL_INDEX = 119
     MAX_CHECKPOINT_BYTES = 1_000_000
     MAX_OUTPUT_BYTES = 6_000_000
@@ -181,6 +186,18 @@ class SupabaseCourseJobRepository:
         validated = self._json_object(plan, limit=40_000)
         if validated.get("user_id") != uid or validated.get("course_id") != cid:
             raise ValueError("Le plan ne correspond pas au cours et à son propriétaire.")
+        # Cette validation est LOCALE et ne remplace pas le contrôle atomique
+        # du pack, du devis et des réservations dans les RPC SQL. Elle empêche
+        # surtout de persister les anciens plans multi-modèles par accident.
+        if (validated.get("writing_model") != "luna"
+                or validated.get("provider_model") != "gpt-6-luna"):
+            raise ValueError("ORIA Cours accepte uniquement GPT-6 Luna.")
+        for stage in ("transcription", "document"):
+            amount = validated.get(f"{stage}_reservation_credits")
+            if type(amount) is not int or amount <= 0:
+                raise ValueError("Devis de réservation Cours invalide.")
+            self._uuid(validated.get(f"{stage}_reservation_id"),
+                       f"{stage}_reservation_id")
         return self._command(uid, cid, "ensure", {"plan": validated})
 
     def update_reservation(self, *, user_id: str, course_id: str,
@@ -188,7 +205,18 @@ class SupabaseCourseJobRepository:
         uid, cid = self._ids(user_id, course_id)
         if status not in self.RESERVATION_STATES:
             raise ValueError("Le statut de réservation est fixé par la base SQL.")
-        self._command(uid, cid, "mark_reserved", {"stage": self._stage(stage)})
+        stage = self._stage(stage)
+        if stage == "document":
+            # Validation ergonomique, fail-closed. Le SQL doit refaire cette
+            # vérification sous verrou, et corréler le ledger crédit.
+            job = self.get_job(user_id=uid, course_id=cid)
+            if not job or job.get("transcription_reservation_status") != "settled":
+                raise CourseJobConflict("La transcription doit être réglée avant Luna.")
+            if job.get("status") != "processing":
+                raise CourseJobConflict("La rédaction nécessite un job en traitement.")
+            if job.get("document_reservation_status") not in (None, "", "pending", "reserved"):
+                raise CourseJobConflict("État financier de rédaction incompatible.")
+        self._command(uid, cid, "mark_reserved", {"stage": stage})
 
     def begin_call(self, *, user_id: str, course_id: str, stage: str, index: int) -> None:
         uid, cid = self._ids(user_id, course_id)

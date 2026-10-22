@@ -3183,10 +3183,17 @@ type OriaCourseJob = {
   document_reservation_status?: string;
   document_ready?: boolean;
   requires_manual_review?: boolean;
+  awaiting_credits?: boolean;
+  transcription_paid?: boolean;
+  resume_available?: boolean;
+  writing_reservation_required_credits?: number | null;
+  next_action?: string;
 };
 type OriaCourseQuote = {
   estimated_total_credits: number;
   maximum_reserved_credits: number;
+  transcription_reservation_credits: number;
+  document_reservation_credits: number;
   duration_ms: number;
   segments: number;
   writing_model: string;
@@ -3248,7 +3255,7 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
   const [course, setCourse] = useState<OriaCourseRecord | null>(null);
   const [job, setJob] = useState<OriaCourseJob | null>(null);
   const [segments, setSegments] = useState<OriaCourseSegment[]>([]);
-  const [writingModel, setWritingModel] = useState("");
+  const writingModel = "luna"; // ORIA Cours exclusivement, independamment du Chat general.
   const [quote, setQuote] = useState<OriaCourseQuoteResponse | null>(null);
   const [artifacts, setArtifacts] = useState<OriaCourseArtifact[]>([]);
   const [recentCourses, setRecentCourses] = useState<string[]>([]);
@@ -3260,6 +3267,7 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
   const [localError, setLocalError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [confirmationUncertain, setConfirmationUncertain] = useState(false);
+  const [resumeUncertain, setResumeUncertain] = useState(false);
   const [readyToRecord, setReadyToRecord] = useState(false);
   const [loading, setLoading] = useState(true);
   const courseIdRef = useRef<string | null>(null);
@@ -3343,7 +3351,7 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
         const limits = await apiFetch<CourseCapabilities>("/courses/capabilities");
         if (cancelled) return;
         setCapabilities(limits);
-        setWritingModel((current) => limits.writing_models.includes(current) ? current : limits.writing_models[0] || "");
+
         let history: string[] = [];
         try {
           const saved = JSON.parse(window.localStorage.getItem(courseHistoryKey(userId)) || "[]");
@@ -3396,6 +3404,7 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
     setBusy("open"); setLocalError(null);
     courseIdRef.current = cid;
     setQuote(null); setJob(null); setCourse(null); setArtifacts([]); setSegments([]);
+    setResumeUncertain(false); setConfirmationUncertain(false);
     nextIndexRef.current = 0;
     try {
       if (userId) window.localStorage.setItem(courseStorageKey(userId), cid);
@@ -3415,6 +3424,7 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
       keepCourseId(result.course.id);
       nextIndexRef.current = 0; recordedMsRef.current = 0;
       setCourse(result.course); setSegments([]); setJob(null); setQuote(null); setArtifacts([]);
+      setResumeUncertain(false); setConfirmationUncertain(false);
       setConfirmationUncertain(false);
     } catch (error) { setLocalError(courseErrorMessage(error)); }
     finally { setBusy(""); }
@@ -3592,7 +3602,7 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
 
   async function confirmQuote() {
     if (!course || !quote || busy || confirmationUncertain || !wallet?.is_pack_active ||
-      wallet.balance < quote.quote.maximum_reserved_credits) return;
+      wallet.balance < (quote.quote.transcription_reservation_credits ?? quote.quote.maximum_reserved_credits)) return;
     if (Date.parse(quote.expires_at) <= Date.now()) {
       setQuote(null); setLocalError(tr("Devis expiré : demandez-en un nouveau.", "Quote expired: request a new one.")); return;
     }
@@ -3614,12 +3624,43 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
     } finally { setBusy(""); }
   }
 
+  async function resumeCourse() {
+    if (!course || !job || job.status !== "awaiting_credits" ||
+        !job.resume_available || busy || resumeUncertain || !wallet?.is_pack_active) return;
+    const amount = job.writing_reservation_required_credits;
+    const alreadyReserved = job.document_reservation_status === "reserved";
+    if (!alreadyReserved && (typeof amount !== "number" || amount <= 0 || wallet.balance < amount)) return;
+    const amountText = typeof amount === "number" ? amount.toLocaleString(en ? "en-US" : "fr-FR") : "—";
+    if (!window.confirm(tr(
+      `Reprendre la rédaction avec GPT-6 Luna ? Jusqu'à ${amountText} crédits seront réservés pour cette étape uniquement. La transcription déjà réglée ne sera pas refacturée.`,
+      `Resume writing with GPT-6 Luna? Up to ${amountText} credits will be reserved for this step only. The paid transcription will not be charged again.`
+    ))) return;
+    setBusy("resume"); setLocalError(null);
+    try {
+      const result = await apiFetch<{ status: string; message?: string }>(
+        `/courses/${encodeURIComponent(course.id)}/resume`,
+        { method: "POST", body: JSON.stringify({ approved: true }) },
+      );
+      setInfo(result.message || tr("Reprise du cours enregistrée.", "Course resume submitted."));
+      await refreshCourse(course.id);
+      onWalletRefresh();
+    } catch (error) {
+      // Réponse incertaine : ne jamais répéter une réservation financière sans lire le serveur.
+      setResumeUncertain(true);
+      setLocalError(`${courseErrorMessage(error)} ${tr(
+        "Actualisez le statut avant toute nouvelle tentative de reprise.",
+        "Refresh status before attempting to resume again.")}`);
+    } finally { setBusy(""); }
+  }
+
   async function retryCourseStatus() {
     if (!course || busy) return;
     setBusy("refresh"); setLocalError(null);
     try {
       await refreshCourse(course.id);
       setConfirmationUncertain(false);
+      setResumeUncertain(false);
+      onWalletRefresh();
     } catch (error) { setLocalError(courseErrorMessage(error)); }
     finally { setBusy(""); }
   }
@@ -3658,6 +3699,12 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
   const status = job?.status || course?.status || "uploading";
   const isCourseComplete = job?.status === "completed";
   const working = ["processing", "queued"].includes(job?.status || "");
+  const awaitingCredits = job?.status === "awaiting_credits";
+  const resumeNeeded = job?.writing_reservation_required_credits;
+  const resumeFunded = job?.document_reservation_status === "reserved" ||
+    (typeof resumeNeeded === "number" && resumeNeeded > 0 &&
+      (wallet?.balance ?? 0) >= resumeNeeded);
+  const initialReservation = quote?.quote.transcription_reservation_credits ?? quote?.quote.maximum_reserved_credits ?? 0;
 
   return (
     <section className="mx-auto mt-4 w-full max-w-3xl space-y-4" aria-label="ORIA Cours">
@@ -3805,14 +3852,12 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
             {course.status === "queued" && !job?.status ? (
               <div className="rounded-xl border border-border p-4">
                 <h3 className="text-sm font-semibold">{tr("Préparer le document", "Prepare document")}</h3>
-                <label className="mt-3 block text-xs font-medium">{tr("Modèle de rédaction autorisé par votre pack", "Writing model allowed by your pack")}
-                  <select value={writingModel} disabled={!!busy || !capabilities?.writing_models.length}
-                    onChange={(event) => { setWritingModel(event.target.value); setQuote(null); }}
-                    className="mt-1.5 block w-full rounded-xl border border-border bg-background px-4 py-3 text-sm">
-                    {(capabilities?.writing_models || []).map((model) => <option key={model} value={model}>{model}</option>)}
-                  </select>
-                </label>
-                <button type="button" onClick={() => void requestQuote()} disabled={!writingModel || !!busy}
+                <div className="mt-3 rounded-xl border border-border bg-surface-secondary px-4 py-3">
+                  <p className="text-xs font-semibold">{tr("Modèle de rédaction pédagogique", "Pedagogical writing model")}</p>
+                  <p className="mt-1 text-sm font-semibold">GPT-6 Luna</p>
+                  <p className="mt-1 text-xs text-muted">{tr("Inclus dans ORIA Cours pour tous les packs actifs. Pour approfondir un point, importez le document dans le Chat général avec un modèle autorisé par votre pack.", "Available for ORIA Cours on every active pack. For more detailed explanations, upload the document in general Chat using a model allowed by your pack.")}</p>
+                </div>
+                <button type="button" onClick={() => void requestQuote()} disabled={!capabilities?.pack_active || !capabilities.writing_models.includes(writingModel) || !!busy}
                   className="mt-3 w-full rounded-xl border border-border px-4 py-3 text-sm font-semibold disabled:opacity-40">
                   {busy === "quote" ? tr("Calcul du devis…", "Estimating…") : tr("Calculer les crédits nécessaires", "Estimate required credits")}
                 </button>
@@ -3820,15 +3865,17 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
                   <div className="mt-3 rounded-xl bg-surface-secondary p-4 text-sm">
                     <div className="flex justify-between gap-3"><span>{tr("Crédits estimés", "Estimated credits")}</span>
                       <strong>{quote.quote.estimated_total_credits.toLocaleString(en ? "en-US" : "fr-FR")}</strong></div>
-                    <div className="mt-2 flex justify-between gap-3"><span>{tr("Maximum à réserver", "Maximum reserved")}</span>
-                      <strong>{quote.quote.maximum_reserved_credits.toLocaleString(en ? "en-US" : "fr-FR")}</strong></div>
-                    <p className="mt-2 text-xs text-muted">{tr("La somme réservée est régularisée selon la consommation réelle. Un devis différent nécessitera une nouvelle confirmation.",
-                      "The reserved amount is adjusted to actual usage. A changed quote requires new confirmation.")}</p>
+                    <div className="mt-2 flex justify-between gap-3"><span>{tr("Réservation initiale · transcription", "Initial reservation · transcription")}</span>
+                      <strong>{initialReservation.toLocaleString(en ? "en-US" : "fr-FR")}</strong></div>
+                    <div className="mt-2 flex justify-between gap-3"><span>{tr("Réservation suivante · Luna", "Later reservation · Luna")}</span>
+                      <strong>{(quote.quote.document_reservation_credits ?? 0).toLocaleString(en ? "en-US" : "fr-FR")}</strong></div>
+                    <p className="mt-2 text-xs text-muted">{tr("Les deux sommes ne sont pas réservées simultanément. L'audio est réglé avant la réservation Luna ; si les crédits manquent, la transcription est conservée. Les crédits réellement consommés sont facturés.",
+                      "These amounts are not reserved together. Audio is settled before Luna is reserved; if credits are insufficient, the transcript is kept. Actual usage is charged.")}</p>
                     <p className="mt-1 text-xs text-muted">{tr("Expiration", "Expires")}: {new Date(quote.expires_at).toLocaleTimeString(en ? "en-US" : "fr-FR")}</p>
                     {!hasValidQuote ? <p className="mt-2 text-xs text-red-600">{tr("Devis expiré : recalcul nécessaire.", "Quote expired: request another.")}</p> : null}
-                    {wallet && wallet.balance < quote.quote.maximum_reserved_credits ? <p className="mt-2 text-xs text-red-600">{tr("Crédits insuffisants pour la réservation initiale. Rechargez votre solde.",
+                    {wallet && wallet.balance < initialReservation ? <p className="mt-2 text-xs text-red-600">{tr("Crédits insuffisants pour la réservation initiale. Rechargez votre solde.",
                       "Not enough credits for initial reservation. Top up your balance.")}</p> : null}
-                    <button type="button" disabled={!hasValidQuote || !!busy || confirmationUncertain || !wallet?.is_pack_active || (wallet.balance < quote.quote.maximum_reserved_credits)}
+                    <button type="button" disabled={!hasValidQuote || !!busy || confirmationUncertain || !wallet?.is_pack_active || (wallet.balance < initialReservation)}
                       onClick={() => void confirmQuote()}
                       className="mt-3 w-full rounded-xl bg-accent px-4 py-3 font-semibold text-accent-foreground disabled:opacity-40">
                       {busy === "confirm" ? tr("Confirmation…", "Confirming…") : tr("J'accepte le devis et autorise le traitement", "Accept quote and authorize processing")}
@@ -3837,6 +3884,34 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
                 ) : null}
               </div>
             ) : null}
+            {awaitingCredits && (
+              <div className="space-y-3 rounded-xl border border-border bg-surface-secondary p-4" role="status">
+                <h3 className="text-sm font-semibold">{tr("Cours en attente de crédits", "Course waiting for credits")}</h3>
+                <p className="text-xs text-muted">{tr(
+                  "Votre transcription a déjà été traitée et réglée. Elle est conservée : il ne faut ni réenregistrer ni repayer l'audio. La rédaction du PDF/Word se fera uniquement avec GPT-6 Luna.",
+                  "Your transcription has already been completed and paid. It is kept: no need to record or pay for audio again. PDF/Word writing uses only GPT-6 Luna.")}</p>
+                {typeof resumeNeeded === "number" && resumeNeeded > 0 && (
+                  <p className="text-sm">{tr("Provision nécessaire pour Luna", "Required Luna reservation")}: <strong>{resumeNeeded.toLocaleString(en ? "en-US" : "fr-FR")} {tr("crédits", "credits")}</strong></p>
+                )}
+                <p className="text-xs text-muted">{tr("Solde disponible", "Available balance")}: {(wallet?.balance ?? 0).toLocaleString(en ? "en-US" : "fr-FR")}</p>
+                {!resumeFunded && <p className="text-xs text-muted">{tr(
+                  "Rechargez les crédits manquants, puis revenez sur ce cours pour reprendre. Le montant affiché est une réservation, pas une facture définitive.",
+                  "Add the missing credits, then return to this course to resume. The amount shown is a reservation, not the final charge.")}</p>}
+                <div className="flex flex-wrap gap-2">
+                  <Link href="/credits" className="rounded-xl border border-border px-4 py-2 text-xs font-semibold">{tr("Voir mes crédits / Recharger", "Credits / Top up")}</Link>
+                  <button type="button" onClick={() => void retryCourseStatus()} disabled={!!busy}
+                    className="rounded-xl border border-border px-4 py-2 text-xs font-semibold disabled:opacity-40">{tr("Actualiser le solde et le statut", "Refresh balance and status")}</button>
+                </div>
+                {resumeUncertain && <p className="text-xs text-red-600">{tr(
+                  "Reprise non confirmée : actualisez le statut avant de réessayer.",
+                  "Resume not confirmed: refresh status before retrying.")}</p>}
+                <button type="button" onClick={() => void resumeCourse()}
+                  disabled={!!busy || resumeUncertain || !job?.resume_available || !wallet?.is_pack_active || !resumeFunded}
+                  className="w-full rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground disabled:opacity-40">
+                  {busy === "resume" ? tr("Reprise en cours…", "Resuming…") : tr("Reprendre la rédaction avec Luna", "Resume writing with Luna")}
+                </button>
+              </div>
+            )}
             {(working || isCourseComplete || job?.requires_manual_review || confirmationUncertain) && (
               <div className="rounded-xl border border-border p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">

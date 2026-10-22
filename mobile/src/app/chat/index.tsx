@@ -4,6 +4,7 @@ import {
   Alert,
   Animated,
   AppState,
+  BackHandler,
   FlatList,
   Image,
   Keyboard,
@@ -3310,9 +3311,15 @@ type CourseJob = {
   status: string; transcription_reservation_status?: string;
   document_reservation_status?: string; document_ready?: boolean;
   requires_manual_review?: boolean;
+  awaiting_credits?: boolean;
+  transcription_paid?: boolean;
+  resume_available?: boolean;
+  writing_reservation_required_credits?: number | null;
+  next_action?: string;
 };
 type CourseQuote = {
   quote: { estimated_total_credits: number; maximum_reserved_credits: number;
+    transcription_reservation_credits: number; document_reservation_credits: number;
     writing_model: string; duration_ms: number; segments: number;
     document_format: string; requires_confirmation: boolean; note?: string };
   quote_token: string; expires_at: string;
@@ -3390,6 +3397,7 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
   onClose: () => void; onWalletRefresh: () => void;
 }) {
   const isDark = useIsDarkTheme();
+  const courseRouter = useRouter();
   const tr = (fr: string, en: string) => language === "en" ? en : fr;
   const bg = isDark ? "#101012" : "#ffffff";
   const card = isDark ? "#1b1b20" : "#f6f6f8";
@@ -3402,7 +3410,7 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
   const [course, setCourse] = useState<CourseRecord | null>(null);
   const [segments, setSegments] = useState<CourseSegment[]>([]);
   const [job, setJob] = useState<CourseJob | null>(null);
-  const [writingModel, setWritingModel] = useState("");
+  const writingModel = "luna"; // ORIA Cours uniquement ; Chat général inchangé.
   const [quote, setQuote] = useState<CourseQuote | null>(null);
   const [artifacts, setArtifacts] = useState<CourseArtifact[]>([]);
   const [recent, setRecent] = useState<string[]>([]);
@@ -3412,6 +3420,7 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmUncertain, setConfirmUncertain] = useState(false);
+  const [resumeUncertain, setResumeUncertain] = useState(false);
   const [loading, setLoading] = useState(true);
   const courseIdRef = useRef<string | null>(null);
   const nextIndexRef = useRef(0);
@@ -3435,9 +3444,38 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
   const totalMs = segments.reduce((sum, segment) => sum + segment.duration_ms, 0);
   const hasQuote = Boolean(quote && Date.parse(quote.expires_at) > Date.now());
   const maxReserved = quote?.quote.maximum_reserved_credits || 0;
+  const initialReserved = quote?.quote.transcription_reservation_credits ?? maxReserved;
+  const awaitingCredits = job?.status === "awaiting_credits";
+  const resumeRequired = job?.writing_reservation_required_credits;
+  const resumeFunded = job?.document_reservation_status === "reserved" ||
+    (typeof resumeRequired === "number" && resumeRequired > 0 &&
+      (wallet?.balance ?? 0) >= resumeRequired);
   const isComplete = job?.status === "completed";
   const needsReview = job?.status === "reconciliation_required" || Boolean(job?.requires_manual_review);
   const working = job?.status === "processing" || job?.status === "queued";
+
+  // Le retour ne doit pas interrompre un enregistrement ou abandonner un envoi.
+  // Les segments sauvegardés et les cours confirmés restent récupérables après fermeture.
+  const returnToChat = useCallback(() => {
+    if (recordingRef.current || rollingRef.current || recording || uploading ||
+        uploadLockRef.current || Boolean(busy)) {
+      setNotice(language === "en"
+        ? "Stop recording or wait for the upload to finish before returning to Chat."
+        : "Terminez l'enregistrement ou l'envoi en cours avant de revenir au Chat.");
+      return;
+    }
+    onClose();
+  }, [recording, uploading, busy, language, onClose]);
+
+  // Le bouton Retour Android suit la même règle que le bouton visible dans le panneau.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const listener = BackHandler.addEventListener("hardwareBackPress", () => {
+      returnToChat();
+      return true;
+    });
+    return () => listener.remove();
+  }, [returnToChat]);
 
   async function refreshCourse(cid: string, includeFiles = true) {
     const [result, parts] = await Promise.all([
@@ -3484,7 +3522,7 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
         const limits = await apiFetch<CourseCapabilities>("/courses/capabilities");
         if (cancelled) return;
         setCapabilities(limits);
-        setWritingModel(limits.writing_models[0] || "");
+
         const pending = await readCoursePending(userId);
         pendingRef.current = pending;
         setPendingCount(pending.length);
@@ -3530,13 +3568,14 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
       nextIndexRef.current = 0;
       previousMsRef.current = 0;
       setCourse(result.course); setSegments([]); segmentsRef.current = []; setArtifacts([]);
-      setJob(null); setQuote(null); setConfirmUncertain(false);
+      setJob(null); setQuote(null); setConfirmUncertain(false); setResumeUncertain(false);
     } catch (cause) { setError(courseError(cause)); }
     finally { setBusy(""); }
   }
   async function selectCourse(cid: string) {
     if (blocked || pendingRef.current.length || recordingRef.current) return;
     setBusy("open"); setError(null); setQuote(null); setCourse(null); setSegments([]); segmentsRef.current = []; setJob(null); setArtifacts([]);
+    setResumeUncertain(false); setConfirmUncertain(false);
     nextIndexRef.current = 0;
     try { await persistCourseId(cid); await refreshCourse(cid); setConfirmUncertain(false); }
     catch (cause) { setError(courseError(cause)); }
@@ -3750,7 +3789,7 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
   }
   async function confirmQuote() {
     if (!course || !quote || busy || confirmUncertain || !wallet?.is_pack_active ||
-        wallet.balance < quote.quote.maximum_reserved_credits) return;
+        wallet.balance < (quote.quote.transcription_reservation_credits ?? quote.quote.maximum_reserved_credits)) return;
     if (!Number.isFinite(Date.parse(quote.expires_at)) || Date.parse(quote.expires_at) <= Date.now()) {
       setQuote(null); setError("Devis expiré. Recalculez le montant."); return;
     }
@@ -3771,14 +3810,47 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
         "Check course status before confirming again.")}`);
     } finally { setBusy(""); }
   }
+  async function resumeCourse() {
+    if (!course || !job || job.status !== "awaiting_credits" ||
+        !job.resume_available || busy || resumeUncertain || !wallet?.is_pack_active) return;
+    const alreadyReserved = job.document_reservation_status === "reserved";
+    const required = job.writing_reservation_required_credits;
+    if (!alreadyReserved && (typeof required !== "number" || required <= 0 || wallet.balance < required)) return;
+    setBusy("resume"); setError(null);
+    try {
+      const result = await apiFetch<{ status: string; message?: string }>(
+        `/courses/${encodeURIComponent(course.id)}/resume`,
+        { method: "POST", body: JSON.stringify({ approved: true }) },
+      );
+      setNotice(result.message || tr("Reprise enregistrée.", "Resume submitted."));
+      await refreshCourse(course.id);
+      onWalletRefresh();
+    } catch (cause) {
+      // Toute erreur peut suivre une écriture SQL réussie : aucune répétition automatique.
+      setResumeUncertain(true);
+      setError(`${courseError(cause)} ${tr(
+        "Actualisez le statut du cours avant toute nouvelle tentative.",
+        "Refresh course status before trying again.")}`);
+    } finally { setBusy(""); }
+  }
+  function confirmResume() {
+    if (!job || !resumeFunded || resumeUncertain || busy) return;
+    const required = job.writing_reservation_required_credits;
+    const amount = typeof required === "number" ? formatCredits(required, language) : "—";
+    Alert.alert(tr("Reprendre avec GPT-6 Luna", "Resume with GPT-6 Luna"),
+      tr(`Réserver jusqu'à ${amount} crédits pour la rédaction uniquement ? La transcription déjà payée ne sera pas refacturée.`,
+        `Reserve up to ${amount} credits for writing only? Your paid transcription will not be charged again.`),
+      [{ text: tr("Annuler", "Cancel"), style: "cancel" },
+       { text: tr("Confirmer", "Confirm"), onPress: () => void resumeCourse() }]);
+  }
   async function verifyStatus() {
     if (!course || busy) return;
     setBusy("refresh"); setError(null);
     try {
       await refreshCourse(course.id);
-      if (confirmUncertain) {
+      if (confirmUncertain || resumeUncertain) {
         const state = await apiFetch<{ job: CourseJob | null }>(`/courses/${encodeURIComponent(course.id)}`);
-        if (state.job) setConfirmUncertain(false);
+        if (state.job) { setConfirmUncertain(false); setResumeUncertain(false); }
         else setNotice(tr("Aucun job confirmé. En cas de réservation incertaine, contactez l'assistance avant de réessayer.",
           "No confirmed job. Contact support before retrying an uncertain reservation."));
       }
@@ -3818,14 +3890,13 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
   return (
     <View style={[courseUi.screen, { backgroundColor: bg }]}>
       <View style={[courseUi.top, { borderBottomColor: line }]}>
-        <Pressable onPress={() => {
-          if (recordingRef.current || rollingRef.current) {
-            setNotice(tr("Arrêtez d'abord l'enregistrement.", "Stop recording first."));
-            return;
-          }
-          onClose();
-        }} style={courseUi.back} accessibilityLabel={tr("Retour au Chat", "Back to Chat")}>
-          <Ionicons name="arrow-back" size={22} color={ink}/>
+        <Pressable accessibilityRole="button" onPress={returnToChat}
+          style={[courseUi.back, { flexDirection: "row", alignItems: "center", gap: 5 }]}
+          accessibilityLabel={tr("Retour au Chat", "Back to Chat")}>
+          <Ionicons name="arrow-back" size={20} color={ink}/>
+          <Text style={{ color: ink, fontSize: 12, fontWeight: "700" }}>
+            {tr("Retour au Chat", "Back to Chat")}
+          </Text>
         </Pressable>
         <View style={{ flex: 1 }}><Text style={{ color: ink, fontWeight: "800", fontSize: 17 }}>ORIA Cours</Text>
           <Text style={{ color: muted, fontSize: 11 }}>{tr("Jusqu'à 4 h • PDF ou Word", "Up to 4 h • PDF or Word")}</Text></View>
@@ -3933,37 +4004,60 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
               blocked || pendingCount > 0 || !segments.length || totalMs > COURSE_MAX_DURATION_MS)}
           </> : null}
           {course.status === "queued" && !job ? <>
-            <Text style={{ color: ink, fontWeight: "700", marginTop: 12 }}>{tr("Modèle de rédaction", "Writing model")}</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 7, marginVertical: 7 }}>
-              {(capabilities?.writing_models || []).map((model) => <Pressable key={model}
-                onPress={() => { setWritingModel(model); setQuote(null); }}
-                style={[courseUi.pill, { borderColor: writingModel === model ? ink : line,
-                  backgroundColor: writingModel === model ? card : bg }]}>
-                <Text style={{ color: ink }}>{model}</Text></Pressable>)}
-            </ScrollView>
-            {courseButton(tr("Calculer les crédits nécessaires", "Estimate credits"), () => void requestQuote(), !writingModel || Boolean(busy), true)}
+            <View style={[courseUi.note, { borderColor: line, marginTop: 12 }]}>
+              <Text style={{ color: ink, fontWeight: "700" }}>{tr("Modèle de rédaction pédagogique", "Pedagogical writing model")}</Text>
+              <Text style={{ color: ink, fontWeight: "700", marginTop: 6 }}>GPT-6 Luna</Text>
+              <Text style={{ color: muted, fontSize: 12, marginTop: 4 }}>
+                {tr("Disponible pour ORIA Cours dans tous les packs actifs. Pour approfondir un sujet, importez votre document dans le Chat général avec un modèle autorisé par votre pack.",
+                  "Available for ORIA Cours on every active pack. To explore a topic further, upload the document to general Chat using a model allowed by your pack.")}
+              </Text>
+            </View>
+            {courseButton(tr("Calculer les crédits nécessaires", "Estimate credits"), () => void requestQuote(), !capabilities?.pack_active || !capabilities.writing_models.includes(writingModel) || Boolean(busy), true)}
             {quote ? <View style={[courseUi.card, { backgroundColor: card, borderColor: line, marginTop: 12 }]}>
               {detail(tr("Crédits estimés", "Estimated credits"), formatCredits(quote.quote.estimated_total_credits, language))}
-              {detail(tr("Maximum à réserver", "Maximum to reserve"), formatCredits(maxReserved, language))}
+              {detail(tr("Réservation initiale · transcription", "Initial reservation · transcription"), formatCredits(initialReserved, language))}
+              {detail(tr("Réservation suivante · Luna", "Later reservation · Luna"), formatCredits(quote.quote.document_reservation_credits ?? 0, language))}
               <Text style={{ color: muted, fontSize: 12 }}>
-                {tr("Le montant réel sera régularisé. Aucun second plafond API fixe ne bloque les crédits achetés.",
-                  "Actual use is settled afterward. No separate fixed API pack cap blocks purchased credits.")}
+                {tr("Réservations successives, jamais simultanées. Le coût audio est réglé avant la provision Luna. Si les crédits manquent, la transcription est conservée. Seul le coût réel est facturé.",
+                  "Sequential, never simultaneous reservations. Audio settles before Luna is reserved. If credits run out, the transcript is kept. Only actual cost is charged.")}
               </Text>
               <Text style={{ color: muted, fontSize: 12 }}>
                 {tr("Expiration", "Expires")}: {new Date(quote.expires_at).toLocaleTimeString(language === "en" ? "en-US" : "fr-FR")}
               </Text>
               {!hasQuote ? <Text style={{ color: "#ba2d3c" }}>{tr("Devis expiré, recalcul requis.", "Quote expired, request another.")}</Text> : null}
-              {wallet && wallet.balance < maxReserved ? <Text style={{ color: "#ba2d3c" }}>
+              {wallet && wallet.balance < initialReserved ? <Text style={{ color: "#ba2d3c" }}>
                 {tr("Crédits insuffisants pour cette réservation.", "Insufficient credits for this reservation.")}</Text> : null}
               {courseButton(tr("J'accepte le devis et autorise le traitement", "Accept quote and authorize processing"),
                 () => Alert.alert(tr("Confirmer la réservation", "Confirm reservation"),
-                  tr(`ORIA peut réserver jusqu'à ${formatCredits(maxReserved, language)} crédits. Continuer ?`,
-                    `ORIA may reserve up to ${formatCredits(maxReserved, language)} credits. Continue?`),
+                  tr(`ORIA réservera initialement jusqu'à ${formatCredits(initialReserved, language)} crédits pour la transcription. La rédaction Luna sera réservée ensuite. Continuer ?`,
+                    `ORIA will initially reserve up to ${formatCredits(initialReserved, language)} credits for transcription. Luna writing is reserved later. Continue?`),
                   [{ text: tr("Annuler", "Cancel"), style: "cancel" },
                     { text: tr("Confirmer", "Confirm"), onPress: () => void confirmQuote() }]),
-                !hasQuote || confirmUncertain || Boolean(busy) || !wallet?.is_pack_active || wallet.balance < maxReserved)}
+                !hasQuote || confirmUncertain || Boolean(busy) || !wallet?.is_pack_active || wallet.balance < initialReserved)}
             </View> : null}
           </> : null}
+          {awaitingCredits ? <View style={[courseUi.card, { backgroundColor: card, borderColor: line, marginTop: 12, gap: 9 }] }>
+            <Text style={{ color: ink, fontWeight: "800", fontSize: 15 }}>{tr("Cours en attente de crédits", "Course waiting for credits")}</Text>
+            <Text style={{ color: muted, fontSize: 12 }}>{tr(
+              "La transcription est déjà terminée et payée. Elle reste disponible pour la reprise : aucun nouvel enregistrement ni deuxième facturation audio.",
+              "Transcription is complete and paid. It is saved for resuming: no need to record or pay for audio again.")}</Text>
+            {typeof resumeRequired === "number" && resumeRequired > 0 ?
+              detail(tr("Réservation pour Luna", "Luna reservation"), formatCredits(resumeRequired, language)) : null}
+            {detail(tr("Crédits disponibles", "Available credits"), formatCredits(wallet?.balance ?? 0, language))}
+            {!resumeFunded ? <Text style={{ color: muted, fontSize: 12 }}>{tr(
+              "Rechargez votre solde puis revenez à ce cours. Ce montant est une provision, pas un débit définitif.",
+              "Top up and return to this course. This amount is a reservation, not a final charge.")}</Text> : null}
+            {courseButton(tr("Voir mes crédits / Recharger", "Credits / Top up"),
+              () => courseRouter.push("/credits" as any), Boolean(busy), true)}
+            {courseButton(tr("Actualiser le solde et le statut", "Refresh balance and status"),
+              () => void verifyStatus(), Boolean(busy), true)}
+            {resumeUncertain ? <Text style={{ color: "#b54444", fontSize: 12 }}>{tr(
+              "Reprise non confirmée : actualisez le statut avant de réessayer.",
+              "Resume not confirmed: refresh status before retrying.")}</Text> : null}
+            {courseButton(busy === "resume" ? tr("Reprise…", "Resuming…") : tr("Reprendre la rédaction avec Luna", "Resume writing with Luna"),
+              () => confirmResume(), Boolean(busy) || resumeUncertain || !job?.resume_available ||
+                !wallet?.is_pack_active || !resumeFunded)}
+          </View> : null}
           {working || isComplete || needsReview || confirmUncertain ? <View style={[courseUi.card, { backgroundColor: card, borderColor: line, marginTop: 12 }]}>
             <Text style={{ color: ink, fontWeight: "700" }}>{isComplete ? tr("Cours terminé", "Course completed") :
               needsReview ? tr("Vérification manuelle", "Manual review") : tr("Traitement en cours", "Processing")}</Text>

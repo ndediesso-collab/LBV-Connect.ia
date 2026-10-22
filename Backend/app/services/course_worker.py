@@ -4,6 +4,8 @@ Destination : Backend/app/services/course_worker.py
 
 Une instance s'occupe d'UN cours à la fois. Le lancement est une opération
 serveur explicite, après `CourseService.confirm_and_reserve(approved=True)`.
+ORIA Cours n'exige au départ que la réservation de transcription ; le service
+réserve Luna seulement APRÈS le règlement définitif de l'audio.
 Ce module NE crée pas de devis, ne prélève aucun crédit et ne soumet pas un
 cours au nom de l'étudiant. Il NE doit pas être exécuté dans une requête
 FastAPI de longue durée.
@@ -41,7 +43,16 @@ class CourseWorkerError(RuntimeError):
 
 
 class CourseWorkerNotReady(CourseWorkerError):
-    """Devis non accepté ou réservations non confirmées."""
+    """Devis non accepté ou réservation audio non confirmée."""
+
+
+class CourseWorkerAwaitingCredits(CourseWorkerError):
+    """Audio facturé et sauvegardé ; la rédaction attend une recharge.
+
+    Ce statut n'est PAS une incertitude fournisseur et ne doit pas entraîner
+    un marquage reconciliation_required. La file durable et les RPC devront
+    gérer explicitement une attente persistante AVANT activation du worker.
+    """
 
 
 class CourseWorkerNeedsReconciliation(CourseWorkerError):
@@ -371,7 +382,7 @@ class _GuardedJobStore:
 
 
 class CourseWorker:
-    """Exécute un cours *déjà confirmé et pré-réservé*.
+    """Exécute un cours confirmé, avec provision AUDIO uniquement au départ.
 
     Ne fait aucun retry automatique. Chaque nouvelle tentative `run()`
     revalide l'état SQL ; les checkpoints 'started' non terminés resteront
@@ -420,11 +431,23 @@ class CourseWorker:
         plan = job.get("plan")
         if (not isinstance(plan, dict)
                 or not plan.get("transcription_reservation_id")
-                or not plan.get("document_reservation_id")):
-            raise CourseWorkerNotReady("Devis du cours absent ou incomplet.")
-        if any(job.get(f"{stage}_reservation_status") not in ("reserved", "settled")
-               for stage in ("transcription", "document")):
-            raise CourseWorkerNotReady("Les deux réservations doivent être confirmées.")
+                or not plan.get("document_reservation_id")
+                or plan.get("writing_model") != "luna"
+                or plan.get("provider_model") != "gpt-6-luna"):
+            raise CourseWorkerNotReady("Devis Luna du cours absent ou incompatible.")
+        # Le devis accepté ne bloque QUE l'audio avant de commencer.
+        # La provision documentaire peut encore être absente/pending :
+        # CourseService la créera seulement lorsque l'audio sera réglé.
+        audio = job.get("transcription_reservation_status")
+        document = job.get("document_reservation_status")
+        if audio not in ("reserved", "settled"):
+            raise CourseWorkerNotReady("Réservation audio non confirmée.")
+        if document not in (None, "", "pending", "reserved", "settled"):
+            raise CourseWorkerNeedsReconciliation("État de réservation documentaire inconnu.")
+        if document in ("reserved", "settled") and audio != "settled":
+            # Ancien plan doublement réservé ou incohérence de séquencement.
+            # Ne démarrer AUCUN appel fournisseur avec une double réservation.
+            raise CourseWorkerNotReady("Réservations d'étapes non séquentielles.")
 
     def run(self, *, user_id: str, course_id: str) -> CourseWorkerResult:
         """Une seule exécution, sans attente artificielle ni réessai fournisseur.
@@ -485,20 +508,52 @@ class CourseWorker:
             self._check_ready(current)
             heartbeat.ensure_healthy()
 
+            # Phase 1 : réservé et réglé UNIQUEMENT sur l'audio.
+            # Si la transcription a déjà été réglée, CourseService réutilise
+            # les checkpoints sans ré-exécuter les appels fournisseur.
             service.transcribe_submitted_course(user_id=uid, course_id=cid)
             heartbeat.ensure_healthy()
-            service.write_course(user_id=uid, course_id=cid)
+            # Phase 2 : CourseService réserve maintenant la rédaction Luna.
+            # Une insuffisance de crédits à ce stade est une ATTENTE métier,
+            # pas un échec fournisseur. Aucun appel de rédaction n'a débuté.
+            try:
+                service.write_course(user_id=uid, course_id=cid)
+            except Exception as exc:
+                # Import local pour préserver les tests isolés du worker,
+                # sans reconnaissance fragile fondée sur le texte d'erreur.
+                from app.services.course_service import CourseInsufficientCredits
+                if not isinstance(exc, CourseInsufficientCredits):
+                    raise
+                heartbeat.ensure_healthy()
+                state = _owned_job(jobs.get_job(user_id=uid, course_id=cid), uid, cid)
+                if (state.get("transcription_reservation_status") != "settled"
+                        or state.get("document_reservation_status") not in (None, "", "pending")):
+                    raise CourseWorkerNeedsReconciliation(
+                        "Insuffisance de crédits avec état financier incohérent."
+                    ) from exc
+                # L'étape B suivante rendra cette attente persistante via SQL
+                # et fera différer l'élément de file. Avant cela, ne jamais
+                # classer ce cas comme une anomalie de facturation du job.
+                raise CourseWorkerAwaitingCredits(
+                    "Transcription conservée : crédits insuffisants pour la rédaction Luna."
+                ) from exc
             # finish_job met normalement completed et supprime le bail.
             final = _owned_job(jobs.get_job(user_id=uid, course_id=cid), uid, cid)
             if final.get("status") != "completed":
                 raise CourseWorkerNeedsReconciliation("Export final non confirmé en base.")
             completed = True
             return _output_result(final, cid, replay=False)
+        except CourseWorkerAwaitingCredits as exc:
+            # Aucune nouvelle dépense lancée pour la rédaction : ne pas
+            # imposer de rapprochement manuel au job pour simple manque de
+            # crédits. La file durable doit traiter explicitement cette
+            # exception AVANT toute activation (elle est encore en 'review').
+            error = exc
+            raise
         except BaseException as exc:
             error = exc
-            # Toute défaillance après acquisition doit être examinée avant une
-            # nouvelle tentative, y compris un checkpoint 'started' hérité d'un
-            # autre worker. Les factures fournisseur pourraient déjà exister.
+            # Toute véritable défaillance après acquisition reste à rapprocher.
+            # Un appel commencé peut avoir été facturé malgré une panne réseau.
             if lease_acquired:
                 try:
                     current = jobs.get_job(user_id=uid, course_id=cid)
@@ -529,6 +584,7 @@ class CourseWorker:
 
 __all__ = [
     "CourseWorker", "CourseWorkerResult", "CourseWorkerError",
-    "CourseWorkerNotReady", "CourseWorkerNeedsReconciliation",
+    "CourseWorkerNotReady", "CourseWorkerAwaitingCredits",
+    "CourseWorkerNeedsReconciliation",
     "CourseArtifactRenderer", "CourseArtifactPersistenceError",
 ]

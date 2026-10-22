@@ -45,6 +45,7 @@ class SupabaseCourseQueueRepository:
     RPC_HEARTBEAT = "oria_course_queue_heartbeat"
     RPC_ACK = "oria_course_queue_ack"
     RPC_REVIEW = "oria_course_queue_review"
+    RPC_PAUSE_CREDITS = "oria_course_queue_pause_for_credits"
     RPC_STALLED = "oria_course_queue_reconcile_stalled"
     RPC_GET = "oria_course_queue_get"
 
@@ -183,6 +184,48 @@ class SupabaseCourseQueueRepository:
         self._expect_owner(row, user_id=uid, course_id=cid)
         if row.get("status") != "completed":
             raise CourseQueueError("ACK non confirme.")
+        return row
+
+    def pause_for_credits(self, *, user_id: str, course_id: str,
+                          lease_token: str) -> dict[str, Any]:
+        """Suspend durablement une livraison APRES transcription deja reglee.
+
+        RPC SQL A CREER lors de la prochaine migration (pas dans ce fichier) :
+        ``oria_course_queue_pause_for_credits(uuid, uuid, uuid)``.
+
+        La RPC, en UNE transaction sous verrous queue+job, doit verifier :
+          - user_id / course_id, statut queue='running', bail actif et token ;
+          - job sous le bail du worker libere, transcription totalement achevee
+            et reservation audio 'settled' ;
+          - document sans reservation active et SANS appel fournisseur commence ;
+          - aucun doute financier / fournisseur exigeant un rapprochement.
+        Si ces conditions tiennent, elle place queue ET job en
+        'awaiting_credits', efface les deux baux, sans debit ni re-dispatch.
+
+        Reponse exigee : to_jsonb(queue) avec ``job_status`` ajoute depuis
+        le job enregistre atomiquement. Le retour est valide STRICTEMENT :
+        un faux succes serait dangereux pour le suivi/reprise du cours.
+        Erreur SQL ou timeout : lever, SANS repeter la RPC ou re-clamer le job.
+        """
+        uid = self._uuid(user_id, "user_id")
+        cid = self._uuid(course_id, "course_id")
+        token = self._uuid(lease_token, "lease_token")
+        row = self._rpc(self.RPC_PAUSE_CREDITS, {
+            "p_user_id": uid,
+            "p_course_id": cid,
+            "p_lease_token": token,
+        })
+        assert row is not None
+        self._expect_owner(row, user_id=uid, course_id=cid)
+        if (row.get("status") != "awaiting_credits"
+                or row.get("job_status") != "awaiting_credits"
+                or row.get("lease_token") is not None
+                or row.get("lease_expires_at") is not None
+                or type(row.get("delivery_attempts")) is not int
+                or row["delivery_attempts"] != 1):
+            raise CourseQueueError(
+                "Pause de credits non confirmee pour la file et le job."
+            )
         return row
 
     def flag_for_review(self, *, user_id: str, course_id: str,
