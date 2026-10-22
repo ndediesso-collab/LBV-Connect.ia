@@ -516,3 +516,145 @@ class AudioService:
         if not updated:
             raise AudioConflict("La note a déjà été remise en file d'attente.")
         return self._public(updated)
+
+# ============================================================
+# ORIA COURS — VALIDATION AUDIO INDEPENDANTE DES NOTES VOCALES
+# ============================================================
+# IMPORTANT :
+# - AudioService conserve integralement son fonctionnement actuel (5 minutes).
+# - Une session Cours peut durer jusqu'a 4 heures au TOTAL, pas par segment.
+# - Le client enregistre localement puis lance l'envoi. Le backend ne doit
+#   commencer transcription et redaction qu'apres validation de l'envoi,
+#   authentification et reservation des credits par le futur CourseService.
+# - Les segments sont controles individuellement, puis comme un ensemble.
+# - Ce module ne stocke PAS les segments, ne facture PAS et n'appelle PAS l'IA.
+#   Le stockage, le worker et la facturation seront implementes dans les
+#   fichiers backend specifiques que nous traiterons ensuite.
+
+
+class CourseAudioPolicy:
+    """Valide le contenu audio et le format d'une session ORIA Cours.
+
+    Le traitement des longues sessions sera construit autour de segments
+    courts pour respecter les limites d'upload et de transcription.
+    Les informations remises a validate_manifest() doivent provenir d'une
+    inspection SERVEUR des vrais octets, jamais des declarations du client.
+    """
+
+    MAX_COURSE_DURATION_MS = 4 * 60 * 60 * 1000  # 4 h = 14 400 s
+    MAX_SEGMENT_DURATION_SECONDS = AudioService.MAX_DURATION_SECONDS  # 5 min
+    MAX_SEGMENT_BYTES = AudioService.MAX_BYTES  # 20 Mio
+    MAX_SEGMENTS = 120  # permet des segments de ~2 min jusqu'a 4 heures
+    MAX_COURSE_BYTES = 512 * 1024 * 1024  # borne de securite par cours
+    DEFAULT_DOCUMENT_FORMAT = "pdf"
+    DOCUMENT_FORMATS = frozenset({"pdf", "docx"})
+
+    @classmethod
+    def validate_document_format(cls, value: str | None = None) -> str:
+        """PDF par defaut ; DOCX sur demande explicite."""
+        if value is None:
+            return cls.DEFAULT_DOCUMENT_FORMAT
+        if not isinstance(value, str):
+            raise AudioInvalid("Le format du cours doit etre PDF ou DOCX.")
+        selected = value.strip().lower()
+        if selected not in cls.DOCUMENT_FORMATS:
+            raise AudioInvalid("Format non pris en charge : choisissez PDF ou DOCX.")
+        return selected
+
+    @classmethod
+    def inspect_segment(
+        cls, *, index: int, data: bytes, mime_type: str
+    ) -> tuple[dict[str, Any], bytes]:
+        """Controle un vrai segment et retourne ses metadonnees + octets normalises.
+
+        Utiliser les memes protections de format, de taille et de duree que
+        les notes vocales, sans soumettre le segment a leur facturation.
+        Les octets renvoyes sont destines au stockage prive du futur
+        CourseService et ne doivent jamais etre exposes en JSON.
+        """
+        if type(index) is not int or not 0 <= index < cls.MAX_SEGMENTS:
+            raise AudioInvalid("Indice de segment de cours invalide.")
+        if not isinstance(data, bytes):
+            raise AudioInvalid("Le segment audio doit etre transmis en octets.")
+
+        normalized, stored_mime, extension = AudioService._normalize_audio(
+            data, mime_type
+        )
+        # Utilise la limite existante de 5 minutes par SEGMENT.
+        duration_seconds = AudioService._duration(normalized, extension)
+        duration_ms = math.ceil(duration_seconds * 1000)
+
+        return (
+            {
+                "index": index,
+                "duration_ms": duration_ms,
+                "size_bytes": len(normalized),
+                "mime_type": stored_mime,
+                "extension": extension,
+                "sha256": hashlib.sha256(normalized).hexdigest(),
+            },
+            normalized,
+        )
+
+    @classmethod
+    def validate_manifest(
+        cls,
+        segments: list[dict[str, Any]],
+        *,
+        document_format: str | None = None,
+    ) -> dict[str, Any]:
+        """Valide l'ensemble des segments DEJA inspectes par le serveur.
+
+        Les indices doivent etre consecutifs et commencer a zero. Cette
+        methode ne prouve pas que les fragments ont ete enregistres sans
+        interruption : la capture continue/reprise est du ressort du client.
+        La facturation est basee sur la duree TOTALE, pas sur un arrondi par
+        segment qui sur-facturerait systematiquement l'utilisateur.
+        """
+        selected_format = cls.validate_document_format(document_format)
+        if not isinstance(segments, list) or not 1 <= len(segments) <= cls.MAX_SEGMENTS:
+            raise AudioInvalid("Nombre de segments de cours invalide.")
+
+        duration_ms = 0
+        size_bytes = 0
+        verified_segments = []
+        for expected_index, part in enumerate(segments):
+            if not isinstance(part, dict) or type(part.get("index")) is not int:
+                raise AudioInvalid("Metadonnees de segment invalides.")
+            if part["index"] != expected_index:
+                raise AudioInvalid("Segments manquants, inverses ou dupliques.")
+            part_ms = part.get("duration_ms")
+            part_size = part.get("size_bytes")
+            digest = part.get("sha256")
+            if (
+                type(part_ms) is not int or not 400 <= part_ms <= cls.MAX_SEGMENT_DURATION_SECONDS * 1000
+                or type(part_size) is not int or not 0 < part_size <= cls.MAX_SEGMENT_BYTES
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+            ):
+                raise AudioInvalid("Duree, taille ou empreinte de segment invalide.")
+            if part.get("mime_type") not in AudioService.MIME_EXTENSIONS:
+                raise AudioInvalid("Format d'un segment de cours invalide.")
+            if part.get("extension") != AudioService.MIME_EXTENSIONS[part["mime_type"]]:
+                raise AudioInvalid("Extension et type audio incoherents.")
+
+            duration_ms += part_ms
+            size_bytes += part_size
+            if duration_ms > cls.MAX_COURSE_DURATION_MS:
+                raise AudioInvalid("Un cours ne peut pas depasser 4 heures.")
+            if size_bytes > cls.MAX_COURSE_BYTES:
+                raise AudioInvalid("Ce cours audio est trop volumineux : compression necessaire.")
+            verified_segments.append(digest)
+
+        # Un seul arrondi par cours. La facturation finale reste a integrer.
+        billable_minutes = (duration_ms + 60_000 - 1) // 60_000
+        return {
+            "duration_ms": duration_ms,
+            "duration_minutes": round(duration_ms / 60_000, 3),
+            "billable_minutes": billable_minutes,
+            "size_bytes": size_bytes,
+            "segment_count": len(segments),
+            "document_format": selected_format,
+            "segment_sha256": verified_segments,
+        }
+

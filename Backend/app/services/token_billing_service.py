@@ -22,6 +22,16 @@ from app.config.credit_costs import (
     VIDEO_MODEL_BY_PACK,
     VIDEO_PROVIDER_BY_PACK,
     WEB_SEARCH_COST_USD_PER_CALL,
+    # ORIA Cours : les budgets XAF sont des PLAFONDS, pas des soldes calcules.
+    LIGHT_PACK_API_BUDGET_XAF,
+    INTERMEDIATE_PACK_API_BUDGET_XAF,
+    PRO_PACK_API_BUDGET_XAF,
+    BUSINESS_PACK_API_BUDGET_XAF,
+    PACK_API_SAFETY_RESERVE_RATIO,
+    COURSE_MAX_DURATION_MS,
+    CourseCreditQuote,
+    build_course_credit_quote,
+    validate_course_writing_model,
 )
 
 # ============================================================
@@ -41,6 +51,7 @@ _MODEL_ALIASES = {
     "luna": "luna",
 
     "gpt-5.6-luna": "luna",
+    "gpt-6-luna": "luna",
 
     "gpt-5": "gpt-5",
 
@@ -48,9 +59,11 @@ _MODEL_ALIASES = {
 
     "gpt-5.6-terra": "gpt-5.6-terra",
 
-    "sol": "gpt-5.6-sol",
+    "sol": "gpt-6-sol",
 
-    "gpt-5.6-sol": "gpt-5.6-sol",
+    "gpt-5.6-sol": "gpt-6-sol",  # alias historique
+
+    "gpt-6-sol": "gpt-6-sol",
 
     "astra": "gpt-6-astra",
 
@@ -68,7 +81,7 @@ _LONG_CONTEXT_MODELS = {
 
     "gpt-5.6-terra",
 
-    "gpt-5.6-sol",
+    "gpt-6-sol",
 
     "gpt-6-astra",
 
@@ -1964,3 +1977,329 @@ class MediaBillingService:
         )
 
         return max(1, result.credits)
+
+
+# ============================================================
+# ORIA COURS — FACTURATION DYNAMIQUE SANS DEBIT DIRECT
+# ============================================================
+# Les ajouts ci-dessous ne modifient ni le Chat, ni les images/videos.
+# La transcription reste le service interne defini dans credit_costs.py.
+# Le modele de REDACTION est choisi par l'utilisateur et verifie avec son
+# VRAI pack par le backend, jamais avec un pack annonce par le frontend.
+#
+# IMPORTANT SECURITE : les fonctions de ce fichier sont des calculs purs.
+# Pour refuser une action AVANT l'appel fournisseur, la reservation des
+# credits utilisateur doit etre atomique dans PostgreSQL. Le cout fournisseur
+# reste mesurable, mais ne constitue pas un deuxieme plafond bloquant.
+
+from collections.abc import Sequence
+from decimal import InvalidOperation
+
+
+INSUFFICIENT_ACTION_CREDITS_MESSAGE = "Crédits insuffisants pour cette action."
+
+
+class InsufficientActionBudgetError(TokenBillingError):
+    """Solde de credits ORIA insuffisant pour l'action.
+
+    `reason` est reserve au diagnostic serveur ; le message public ne
+    communique aucun montant de cout fournisseur.
+    """
+
+    def __init__(self, reason: str = "insufficient_budget") -> None:
+        self.reason = reason
+        super().__init__(INSUFFICIENT_ACTION_CREDITS_MESSAGE)
+
+
+class BudgetSnapshotInvalidError(TokenBillingError):
+    """Etat comptable non fiable : refuser l'action sans appeler l'API."""
+
+
+def _budget_decimal(value: Any, name: str) -> Decimal:
+    try:
+        amount = Decimal(str(value))
+    except (ValueError, TypeError, InvalidOperation) as error:
+        raise BudgetSnapshotInvalidError(f"Montant invalide pour {name}.") from error
+    if not amount.is_finite() or amount < 0:
+        raise BudgetSnapshotInvalidError(f"Montant invalide pour {name}.")
+    return amount
+
+
+def _positive_int(value: Any, name: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise TokenBillingError(f"{name} doit etre un entier strictement positif.")
+    return value
+
+
+_PACK_API_LIMIT_XAF: Mapping[str, int] = {
+    "light_pack": LIGHT_PACK_API_BUDGET_XAF,
+    "intermediate_pack": INTERMEDIATE_PACK_API_BUDGET_XAF,
+    "pro_pack": PRO_PACK_API_BUDGET_XAF,
+    "business_pack": BUSINESS_PACK_API_BUDGET_XAF,
+}
+
+
+@dataclass(frozen=True)
+class ActionBudgetDecision:
+    """Diagnostic non transactionnel ; les champs API historiques sont
+    informatifs et ne constituent jamais une limite d'autorisation.
+    """
+    pack_id: str
+    required_credits: int
+    wallet_available_credits: int
+    api_limit_xaf: Decimal
+    api_remaining_xaf: Decimal
+    api_reservation_xaf: Decimal
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        for key in ("api_limit_xaf", "api_remaining_xaf", "api_reservation_xaf"):
+            data[key] = str(data[key])
+        return data
+
+
+class ActionBudgetGuard:
+    """Controle de solvabilite en credits ORIA (compatibilite historique).
+
+    La seule condition FINANCIERE bloquante est :
+        wallet_available_credits >= required_credits > 0
+
+    Les champs API XAF restent acceptes pour la telemetrie legacy, sans jamais
+    restreindre un achat de credits complementaires. Ce controle est indicatif :
+    la RPC reserve_credits verrouille et debite le wallet atomiquement.
+    L'etat actif du pack et l'acces au modele sont controles en amont et en SQL.
+    """
+
+    @classmethod
+    def validate(
+        cls,
+        *,
+        pack_id: str,
+        wallet_available_credits: int,
+        required_credits: int,
+        api_spent_xaf: Any = 0,
+        api_reserved_xaf: Any = 0,
+        api_reservation_xaf: Any = 0,
+    ) -> ActionBudgetDecision:
+        pack = str(pack_id or "").strip()
+        if pack not in _PACK_API_LIMIT_XAF:
+            raise BudgetSnapshotInvalidError("Pack de credits inconnu.")
+        if type(wallet_available_credits) is not int or wallet_available_credits < 0:
+            raise BudgetSnapshotInvalidError("Solde de credits invalide.")
+        required = _positive_int(required_credits, "required_credits")
+        # Compatibilite: les mesures fournisseur optionnelles sont validees
+        # uniquement pour des diagnostics; elles ne bloquent aucun achat.
+        spent = _budget_decimal(api_spent_xaf, "api_spent_xaf")
+        reserved = _budget_decimal(api_reserved_xaf, "api_reserved_xaf")
+        api_required = _budget_decimal(api_reservation_xaf, "api_reservation_xaf")
+        api_limit = _budget_decimal(_PACK_API_LIMIT_XAF[pack], "api_limit_xaf")
+        remaining = max(Decimal(0), api_limit - spent - reserved)
+        if required > wallet_available_credits:
+            raise InsufficientActionBudgetError("wallet_credits")
+        # PAS de verification api_required <= remaining : les credits ORIA
+        # achetes (pack + complements) sont la seule limite financiere.
+        return ActionBudgetDecision(
+            pack_id=pack,
+            required_credits=required,
+            wallet_available_credits=wallet_available_credits,
+            api_limit_xaf=api_limit,
+            api_remaining_xaf=remaining,
+            api_reservation_xaf=api_required,
+        )
+
+    @classmethod
+    def validate_course_quote(
+        cls,
+        *,
+        quote: Any,
+        wallet_available_credits: int,
+        api_spent_xaf: Any = 0,
+        api_reserved_xaf: Any = 0,
+    ) -> ActionBudgetDecision:
+        """Controle le TOTAL des credits du devis ORIA Cours."""
+        if not isinstance(quote, CourseCreditQuote):
+            raise BudgetSnapshotInvalidError("Devis Cours serveur invalide.")
+        required = _positive_int(quote.total_reservation_credits, "total_reservation_credits")
+        credit_value = _budget_decimal(ORIA_CREDIT_VALUE_XAF, "ORIA_CREDIT_VALUE_XAF")
+        if credit_value <= 0:
+            raise BudgetSnapshotInvalidError("Valeur comptable d'un credit invalide.")
+        return cls.validate(
+            pack_id=quote.pack_id,
+            wallet_available_credits=wallet_available_credits,
+            required_credits=required,
+            api_spent_xaf=api_spent_xaf,
+            api_reserved_xaf=api_reserved_xaf,
+            api_reservation_xaf=Decimal(required) * credit_value,
+        )
+
+
+@dataclass(frozen=True)
+class CourseWritingStep:
+    """Une requete OpenAI prevue pour structurer/rediger le cours.
+
+    Un cours long peut necessiter plusieurs appels : chaque appel doit
+    etre estime et budgete, pas seulement le dernier appel de synthese.
+    """
+    estimated_input_tokens: int
+    max_output_tokens: int
+
+
+@dataclass(frozen=True)
+class CourseDocumentBillingEstimate:
+    model: str
+    steps: int
+    estimated_credits: int
+    reservation_credits: int
+    document_estimated_cost_usd: Decimal
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["document_estimated_cost_usd"] = str(data["document_estimated_cost_usd"])
+        return data
+
+
+@dataclass(frozen=True)
+class CourseDocumentBillingActual:
+    model: str
+    calls: int
+    total_cost_usd: Decimal
+    total_cost_xaf: Decimal
+    credits: int
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["total_cost_usd"] = str(data["total_cost_usd"])
+        data["total_cost_xaf"] = str(data["total_cost_xaf"])
+        return data
+
+
+class CourseBillingService:
+    """Calcule la redaction d'ORIA Cours avec les tarifs du Chat existants.
+
+    Aucun montant, choix de modele ou nombre de tokens du frontend n'est
+    une autorite : le backend construit les etapes puis effectue les appels.
+    Le mode Cours n'autorise pas le Web durant la redaction de base.
+    """
+
+    @classmethod
+    def estimate_document(
+        cls,
+        *,
+        pack_id: str,
+        writing_model: str,
+        steps: Sequence[CourseWritingStep],
+    ) -> CourseDocumentBillingEstimate:
+        chosen = validate_course_writing_model(pack_id, writing_model)
+        canonical = TokenBillingService.normalize_model(chosen)
+        if not isinstance(steps, (list, tuple)) or not steps:
+            raise TokenBillingError("Un plan de redaction non vide est obligatoire.")
+        if len(steps) > 256:
+            raise TokenBillingError("Trop d'etapes de redaction pour un cours.")
+        total_cost_usd = Decimal(0)
+        reserved = 0
+        for stage in steps:
+            if not isinstance(stage, CourseWritingStep):
+                raise TokenBillingError("Etape de redaction invalide.")
+            inputs = _positive_int(stage.estimated_input_tokens, "estimated_input_tokens")
+            outputs = _positive_int(stage.max_output_tokens, "max_output_tokens")
+            if outputs > MAX_CHAT_OUTPUT_TOKENS:
+                raise TokenBillingError("Limite de sortie du modele depassee.")
+            if inputs > 1_000_000:
+                raise TokenBillingError("Limite d'entree du modele depassee.")
+            # L'estimation indicative suppose que la sortie maximale sera
+            # produite. L'entree est repartie au tarif normal (sans cache).
+            estimate = TokenBillingService.calculate(
+                model=canonical,
+                usage={"input_tokens": inputs, "output_tokens": outputs},
+            )
+            total_cost_usd += estimate.total_cost_usd
+            # L'estimation de reservation est volontairement conservative.
+            reserved += TokenBillingService.estimate_reservation(
+                model=canonical,
+                estimated_input_tokens=inputs,
+                max_output_tokens=outputs,
+                web_enabled=False,
+            )
+        fx = _budget_decimal(ACCOUNTING_USD_XAF, "ACCOUNTING_USD_XAF")
+        value = _budget_decimal(ORIA_CREDIT_VALUE_XAF, "ORIA_CREDIT_VALUE_XAF")
+        margin = _budget_decimal(PACK_API_SAFETY_RESERVE_RATIO, "PACK_API_SAFETY_RESERVE_RATIO")
+        if fx <= 0 or value <= 0 or margin > 1:
+            raise TokenBillingError("Configuration economique Cours incorrecte.")
+        estimated_credits = max(
+            1, int((total_cost_usd * fx / value).to_integral_value(rounding=ROUND_CEILING))
+        )
+        reserved = max(
+            estimated_credits,
+            int((Decimal(reserved) * (1 + margin)).to_integral_value(rounding=ROUND_CEILING)),
+        )
+        return CourseDocumentBillingEstimate(
+            model=chosen,
+            steps=len(steps),
+            estimated_credits=estimated_credits,
+            reservation_credits=reserved,
+            document_estimated_cost_usd=total_cost_usd,
+        )
+
+    @classmethod
+    def quote_course(
+        cls,
+        *,
+        pack_id: str,
+        writing_model: str,
+        duration_ms: int,
+        steps: Sequence[CourseWritingStep],
+        document_format: str | None = None,
+    ) -> Any:
+        """Assemble devis du cours entier, sans requete de paiement."""
+        if type(duration_ms) is not int or not 400 <= duration_ms <= COURSE_MAX_DURATION_MS:
+            raise TokenBillingError("Duree du cours invalide (maximum 4 heures).")
+        document = cls.estimate_document(
+            pack_id=pack_id, writing_model=writing_model, steps=steps,
+        )
+        return build_course_credit_quote(
+            pack_id=pack_id,
+            writing_model=document.model,
+            duration_ms=duration_ms,
+            document_estimated_credits=document.estimated_credits,
+            document_reservation_credits=document.reservation_credits,
+            document_format=document_format,
+        )
+
+    @classmethod
+    def calculate_document_actual(
+        cls,
+        *,
+        pack_id: str,
+        writing_model: str,
+        usages: Sequence[Mapping[str, Any]],
+    ) -> CourseDocumentBillingActual:
+        """Calcule la depense fournisseur apres CHAQUE appel realise.
+
+        L'appelant doit enregistrer de facon persistante les usages par
+        appel et eviter tout second debit pour une requete deja reglee.
+        Additionner les USD puis convertir une seule fois en credits,
+        pour ne pas sur-facturer les arrondis par petit segment.
+        """
+        chosen = validate_course_writing_model(pack_id, writing_model)
+        if not isinstance(usages, (list, tuple)) or not usages:
+            raise TokenBillingError("Les usages reels des appels sont obligatoires.")
+        if len(usages) > 256:
+            raise TokenBillingError("Trop d'appels de redaction pour ce cours.")
+        total_usd = Decimal(0)
+        for usage in usages:
+            result = TokenBillingService.calculate(
+                model=chosen, usage=usage, web_search_calls=0,
+            )
+            if result.input_tokens + result.output_tokens <= 0:
+                raise InvalidUsageError("Usage de redaction vide ou non mesure.")
+            total_usd += result.total_cost_usd
+        fx = _budget_decimal(ACCOUNTING_USD_XAF, "ACCOUNTING_USD_XAF")
+        value = _budget_decimal(ORIA_CREDIT_VALUE_XAF, "ORIA_CREDIT_VALUE_XAF")
+        if fx <= 0 or value <= 0:
+            raise TokenBillingError("Conversion economique ORIA invalide.")
+        xaf = total_usd * fx
+        credits = max(1, int((xaf / value).to_integral_value(rounding=ROUND_CEILING)))
+        return CourseDocumentBillingActual(
+            model=chosen, calls=len(usages), total_cost_usd=total_usd,
+            total_cost_xaf=xaf, credits=credits,
+        )

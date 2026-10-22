@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   FlatList,
   Image,
   Keyboard,
@@ -3285,12 +3286,738 @@ const mobileExtras = StyleSheet.create({
   codeText: { fontSize: 12, lineHeight: 20, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
 });
 
+
+/* ============================================================
+ * ORIA COURS — MOBILE iOS / ANDROID, SEGMENTS PRIVES
+ * Contrat Backend/app/route/courses.py ; aucun debit avant devis confirme.
+ * ============================================================ */
+type CourseCapabilities = {
+  pack_active: boolean;
+  writing_models: string[];
+  document_formats: string[];
+  maximum_duration_ms: number;
+  maximum_segment_duration_ms: number;
+  maximum_segment_bytes: number;
+  maximum_segments: number;
+};
+type CourseRecord = {
+  id: string; title: string; document_format: "pdf" | "docx";
+  status: string; submitted_duration_ms?: number | null;
+  submitted_segment_count?: number | null;
+};
+type CourseSegment = { index: number; duration_ms: number; size_bytes: number; mime_type: string };
+type CourseJob = {
+  status: string; transcription_reservation_status?: string;
+  document_reservation_status?: string; document_ready?: boolean;
+  requires_manual_review?: boolean;
+};
+type CourseQuote = {
+  quote: { estimated_total_credits: number; maximum_reserved_credits: number;
+    writing_model: string; duration_ms: number; segments: number;
+    document_format: string; requires_confirmation: boolean; note?: string };
+  quote_token: string; expires_at: string;
+};
+type CourseArtifact = {
+  kind: "document" | "transcript"; id: string; filename: string;
+  extension: string; size_bytes: number;
+};
+type PendingCourseSegment = {
+  courseId: string; index: number; uri: string; filename: string;
+  mimeType: string; size: number; durationMs: number;
+};
+const COURSE_SEGMENT_STOP_MS = 270_000; // < 300 000 ms serveur
+const COURSE_MAX_DURATION_MS = 14_400_000;
+const COURSE_MAX_BYTES = 20 * 1024 * 1024;
+const COURSE_MIMES: Record<string, string> = {
+  m4a: "audio/mp4", mp4: "audio/mp4", webm: "audio/webm", ogg: "audio/ogg",
+  wav: "audio/wav", mp3: "audio/mpeg", aac: "audio/aac", "3gp": "audio/3gpp",
+};
+const COURSE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const courseDraftKey = (id: string) => `oria_course_draft_v1_${id}`;
+const courseHistoryKey = (id: string) => `oria_course_ids_v1_${id}`;
+const coursePendingFile = (id: string) => new ExpoFile(Paths.document, `oria-course-${id}-pending.json`);
+const courseClock = (ms: number) => {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+    .map((n) => String(n).padStart(2, "0")).join(":");
+};
+const courseError = (cause: unknown) => cause instanceof Error ? cause.message : "Opération indisponible.";
+
+async function readCoursePending(userId: string): Promise<PendingCourseSegment[]> {
+  try {
+    const file = coursePendingFile(userId);
+    if (!file.exists) return [];
+    const json = JSON.parse(await file.text()) as unknown;
+    if (!Array.isArray(json)) return [];
+    return json.filter((row): row is PendingCourseSegment => Boolean(
+      row && typeof row === "object" &&
+      COURSE_UUID_RE.test(String(row.courseId || "")) &&
+      Number.isInteger(row.index) && row.index >= 0 && row.index < 120 &&
+      typeof row.uri === "string" && row.uri.startsWith("file:") &&
+      typeof row.filename === "string" && typeof row.mimeType === "string" &&
+      typeof row.size === "number" && row.size > 0 && row.size <= COURSE_MAX_BYTES &&
+      typeof row.durationMs === "number" && row.durationMs >= 0,
+    ));
+  } catch { return []; }
+}
+async function saveCoursePending(userId: string, rows: PendingCourseSegment[]) {
+  coursePendingFile(userId).write(JSON.stringify(rows));
+}
+async function courseUploadMultipart(courseId: string, row: PendingCourseSegment): Promise<CourseSegment> {
+  const session = await getSessionOrThrow();
+  const file = new ExpoFile(row.uri);
+  if (!file.exists || file.size <= 0 || file.size > COURSE_MAX_BYTES) {
+    throw new Error("Fichier local manquant ou trop volumineux : vérifiez le segment enregistré.");
+  }
+  const multipart = new FormData();
+  // Important: expo/fetch + ExpoFile : pas d'objet RN {uri,name,type}.
+  multipart.append("file", file, row.filename);
+  const response = await expoFetch(`${API_URL}/courses/${encodeURIComponent(courseId)}/segments/${row.index}`, {
+    method: "PUT", headers: { "user-id": session.user.id,
+      authorization: `Bearer ${session.access_token}` }, body: multipart,
+  });
+  const payload = await response.json().catch(() => null) as
+    { detail?: unknown; segment?: CourseSegment } | null;
+  if (!response.ok) throw new Error(typeof payload?.detail === "string" ? payload.detail : "Segment refusé par le serveur.");
+  if (!payload?.segment || payload.segment.index !== row.index) {
+    throw new Error("Confirmation du segment incohérente.");
+  }
+  return payload.segment;
+}
+
+function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRefresh }: {
+  language: OriaLanguage; wallet: WalletData | null; userId: string | null;
+  onClose: () => void; onWalletRefresh: () => void;
+}) {
+  const isDark = useIsDarkTheme();
+  const tr = (fr: string, en: string) => language === "en" ? en : fr;
+  const bg = isDark ? "#101012" : "#ffffff";
+  const card = isDark ? "#1b1b20" : "#f6f6f8";
+  const ink = isDark ? "#f5f5f5" : "#17171b";
+  const muted = isDark ? "#b4b4bd" : "#666671";
+  const line = isDark ? "#3c3c44" : "#e4e4e8";
+  const [capabilities, setCapabilities] = useState<CourseCapabilities | null>(null);
+  const [title, setTitle] = useState("");
+  const [format, setFormat] = useState<"pdf" | "docx">("pdf");
+  const [course, setCourse] = useState<CourseRecord | null>(null);
+  const [segments, setSegments] = useState<CourseSegment[]>([]);
+  const [job, setJob] = useState<CourseJob | null>(null);
+  const [writingModel, setWritingModel] = useState("");
+  const [quote, setQuote] = useState<CourseQuote | null>(null);
+  const [artifacts, setArtifacts] = useState<CourseArtifact[]>([]);
+  const [recent, setRecent] = useState<string[]>([]);
+  const [busy, setBusy] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [confirmUncertain, setConfirmUncertain] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const courseIdRef = useRef<string | null>(null);
+  const nextIndexRef = useRef(0);
+  const pendingRef = useRef<PendingCourseSegment[]>([]);
+  const uploadLockRef = useRef(false);
+  const uploadErrorRef = useRef(false);
+  const segmentsRef = useRef<CourseSegment[]>([]);
+  const recordLockRef = useRef(false);
+  const recordingRef = useRef(false);
+  const rollingRef = useRef(false);
+  const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousMsRef = useRef(0);
+  const recordingStartedRef = useRef(0);
+  const liveRef = useRef(true);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderStatus = useAudioRecorderState(recorder);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+
+  const blocked = Boolean(busy) || uploading || recording;
+  const totalMs = segments.reduce((sum, segment) => sum + segment.duration_ms, 0);
+  const hasQuote = Boolean(quote && Date.parse(quote.expires_at) > Date.now());
+  const maxReserved = quote?.quote.maximum_reserved_credits || 0;
+  const isComplete = job?.status === "completed";
+  const needsReview = job?.status === "reconciliation_required" || Boolean(job?.requires_manual_review);
+  const working = job?.status === "processing" || job?.status === "queued";
+
+  async function refreshCourse(cid: string, includeFiles = true) {
+    const [result, parts] = await Promise.all([
+      apiFetch<{ course: CourseRecord; job: CourseJob | null }>(`/courses/${encodeURIComponent(cid)}`),
+      apiFetch<{ segments: CourseSegment[] }>(`/courses/${encodeURIComponent(cid)}/segments`),
+    ]);
+    if (!liveRef.current || cid !== courseIdRef.current) return;
+    setCourse(result.course);
+    setTitle(result.course.title);
+    setFormat(result.course.document_format === "docx" ? "docx" : "pdf");
+    setJob(result.job);
+    const ordered = [...parts.segments].sort((a, b) => a.index - b.index);
+    setSegments(ordered);
+    segmentsRef.current = ordered;
+    nextIndexRef.current = Math.max(nextIndexRef.current,
+      ...ordered.map((part) => part.index + 1),
+      ...pendingRef.current.filter((p) => p.courseId === cid).map((p) => p.index + 1), 0);
+    if (includeFiles && result.job?.status === "completed") {
+      const files = await apiFetch<{ ready: boolean; artifacts: CourseArtifact[] }>(
+        `/courses/${encodeURIComponent(cid)}/artifacts`);
+      if (liveRef.current && cid === courseIdRef.current) setArtifacts(files.ready ? files.artifacts : []);
+    }
+  }
+
+  async function persistCourseId(cid: string) {
+    courseIdRef.current = cid;
+    if (!userId) return;
+    await SecureStore.setItemAsync(courseDraftKey(userId), cid);
+    const old = await SecureStore.getItemAsync(courseHistoryKey(userId));
+    let ids: string[] = [];
+    try { const data = JSON.parse(old || "[]"); if (Array.isArray(data)) ids = data.filter((x): x is string => typeof x === "string" && COURSE_UUID_RE.test(x)); }
+    catch { /* Ignore an obsolete cache entry. */ }
+    const updated = [cid, ...ids.filter((x) => x !== cid)].slice(0, 25);
+    setRecent(updated);
+    await SecureStore.setItemAsync(courseHistoryKey(userId), JSON.stringify(updated));
+  }
+
+  useEffect(() => {
+    liveRef.current = true;
+    let cancelled = false;
+    (async () => {
+      if (!userId) { setLoading(false); return; }
+      try {
+        const limits = await apiFetch<CourseCapabilities>("/courses/capabilities");
+        if (cancelled) return;
+        setCapabilities(limits);
+        setWritingModel(limits.writing_models[0] || "");
+        const pending = await readCoursePending(userId);
+        pendingRef.current = pending;
+        setPendingCount(pending.length);
+        const saved = await SecureStore.getItemAsync(courseHistoryKey(userId));
+        let ids: string[] = [];
+        try { const rows = JSON.parse(saved || "[]");
+          if (Array.isArray(rows)) ids = rows.filter((x): x is string => typeof x === "string" && COURSE_UUID_RE.test(x)).slice(0, 25);
+        } catch { /* Local history is optional. */ }
+        if (cancelled) return;
+        setRecent(ids);
+        // A saved segment takes precedence: never abandon it by opening another course.
+        const draft = pending[0]?.courseId || await SecureStore.getItemAsync(courseDraftKey(userId));
+        if (draft && COURSE_UUID_RE.test(draft)) {
+          courseIdRef.current = draft;
+          if (!ids.includes(draft)) setRecent([draft, ...ids].slice(0, 25));
+          await refreshCourse(draft);
+        }
+      } catch (cause) { if (!cancelled) setError(courseError(cause)); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; liveRef.current = false; };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!course?.id || !working) return;
+    let active = true;
+    const timer = setInterval(() => {
+      if (active && AppState.currentState === "active" && !busy && !uploading) {
+        void refreshCourse(course.id).catch((cause) => { if (active) setError(courseError(cause)); });
+      }
+    }, 7000);
+    return () => { active = false; clearInterval(timer); };
+  }, [course?.id, job?.status, busy, uploading]);
+
+  async function createCourse() {
+    if (blocked || !title.trim() || !capabilities?.pack_active || pendingRef.current.length) return;
+    setBusy("create"); setError(null);
+    try {
+      const result = await apiFetch<{ course: CourseRecord }>("/courses", {
+        method: "POST", body: JSON.stringify({ title: title.trim(), document_format: format }),
+      });
+      await persistCourseId(result.course.id);
+      nextIndexRef.current = 0;
+      previousMsRef.current = 0;
+      setCourse(result.course); setSegments([]); segmentsRef.current = []; setArtifacts([]);
+      setJob(null); setQuote(null); setConfirmUncertain(false);
+    } catch (cause) { setError(courseError(cause)); }
+    finally { setBusy(""); }
+  }
+  async function selectCourse(cid: string) {
+    if (blocked || pendingRef.current.length || recordingRef.current) return;
+    setBusy("open"); setError(null); setQuote(null); setCourse(null); setSegments([]); segmentsRef.current = []; setJob(null); setArtifacts([]);
+    nextIndexRef.current = 0;
+    try { await persistCourseId(cid); await refreshCourse(cid); setConfirmUncertain(false); }
+    catch (cause) { setError(courseError(cause)); }
+    finally { setBusy(""); }
+  }
+  async function savePending(rows: PendingCourseSegment[]) {
+    pendingRef.current = rows;
+    setPendingCount(rows.length);
+    if (userId) await saveCoursePending(userId, rows);
+  }
+  async function removeFirstPending() {
+    const item = pendingRef.current[0];
+    if (!item) return;
+    await savePending(pendingRef.current.slice(1));
+    try {
+      // Only remove our own persistent copy after the server confirmed it.
+      const file = new ExpoFile(item.uri);
+      if (file.exists && item.uri.includes("oria-course-recording-")) file.delete();
+    } catch { /* Space cleanup is best-effort. */ }
+  }
+  async function uploadQueue() {
+    if (uploadLockRef.current || !pendingRef.current.length) return;
+    uploadLockRef.current = true; setUploading(true);
+    try {
+      while (pendingRef.current.length) {
+        const item = pendingRef.current[0];
+        let accepted: CourseSegment | undefined;
+        try { accepted = await courseUploadMultipart(item.courseId, item); }
+        catch (cause) {
+          // A network timeout may happen AFTER the server inserted the segment.
+          const data = await apiFetch<{ segments: CourseSegment[] }>(
+            `/courses/${encodeURIComponent(item.courseId)}/segments`).catch(() => null);
+          accepted = data?.segments.find((part) => part.index === item.index);
+          if (!accepted) throw cause;
+        }
+        await removeFirstPending();
+        const newSegments = [...segmentsRef.current.filter((x) => x.index !== accepted!.index), accepted!]
+          .sort((a, b) => a.index - b.index);
+        segmentsRef.current = newSegments;
+        setSegments(newSegments);
+        setQuote(null);
+      }
+      uploadErrorRef.current = false;
+      setError(null);
+    } catch (cause) {
+      uploadErrorRef.current = true;
+      setError(`${courseError(cause)} ${tr("Le segment est conservé sur l'appareil : réessayez l'envoi.",
+        "The segment is saved on your phone: retry upload.")}`);
+      // Stop ongoing recording if connection broke; don't accrue unbounded local audio.
+      if (recordingRef.current) void stopRecording(false);
+    } finally { uploadLockRef.current = false; setUploading(false); }
+  }
+  async function addAudioSegment(uri: string, filename: string, mimeType: string, durationMs = 0) {
+    if (!courseIdRef.current || !userId) throw new Error("Créez d'abord un cours.");
+    if (!course || course.status !== "uploading") throw new Error("Le cours n'accepte plus de segments.");
+    const source = new ExpoFile(uri);
+    const bytes = source.size;
+    if (!source.exists || !bytes || bytes > Math.min(COURSE_MAX_BYTES, capabilities?.maximum_segment_bytes || COURSE_MAX_BYTES)) {
+      throw new Error("Le segment audio doit être non vide et inférieur à 20 Mio.");
+    }
+    const ext = filename.split(".").pop()?.toLowerCase() || "";
+    const mime = mimeType.split(";")[0].toLowerCase();
+    const accepted = Object.values(COURSE_MIMES).includes(mime) && COURSE_MIMES[ext] === mime;
+    if (!accepted) throw new Error("Format audio incompatible : M4A, MP3, WAV, OGG, WebM, AAC ou 3GP.");
+    const index = nextIndexRef.current;
+    if (index >= (capabilities?.maximum_segments || 120)) throw new Error("Nombre maximal de segments atteint.");
+    const expected = segmentsRef.current.reduce((sum, x) => sum + x.duration_ms, 0) +
+      pendingRef.current.reduce((sum, x) => sum + x.durationMs, 0) + durationMs;
+    const expectedBytes = segmentsRef.current.reduce((sum, x) => sum + x.size_bytes, 0) +
+      pendingRef.current.reduce((sum, x) => sum + x.size, 0) + bytes;
+    if (expectedBytes > 512 * 1024 * 1024) throw new Error("Le cours dépasse la limite totale de 512 Mio.");
+    if (expected > Math.min(COURSE_MAX_DURATION_MS, capabilities?.maximum_duration_ms || COURSE_MAX_DURATION_MS)) {
+      throw new Error("La durée totale du cours dépasse quatre heures.");
+    }
+    // Recording chunks are already copied into Paths.document. Picker files remain
+    // in picker cache until accepted; copy them into documents for offline retry.
+    const dest = new ExpoFile(Paths.document, `oria-course-recording-${courseIdRef.current}-${index}.${ext}`);
+    if (source.uri !== dest.uri) source.copy(dest);
+    const storedUri = dest.uri;
+    const item: PendingCourseSegment = { courseId: courseIdRef.current, index,
+      uri: storedUri, filename: `oria-course-${index}.${ext}`, mimeType: mime,
+      size: bytes, durationMs };
+    await savePending([...pendingRef.current, item]);
+    nextIndexRef.current = index + 1;
+    setQuote(null);
+    void uploadQueue();
+  }
+  async function chooseAudio() {
+    if (!course || course.status !== "uploading" || blocked || pendingRef.current.length) return;
+    setBusy("picker"); setError(null);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: "audio/*",
+        multiple: true, copyToCacheDirectory: true });
+      if (result.canceled || !result.assets?.length) return;
+      if (result.assets.length + nextIndexRef.current > (capabilities?.maximum_segments || 120)) {
+        throw new Error("Trop de segments audio pour ce cours.");
+      }
+      for (const asset of result.assets) {
+        const ext = asset.name.split(".").pop()?.toLowerCase() || "";
+        const mime = COURSE_MIMES[ext];
+        if (!mime) throw new Error(`Fichier non compatible : ${asset.name}.`);
+        await addAudioSegment(asset.uri, asset.name, mime);
+      }
+    } catch (cause) { setError(courseError(cause)); }
+    finally { setBusy(""); }
+  }
+
+  async function startRecording(continuation = false) {
+    if (recordLockRef.current || recordingRef.current || !course || course.status !== "uploading"
+        || busy || (!continuation && (pendingRef.current.length || uploading)) ||
+        uploadErrorRef.current || !capabilities?.pack_active) return;
+    const committedMs = segmentsRef.current.reduce((sum, x) => sum + x.duration_ms, 0) +
+      pendingRef.current.reduce((sum, x) => sum + x.durationMs, 0);
+    if (committedMs >= COURSE_MAX_DURATION_MS || nextIndexRef.current >= (capabilities.maximum_segments || 120)) {
+      setError("Durée maximale ou nombre de segments atteint."); return;
+    }
+    recordLockRef.current = true;
+    try {
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
+      if (!permission.granted) throw new Error("Autorisez l'accès au microphone dans les réglages.");
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      previousMsRef.current = committedMs;
+      recordingStartedRef.current = Date.now();
+      recordingRef.current = true; setRecording(true); setElapsed(0); setError(null);
+      recorder.record();
+      if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = setTimeout(() => void stopRecording(true),
+        Math.min(COURSE_SEGMENT_STOP_MS, Math.max(1000, COURSE_MAX_DURATION_MS - committedMs - 5000)));
+    } catch (cause) { setError(courseError(cause)); recordingRef.current = false; setRecording(false); }
+    finally { recordLockRef.current = false; }
+  }
+  async function stopRecording(continueWithNext: boolean) {
+    if (!recordingRef.current || rollingRef.current) return;
+    rollingRef.current = true;
+    if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+    stopTimerRef.current = null;
+    const duration = Math.max(recorderStatus.durationMillis || 0, Date.now() - recordingStartedRef.current);
+    recordingRef.current = false;
+    setRecording(false);
+    try {
+      await recorder.stop();
+      if (!recorder.uri) throw new Error("Enregistrement vide ou inaccessible.");
+      const uri = recorder.uri;
+      const ext = uri.split(".").pop()?.toLowerCase() || "m4a";
+      const mime = COURSE_MIMES[ext];
+      if (!mime) throw new Error("Format d'enregistrement non reconnu par le backend.");
+      await addAudioSegment(uri, `cours.${ext}`, mime, duration);
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      // Automatic continuation is safe only while the view is mounted, no upload
+      // failure has been reported, and the next segment stays under 4 hours.
+      const continueRecording = continueWithNext && liveRef.current &&
+        AppState.currentState === "active" && !uploadErrorRef.current &&
+        previousMsRef.current + duration < COURSE_MAX_DURATION_MS - 1000 &&
+        nextIndexRef.current < (capabilities?.maximum_segments || 120);
+      if (continueRecording) {
+        // Queue upload is asynchronous; start the next native file independently.
+        recordingRef.current = false;
+        rollingRef.current = false;
+        await startRecording(true);
+        return;
+      }
+      setNotice(tr("Enregistrement terminé. Vérifiez que tous les segments sont envoyés.",
+        "Recording stopped. Check that all segments were uploaded."));
+    } catch (cause) { setError(courseError(cause)); }
+    finally { rollingRef.current = false; }
+  }
+  // Expo records only while this screen is in the foreground. No hidden microphone.
+  useEffect(() => {
+    const listener = AppState.addEventListener("change", (next) => {
+      if (next !== "active" && recordingRef.current) void stopRecording(false);
+    });
+    return () => listener.remove();
+  }, [recording]);
+  useEffect(() => {
+    if (!recording) return;
+    const tick = setInterval(() => setElapsed(Math.floor((Date.now() - recordingStartedRef.current) / 1000)), 1000);
+    return () => clearInterval(tick);
+  }, [recording]);
+  useEffect(() => {
+    if (recording && recorderStatus.isRecording && recorderStatus.durationMillis >= COURSE_SEGMENT_STOP_MS) {
+      void stopRecording(true);
+    }
+  }, [recording, recorderStatus.isRecording, recorderStatus.durationMillis]);
+  useEffect(() => () => {
+    if (stopTimerRef.current) clearTimeout(stopTimerRef.current);
+    // If navigation destroys the panel, ensure the microphone is no longer active.
+    if (recordingRef.current) void recorder.stop().catch(() => undefined);
+  }, []);
+
+  async function submitCourse() {
+    if (!course || course.status !== "uploading" || blocked || pendingRef.current.length || !segments.length) return;
+    setBusy("submit"); setError(null);
+    try {
+      const result = await apiFetch<{ course: CourseRecord }>(`/courses/${encodeURIComponent(course.id)}/submit`, { method: "POST" });
+      setCourse(result.course); setQuote(null);
+      setNotice(tr("Audio soumis. Calculez maintenant votre devis.", "Audio submitted. Request a quote."));
+    } catch (cause) { setError(courseError(cause)); }
+    finally { setBusy(""); }
+  }
+  async function requestQuote() {
+    if (!course || course.status !== "queued" || busy || !writingModel || job) return;
+    setBusy("quote"); setError(null); setQuote(null);
+    try {
+      const result = await apiFetch<CourseQuote>(`/courses/${encodeURIComponent(course.id)}/quote`, {
+        method: "POST", body: JSON.stringify({ writing_model: writingModel }),
+      });
+      setQuote(result);
+    } catch (cause) { setError(courseError(cause)); }
+    finally { setBusy(""); }
+  }
+  async function confirmQuote() {
+    if (!course || !quote || busy || confirmUncertain || !wallet?.is_pack_active ||
+        wallet.balance < quote.quote.maximum_reserved_credits) return;
+    if (!Number.isFinite(Date.parse(quote.expires_at)) || Date.parse(quote.expires_at) <= Date.now()) {
+      setQuote(null); setError("Devis expiré. Recalculez le montant."); return;
+    }
+    setBusy("confirm"); setError(null);
+    try {
+      const result = await apiFetch<{ status: string; message?: string }>(`/courses/${encodeURIComponent(course.id)}/confirm`, {
+        method: "POST", body: JSON.stringify({ quote_token: quote.quote_token, approved: true }),
+      });
+      setQuote(null);
+      setNotice(result.message || "Traitement accepté.");
+      await refreshCourse(course.id);
+      onWalletRefresh();
+    } catch (cause) {
+      // A timeout can occur AFTER a credit reservation was written. Never
+      // retry automatically or silently release credits from the device.
+      setConfirmUncertain(true);
+      setError(`${courseError(cause)} ${tr("Vérifiez l'état du cours avant de confirmer à nouveau.",
+        "Check course status before confirming again.")}`);
+    } finally { setBusy(""); }
+  }
+  async function verifyStatus() {
+    if (!course || busy) return;
+    setBusy("refresh"); setError(null);
+    try {
+      await refreshCourse(course.id);
+      if (confirmUncertain) {
+        const state = await apiFetch<{ job: CourseJob | null }>(`/courses/${encodeURIComponent(course.id)}`);
+        if (state.job) setConfirmUncertain(false);
+        else setNotice(tr("Aucun job confirmé. En cas de réservation incertaine, contactez l'assistance avant de réessayer.",
+          "No confirmed job. Contact support before retrying an uncertain reservation."));
+      }
+      onWalletRefresh();
+    } catch (cause) { setError(courseError(cause)); }
+    finally { setBusy(""); }
+  }
+  async function playSegment(index: number) {
+    if (!course) return;
+    try {
+      const result = await apiFetch<{ playback_url: string }>(`/courses/${encodeURIComponent(course.id)}/segments/${index}/playback`);
+      if (!result.playback_url?.startsWith("https://")) throw new Error("Lien privé indisponible.");
+      await Linking.openURL(result.playback_url);
+    } catch (cause) { setError(courseError(cause)); }
+  }
+  async function openArtifact(item: CourseArtifact) {
+    setError(null);
+    try {
+      const result = await apiFetch<{ artifact: Record<string, unknown> }>(`/ai/artifacts/${encodeURIComponent(item.id)}`);
+      const raw = result.artifact;
+      const url = typeof raw?.download_url === "string" ? raw.download_url : raw?.url;
+      if (typeof url !== "string" || !url.startsWith("https://")) throw new Error("Fichier privé non disponible.");
+      await Linking.openURL(url);
+    } catch (cause) { setError(courseError(cause)); }
+  }
+  const courseButton = (label: string, action: () => void, disabled = false, subtle = false) => (
+    <Pressable accessibilityRole="button" disabled={disabled} onPress={action}
+      style={[courseUi.button, { backgroundColor: subtle ? card : ink, borderColor: line, opacity: disabled ? .45 : 1 }]}>
+      <Text style={[courseUi.buttonText, { color: subtle ? ink : bg }]}>{label}</Text>
+    </Pressable>
+  );
+  const detail = (label: string, value: string) => (
+    <View style={courseUi.detailRow}><Text style={{ color: muted, fontSize: 12 }}>{label}</Text>
+      <Text style={{ color: ink, fontSize: 13, fontWeight: "700" }}>{value}</Text></View>
+  );
+
+  return (
+    <View style={[courseUi.screen, { backgroundColor: bg }]}>
+      <View style={[courseUi.top, { borderBottomColor: line }]}>
+        <Pressable onPress={() => {
+          if (recordingRef.current || rollingRef.current) {
+            setNotice(tr("Arrêtez d'abord l'enregistrement.", "Stop recording first."));
+            return;
+          }
+          onClose();
+        }} style={courseUi.back} accessibilityLabel={tr("Retour au Chat", "Back to Chat")}>
+          <Ionicons name="arrow-back" size={22} color={ink}/>
+        </Pressable>
+        <View style={{ flex: 1 }}><Text style={{ color: ink, fontWeight: "800", fontSize: 17 }}>ORIA Cours</Text>
+          <Text style={{ color: muted, fontSize: 11 }}>{tr("Jusqu'à 4 h • PDF ou Word", "Up to 4 h • PDF or Word")}</Text></View>
+        {Boolean(busy || uploading) && <ActivityIndicator color={ink} />}
+      </View>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={courseUi.content}
+        keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <View style={[courseUi.card, { backgroundColor: card, borderColor: line }]}>
+          <Text style={{ color: ink, fontWeight: "700", fontSize: 15 }}>
+            {tr("Votre professeur, clairement expliqué", "Your lecture, clearly explained")}
+          </Text>
+          <Text style={{ color: muted, lineHeight: 20, fontSize: 13, marginTop: 5 }}>
+            {tr("Enregistrez ou importez des segments audio. ORIA prépare une transcription et un vrai document pédagogique, après votre accord sur le devis en crédits.",
+              "Record or import audio segments. ORIA produces a transcript and structured notes after your credit quote approval.")}
+          </Text>
+        </View>
+        {loading ? <ActivityIndicator color={ink}/> : null}
+        {error ? <View style={[courseUi.note, { borderColor: "#b54444" }]}>
+          <Text style={{ color: isDark ? "#ff9999" : "#b4232d" }}>{error}</Text></View> : null}
+        {notice ? <View style={[courseUi.note, { borderColor: line }]}><Text style={{ color: ink }}>{notice}</Text></View> : null}
+        {capabilities && !capabilities.pack_active ? (
+          <Text style={{ color: muted, fontSize: 13 }}>
+            {tr("Un pack actif est nécessaire. Aucun crédit n'est débité avant votre accord sur le devis.",
+              "An active pack is required. Credits are not charged before quote approval.")}
+          </Text>
+        ) : null}
+        {recent.length ? <View style={{ gap: 7 }}>
+          <Text style={{ color: muted, fontSize: 12 }}>{tr("Cours récents", "Recent courses")}</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+            {recent.map((cid) => <Pressable key={cid}
+              disabled={blocked || pendingCount > 0}
+              onPress={() => void selectCourse(cid)}
+              style={[courseUi.pill, { backgroundColor: course?.id === cid ? card : bg, borderColor: line }]}>
+              <Text style={{ color: ink, fontSize: 12 }}>{tr("Cours", "Course")} {cid.slice(0, 8)}</Text>
+            </Pressable>)}
+          </ScrollView>
+        </View> : null}
+        {!course && !loading ? <View style={[courseUi.card, { backgroundColor: bg, borderColor: line }]}>
+          <Text style={{ color: ink, fontWeight: "700" }}>{tr("Titre du cours", "Course title")}</Text>
+          <TextInput value={title} maxLength={160} onChangeText={setTitle}
+            placeholder={tr("Ex. Thermodynamique — transformations", "E.g. Thermodynamics")}
+            placeholderTextColor={muted} style={[courseUi.input, { color: ink, borderColor: line }]}/>
+          <Text style={{ color: ink, fontWeight: "700", marginTop: 9 }}>{tr("Format du document", "Document format")}</Text>
+          <View style={courseUi.options}>{(["pdf", "docx"] as const).map((f) =>
+            <Pressable key={f} onPress={() => setFormat(f)} style={[courseUi.option,
+              { borderColor: f === format ? ink : line, backgroundColor: f === format ? card : bg }]}>
+              <Text style={{ color: ink }}>{f === "pdf" ? "PDF" : "Word (.docx)"}</Text>
+            </Pressable>)}</View>
+          {courseButton(tr("Créer ce cours", "Create course"), () => void createCourse(),
+            !title.trim() || !capabilities?.pack_active || Boolean(busy))}
+        </View> : null}
+        {course ? <View style={[courseUi.card, { backgroundColor: bg, borderColor: line }]}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <View style={{ flex: 1, gap: 3 }}><Text style={{ color: ink, fontWeight: "800", fontSize: 16 }} numberOfLines={2}>{course.title}</Text>
+              <Text style={{ color: muted, fontSize: 12 }}>{course.document_format.toUpperCase()} · {course.status} · {course.id.slice(0, 8)}</Text></View>
+            <Pressable accessibilityRole="button" disabled={blocked || pendingCount > 0}
+              onPress={() => {
+                courseIdRef.current = null;
+                nextIndexRef.current = 0;
+                segmentsRef.current = [];
+                setCourse(null); setSegments([]); setJob(null); setQuote(null); setArtifacts([]);
+                setTitle(""); setError(null); setConfirmUncertain(false);
+                if (userId) void SecureStore.deleteItemAsync(courseDraftKey(userId));
+              }} style={[courseUi.pill, { borderColor: line, opacity: blocked || pendingCount ? .4 : 1 }]}>
+              <Text style={{ color: ink, fontSize: 11 }}>{tr("Nouveau", "New")}</Text>
+            </Pressable>
+          </View>
+          {detail(tr("Crédits disponibles", "Available credits"),
+            formatCredits(wallet?.is_pack_active ? wallet.balance : 0, language))}
+          {course.status === "uploading" ? <>
+            {detail(tr("Durée des segments envoyés", "Uploaded audio duration"), courseClock(totalMs))}
+            {detail(tr("Nombre de segments", "Segments"), `${segments.length} / ${capabilities?.maximum_segments || 120}`)}
+            <Text style={{ color: muted, fontSize: 12, lineHeight: 18 }}>
+              {tr("Chaque segment doit durer moins de cinq minutes et peser moins de 20 Mio. Les enregistrements sont envoyés sans transcription avant l'accord sur le devis.",
+                "Each segment must be under five minutes and 20 MiB. Recording uploads do not start paid transcription before quote approval.")}
+            </Text>
+            {recording ? <View style={[courseUi.note, { borderColor: "#c53a48" }]}>
+              <Text style={{ color: ink, fontWeight: "700" }}>
+                🔴 {tr("Enregistrement", "Recording")} {courseClock(elapsed * 1000)}
+              </Text><Text style={{ color: muted, fontSize: 12 }}>
+                {tr("Découpage automatique toutes les 4 min 30 s.", "Auto-segments every 4 min 30 s.")}
+              </Text></View> : null}
+            <View style={courseUi.actionRow}>
+              <View style={{ flex: 1 }}>
+                {courseButton(recording ? tr("Arrêter", "Stop") : tr("Enregistrer", "Record"),
+                  () => void (recording ? stopRecording(false) : startRecording()),
+                  Boolean(busy) || (uploading && !recording) || (!recording && pendingCount > 0))}
+              </View>
+              <View style={{ flex: 1 }}>
+                {courseButton(tr("Importer audio", "Import audio"), () => void chooseAudio(),
+                  Boolean(busy) || recording || uploading || pendingCount > 0, true)}
+              </View>
+            </View>
+            {pendingCount > 0 || uploading ? <View style={[courseUi.note, { borderColor: line }]}>
+              <Text style={{ color: ink }}>{tr("Segments conservés sur l'appareil", "Segments saved on device")}: {pendingCount}</Text>
+              <Text style={{ color: muted, fontSize: 12 }}>{tr("Ils ne sont pas comptés comme envoyés avant confirmation du serveur.",
+                "They are not considered uploaded until the server confirms them.")}</Text>
+              {courseButton(tr("Réessayer l'envoi", "Retry upload"), () => void uploadQueue(), uploading || recording || Boolean(busy), true)}
+            </View> : null}
+            {segments.map((part) => <View key={part.index} style={[courseUi.detailRow, { borderTopWidth: 1, borderTopColor: line }]}>
+              <Text style={{ color: ink, fontSize: 12 }}>#{part.index + 1} · {courseClock(part.duration_ms)} · {(part.size_bytes / 1024 / 1024).toFixed(1)} Mio</Text>
+              <Pressable onPress={() => void playSegment(part.index)}><Ionicons name="play-circle-outline" size={24} color={ink}/></Pressable>
+            </View>)}
+            {courseButton(tr("Terminer l'envoi audio", "Finish audio upload"), () => void submitCourse(),
+              blocked || pendingCount > 0 || !segments.length || totalMs > COURSE_MAX_DURATION_MS)}
+          </> : null}
+          {course.status === "queued" && !job ? <>
+            <Text style={{ color: ink, fontWeight: "700", marginTop: 12 }}>{tr("Modèle de rédaction", "Writing model")}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 7, marginVertical: 7 }}>
+              {(capabilities?.writing_models || []).map((model) => <Pressable key={model}
+                onPress={() => { setWritingModel(model); setQuote(null); }}
+                style={[courseUi.pill, { borderColor: writingModel === model ? ink : line,
+                  backgroundColor: writingModel === model ? card : bg }]}>
+                <Text style={{ color: ink }}>{model}</Text></Pressable>)}
+            </ScrollView>
+            {courseButton(tr("Calculer les crédits nécessaires", "Estimate credits"), () => void requestQuote(), !writingModel || Boolean(busy), true)}
+            {quote ? <View style={[courseUi.card, { backgroundColor: card, borderColor: line, marginTop: 12 }]}>
+              {detail(tr("Crédits estimés", "Estimated credits"), formatCredits(quote.quote.estimated_total_credits, language))}
+              {detail(tr("Maximum à réserver", "Maximum to reserve"), formatCredits(maxReserved, language))}
+              <Text style={{ color: muted, fontSize: 12 }}>
+                {tr("Le montant réel sera régularisé. Aucun second plafond API fixe ne bloque les crédits achetés.",
+                  "Actual use is settled afterward. No separate fixed API pack cap blocks purchased credits.")}
+              </Text>
+              <Text style={{ color: muted, fontSize: 12 }}>
+                {tr("Expiration", "Expires")}: {new Date(quote.expires_at).toLocaleTimeString(language === "en" ? "en-US" : "fr-FR")}
+              </Text>
+              {!hasQuote ? <Text style={{ color: "#ba2d3c" }}>{tr("Devis expiré, recalcul requis.", "Quote expired, request another.")}</Text> : null}
+              {wallet && wallet.balance < maxReserved ? <Text style={{ color: "#ba2d3c" }}>
+                {tr("Crédits insuffisants pour cette réservation.", "Insufficient credits for this reservation.")}</Text> : null}
+              {courseButton(tr("J'accepte le devis et autorise le traitement", "Accept quote and authorize processing"),
+                () => Alert.alert(tr("Confirmer la réservation", "Confirm reservation"),
+                  tr(`ORIA peut réserver jusqu'à ${formatCredits(maxReserved, language)} crédits. Continuer ?`,
+                    `ORIA may reserve up to ${formatCredits(maxReserved, language)} credits. Continue?`),
+                  [{ text: tr("Annuler", "Cancel"), style: "cancel" },
+                    { text: tr("Confirmer", "Confirm"), onPress: () => void confirmQuote() }]),
+                !hasQuote || confirmUncertain || Boolean(busy) || !wallet?.is_pack_active || wallet.balance < maxReserved)}
+            </View> : null}
+          </> : null}
+          {working || isComplete || needsReview || confirmUncertain ? <View style={[courseUi.card, { backgroundColor: card, borderColor: line, marginTop: 12 }]}>
+            <Text style={{ color: ink, fontWeight: "700" }}>{isComplete ? tr("Cours terminé", "Course completed") :
+              needsReview ? tr("Vérification manuelle", "Manual review") : tr("Traitement en cours", "Processing")}</Text>
+            <Text style={{ color: muted, fontSize: 12 }}>
+              {tr("Transcription", "Transcription")}: {job?.transcription_reservation_status || "—"} · {tr("Document", "Document")}: {job?.document_reservation_status || "—"}
+            </Text>
+            {needsReview || confirmUncertain ? <Text style={{ color: "#b54444", fontSize: 12 }}>
+              {tr("Ne relancez pas la confirmation : une opération peut déjà être facturée. Actualisez le statut.",
+                "Do not reconfirm: a provider call may already have been billed. Refresh the status.")}
+            </Text> : null}
+            {courseButton(tr("Actualiser le statut", "Refresh status"), () => void verifyStatus(), Boolean(busy), true)}
+          </View> : null}
+          {isComplete ? <View style={[courseUi.card, { backgroundColor: card, borderColor: line, marginTop: 12 }]}>
+            <Text style={{ color: ink, fontWeight: "700" }}>{tr("Documents privés", "Private files")}</Text>
+            {artifacts.length === 0 ? courseButton(tr("Charger les documents", "Load documents"), () => void verifyStatus(), Boolean(busy), true) : null}
+            {artifacts.map((item) => <View key={item.id} style={courseUi.detailRow}>
+              <View style={{ flex: 1 }}><Text style={{ color: ink, fontSize: 13 }}>{item.filename}</Text>
+                <Text style={{ color: muted, fontSize: 11 }}>{item.kind === "transcript" ? tr("Transcription", "Transcript") : tr("Cours rédigé", "Structured notes")}</Text></View>
+              <Pressable accessibilityRole="button" onPress={() => void openArtifact(item)} style={[courseUi.pill, { borderColor: line }]}>
+                <Ionicons name="open-outline" size={21} color={ink}/>
+              </Pressable>
+            </View>)}
+          </View> : null}
+        </View> : null}
+        <View style={{ height: 40 }}/>
+      </ScrollView>
+    </View>
+  );
+}
+const courseUi = StyleSheet.create({
+  screen: { flex: 1 },
+  top: { paddingHorizontal: 16, paddingVertical: 12, flexDirection: "row", gap: 10,
+    alignItems: "center", borderBottomWidth: 1 },
+  back: { padding: 6 }, content: { padding: 16, gap: 14 },
+  card: { padding: 15, borderRadius: 17, borderWidth: 1, gap: 10 },
+  input: { paddingHorizontal: 13, paddingVertical: 12, borderWidth: 1, borderRadius: 10, marginTop: 8 },
+  options: { flexDirection: "row", gap: 8, marginTop: 6, marginBottom: 10 },
+  option: { borderRadius: 10, paddingHorizontal: 15, paddingVertical: 10, borderWidth: 1 },
+  button: { borderRadius: 12, paddingVertical: 13, paddingHorizontal: 11, borderWidth: 1,
+    alignItems: "center", justifyContent: "center", minHeight: 46 },
+  buttonText: { fontWeight: "700", fontSize: 13, textAlign: "center" },
+  pill: { paddingVertical: 9, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1 },
+  note: { borderRadius: 13, borderWidth: 1, padding: 12, gap: 8 },
+  detailRow: { paddingVertical: 8, flexDirection: "row", gap: 10, justifyContent: "space-between", alignItems: "center" },
+  actionRow: { flexDirection: "row", gap: 9, marginVertical: 8 },
+});
+
 export default function ChatPage() {
   const router = useRouter();
   const navigation = useNavigation();
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
   const [language, setLanguage] = useState<OriaLanguage>("fr");
+  const [coursesOpen, setCoursesOpen] = useState(false);
   const [theme, setTheme] = useState<OriaTheme>("light");
   const isDark = theme === "dark";
   const styles = useMemo(
@@ -3435,6 +4162,7 @@ export default function ChatPage() {
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gesture) =>
           !drawerVisible &&
+          !coursesOpen &&
           gesture.x0 <= 28 &&
           gesture.dx > 8 &&
           Math.abs(gesture.dx) > Math.abs(gesture.dy),
@@ -3465,7 +4193,7 @@ export default function ChatPage() {
           }).start();
         },
       }),
-    [drawerVisible, drawerTranslateX, drawerWidth, openDrawer],
+    [drawerVisible, coursesOpen, drawerTranslateX, drawerWidth, openDrawer],
   );
 
   const drawerPanResponder = useMemo(
@@ -6453,7 +7181,7 @@ export default function ChatPage() {
         keyboardVerticalOffset={0}
       >
         <View style={styles.container} {...edgePanResponder.panHandlers}>
-          <View style={styles.header}>
+          {!coursesOpen ? <View style={styles.header}>
             <Pressable
               style={styles.headerButton}
               onPress={openDrawer}
@@ -6474,6 +7202,21 @@ export default function ChatPage() {
             </View>
 
             <View style={styles.headerRight}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={language === "en" ? "ORIA Courses" : "ORIA Cours"}
+                style={[courseUi.pill, { borderColor: isDark ? "#555" : "#ddd", paddingHorizontal: 10, paddingVertical: 7 }]}
+                onPress={() => {
+                  if (recorderState.isRecording) {
+                    Alert.alert("ORIA", language === "en" ? "Stop your voice note first." : "Arrêtez d'abord la note vocale.");
+                    return;
+                  }
+                  setCoursesOpen((previous) => !previous);
+                  Keyboard.dismiss();
+                }}>
+                <Ionicons name={coursesOpen ? "chatbubble-outline" : "school-outline"}
+                  size={20} color={themedIconColor("#555555", isDark)} />
+              </Pressable>
               <Pressable
                 style={styles.creditPill}
                 onPress={() => router.push("/credits"as any)}
@@ -6499,8 +7242,13 @@ export default function ChatPage() {
                 <Text style={styles.profileLetter}>U</Text>
               </Pressable>
             </View>
-          </View>
+          </View> : null}
 
+          {coursesOpen ? (
+            <OriaCoursesMobilePanel language={language} wallet={wallet} userId={currentUserId}
+              onWalletRefresh={() => { void loadWallet(); }} onClose={() => setCoursesOpen(false)} />
+          ) : (
+          <>
           {error ? (
             <View style={styles.errorBox}>
               <Text style={styles.errorText}>{error}</Text>
@@ -7301,6 +8049,15 @@ export default function ChatPage() {
                   >
                     <Pressable
                       style={styles.capabilityButton}
+                      onPress={() => {
+                        if (recorderState.isRecording) return;
+                        Keyboard.dismiss(); setCoursesOpen(true);
+                      }}>
+                      <Ionicons name="school-outline" size={19} color={themedIconColor("#555555", isDark)} />
+                      <Text style={styles.capabilityButtonText}>Cours</Text>
+                    </Pressable>
+                    <Pressable
+                      style={styles.capabilityButton}
                       onPress={() => selectCapability("Fichier")}
                     >
                       <Ionicons
@@ -7475,6 +8232,8 @@ export default function ChatPage() {
             ) : null}
           </View>
 
+          </>
+          )}
           <Modal
             visible={drawerVisible}
             transparent
@@ -7606,6 +8365,15 @@ export default function ChatPage() {
                 </View>
 
                 <View style={styles.drawerLinks}>
+                  <Pressable style={styles.drawerLink} onPress={() => {
+                    if (recorderState.isRecording) {
+                      Alert.alert("ORIA", "Arrêtez d'abord la note vocale."); return;
+                    }
+                    closeDrawer(); setCoursesOpen(true); Keyboard.dismiss();
+                  }}>
+                    <Ionicons name="school-outline" size={18} color={themedIconColor("#555555", isDark)} />
+                    <Text style={styles.drawerLinkText}>ORIA Cours</Text>
+                  </Pressable>
                   <Pressable
                     style={styles.drawerLink}
                     onPress={() => {

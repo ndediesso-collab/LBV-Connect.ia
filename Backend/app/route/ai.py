@@ -1,4 +1,5 @@
 from json import dumps
+from decimal import Decimal, InvalidOperation
 
 import asyncio
 
@@ -58,6 +59,9 @@ from app.models.credit_transaction import (
 from app.repositories.supabase_credit_repository import (
 
     SupabaseCreditRepository,
+    INSUFFICIENT_ACTION_CREDITS_MESSAGE,
+    InsufficientCreditsForActionError,
+    ApiBudgetConfigurationError,
 
 )
 
@@ -2081,6 +2085,106 @@ def _attachments_for_openai(
 
 
 # ============================================================
+# ESTIMATION FOURNISSEUR : diagnostics internes, jamais autorisation de paiement
+# ============================================================
+
+def _quote_positive_decimal(value: Any, field: str) -> Decimal:
+    try:
+        number = Decimal(str(value))
+    except (ValueError, TypeError, InvalidOperation) as exc:
+        raise ValueError(f"Montant fournisseur invalide : {field}.") from exc
+    if not number.is_finite() or number <= 0:
+        raise ValueError(f"Montant fournisseur absent ou non positif : {field}.")
+    return number
+
+
+def _provider_reserve_xaf(cost_usd: Decimal) -> Decimal:
+    """Marge de prudence fournie par credit_costs ; jamais depuis un solde.
+
+    Seules des données tarifaires backend sont prises en compte. Une prévision
+    ne constitue pas un coût fournisseur réel, qui sera calculé au settlement.
+    """
+    fx = _quote_positive_decimal(credit_costs_config.ACCOUNTING_USD_XAF, "taux XAF")
+    try:
+        ratio = Decimal(str(credit_costs_config.PACK_API_SAFETY_RESERVE_RATIO))
+    except (TypeError, ValueError, InvalidOperation) as exc:
+        raise ValueError("Marge de sécurité API invalide.") from exc
+    if not ratio.is_finite() or not 0 <= ratio <= 1:
+        raise ValueError("Marge de sécurité API hors limites.")
+    return _quote_positive_decimal(cost_usd, "coût USD estimé") * fx * (1 + ratio)
+
+
+def _chat_provider_reserve_xaf(
+    *, model: str, input_tokens: int, output_tokens: int,
+    web_enabled: bool,
+) -> Decimal:
+    """Réserve un coût API pessimiste sans convertir des crédits en dépense.
+
+    Les tokens d'entrée cache-write, lorsque configurés, peuvent coûter
+    plus cher que les tokens ordinaires ; utiliser le maximum des trois.
+    """
+    canonical = TokenBillingService.normalize_model(model)
+    context = TokenBillingService._pricing_context(canonical, input_tokens)
+    rates = credit_costs_config.MODEL_TOKEN_PRICING_USD_PER_MILLION[canonical]
+    input_rate = max(
+        _quote_positive_decimal(rates[f"{context}_input"], "input"),
+        _quote_positive_decimal(rates[f"{context}_cached_input"], "cached_input"),
+        _quote_positive_decimal(rates[f"{context}_cache_write"], "cache_write"),
+    )
+    output_rate = _quote_positive_decimal(rates[f"{context}_output"], "output")
+    estimated_usd = (
+        (Decimal(input_tokens) * input_rate + Decimal(output_tokens) * output_rate)
+        / Decimal(1_000_000)
+    )
+    if web_enabled:
+        estimated_usd += (
+            Decimal(credit_costs_config.MAX_WEB_SEARCH_CALLS_PER_ACTION)
+            * Decimal(str(credit_costs_config.WEB_SEARCH_COST_USD_PER_CALL))
+        )
+    return _provider_reserve_xaf(estimated_usd)
+
+
+def _image_provider_reserve_xaf(*, pack_id: str, action: CreditAction) -> Decimal:
+    model = MediaBillingService.resolve_image_model(pack_id)
+    _, quality = MediaBillingService.resolve_image_quality(action)
+    rates = credit_costs_config.IMAGE_TOKEN_PRICING_USD_PER_MILLION[model]
+    # Même hypothèse de base que estimate_image_reservation() : 2048 tokens
+    # textuels, une image ; le montant de sortie est une référence, pas une
+    # mesure de l'usage effectif (celui-ci sera requis au règlement sécurisé).
+    reference = credit_costs_config.IMAGE_REFERENCE_OUTPUT_COST_USD_1024_SQUARE[model][quality]
+    usd = (
+        Decimal(2048) * _quote_positive_decimal(rates["text_input"], "image input")
+        / Decimal(1_000_000)
+        + _quote_positive_decimal(reference, "image output")
+    )
+    return _provider_reserve_xaf(usd)
+
+
+def _video_provider_reserve_xaf(*, model: str, action: CreditAction,
+                                rate_usd_per_second: float) -> Decimal:
+    duration = credit_costs_config.VIDEO_ACTION_DURATION_SECONDS[action]
+    if type(duration) is not int or duration <= 0:
+        raise ValueError("Durée de génération vidéo inconnue.")
+    usd = Decimal(duration) * _quote_positive_decimal(rate_usd_per_second, "video rate")
+    return _provider_reserve_xaf(usd)
+
+
+def _billing_reservation_failure(error: Exception) -> HTTPException:
+    """Message stable sans fuite des montants fournisseur ou de l'erreur SQL."""
+    detail = str(error).lower()
+    if isinstance(error, InsufficientCreditsForActionError) or any(
+        item in detail for item in (
+            "insufficient_credits",
+            "crédits insuffisants", "insufficient_credits_for_settlement",
+        )
+    ):
+        return HTTPException(status_code=402, detail=INSUFFICIENT_ACTION_CREDITS_MESSAGE)
+    if "inactive_pack" in detail:
+        return HTTPException(status_code=403, detail="Le pack de crédits est expiré ou inactif.")
+    # Aucune information SQL, aucune facture fournisseur exposée au frontend.
+    return HTTPException(status_code=503, detail="Facturation temporairement indisponible.")
+
+
 # FACTURATION DYNAMIQUE DU CHAT
 # ============================================================
 
@@ -2148,12 +2252,12 @@ def _safe_public_https_url(value: str) -> bool:
         return False
 
 
-def _calculate_real_chat_cost(
+def _calculate_real_chat_billing(
     *,
     model: str,
     usage: Any,
     web_search_calls: int,
-) -> int:
+):
     """
     Convertit l'usage OpenAI réel en crédits Oria.
 
@@ -2187,7 +2291,14 @@ def _calculate_real_chat_cost(
             "aucun débit n'a été effectué."
         )
 
-    return billing.credits
+    return billing
+
+
+def _calculate_real_chat_cost(*, model: str, usage: Any, web_search_calls: int) -> int:
+    """Compatibilité des appelants historiques : coût utilisateur en crédits."""
+    return _calculate_real_chat_billing(
+        model=model, usage=usage, web_search_calls=web_search_calls,
+    ).credits
 
 
 def _extract_classic_chat_result(
@@ -2232,16 +2343,13 @@ def _extract_classic_chat_result(
             "pour une requête utilisant la recherche Web."
         )
 
-    cost = _calculate_real_chat_cost(
+    billing = _calculate_real_chat_billing(
         model=model,
         usage=payload.get("usage"),
-        web_search_calls=payload.get(
-            "web_search_calls",
-            0,
-        ),
+        web_search_calls=payload.get("web_search_calls", 0),
     )
 
-    return message, cost
+    return message, billing.credits, billing.total_cost_xaf
 
 
 def _parse_stream_item(
@@ -2975,10 +3083,7 @@ def _prepare_chat(
     if wallet.balance <= 0:
         raise HTTPException(
             status_code=402,
-            detail=(
-                "Crédits insuffisants "
-                "pour effectuer cette action."
-            ),
+            detail=INSUFFICIENT_ACTION_CREDITS_MESSAGE,
         )
 
     allowed_models = PACK_ALLOWED_MODELS.get(
@@ -3101,7 +3206,7 @@ def _reserve_chat_credits(
     attachments: list[ChatAttachment],
     web: bool,
 ) -> tuple[str, int]:
-    """Réserve atomiquement un montant prudent avant l'appel OpenAI."""
+    """Réserve uniquement les crédits ORIA avant l'appel fournisseur."""
     estimated_input_tokens = _estimate_chat_input_tokens(
         message=message,
         history=history,
@@ -3124,7 +3229,6 @@ def _reserve_chat_credits(
         ) from error
 
     reservation_id = str(uuid4())
-
     try:
         repository.reserve_credits(
             user_id=authenticated_user_id,
@@ -3133,30 +3237,7 @@ def _reserve_chat_credits(
             reference_id=reservation_id,
         )
     except Exception as error:
-        error_text = str(error).lower()
-
-        if "insufficient_credits" in error_text:
-            raise HTTPException(
-                status_code=402,
-                detail=(
-                    "Crédits insuffisants pour réserver cette requête. "
-                    "Aucun appel OpenAI n'a été effectué."
-                ),
-            ) from error
-
-        if "inactive_pack" in error_text:
-            raise HTTPException(
-                status_code=403,
-                detail="Le pack de crédits est expiré ou inactif.",
-            ) from error
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Impossible de réserver les crédits avant la requête IA : "
-                f"{error}"
-            ),
-        ) from error
+        raise _billing_reservation_failure(error) from error
 
     return reservation_id, reserved_amount
 
@@ -3181,6 +3262,7 @@ def _settle_chat_reservation(
     reservation_id: str,
     action: CreditAction,
     cost: int,
+    api_cost_xaf: Decimal,
     is_trial_model: bool,
     model_id: str,
 ):
@@ -3191,6 +3273,8 @@ def _settle_chat_reservation(
     aucune seconde transaction n'est effectué côté Python.
     """
     try:
+        # Cout fournisseur calcule pour diagnostic ; la RPC SQL ne regle
+        # que les credits ORIA. Aucun second plafond fournisseur.
         settled_wallet = repository.settle_credit_reservation(
             user_id=authenticated_user_id,
             reference_id=reservation_id,
@@ -3329,7 +3413,7 @@ async def chat(
         ) from error
 
     try:
-        response_text, cost = _extract_classic_chat_result(
+        response_text, cost, real_api_xaf = _extract_classic_chat_result(
             response=openai_response,
             model=model,
             web=web,
@@ -3347,6 +3431,7 @@ async def chat(
             reservation_id=reservation_id,
             action=action,
             cost=cost,
+            api_cost_xaf=real_api_xaf,
             is_trial_model=is_trial_model,
             model_id=model,
         )
@@ -3479,7 +3564,7 @@ def _prepare_media(
     if wallet.balance <= 0:
         raise HTTPException(
             status_code=402,
-            detail="Crédits insuffisants pour effectuer cette création.",
+            detail=INSUFFICIENT_ACTION_CREDITS_MESSAGE,
         )
 
     allowed_media = PACK_ALLOWED_MEDIA.get(
@@ -3544,7 +3629,6 @@ def _reserve_image_credits(
         ) from error
 
     reservation_id = str(uuid4())
-
     try:
         repository.reserve_credits(
             user_id=authenticated_user_id,
@@ -3553,30 +3637,7 @@ def _reserve_image_credits(
             reference_id=reservation_id,
         )
     except Exception as error:
-        error_text = str(error).lower()
-
-        if "insufficient_credits" in error_text:
-            raise HTTPException(
-                status_code=402,
-                detail=(
-                    "Crédits insuffisants pour réserver cette "
-                    "génération. Aucun appel fournisseur n'a été effectué."
-                ),
-            ) from error
-
-        if "inactive_pack" in error_text:
-            raise HTTPException(
-                status_code=403,
-                detail="Le pack de crédits est expiré ou inactif.",
-            ) from error
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Impossible de réserver les crédits avant "
-                f"la génération : {error}"
-            ),
-        ) from error
+        raise _billing_reservation_failure(error) from error
 
     return reservation_id, reserved_amount
 
@@ -3594,11 +3655,11 @@ def _release_media_reservation(
     )
 
 
-def _calculate_real_image_cost(
+def _calculate_real_image_billing(
     *,
     generated: Any,
     reserved_amount: int,
-) -> int:
+) -> tuple[int, Decimal | None]:
     """
     Calcule le coût réel depuis l'usage retourné par OpenAI.
 
@@ -3608,22 +3669,23 @@ def _calculate_real_image_cost(
     mapping = _as_mapping(generated)
 
     if mapping is None:
-        return reserved_amount
+        return reserved_amount, None
 
     try:
-        billing = (
-            MediaBillingService
-            .calculate_image_from_provider_result(
-                mapping
-            )
-        )
-    except MediaBillingError:
-        return reserved_amount
+        billing = MediaBillingService.calculate_image_from_provider_result(mapping)
+    except (MediaBillingError, KeyError, TypeError, ValueError) as error:
+        return reserved_amount, None
 
-    if billing.credits <= 0:
-        return reserved_amount
+    if billing.credits <= 0 or billing.total_cost_xaf <= 0:
+        return reserved_amount, None
 
-    return billing.credits
+    return billing.credits, billing.total_cost_xaf
+
+
+def _calculate_real_image_cost(*, generated: Any, reserved_amount: int) -> int:
+    return _calculate_real_image_billing(
+        generated=generated, reserved_amount=reserved_amount,
+    )[0]
 
 
 
@@ -3762,7 +3824,6 @@ def _reserve_video_credits(
         ) from error
 
     reservation_id = str(uuid4())
-
     try:
         repository.reserve_credits(
             user_id=authenticated_user_id,
@@ -3771,39 +3832,16 @@ def _reserve_video_credits(
             reference_id=reservation_id,
         )
     except Exception as error:
-        error_text = str(error).lower()
-
-        if "insufficient_credits" in error_text:
-            raise HTTPException(
-                status_code=402,
-                detail=(
-                    "Crédits insuffisants pour réserver cette génération "
-                    "vidéo. Aucun appel OpenAI n'a été effectué."
-                ),
-            ) from error
-
-        if "inactive_pack" in error_text:
-            raise HTTPException(
-                status_code=403,
-                detail="Le pack de crédits est expiré ou inactif.",
-            ) from error
-
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "Impossible de réserver les crédits avant la génération "
-                f"vidéo : {error}"
-            ),
-        ) from error
+        raise _billing_reservation_failure(error) from error
 
     return reservation_id, reserved_amount
 
 
-def _calculate_real_video_cost(
+def _calculate_real_video_billing(
     *,
     generated: Any,
     reserved_amount: int,
-) -> int:
+) -> tuple[int, Decimal | None]:
     """
     Calcule le coût réel d'une vidéo terminée.
 
@@ -3814,7 +3852,7 @@ def _calculate_real_video_cost(
     """
     mapping = _as_mapping(generated)
     if mapping is None:
-        return reserved_amount
+        return reserved_amount, None
 
     provider = str(mapping.get("provider") or "openai")
     model = str(mapping.get("model") or "")
@@ -3823,7 +3861,7 @@ def _calculate_real_video_cost(
     total_cost_usd = mapping.get("total_cost_usd")
 
     if not model or not action:
-        return reserved_amount
+        return reserved_amount, None
 
     try:
         if total_cost_usd is not None:
@@ -3847,13 +3885,19 @@ def _calculate_real_video_cost(
                 seconds=seconds,
                 rate_usd_per_second=rate,
             )
-    except MediaBillingError:
-        return reserved_amount
+    except (MediaBillingError, KeyError, TypeError, ValueError) as error:
+        return reserved_amount, None
 
-    if billing.credits <= 0:
-        return reserved_amount
+    if billing.credits <= 0 or billing.total_cost_xaf <= 0:
+        return reserved_amount, None
 
-    return billing.credits
+    return billing.credits, billing.total_cost_xaf
+
+def _calculate_real_video_cost(*, generated: Any, reserved_amount: int) -> int:
+    return _calculate_real_video_billing(
+        generated=generated, reserved_amount=reserved_amount,
+    )[0]
+
 
 def _settle_media_reservation(
     *,
@@ -3863,9 +3907,13 @@ def _settle_media_reservation(
     reservation_id: str,
     action: CreditAction,
     cost: int,
+    api_cost_xaf: Decimal | None,
 ):
-    """Finalise une réservation média avec le coût réel."""
+    """Règle les crédits ORIA ; le coût XAF n’est pas transmis à cette RPC."""
     try:
+        # Le cout fournisseur est calcule en amont mais non persiste par cette
+        # RPC : la journalisation comptable demandera un raccordement distinct.
+        # Si l'usage manque, le cout en credits utilise la provision estimee.
         settled_wallet = repository.settle_credit_reservation(
             user_id=authenticated_user_id,
             reference_id=reservation_id,
@@ -4209,10 +4257,13 @@ async def generate_image(
             ),
         ) from error
 
-    actual_cost = _calculate_real_image_cost(
-        generated=generated,
-        reserved_amount=reserved_amount,
-    )
+    try:
+        actual_cost, actual_api_xaf = _calculate_real_image_billing(
+            generated=generated, reserved_amount=reserved_amount,
+        )
+    except RuntimeError as error:
+        # L'appel fournisseur a eu lieu : conserver la réservation pour audit.
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
     try:
         result = _settle_media_reservation(
@@ -4222,6 +4273,7 @@ async def generate_image(
             reservation_id=reservation_id,
             action=credit_action,
             cost=actual_cost,
+            api_cost_xaf=actual_api_xaf,
         )
     except RuntimeError as error:
         # L'appel fournisseur a déjà réussi : ne pas release
@@ -4389,10 +4441,13 @@ async def generate_video(
             ),
         ) from error
 
-    actual_cost = _calculate_real_video_cost(
-        generated=generated,
-        reserved_amount=reserved_amount,
-    )
+    try:
+        actual_cost, actual_api_xaf = _calculate_real_video_billing(
+            generated=generated, reserved_amount=reserved_amount,
+        )
+    except RuntimeError as error:
+        # La vidéo est déjà facturable : ne pas relâcher la réservation.
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
     try:
         result = _settle_media_reservation(
@@ -4402,6 +4457,7 @@ async def generate_video(
             reservation_id=reservation_id,
             action=credit_action,
             cost=actual_cost,
+            api_cost_xaf=actual_api_xaf,
         )
     except RuntimeError as error:
         # La vidéo a déjà été générée : ne pas libérer la réservation.
@@ -5669,11 +5725,12 @@ async def chat_stream(
                 return
 
             try:
-                cost = _calculate_real_chat_cost(
+                billing = _calculate_real_chat_billing(
                     model=model,
                     usage=final_usage,
                     web_search_calls=(final_web_search_calls or 0),
                 )
+                cost = billing.credits
             except RuntimeError as error:
                 yield _sse(
                     "error",
@@ -5693,6 +5750,7 @@ async def chat_stream(
                     reservation_id=reservation_id,
                     action=action,
                     cost=cost,
+                    api_cost_xaf=billing.total_cost_xaf,
                     is_trial_model=is_trial_model,
                     model_id=model,
                 )

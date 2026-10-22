@@ -291,6 +291,14 @@ class CreditAction(str, Enum):
 
     AUDIO_TRANSCRIPTION = "audio_transcription"
 
+    # ORIA COURS : DEUX PRESTATIONS DISTINCTES.
+    # Ne pas reutiliser AUDIO_TRANSCRIPTION des notes vocales classiques.
+    # La transcription d'un cours est estimee sur sa duree TOTALE ;
+    # la redaction pedagogique est mesuree en tokens OpenAI par le
+    # futur raccordement de TokenBillingService.
+    COURSE_TRANSCRIPTION = "course_transcription"
+    COURSE_DOCUMENT_GENERATION = "course_document_generation"
+
 
 
 # ========================================================
@@ -1309,3 +1317,317 @@ COMPLEMENTARY_CREDIT_PACKS = {
 
 
 }
+
+
+# ============================================================
+# ORIA COURS — CONFIGURATION ET ESTIMATION ECONOMIQUE
+# ============================================================
+# Ces valeurs concernent UNIQUEMENT le mode d'enregistrement de cours.
+# Elles ne modifient pas les actions, prix, quotas ou durees des 4 packs,
+# ni la facturation des notes vocales AUDIO_TRANSCRIPTION.
+#
+# Le fonctionnement cible est :
+#   1. Enregistrement local, jusqu'a quatre heures ;
+#   2. Upload des fragments puis bouton « Envoyer » ;
+#   3. Controle du manifeste COMPLET et estimation des credits ;
+#   4. Reservation atomique des credits AVANT l'appel OpenAI ;
+#   5. Transcription + redaction du document ;
+#   6. Sauvegarde du resultat, puis reglement du cout reel et liberation
+#      de l'excedent reserve ; reprise/reconciliation sans double debit.
+#
+# IMPORTANT : le present module ne reserve, ne debite, ni ne rembourse
+# aucun credit. Le prix de transcription ci-dessous est une estimation
+# fournisseur, PAS un tarif commercial final. Le prix de redaction depend
+# des tokens et doit venir du TokenBillingService (pas d'un forfait fictif).
+
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
+
+COURSE_MAX_DURATION_MS = 4 * 60 * 60 * 1000
+COURSE_MAX_SEGMENT_DURATION_SECONDS = 5 * 60
+COURSE_MAX_SEGMENTS = 120
+COURSE_MAX_SEGMENT_BYTES = 20 * 1024 * 1024
+COURSE_MAX_TOTAL_BYTES = 512 * 1024 * 1024
+COURSE_DEFAULT_DOCUMENT_FORMAT = "pdf"
+COURSE_DOCUMENT_FORMATS = frozenset({"pdf", "docx"})
+
+# Aligne sur audio_service.py : CourseAudioPolicy.MAX_*.
+# Le backend doit maintenir les deux definitions concordantes.
+# Le choix du format n'applique aucun surcout arbitraire.
+
+# Prix de REFERENCE publies par OpenAI (USD/minute, couts estimes).
+# Date de verification : 21/10/2026.
+# Source : https://developers.openai.com/api/docs/pricing
+# Une estimation de facturation ne doit jamais etre traitee comme
+# mesure finale si la facture/usage effectif differe.
+COURSE_TRANSCRIPTION_REFERENCE_DATE = "2026-10-21"
+COURSE_TRANSCRIPTION_USD_PER_MINUTE = {
+    "gpt-4o-mini-transcribe": Decimal("0.003"),
+    "gpt-4o-transcribe": Decimal("0.006"),
+    "gpt-transcribe": Decimal("0.0045"),
+}
+
+# Choix conservateur pour commencer : le modele deja utilise par
+# app.services.audio_service.AudioService. Le futur CourseService peut
+# passer a gpt-transcribe apres validation de l'integration OpenAI.
+COURSE_TRANSCRIPTION_DEFAULT_MODEL = "gpt-4o-mini-transcribe"
+
+# La redaction pedagogique utilise le systeme de cout dynamique du Chat :
+#   usage OpenAI -> cout USD -> cout XAF -> credits ORIA.
+# Le modele de redaction est choisi EXPLICITEMENT par l'utilisateur ; il
+# n'existe aucun modele de redaction implicite/fallback dans ORIA Cours.
+# Le serveur recontrole ce choix sur son propre wallet au moment de l'envoi.
+# Ce mapping doit rester aligne avec PACK_ALLOWED_MODELS (config/openai.py).
+# Ne jamais importer config/openai.py ici : son import exige une cle API.
+COURSE_DOCUMENT_BILLING_ACTION = CreditAction.COURSE_DOCUMENT_GENERATION
+
+# IDs publics des seuls modeles de redaction : memes IDs que le Chat ORIA.
+# Le moteur de transcription n'y figure pas : il est utilise en interne.
+COURSE_WRITING_MODEL_IDS: tuple[str, ...] = (
+    "luna",
+    "gpt-5",
+    "gpt-5.6-terra",
+    "gpt-6-sol",
+    "gpt-6-astra",
+)
+COURSE_WRITING_MODELS_BY_PACK: dict[str, tuple[str, ...]] = {
+    "light_pack": ("luna",),
+    "intermediate_pack": ("luna", "gpt-5"),
+    "pro_pack": ("luna", "gpt-5.6-terra", "gpt-6-sol"),
+    "business_pack": ("gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"),
+}
+
+
+def available_course_writing_models(pack_id: str) -> tuple[str, ...]:
+    """Modeles affichables sur l'interface Cours selon le pack.
+
+    Une valeur de pack inconnue n'accorde aucun modele : la route doit
+    ensuite rejeter la tentative de generation, sans contournement.
+    """
+    if not isinstance(pack_id, str):
+        return ()
+    return COURSE_WRITING_MODELS_BY_PACK.get(pack_id.strip(), ())
+
+
+def validate_course_writing_model(pack_id: str, model: str) -> str:
+    """Valide le choix explicite du redacteur, sans selection automatique.
+
+    Cette verification doit etre refaite sur le serveur avec le pack REEL
+    issu du wallet. Ne jamais faire confiance au pack fourni par le client.
+    Le modele valide doit etre fige avec le devis puis utilise pour tous les
+    appels de redaction et le reglement des tokens consommes.
+    """
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("Choisir un modele de redaction ORIA avant l'envoi.")
+    chosen = model.strip().lower()
+    if chosen not in COURSE_WRITING_MODEL_IDS:
+        raise ValueError("Modele de redaction ORIA inconnu ou non disponible.")
+    if chosen not in MODEL_TOKEN_PRICING_USD_PER_MILLION:
+        raise ValueError("Le modele de redaction ne possede aucun tarif configure.")
+    if chosen not in available_course_writing_models(pack_id):
+        raise ValueError("Ce modele de redaction n'est pas autorise par votre pack.")
+    return chosen
+
+
+@dataclass(frozen=True)
+class CourseTranscriptionEstimate:
+    """Devis indicatif pour la seule transcription du cours.
+
+    estimated_credits ne comprend PAS la redaction pedagogique, ni
+    stockage/hebergement ni eventuelle facturation additionnelle.
+    reservation_credits contient une marge de securite provisoire ;
+    il ne constitue PAS le debit final.
+    """
+
+    model: str
+    duration_ms: int
+    billable_minutes: int
+    estimated_provider_usd: Decimal
+    estimated_xaf: Decimal
+    estimated_credits: int
+    reservation_credits: int
+
+
+def normalize_course_document_format(value: str | None = None) -> str:
+    """PDF par defaut ; DOCX uniquement sur choix explicite valide."""
+    if value is None:
+        return COURSE_DEFAULT_DOCUMENT_FORMAT
+    if not isinstance(value, str):
+        raise ValueError("Le format du cours doit etre PDF ou DOCX.")
+    normalized = value.strip().lower()
+    if normalized not in COURSE_DOCUMENT_FORMATS:
+        raise ValueError("Format de cours invalide : PDF et DOCX uniquement.")
+    return normalized
+
+
+def _course_positive_decimal(value: object, name: str) -> Decimal:
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as error:
+        raise ValueError(f"Valeur economique invalide : {name}.") from error
+    if not number.is_finite() or number <= 0:
+        raise ValueError(f"La valeur {name} doit etre finie et positive.")
+    return number
+
+
+def _course_nonnegative_decimal(value: object, name: str) -> Decimal:
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as error:
+        raise ValueError(f"Valeur economique invalide : {name}.") from error
+    if not number.is_finite() or number < 0:
+        raise ValueError(f"La valeur {name} doit etre finie et non negative.")
+    return number
+
+
+def estimate_course_transcription_credits(
+    duration_ms: int,
+    *,
+    model: str = COURSE_TRANSCRIPTION_DEFAULT_MODEL,
+    usd_xaf: object | None = None,
+    credit_value_xaf: object | None = None,
+    reserve_ratio: object | None = None,
+) -> CourseTranscriptionEstimate:
+    """Estime les credits de transcription pour une session ENTIERE.
+
+    Arrondit la duree une seule fois, pas pour chaque fragment.
+    Ce devis seul ne suffit PAS a autoriser un traitement : le futur
+    CourseService doit egalement reserver la redaction, controler le
+    wallet/pack actif et obtenir l'accord avant la premiere API.
+
+    Ne jamais utiliser cette fonction comme debit definitif sans verifier
+    les regles fournisseur et les consommations effectivement relevees.
+    """
+    if type(duration_ms) is not int or not 400 <= duration_ms <= COURSE_MAX_DURATION_MS:
+        raise ValueError("La duree du cours doit etre comprise entre 0,4 seconde et 4 heures.")
+    if model not in COURSE_TRANSCRIPTION_USD_PER_MINUTE:
+        raise ValueError("Modele de transcription de cours non tarife.")
+
+    fx = _course_positive_decimal(
+        ACCOUNTING_USD_XAF if usd_xaf is None else usd_xaf,
+        "usd_xaf",
+    )
+    value = _course_positive_decimal(
+        ORIA_CREDIT_VALUE_XAF if credit_value_xaf is None else credit_value_xaf,
+        "credit_value_xaf",
+    )
+    margin = _course_nonnegative_decimal(
+        PACK_API_SAFETY_RESERVE_RATIO if reserve_ratio is None else reserve_ratio,
+        "reserve_ratio",
+    )
+    # Evite les marges aberrantes dues a une mauvaise configuration.
+    if margin > Decimal("1"):
+        raise ValueError("reserve_ratio ne peut pas depasser 100 %.")
+
+    minutes = (duration_ms + 60_000 - 1) // 60_000
+    provider_usd = COURSE_TRANSCRIPTION_USD_PER_MINUTE[model] * minutes
+    estimated_xaf = provider_usd * fx
+    estimated_credits = max(
+        1,
+        int((estimated_xaf / value).to_integral_value(rounding=ROUND_CEILING)),
+    )
+    reservation_credits = max(
+        estimated_credits,
+        int(
+            ((estimated_xaf / value) * (Decimal("1") + margin)).to_integral_value(
+                rounding=ROUND_CEILING
+            )
+        ),
+    )
+    return CourseTranscriptionEstimate(
+        model=model,
+        duration_ms=duration_ms,
+        billable_minutes=minutes,
+        estimated_provider_usd=provider_usd,
+        estimated_xaf=estimated_xaf,
+        estimated_credits=estimated_credits,
+        reservation_credits=reservation_credits,
+    )
+
+
+def combine_course_reservation_credits(
+    transcription: CourseTranscriptionEstimate,
+    document_reservation_credits: int,
+) -> int:
+    """Additionne deux provisions distinctes pour un cours complet.
+
+    Le montant de la redaction doit venir d'une estimation conservatrice du
+    TokenBillingService. Il est INTERDIT de lancer le traitement avec une
+    provision audio seulement, faute de garantie sur la generation du cours.
+    """
+    if not isinstance(transcription, CourseTranscriptionEstimate):
+        raise TypeError("Une estimation audio de cours est obligatoire.")
+    if type(document_reservation_credits) is not int or document_reservation_credits <= 0:
+        raise ValueError("Une provision de redaction strictement positive est requise.")
+    return transcription.reservation_credits + document_reservation_credits
+
+
+@dataclass(frozen=True)
+class CourseCreditQuote:
+    """Devis prepare cote serveur, pour un modele de redaction choisi.
+
+    La provision document vient de TokenBillingService (non de l'UI),
+    et peut differer pour deux modeles avec la meme transcription.
+    Aucun debit n'est declenche par la construction de ce devis.
+    """
+    pack_id: str
+    writing_model: str
+    transcription_model: str
+    document_format: str
+    duration_ms: int
+    transcription_estimated_credits: int
+    transcription_reservation_credits: int
+    document_estimated_credits: int
+    document_reservation_credits: int
+    total_estimated_credits: int
+    total_reservation_credits: int
+
+
+def build_course_credit_quote(
+    *,
+    pack_id: str,
+    writing_model: str,
+    duration_ms: int,
+    document_estimated_credits: int,
+    document_reservation_credits: int,
+    document_format: str | None = None,
+) -> CourseCreditQuote:
+    """Assemble le devis audio + redaction sans inventer de prix de tokens.
+
+    L'appelant (backend uniquement) doit :
+    - lire et verifier le pack de l'utilisateur depuis son wallet ;
+    - fournir les estimations de tokens du modele CHOISI, calculees par
+      TokenBillingService, y compris tous les appels necessaires aux 4 h ;
+    - conserver le modele et les deux provisions lors de la confirmation ;
+    - revalider les droits et bloquer les credits avant tout appel OpenAI ;
+    - regulariser le cout reel sans jamais double-facturer les segments.
+    Le montant ne doit PAS etre construit a partir de prix envoyes par l'UI.
+    """
+    chosen = validate_course_writing_model(pack_id, writing_model)
+    fmt = normalize_course_document_format(document_format)
+    for label, value in (
+        ("document_estimated_credits", document_estimated_credits),
+        ("document_reservation_credits", document_reservation_credits),
+    ):
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"{label} doit etre un entier positif calcule cote serveur.")
+    if document_reservation_credits < document_estimated_credits:
+        raise ValueError("La provision document doit couvrir son estimation.")
+
+    transcription = estimate_course_transcription_credits(duration_ms)
+    reserved = combine_course_reservation_credits(
+        transcription, document_reservation_credits,
+    )
+    return CourseCreditQuote(
+        pack_id=pack_id.strip(),
+        writing_model=chosen,
+        transcription_model=transcription.model,
+        document_format=fmt,
+        duration_ms=transcription.duration_ms,
+        transcription_estimated_credits=transcription.estimated_credits,
+        transcription_reservation_credits=transcription.reservation_credits,
+        document_estimated_credits=document_estimated_credits,
+        document_reservation_credits=document_reservation_credits,
+        total_estimated_credits=transcription.estimated_credits + document_estimated_credits,
+        total_reservation_credits=reserved,
+    )

@@ -72,7 +72,7 @@ from app.config.credit_costs import (
 
 
 
-from app.services.prompt_service import build_output_prompt
+from app.services.prompt_service import build_output_prompt, build_course_section_messages
 
 
 
@@ -4381,6 +4381,149 @@ class OpenAIService:
 
 
     # ========================================================
+    # ORIA COURS — UN SEGMENT À LA FOIS, SANS FACTURATION ICI
+    # ========================================================
+    # Un cours de quatre heures est segmenté par le service Cours.
+    # OpenAIService ne doit ni envoyer les 4 h en une fois, ni toucher
+    # au wallet, ni décider quel modèle public est autorisé par le pack.
+    MAX_COURSE_SECTION_CHARS = 60_000
+    MAX_COURSE_CONTEXT_CHARS = 8_000
+
+    def transcribe_course_segment(
+        self,
+        *,
+        data: bytes,
+        filename: str,
+        mime_type: str,
+    ) -> dict[str, Any]:
+        """Transcrit un segment avec le modèle INTERNE et fixe d'ORIA Cours.
+
+        Les contrôles de durée cumulée (<= 4 h), le découpage, la
+        réservation des crédits ORIA, le stockage et la reprise des segments
+        relèvent du service Cours appelant. Ne jamais exposer le nom du
+        modèle interne dans la réponse publique de l'endpoint.
+        """
+        result = self.transcribe_audio(
+            data=data,
+            filename=filename,
+            mime_type=mime_type,
+            model="gpt-4o-mini-transcribe",
+        )
+        return {
+            "text": result["text"],
+            "usage": result.get("usage"),
+        }
+
+    def compose_course_section(
+        self,
+        *,
+        model: str,
+        transcript: str,
+        section_index: int,
+        total_sections: int,
+        previous_context: str = "",
+        reasoning_mode: str = "balanced",
+    ) -> dict[str, Any]:
+        """Rédige UNE section pédagogique à partir d'une transcription.
+
+        `model` est le modèle public sélectionné et déjà autorisé par la
+        route Cours ; il n'est pas le modèle interne de transcription.
+        La section source est plafonnée : le pipeline de quatre heures
+        fournit plusieurs sections puis assemble le PDF/DOCX ailleurs.
+        L'usage token réel est renvoyé pour règlement par le service Cours.
+        """
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("Modèle de rédaction du cours obligatoire.")
+        if not isinstance(transcript, str) or not transcript.strip():
+            raise ValueError("Transcription de section vide.")
+        if len(transcript) > self.MAX_COURSE_SECTION_CHARS:
+            raise ValueError(
+                "Section de transcription trop longue : découper le cours avant l'appel IA."
+            )
+        if (type(section_index) is not int or type(total_sections) is not int
+                or not 1 <= section_index <= total_sections <= 500):
+            raise ValueError("Numérotation des sections de cours invalide.")
+        if (not isinstance(previous_context, str)
+                or len(previous_context) > self.MAX_COURSE_CONTEXT_CHARS):
+            raise ValueError("Contexte précédent trop long pour cette section.")
+
+        request: dict[str, Any] = {
+            "model": model.strip(),
+            "store": False,
+            "max_output_tokens": MAX_CHAT_OUTPUT_TOKENS,
+            "input": build_course_section_messages(
+                transcript=transcript,
+                section_index=section_index,
+                total_sections=total_sections,
+                previous_context=previous_context,
+            ),
+        }
+        self._apply_reasoning_to_request(
+            request, model=model.strip(), reasoning_mode=reasoning_mode,
+        )
+        try:
+            response = self.client.responses.create(**request)
+        except Exception as error:
+            raise RuntimeError("Échec de la rédaction de la section de cours.") from error
+
+        # Même une réponse partielle peut avoir consommé des tokens :
+        # renvoyer l'usage et le statut sans la déclarer complète.
+        usage = self._extract_usage(response)
+        status = str(self._value(response, "status", "completed") or "")
+        message = str(self._value(response, "output_text", "") or "").strip()
+        details = self._value(response, "incomplete_details")
+        reason = self._value(details, "reason") if details is not None else None
+        return {
+            "message": message,
+            "usage": usage,
+            "web_search_calls": 0,
+            "model": model.strip(),
+            "openai_model": str(self._value(response, "model", model) or model),
+            "complete": status == "completed" and bool(message),
+            "status": status,
+            "incomplete_reason": str(reason) if reason is not None else None,
+            "section_index": section_index,
+            "total_sections": total_sections,
+        }
+
+    @classmethod
+    def _optional_transcription_usage(cls, transcript: Any) -> dict[str, Any] | None:
+        """Récupère seulement l'usage déclaré par le fournisseur, sans estimation.
+
+        L'API peut renvoyer une facturation par durée (`seconds`) ou
+        par tokens. Si elle ne donne rien, le suivi de durée validée
+        (ffprobe) et les tarifs du service audio restent nécessaires.
+        """
+        usage = cls._value(transcript, "usage")
+        if usage is None:
+            return None
+        normalized: dict[str, Any] = {}
+        usage_type = cls._value(usage, "type")
+        if usage_type is not None:
+            normalized["type"] = str(usage_type)
+        for field in ("input_tokens", "output_tokens", "total_tokens"):
+            number = cls._value(usage, field)
+            if number is not None:
+                if isinstance(number, bool) or isinstance(number, float) and not number.is_integer():
+                    continue
+                try:
+                    candidate = int(number)
+                except (ValueError, TypeError, OverflowError):
+                    continue
+                if candidate >= 0:
+                    normalized[field] = candidate
+        seconds = cls._value(usage, "seconds")
+        if seconds is not None:
+            from math import isfinite
+            try:
+                seconds_value = float(seconds)
+            except (ValueError, TypeError, OverflowError):
+                seconds_value = -1.0
+            if isfinite(seconds_value) and seconds_value >= 0:
+                normalized["seconds"] = seconds_value
+        return normalized or None
+
+    # ========================================================
     # AUDIO — CONVERSION DE NOTE VOCALE EN TEXTE
     # ========================================================
 
@@ -4438,7 +4581,12 @@ class OpenAIService:
         text = str(self._value(transcript, "text", "") or "").strip()
         if not text:
             raise RuntimeError("OpenAI n'a retourné aucun texte transcrit.")
-        return {"text": text, "model": model}
+        return {
+            "text": text,
+            "model": model,
+            # Pas de tarif estimé déguisé en consommation réelle.
+            "usage": self._optional_transcription_usage(transcript),
+        }
 
     # ========================================================
 
@@ -6184,6 +6332,12 @@ class OpenAIService:
 
 
 
+        # Le coût vidéo est calculé par la route avec la durée/la résolution
+        # finales lorsque le fournisseur les fournit. Ce n'est PAS un montant
+        # de facture garanti renvoyé par l'API vidéo.
+        actual_seconds = self._safe_int(self._value(video, "seconds"))
+        actual_size = str(self._value(video, "size", "") or "").strip()
+        actual_model = str(self._value(video, "model", "") or "").strip()
         return {
 
 
@@ -6208,7 +6362,7 @@ class OpenAIService:
 
 
 
-            "model": config["model"],
+            "model": actual_model or config["model"],
 
 
 
@@ -6216,11 +6370,11 @@ class OpenAIService:
 
 
 
-            "seconds": config["seconds"],
+            "seconds": actual_seconds or config["seconds"],
 
 
 
-            "size": config["size"],
+            "size": actual_size or config["size"],
 
 
 

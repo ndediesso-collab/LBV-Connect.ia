@@ -1,4 +1,5 @@
 import re
+import os
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
@@ -26,6 +27,15 @@ from app.repositories.supabase_artifact_repository import (
     supabase_artifact_repository,
 )
 
+# ORIA Cours : routeur existant et file PostgreSQL (aucun worker HTTP).
+from app.route.courses import (
+    router as courses_router,
+    configure_course_dispatcher,
+)
+from app.repositories.supabase_course_queue_repository import (
+    SupabaseCourseQueueRepository,
+)
+
 from app.config.payments import (
     ADDON_PACKS,
     PRIMARY_PACKS,
@@ -42,6 +52,32 @@ from app.services.payment_service import (
 
 
 router = APIRouter()
+
+# Le routeur principal reste compatible avec app.include_router(router).
+# Les dix endpoints de courses.py sont inclus une seule fois ici.
+router.include_router(courses_router)
+
+
+def _configure_oria_courses_dispatcher() -> None:
+    """Active uniquement l'enqueue PostgreSQL, jamais le worker HTTP.
+
+    Le drapeau de dispatch Cours doit être explicitement activé APRÈS
+    validation des RPC de crédits et présence d'un consommateur supervisé.
+    Sans ces conditions, /courses/{id}/confirm reste indisponible avant
+    toute réservation payante (courses.py vérifie le dispatcher).
+    """
+    if os.getenv("ORIA_COURSE_DISPATCH_ENABLED", "0") != "1":
+        configure_course_dispatcher(None)
+        return
+
+    # Client backend Supabase service_role déjà configuré pour les routes.
+    # N'exécute aucun appel fournisseur, n'ouvre pas de thread et ne réserve
+    # aucun crédit : cette méthode ne fait qu'enregistrer un job en queue.
+    queue = SupabaseCourseQueueRepository(supabase)
+    configure_course_dispatcher(queue.enqueue_once)
+
+
+_configure_oria_courses_dispatcher()
 
 
 # Limite physique de messages conservés par conversation selon le pack.
@@ -4854,4 +4890,5 @@ def get_my_creations(
         "media_count": len(normalized_media),
         "artifact_count": len(normalized_artifacts),
     }
+
 
