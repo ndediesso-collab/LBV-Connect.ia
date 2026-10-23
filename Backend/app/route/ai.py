@@ -506,6 +506,54 @@ def _sse(
     )
 
 
+# Statuts ORIA : un seul libellé court et vérifiable à la fois.
+# La sélection d'un statut ne déclenche aucun appel IA supplémentaire.
+# Le frontend ne doit conserver que le dernier événement « status ».
+_ORIA_CHAT_STAGES: dict[str, str] = {
+    "file_received": "Fichier reçu",
+    "image_received": "Image reçue",
+    "attachments_received": "Pièces jointes reçues",
+    "preparing": "Préparation de la réponse…",
+    "processing_file": "Traitement du fichier…",
+    "processing_image": "Traitement de l'image…",
+    "processing_attachments": "Traitement des pièces jointes…",
+    "processing": "Génération de la réponse…",
+    "restarting": "Ajustement de la réponse…",
+    "clear": "",
+}
+
+
+def _oria_chat_status(
+    stage: str, *, generation_id: str, attempt_id: str,
+) -> str:
+    """Événement SSE idempotent ; « clear » masque la ligne immédiatement.
+
+    Ne rapporte que des jalons observables dans le routeur : réception des
+    fichiers, création d'une réponse fournisseur, début de sortie texte.
+    Pas de faux pourcentage ni de transcription du raisonnement interne.
+    """
+    return _sse("status", {
+        "step": stage,
+        "label": _ORIA_CHAT_STAGES[stage],
+        "active": stage != "clear",
+        "generation_id": generation_id,
+        "attempt_id": attempt_id,
+    })
+
+
+def _oria_attachment_status_stages(
+    attachments: list[ChatAttachment],
+) -> tuple[str, str]:
+    """Choisit des mots exacts selon les fichiers déjà validés par FastAPI."""
+    if not attachments:
+        return "preparing", "processing"
+    if len(attachments) > 1:
+        return "attachments_received", "processing_attachments"
+    if attachments[0].type == "image":
+        return "image_received", "processing_image"
+    return "file_received", "processing_file"
+
+
 def _restart_message(
     *,
     original_message: str,
@@ -5148,6 +5196,7 @@ async def chat_stream(
         raise
 
     async def event_stream():
+        nonlocal artifact_requests
         full_response = ""
         final_usage = None
         final_web_search_calls = None
@@ -5155,6 +5204,11 @@ async def chat_stream(
         final_web_images: list[dict[str, Any]] = []
         settled = False
         first_delta_server_ms: float | None = None
+        status_active = False
+        status_step = ""
+        first_status_step, processing_status_step = (
+            _oria_attachment_status_stages(attachments)
+        )
 
         current_reasoning_mode = reasoning_mode
         original_message = _code_output_instruction(message, attachments)
@@ -5194,6 +5248,16 @@ async def chat_stream(
                     },
                 },
             )
+
+            # Le pré-traitement/authentification/réservation est déjà terminé.
+            # Ne pas inventer d'étapes antérieures au début du flux HTTP.
+            yield _oria_chat_status(
+                first_status_step,
+                generation_id=generation_id,
+                attempt_id=attempt_id,
+            )
+            status_step = first_status_step
+            status_active = True
 
             while True:
                 generation_state.reasoning_mode = current_reasoning_mode
@@ -5250,6 +5314,14 @@ async def chat_stream(
                                     ) * 1000
 
                                 full_response += delta
+                                if status_active:
+                                    yield _oria_chat_status(
+                                        "clear",
+                                        generation_id=generation_id,
+                                        attempt_id=attempt_id,
+                                    )
+                                    status_active = False
+                                    status_step = "clear"
 
                                 yield _sse(
                                     "delta",
@@ -5308,6 +5380,21 @@ async def chat_stream(
 
                                 restart_request = payload
                                 break
+
+                            if (
+                                item_type == "response_meta"
+                                and status_active
+                                and status_step != processing_status_step
+                            ):
+                                # Le fournisseur a effectivement créé la réponse.
+                                # Cela ne certifie ni l'extraction du fichier ni
+                                # les étapes privées de raisonnement du modèle.
+                                yield _oria_chat_status(
+                                    processing_status_step,
+                                    generation_id=generation_id,
+                                    attempt_id=attempt_id,
+                                )
+                                status_step = processing_status_step
 
                             if item_type == "response_meta" and "web_images" in payload:
                                 final_web_images = _public_web_images(
@@ -5381,6 +5468,14 @@ async def chat_stream(
                                     ) * 1000
 
                                 full_response += delta
+                                if status_active:
+                                    yield _oria_chat_status(
+                                        "clear",
+                                        generation_id=generation_id,
+                                        attempt_id=attempt_id,
+                                    )
+                                    status_active = False
+                                    status_step = "clear"
                                 yield _sse(
                                     "delta",
                                     {
@@ -5410,6 +5505,14 @@ async def chat_stream(
                                 ) * 1000
 
                             full_response += delta
+                            if status_active:
+                                yield _oria_chat_status(
+                                    "clear",
+                                    generation_id=generation_id,
+                                    attempt_id=attempt_id,
+                                )
+                                status_active = False
+                                status_step = "clear"
 
                             yield _sse(
                                 "delta",
@@ -5450,6 +5553,16 @@ async def chat_stream(
                             continue
 
                         if item_type == "response_meta":
+                            if (
+                                status_active
+                                and status_step != processing_status_step
+                            ):
+                                yield _oria_chat_status(
+                                    processing_status_step,
+                                    generation_id=generation_id,
+                                    attempt_id=attempt_id,
+                                )
+                                status_step = processing_status_step
                             if "web_images" in payload:
                                 final_web_images = _public_web_images(
                                     payload.get("web_images"), enabled=web,
@@ -5509,6 +5622,15 @@ async def chat_stream(
                             "replace_content": True,
                         },
                     )
+                    # Le frontend remet à zéro le texte de l'ancienne tentative.
+                    # L'unique statut redevient visible jusqu'au nouveau delta.
+                    yield _oria_chat_status(
+                        "restarting",
+                        generation_id=generation_id,
+                        attempt_id=attempt_id,
+                    )
+                    status_active = True
+                    status_step = "restarting"
                     continue
 
                 break
@@ -5526,6 +5648,13 @@ async def chat_stream(
                 except Exception:
                     pass
 
+                if status_active:
+                    yield _oria_chat_status(
+                        "clear",
+                        generation_id=generation_id,
+                        attempt_id=attempt_id,
+                    )
+                    status_active = False
                 yield _sse(
                     "error",
                     {
@@ -5539,6 +5668,13 @@ async def chat_stream(
                 return
 
             if final_usage is None:
+                if status_active:
+                    yield _oria_chat_status(
+                        "clear",
+                        generation_id=generation_id,
+                        attempt_id=attempt_id,
+                    )
+                    status_active = False
                 yield _sse(
                     "error",
                     {
@@ -5553,6 +5689,13 @@ async def chat_stream(
                 return
 
             if web and final_web_search_calls is None:
+                if status_active:
+                    yield _oria_chat_status(
+                        "clear",
+                        generation_id=generation_id,
+                        attempt_id=attempt_id,
+                    )
+                    status_active = False
                 yield _sse(
                     "error",
                     {
@@ -5574,6 +5717,13 @@ async def chat_stream(
                 )
                 cost = billing.credits
             except RuntimeError as error:
+                if status_active:
+                    yield _oria_chat_status(
+                        "clear",
+                        generation_id=generation_id,
+                        attempt_id=attempt_id,
+                    )
+                    status_active = False
                 yield _sse(
                     "error",
                     {
@@ -5598,6 +5748,13 @@ async def chat_stream(
                 )
                 settled = True
             except Exception as error:
+                if status_active:
+                    yield _oria_chat_status(
+                        "clear",
+                        generation_id=generation_id,
+                        attempt_id=attempt_id,
+                    )
+                    status_active = False
                 yield _sse(
                     "error",
                     {
@@ -5687,6 +5844,13 @@ async def chat_stream(
                         },
                     )
 
+            if status_active:
+                yield _oria_chat_status(
+                    "clear",
+                    generation_id=generation_id,
+                    attempt_id=attempt_id,
+                )
+                status_active = False
             yield _sse(
                 "done",
                 {
@@ -5754,6 +5918,13 @@ async def chat_stream(
                 except Exception:
                     pass
 
+            if status_active:
+                yield _oria_chat_status(
+                    "clear",
+                    generation_id=generation_id,
+                    attempt_id=attempt_id,
+                )
+                status_active = False
             yield _sse(
                 "error",
                 {

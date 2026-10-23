@@ -284,6 +284,34 @@ const USER_MESSAGE_COLLAPSE_LINES = 8;
 type OriaLanguage = "fr" | "en";
 type ReasoningMode = "fast" | "balanced" | "deep";
 
+// Statut ORIA : un seul jalon observable à l'écran, jamais une liste.
+// Les libellés de l'API sont ignorés pour conserver la langue choisie
+// et éviter de présenter du contenu distant arbitraire dans l'interface.
+const ORIA_CHAT_STATUS_LABELS = {
+  sending: { fr: "Envoi de la demande…", en: "Sending request…" },
+  file_received: { fr: "Fichier reçu", en: "File received" },
+  image_received: { fr: "Image reçue", en: "Image received" },
+  attachments_received: { fr: "Pièces jointes reçues", en: "Attachments received" },
+  preparing: { fr: "Préparation de la réponse…", en: "Preparing response…" },
+  processing_file: { fr: "Traitement du fichier…", en: "Processing file…" },
+  processing_image: { fr: "Traitement de l'image…", en: "Processing image…" },
+  processing_attachments: { fr: "Traitement des pièces jointes…", en: "Processing attachments…" },
+  processing: { fr: "Génération de la réponse…", en: "Generating response…" },
+  restarting: { fr: "Ajustement de la réponse…", en: "Updating response…" },
+  media_generation: { fr: "Création du média…", en: "Generating media…" },
+} as const satisfies Record<string, Record<OriaLanguage, string>>;
+
+type OriaChatStatusStep = keyof typeof ORIA_CHAT_STATUS_LABELS;
+
+function readOriaChatStatusStep(value: unknown): OriaChatStatusStep | null {
+  if (typeof value !== "string") return null;
+  // Deux étapes sont exclusivement locales au navigateur.
+  if (value === "sending" || value === "media_generation") return null;
+  return Object.prototype.hasOwnProperty.call(ORIA_CHAT_STATUS_LABELS, value)
+    ? (value as OriaChatStatusStep)
+    : null;
+}
+
 const REASONING_OPTIONS: Array<{
   id: ReasoningMode;
   label: Record<OriaLanguage, string>;
@@ -4032,6 +4060,13 @@ export default function ChatPage() {
   const [isThinking, setIsThinking] =
     useState(false);
 
+  const [chatStatusStep, setChatStatusStep] =
+    useState<OriaChatStatusStep | null>(null);
+
+  // Permet de masquer le message assistant vide, puis de le retirer en
+  // cas d'échec, sans toucher aux réponses déjà reçues.
+  const activeStreamingAssistantIdRef = useRef<string | null>(null);
+
   const [conversations, setConversations] =
     useState<Conversation[]>([]);
 
@@ -5695,6 +5730,7 @@ export default function ChatPage() {
       activeConversationId;
 
     setIsThinking(true);
+    setChatStatusStep("media_generation");
     setError(null);
 
     try {
@@ -5990,6 +6026,7 @@ export default function ChatPage() {
 
       setError(errorMessage);
     } finally {
+      setChatStatusStep(null);
       setIsThinking(false);
     }
   }
@@ -6399,6 +6436,7 @@ export default function ChatPage() {
     }
 
     setMessage("");
+    setChatStatusStep("sending");
     setIsThinking(true);
 
     /*
@@ -6526,8 +6564,10 @@ export default function ChatPage() {
       let assistantContent = "";
       let streamBuffer = "";
       let streamDone = false;
+      let hasVisibleDelta = false;
       let streamedArtifacts: GeneratedArtifact[] = [];
       let streamedWebImages: WebIllustration[] = [];
+      activeStreamingAssistantIdRef.current = assistantId;
       setMessages(
         (current) => [
           ...current,
@@ -6612,6 +6652,24 @@ export default function ChatPage() {
                 dataText,
               );
           } catch {
+            continue;
+          }
+
+          if (eventName === "status") {
+            // Les statuts concernent uniquement la génération courante.
+            if (
+              typeof eventData.generation_id === "string" &&
+              eventData.generation_id !== generationId
+            ) {
+              continue;
+            }
+
+            if (eventData.active === false || eventData.step === "clear") {
+              setChatStatusStep(null);
+            } else if (!hasVisibleDelta) {
+              const step = readOriaChatStatusStep(eventData.step);
+              if (step) setChatStatusStep(step);
+            }
             continue;
           }
 
@@ -6721,6 +6779,8 @@ export default function ChatPage() {
             "generation_restarted"
           ) {
             assistantContent = "";
+            hasVisibleDelta = false;
+            setChatStatusStep("restarting");
             streamedWebImages = [];
             setWebImagesByMessage((current) => ({ ...current, [assistantId]: [] }));
 
@@ -6755,6 +6815,9 @@ export default function ChatPage() {
               continue;
             }
 
+            // Dès le premier caractère reçu, le statut quitte l'écran.
+            hasVisibleDelta = true;
+            setChatStatusStep(null);
             assistantContent +=
               delta;
 
@@ -6829,6 +6892,7 @@ export default function ChatPage() {
             eventName ===
             "done"
           ) {
+            setChatStatusStep(null);
             if (Array.isArray(eventData.web_images)) {
               streamedWebImages = normalizeWebImages(eventData.web_images);
               setWebImagesByMessage((current) => ({...current, [assistantId]: streamedWebImages}));
@@ -7090,6 +7154,7 @@ export default function ChatPage() {
         refreshedTrials,
       );
     } catch (requestError) {
+      setChatStatusStep(null);
       const errorMessage =
         requestError instanceof
         Error
@@ -7106,9 +7171,13 @@ export default function ChatPage() {
           new Date().toISOString(),
       };
 
+      const livePlaceholderId = activeStreamingAssistantIdRef.current;
       setMessages(
         (current) => [
-          ...current,
+          ...current.filter(
+            (item) =>
+              item.id !== livePlaceholderId || Boolean(item.content?.trim()),
+          ),
           assistantMessage,
         ],
       );
@@ -7146,6 +7215,8 @@ export default function ChatPage() {
         );
       }
     } finally {
+      setChatStatusStep(null);
+      activeStreamingAssistantIdRef.current = null;
       setIsThinking(false);
       setCanModifyActiveGeneration(
         false,
@@ -7535,7 +7606,14 @@ export default function ChatPage() {
               0 && (
               <div className="flex-1 overflow-y-auto py-8">
                 <div className="mx-auto flex w-full max-w-3xl flex-col gap-7">
-                  {messages.map(
+                  {messages.filter(
+                    (item) => !(
+                      isThinking &&
+                      item.role === "assistant" &&
+                      item.id === activeStreamingAssistantIdRef.current &&
+                      !getVisibleMessageContent(item.content || "").trim()
+                    ),
+                  ).map(
                     (item) => (
                       <div
                         key={
@@ -7933,21 +8011,17 @@ export default function ChatPage() {
                     ),
                   )}
 
-                  {isThinking && (
-                    <div className="flex justify-start">
-                      <div className="rounded-3xl rounded-bl-lg border border-border bg-surface px-5 py-3.5 text-sm text-muted shadow-sm">
-                        <div className="flex items-center gap-2">
-                          <span className="flex gap-1">
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
-
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:150ms]" />
-
-                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted [animation-delay:300ms]" />
-                          </span>
-
-                          Oria réfléchit...
-                        </div>
-                      </div>
+                  {isThinking && chatStatusStep && (
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true"
+                      className="flex min-w-0 max-w-full items-center gap-2 py-1 text-xs text-muted"
+                    >
+                      <Loader2 size={13} aria-hidden="true" className="shrink-0 animate-spin" />
+                      <span className="min-w-0 truncate">
+                        {ORIA_CHAT_STATUS_LABELS[chatStatusStep][language]}
+                      </span>
                     </div>
                   )}
                 </div>

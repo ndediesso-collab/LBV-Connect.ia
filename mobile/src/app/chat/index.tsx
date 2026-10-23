@@ -81,6 +81,34 @@ type OriaLanguage = "fr" | "en";
 
 type ReasoningMode = "fast" | "balanced" | "deep";
 
+// Une seule étape visible : les jalons précédents ne sont pas conservés.
+// Seuls les codes reconnus par ORIA sont traduits ; un libellé arbitraire
+// envoyé par le réseau n'est jamais affiché directement.
+const ORIA_CHAT_STATUS_LABELS = {
+  sending: { fr: "Envoi de la demande…", en: "Sending request…" },
+  file_received: { fr: "Fichier reçu", en: "File received" },
+  image_received: { fr: "Image reçue", en: "Image received" },
+  attachments_received: { fr: "Pièces jointes reçues", en: "Attachments received" },
+  preparing: { fr: "Préparation de la réponse…", en: "Preparing response…" },
+  processing_file: { fr: "Traitement du fichier…", en: "Processing file…" },
+  processing_image: { fr: "Traitement de l'image…", en: "Processing image…" },
+  processing_attachments: { fr: "Traitement des pièces jointes…", en: "Processing attachments…" },
+  processing: { fr: "Génération de la réponse…", en: "Generating response…" },
+  restarting: { fr: "Ajustement de la réponse…", en: "Updating response…" },
+  media_generation: { fr: "Création du média…", en: "Generating media…" },
+} as const satisfies Record<string, Record<OriaLanguage, string>>;
+
+type OriaChatStatusStep = keyof typeof ORIA_CHAT_STATUS_LABELS;
+
+function readOriaChatStatusStep(value: unknown): OriaChatStatusStep | null {
+  if (typeof value !== "string") return null;
+  // Réservés à des actions confirmées côté application mobile.
+  if (value === "sending" || value === "media_generation") return null;
+  return Object.prototype.hasOwnProperty.call(ORIA_CHAT_STATUS_LABELS, value)
+    ? (value as OriaChatStatusStep)
+    : null;
+}
+
 const REASONING_OPTIONS: Array<{
   id: ReasoningMode;
   label: Record<OriaLanguage, string>;
@@ -4201,6 +4229,11 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [chatStatusStep, setChatStatusStep] =
+    useState<OriaChatStatusStep | null>(null);
+  // Empêche un assistant vide d'apparaître pendant la préparation. Sa
+  // réponse réapparaît dès le premier vrai fragment de texte.
+  const activeStreamingAssistantIdRef = useRef<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] =
     useState<string | null>(null);
@@ -5832,6 +5865,7 @@ export default function ChatPage() {
     let conversationId = activeConversationId;
 
     setIsThinking(true);
+    setChatStatusStep("media_generation");
     setError(null);
 
     try {
@@ -6011,6 +6045,7 @@ export default function ChatPage() {
           : t.mediaCreationFailed,
       );
     } finally {
+      setChatStatusStep(null);
       setIsThinking(false);
     }
   }
@@ -6169,6 +6204,7 @@ export default function ChatPage() {
     if (options?.contentOverride === undefined) setMessage("");
     setComposerExpanded(false);
     setComposerInputHeight(112);
+    setChatStatusStep("sending");
     setIsThinking(true);
     setError(null);
 
@@ -6241,8 +6277,10 @@ export default function ChatPage() {
       const assistantCreatedAt = new Date().toISOString();
 
       let assistantContent = "";
+      let hasVisibleDelta = false;
       let streamedArtifacts: GeneratedArtifact[] = [];
       let streamedWebImages: WebIllustration[] = [];
+      activeStreamingAssistantIdRef.current = assistantId;
 
       setMessages((current) => [
         ...current,
@@ -6276,7 +6314,7 @@ export default function ChatPage() {
             stream: true,
           });
 
-          const events = buffer.split("\n\n");
+          const events = buffer.replace(/\r\n/g, "\n").split("\n\n");
           buffer = events.pop() || "";
 
           for (const rawEvent of events) {
@@ -6302,6 +6340,22 @@ export default function ChatPage() {
             try {
               eventData = JSON.parse(dataText);
             } catch {
+              continue;
+            }
+
+            if (eventName === "status") {
+              // Un événement d'une autre génération ne peut pas modifier la ligne.
+              if (
+                typeof eventData.generation_id === "string" &&
+                eventData.generation_id !== generationId
+              ) continue;
+
+              if (eventData.active === false || eventData.step === "clear") {
+                setChatStatusStep(null);
+              } else if (!hasVisibleDelta) {
+                const step = readOriaChatStatusStep(eventData.step);
+                if (step) setChatStatusStep(step);
+              }
               continue;
             }
 
@@ -6399,6 +6453,8 @@ export default function ChatPage() {
               "generation_restarted"
             ) {
               assistantContent = "";
+              hasVisibleDelta = false;
+              setChatStatusStep("restarting");
               streamedWebImages = [];
 
               setMessages(
@@ -6470,6 +6526,8 @@ export default function ChatPage() {
 
               if (!delta) continue;
 
+              hasVisibleDelta = true;
+              setChatStatusStep(null);
               assistantContent += delta;
 
               setMessages((current) =>
@@ -6485,6 +6543,7 @@ export default function ChatPage() {
             }
 
             if (eventName === "error") {
+              setChatStatusStep(null);
               throw new Error(
                 typeof eventData.detail === "string"
                   ? eventData.detail
@@ -6493,6 +6552,7 @@ export default function ChatPage() {
             }
 
             if (eventName === "done") {
+              setChatStatusStep(null);
               if (Array.isArray(eventData.web_images)) {
                 streamedWebImages = normalizeWebImages(eventData.web_images);
               }
@@ -6573,7 +6633,7 @@ export default function ChatPage() {
           await streamResponse.text();
 
         const rawEvents =
-          rawSse.split("\n\n");
+          rawSse.replace(/\r\n/g, "\n").split("\n\n");
 
         for (const rawEvent of rawEvents) {
           if (!rawEvent.trim()) {
@@ -6628,13 +6688,33 @@ export default function ChatPage() {
             continue;
           }
 
-          if (
-            eventName ===
-            "generation_restarted"
-          ) {
+          if (eventName === "status") {
+            if (
+              typeof eventData.generation_id === "string" &&
+              eventData.generation_id !== generationId
+            ) continue;
+            if (eventData.active === false || eventData.step === "clear") {
+              setChatStatusStep(null);
+            } else if (!hasVisibleDelta) {
+              const step = readOriaChatStatusStep(eventData.step);
+              if (step) setChatStatusStep(step);
+            }
+            continue;
+          }
+
+          if (eventName === "generation_restarted") {
             assistantContent = "";
+            hasVisibleDelta = false;
+            setChatStatusStep("restarting");
             streamedWebImages = [];
             continue;
+          }
+
+          if (eventName === "error") {
+            setChatStatusStep(null);
+            throw new Error(
+              typeof eventData.detail === "string" ? eventData.detail : t.aiStreamingError,
+            );
           }
 
           if (eventName === "delta") {
@@ -6644,8 +6724,11 @@ export default function ChatPage() {
                 ? eventData.content
                 : "";
 
-            assistantContent +=
-              delta;
+            if (delta) {
+              hasVisibleDelta = true;
+              setChatStatusStep(null);
+              assistantContent += delta;
+            }
           }
 
           if (eventName === "artifact") {
@@ -6664,6 +6747,7 @@ export default function ChatPage() {
             }
           }
 
+          if (eventName === "done") setChatStatusStep(null);
           if (eventName === "done" && Array.isArray(eventData.web_images)) {
             streamedWebImages = normalizeWebImages(eventData.web_images);
           }
@@ -6778,6 +6862,7 @@ export default function ChatPage() {
       await loadWallet(refreshedTrials);
       return true;
     } catch (requestError) {
+      setChatStatusStep(null);
       const errorMessage =
         requestError instanceof Error
           ? requestError.message
@@ -6791,12 +6876,17 @@ export default function ChatPage() {
         createdAt: new Date().toISOString(),
       };
 
+      const emptyAssistantId = activeStreamingAssistantIdRef.current;
       setMessages((current) => [
-        ...current,
+        ...current.filter((item) =>
+          item.id !== emptyAssistantId || Boolean(item.content?.trim()),
+        ),
         assistantMessage,
       ]);
       return false;
     } finally {
+      setChatStatusStep(null);
+      activeStreamingAssistantIdRef.current = null;
       setIsThinking(false);
       setActiveGenerationId(null);
       setCanModifyActiveGeneration(false);
@@ -7382,7 +7472,28 @@ export default function ChatPage() {
             <FlatList
               ref={listRef}
               style={styles.messageListContainer}
-              data={messages}
+              data={messages.filter((item) => !(
+                isThinking &&
+                item.role === "assistant" &&
+                item.id === activeStreamingAssistantIdRef.current &&
+                !getVisibleMessageContent(item.content || "").trim()
+              ))}
+              extraData={chatStatusStep}
+              ListFooterComponent={isThinking && chatStatusStep ? (
+                <View style={styles.oriaStatusRow} accessibilityLiveRegion="polite">
+                  <ActivityIndicator
+                    size="small"
+                    color={themedIconColor("#777771", isDark)}
+                  />
+                  <Text
+                    style={styles.oriaStatusText}
+                    numberOfLines={1}
+                    accessibilityRole="text"
+                  >
+                    {ORIA_CHAT_STATUS_LABELS[chatStatusStep][language]}
+                  </Text>
+                </View>
+              ) : null}
               keyExtractor={(item) => item.id}
               renderItem={renderMessage}
               contentContainerStyle={styles.messageList}
@@ -8724,6 +8835,21 @@ const baseStyles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 20,
     gap: 18,
+  },
+  oriaStatusRow: {
+    minHeight: 28,
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingHorizontal: 3,
+    paddingVertical: 4,
+  },
+  oriaStatusText: {
+    flexShrink: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#777771",
   },
   messageRow: {
     width: "100%",
