@@ -900,7 +900,9 @@ class OpenAIService:
 
 
 
-            if role not in {"user", "assistant", "system", "developer"}:
+            # L'historique sauvegardé est du contenu utilisateur : il ne
+            # doit jamais pouvoir injecter un rôle system/developer.
+            if role not in {"user", "assistant"}:
 
 
 
