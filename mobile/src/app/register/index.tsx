@@ -160,7 +160,12 @@ const UI = {
     passwordMinimum: "Minimum 8 caractères.",
     confirmPassword: "Confirmer le mot de passe",
     confirmPasswordPlaceholder: "Confirmer votre mot de passe",
-    terms: "J'accepte les conditions d'utilisation et la politique de confidentialité de Oria.",
+    termsPrefix: "J'accepte les ",
+    termsTitle: "Conditions d'utilisation",
+    termsMiddle: " et reconnais avoir pris connaissance de la ",
+    privacyTitle: "Politique de confidentialité",
+    termsSuffix: " d'ORIA.",
+    termsCheckboxLabel: "Accepter les conditions d'utilisation d'ORIA",
     creating: "Création du compte...",
     createAccount: "Créer mon compte",
     or: "ou",
@@ -209,7 +214,12 @@ const UI = {
     passwordMinimum: "Minimum 8 characters.",
     confirmPassword: "Confirm password",
     confirmPasswordPlaceholder: "Confirm your password",
-    terms: "I accept Oria's terms of use and privacy policy.",
+    termsPrefix: "I accept ORIA's ",
+    termsTitle: "Terms of Use",
+    termsMiddle: " and acknowledge having read the ",
+    privacyTitle: "Privacy Policy",
+    termsSuffix: ".",
+    termsCheckboxLabel: "Accept ORIA's terms of use",
     creating: "Creating account...",
     createAccount: "Create my account",
     or: "or",
@@ -977,6 +987,20 @@ export default function RegisterPage() {
   }
 
   /**
+   * Affiche une politique dans la route Expo Router existante.
+   * Le formulaire reste dans la pile de navigation pour préserver
+   * les saisies lors du retour depuis la page Legal.
+   */
+  function openLegal(tab: "terms" | "privacy") {
+    if (loading) return;
+
+    router.push({
+      pathname: "/legal",
+      params: { tab, from: "signup" },
+    } as any);
+  }
+
+  /**
    * Retour vers l'accueil.
    */
   function handleBack() {
@@ -1580,47 +1604,52 @@ export default function RegisterPage() {
                   </View>
                 ) : null}
 
-                {/* Terms */}
+                {/* Conditions d'utilisation et confidentialité.
+                    Les liens sont indépendants de la case à cocher :
+                    consulter un document ne vaut pas acceptation. */}
 
-                <Pressable
-                  onPress={() =>
-                    setTermsAccepted(
-                      !termsAccepted,
-                    )
-                  }
-                  disabled={loading}
-                  style={({ pressed }) => [
-                    styles.termsRow,
-                    pressed &&
-                      styles.pressed,
-                    loading &&
-                      styles.disabled,
-                  ]}
-                >
-                  <View
-                    style={[
+                <View style={styles.termsRow}>
+                  <Pressable
+                    onPress={() => setTermsAccepted(!termsAccepted)}
+                    disabled={loading}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: termsAccepted, disabled: loading }}
+                    accessibilityLabel={t.termsCheckboxLabel}
+                    hitSlop={8}
+                    style={({ pressed }) => [
                       styles.checkbox,
-                      termsAccepted &&
-                        styles.checkboxChecked,
+                      termsAccepted && styles.checkboxChecked,
+                      pressed && styles.pressed,
+                      loading && styles.disabled,
                     ]}
                   >
                     {termsAccepted ? (
-                      <Ionicons
-                        name="checkmark"
-                        size={13}
-                        color="#ffffff"
-                      />
+                      <Ionicons name="checkmark" size={13} color="#ffffff" />
                     ) : null}
-                  </View>
+                  </Pressable>
 
-                  <Text
-                    style={
-                      styles.termsText
-                    }
-                  >
-                    {t.terms}
+                  <Text style={styles.termsText}>
+                    {t.termsPrefix}
+                    <Text
+                      onPress={() => openLegal("terms")}
+                      accessibilityRole="link"
+                      accessibilityLabel={t.termsTitle}
+                      style={styles.termsLink}
+                    >
+                      {t.termsTitle}
+                    </Text>
+                    {t.termsMiddle}
+                    <Text
+                      onPress={() => openLegal("privacy")}
+                      accessibilityRole="link"
+                      accessibilityLabel={t.privacyTitle}
+                      style={styles.termsLink}
+                    >
+                      {t.privacyTitle}
+                    </Text>
+                    {t.termsSuffix}
                   </Text>
-                </Pressable>
+                </View>
 
                 {/* Submit */}
 
@@ -2241,6 +2270,12 @@ const styles = StyleSheet.create({
     color: "#71717a",
     fontSize: 12,
     lineHeight: 19,
+  },
+
+  termsLink: {
+    color: "#4144aa",
+    textDecorationLine: "underline",
+    fontWeight: "600",
   },
 
   submitButton: {

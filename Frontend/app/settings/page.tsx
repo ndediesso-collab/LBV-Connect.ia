@@ -2,6 +2,7 @@
 
 import {
   ArrowLeft,
+  BookOpen,
   Bell,
   Check,
   ChevronRight,
@@ -13,6 +14,7 @@ import {
   Moon,
   Palette,
   Shield,
+  ScrollText,
   Sparkles,
   UserRound,
   X,
@@ -89,6 +91,14 @@ const SETTINGS_TEXT = {
     credits: "Crédits",
     creditsDescription: "Consulter votre solde et votre consommation",
     view: "Consulter",
+    informationCenter: "Informations et politiques ORIA",
+    informationCenterDescription: "Découvrez ORIA, nos engagements et vos droits.",
+    aboutOria: "Découvrir ORIA",
+    aboutOriaDescription: "Notre mission, nos fonctionnalités et nos engagements",
+    privacyPolicy: "Politique de confidentialité",
+    privacyPolicyDescription: "Comprendre le traitement de vos données personnelles",
+    termsOfUse: "Conditions d'utilisation",
+    termsOfUseDescription: "Règles du service et responsabilités",
     logout: "Se déconnecter",
     logoutDescription: "Fermer votre session actuelle",
     unknownCountry: "Pays inconnu",
@@ -186,6 +196,14 @@ const SETTINGS_TEXT = {
     credits: "Credits",
     creditsDescription: "View your balance and usage",
     view: "View",
+    informationCenter: "ORIA information and policies",
+    informationCenterDescription: "Learn about ORIA, our commitments and your rights.",
+    aboutOria: "Discover ORIA",
+    aboutOriaDescription: "Our mission, features and commitments",
+    privacyPolicy: "Privacy policy",
+    privacyPolicyDescription: "Understand how we process your personal data",
+    termsOfUse: "Terms of use",
+    termsOfUseDescription: "Service rules and responsibilities",
     logout: "Sign out",
     logoutDescription: "Close your current session",
     unknownCountry: "Unknown country",
@@ -1814,6 +1832,53 @@ async function reverseGeocode(
                   <ChevronRight size={15} />
                 </Link>
               </SettingsRow>
+            </SettingsSection>
+
+            {/* =================================================
+                INFORMATIONS ET POLITIQUES ORIA
+                Liens directs vers /legal (aucun appel backend)
+            ================================================= */}
+
+            <SettingsSection
+              icon={<BookOpen size={18} />}
+              title={t.informationCenter}
+              description={t.informationCenterDescription}
+            >
+              <Link
+                href="/legal?tab=about"
+                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--foreground)]"
+              >
+                <IconBox><BookOpen size={17} /></IconBox>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{t.aboutOria}</p>
+                  <p className="mt-0.5 text-xs leading-5 text-[var(--muted)]">{t.aboutOriaDescription}</p>
+                </div>
+                <ChevronRight size={17} className="shrink-0 text-[var(--muted)]" aria-hidden="true" />
+              </Link>
+
+              <Link
+                href="/legal?tab=privacy"
+                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--foreground)]"
+              >
+                <IconBox><Shield size={17} /></IconBox>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{t.privacyPolicy}</p>
+                  <p className="mt-0.5 text-xs leading-5 text-[var(--muted)]">{t.privacyPolicyDescription}</p>
+                </div>
+                <ChevronRight size={17} className="shrink-0 text-[var(--muted)]" aria-hidden="true" />
+              </Link>
+
+              <Link
+                href="/legal?tab=terms"
+                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--foreground)]"
+              >
+                <IconBox><ScrollText size={17} /></IconBox>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{t.termsOfUse}</p>
+                  <p className="mt-0.5 text-xs leading-5 text-[var(--muted)]">{t.termsOfUseDescription}</p>
+                </div>
+                <ChevronRight size={17} className="shrink-0 text-[var(--muted)]" aria-hidden="true" />
+              </Link>
             </SettingsSection>
 
             {/* =================================================

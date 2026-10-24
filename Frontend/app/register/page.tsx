@@ -43,7 +43,12 @@ const UI = {
     confirmPassword: "Confirmer le mot de passe",
     confirmPasswordPlaceholder: "Confirmer votre mot de passe",
     terms:
-      "J'accepte les conditions d'utilisation et la politique de confidentialité de Oria.",
+      "J'accepte les conditions d'utilisation et reconnais avoir pris connaissance de la politique de confidentialité d'ORIA.",
+    termsIntro: "J'accepte les",
+    termsLink: "Conditions d'utilisation",
+    termsConnector: "et reconnais avoir pris connaissance de la",
+    privacyLink: "Politique de confidentialité",
+    opensNewTab: "S'ouvre dans un nouvel onglet",
     creatingAccount: "Création du compte...",
     createMyAccount: "Créer mon compte",
     or: "ou",
@@ -97,7 +102,12 @@ const UI = {
     minimumEight: "Minimum 8 characters.",
     confirmPassword: "Confirm password",
     confirmPasswordPlaceholder: "Confirm your password",
-    terms: "I accept Oria's terms of use and privacy policy.",
+    terms: "I agree to ORIA's terms of use and acknowledge reading the privacy policy.",
+    termsIntro: "I agree to the",
+    termsLink: "Terms of use",
+    termsConnector: "and acknowledge reading the",
+    privacyLink: "Privacy policy",
+    opensNewTab: "Opens in a new tab",
     creatingAccount: "Creating account...",
     createMyAccount: "Create my account",
     or: "or",
@@ -970,21 +980,47 @@ export default function RegisterPage() {
                 </div>
               )}
 
-              {/* Terms */}
+              {/* Terms — consultation possible sans compte.
+                  Les liens restent hors d'un <label> pour éviter
+                  qu'un clic dessus ne coche involontairement la case.
+                  Nouvel onglet : le formulaire saisi reste intact. */}
 
-              <label className="flex items-start gap-3">
+              <div className="flex items-start gap-3">
                 <input
+                  id="oria-legal-acceptance"
                   type="checkbox"
                   name="terms"
                   required
                   disabled={loading}
+                  aria-label={UI[language].terms}
                   className="mt-1 h-4 w-4 shrink-0 accent-black dark:accent-white"
                 />
 
-                <span className="text-xs leading-5 text-muted">
-                  {UI[language].terms}
-                </span>
-              </label>
+                <p className="text-xs leading-5 text-muted">
+                  <label htmlFor="oria-legal-acceptance" className="cursor-pointer">
+                    {UI[language].termsIntro}{" "}
+                  </label>
+                  <Link
+                    href="/legal?tab=terms&from=signup"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={UI[language].opensNewTab}
+                    className="font-semibold text-foreground underline underline-offset-2 transition-opacity hover:opacity-70 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                  >
+                    {UI[language].termsLink}
+                  </Link>{" "}
+                  {UI[language].termsConnector}{" "}
+                  <Link
+                    href="/legal?tab=privacy&from=signup"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={UI[language].opensNewTab}
+                    className="font-semibold text-foreground underline underline-offset-2 transition-opacity hover:opacity-70 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+                  >
+                    {UI[language].privacyLink}
+                  </Link>.
+                </p>
+              </div>
 
               {/* Submit */}
 

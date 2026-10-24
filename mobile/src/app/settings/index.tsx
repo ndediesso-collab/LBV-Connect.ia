@@ -198,6 +198,14 @@ const SETTINGS_TEXT = {
     credits: "Crédits",
     creditsDescription: "Consulter votre solde et votre consommation",
     view: "Consulter",
+    informationCenter: "Informations et politiques ORIA",
+    informationCenterDescription: "Découvrez ORIA, nos engagements et vos droits.",
+    aboutOria: "Découvrir ORIA",
+    aboutOriaDescription: "Notre mission, nos fonctionnalités et nos engagements",
+    privacyPolicy: "Politique de confidentialité",
+    privacyPolicyDescription: "Comprendre le traitement de vos données personnelles",
+    termsOfUse: "Conditions d'utilisation",
+    termsOfUseDescription: "Règles du service et responsabilités",
     logout: "Se déconnecter",
     loggingOut: "Déconnexion...",
     logoutDescription: "Fermer votre session actuelle",
@@ -305,6 +313,14 @@ const SETTINGS_TEXT = {
     credits: "Credits",
     creditsDescription: "View your balance and usage",
     view: "View",
+    informationCenter: "ORIA information and policies",
+    informationCenterDescription: "Learn about ORIA, our commitments and your rights.",
+    aboutOria: "Discover ORIA",
+    aboutOriaDescription: "Our mission, features and commitments",
+    privacyPolicy: "Privacy policy",
+    privacyPolicyDescription: "Understand how we process your personal data",
+    termsOfUse: "Terms of use",
+    termsOfUseDescription: "Service rules and responsibilities",
     logout: "Sign out",
     loggingOut: "Signing out...",
     logoutDescription: "Close your current session",
@@ -3285,6 +3301,61 @@ export default function SettingsPage() {
                       router.push(
                         "/credits" as any,
                       )
+                    }
+                  />
+                </SettingsSection>
+
+                {/* =================================================
+                    INFORMATIONS ET POLITIQUES ORIA
+                    Navigation Expo Router vers /legal.
+                    Aucun appel backend ajoute.
+                ================================================= */}
+
+                <SettingsSection
+                  iconName="book-outline"
+                  title={t.informationCenter}
+                  description={t.informationCenterDescription}
+                  theme={theme}
+                >
+                  <SettingsNavigationRow
+                    iconName="information-circle-outline"
+                    title={t.aboutOria}
+                    description={t.aboutOriaDescription}
+                    actionText={t.view}
+                    theme={theme}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/legal",
+                        params: { tab: "about" },
+                      } as any)
+                    }
+                  />
+
+                  <SettingsNavigationRow
+                    iconName="shield-checkmark-outline"
+                    title={t.privacyPolicy}
+                    description={t.privacyPolicyDescription}
+                    actionText={t.view}
+                    theme={theme}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/legal",
+                        params: { tab: "privacy" },
+                      } as any)
+                    }
+                  />
+
+                  <SettingsNavigationRow
+                    iconName="document-text-outline"
+                    title={t.termsOfUse}
+                    description={t.termsOfUseDescription}
+                    actionText={t.view}
+                    theme={theme}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/legal",
+                        params: { tab: "terms" },
+                      } as any)
                     }
                   />
                 </SettingsSection>
