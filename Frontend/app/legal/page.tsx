@@ -4,12 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft, ArrowUpRight, BookOpen, ChevronRight, FileText, Layers3,
-  Mail, ScrollText, ShieldCheck, Sparkles, Wallet, AlertCircle,
+  Mail, ScrollText, ShieldCheck, Sparkles, Wallet,
 } from "lucide-react";
 // ORIA : contenu integre dans ce fichier. Aucun legal-content.json requis.
 type LegalSection = {
   title: string;
-  review?: boolean;
   paragraphs?: string[];
   bullets?: string[];
 };
@@ -24,9 +23,7 @@ type LegalTab = {
 
 type LegalContent = {
   title: string;
-  version: string;
   updated: string;
-  status: string;
   email: string;
   intro: string;
   tabs: LegalTab[];
@@ -34,72 +31,65 @@ type LegalContent = {
 
 const content: LegalContent = {
   "title": "ORIA — Informations et politiques",
-  "version": "0.2 — Projet approfondi à valider",
   "updated": "24 octobre 2026",
-  "status": "draft",
   "email": "lbv-connect01@gmail.com",
-  "intro": "Comprendre ORIA, ses possibilités réelles, la gestion des crédits, nos engagements et vos droits sur vos données.",
+  "intro": "Découvrez notre vision, nos services et les engagements qui encadrent votre expérience avec ORIA.",
   "tabs": [
     {
       "id": "about",
       "label": "À propos",
-      "subtitle": "Notre mission et notre vision",
+      "subtitle": "Notre identité et notre ambition",
       "icon": "information-circle-outline",
       "sections": [
         {
-          "title": "ORIA, pour apprendre et créer",
+          "title": "Notre vision",
           "paragraphs": [
-            "ORIA est une plateforme d’intelligence artificielle multifonctionnelle pensée d’abord pour les élèves, les étudiants et les créateurs au Gabon, puis plus largement pour l’Afrique francophone. Sa vision : rendre les outils d’IA plus accessibles, sans renoncer à la clarté ni à la responsabilité.",
-            "Notre philosophie repose sur la liberté d’apprendre, de comprendre et de créer. ORIA ne remplace ni un enseignant, ni un professionnel, ni le jugement personnel de l’utilisateur."
+            "ORIA est une plateforme d’intelligence artificielle conçue pour faciliter l’accès au savoir, à la création et aux outils numériques. Née au Gabon avec une vocation francophone, elle rassemble différents usages de l’IA dans un environnement pensé pour être simple, cohérent et accessible.",
+            "Nous défendons une idée essentielle : chacun doit pouvoir apprendre, comprendre et créer avec davantage de liberté. Cette ambition guide nos choix de conception, notre façon de présenter les informations et notre volonté de proposer des solutions utiles au quotidien."
           ]
         },
         {
-          "title": "Les quatre piliers",
+          "title": "Une intelligence artificielle au service des personnes",
+          "paragraphs": [
+            "ORIA accompagne les élèves, les étudiants, les enseignants, les créateurs et les professionnels dans leurs recherches, leurs projets et leurs activités. Elle intervient comme un outil d’assistance : elle aide à explorer des idées, structurer un raisonnement, produire du contenu et gagner du temps.",
+            "Nous accordons une importance particulière à la compréhension. Une bonne réponse ne doit pas seulement apporter un résultat ; elle doit, lorsque cela est utile, permettre à la personne qui la reçoit de mieux maîtriser son sujet."
+          ]
+        },
+        {
+          "title": "Une expérience réunie dans un seul espace",
+          "paragraphs": [
+            "La plateforme associe conversation, assistance à la rédaction, compréhension de documents, programmation, recherche d’informations, traitement des contenus audio et création visuelle. Les outils accessibles dépendent de la version du service, du modèle choisi et du pack détenu.",
+            "Cette organisation permet de passer naturellement d’une question à un document, d’une idée à un visuel ou d’un cours à des notes structurées, sans multiplier les interfaces."
+          ]
+        },
+        {
+          "title": "Une conception adaptée à nos utilisateurs",
+          "paragraphs": [
+            "ORIA est développée avec une attention particulière portée aux usages du Gabon et de l’Afrique francophone : clarté de l’interface, accompagnement pédagogique, modalités d’accès et simplicité des parcours.",
+            "Notre ambition est de construire un service durable, capable d’évoluer avec les besoins de ses utilisateurs tout en conservant une identité propre."
+          ]
+        },
+        {
+          "title": "Notre manière de travailler",
+          "paragraphs": [
+            "Nous privilégions la lisibilité, la continuité du service, la protection des informations et la qualité des résultats. Les retours de la communauté orientent l’amélioration de l’expérience et la conception de nouvelles fonctions.",
+            "Les services numériques évoluent. Nous pouvons donc ajuster les fonctionnalités, les modèles et les offres afin de maintenir une plateforme pertinente et fiable."
+          ]
+        },
+        {
+          "title": "L’essentiel de notre engagement",
           "bullets": [
-            "Apprendre : étudier, préparer ses exercices et organiser ses cours.",
-            "Comprendre : obtenir des explications, analyser des fichiers et mobiliser différents modes de raisonnement.",
-            "Créer : produire du texte, du code, des documents, des images et des vidéos lorsque les fonctions correspondantes sont disponibles.",
-            "Rendre l’IA accessible : utiliser des packs et des crédits adaptés aux usages."
-          ],
-          "paragraphs": []
-        },
-        {
-          "title": "Un service en développement",
-          "paragraphs": [
-            "Certaines fonctionnalités décrites dans le bilan fonctionnel d’ORIA sont développées mais encore en cours de validation technique. Leur présence dans l’interface ne garantit pas une disponibilité continue ni une réussite systématique."
+            "Rendre les outils d’intelligence artificielle plus faciles à utiliser.",
+            "Favoriser l’apprentissage, la créativité et l’autonomie.",
+            "Présenter les coûts et les conditions d’accès avec clarté.",
+            "Respecter la confidentialité et les droits des utilisateurs.",
+            "Faire évoluer ORIA avec exigence et sens des responsabilités."
           ]
         },
         {
-          "title": "À qui s’adresse ORIA ?",
+          "title": "Entrer en contact avec nous",
           "paragraphs": [
-            "ORIA a été pensée en priorité pour les élèves et étudiants du Gabon, puis pour les utilisateurs d’Afrique francophone. Elle peut également accompagner d’autres profils : enseignants, développeurs, entrepreneurs, créateurs de contenus et professionnels recherchant un outil de rédaction ou d’analyse.",
-            "Les outils pédagogiques ont pour vocation de soutenir le travail personnel. Ils ne remplacent pas les cours, les évaluations, l’encadrement d’un enseignant ou une démarche d’apprentissage autonome."
-          ]
-        },
-        {
-          "title": "Une seule interface pour plusieurs besoins",
-          "paragraphs": [
-            "Plutôt que multiplier les applications spécialisées, ORIA cherche à réunir conversation, analyse d’images, lecture de documents, code, recherche Web, création de fichiers, génération d’images et de vidéos, et outils de traitement des cours.",
-            "Toutes ces possibilités ne sont pas disponibles avec chaque pack ni nécessairement ouvertes au même stade du développement. L’utilisateur doit se référer aux fonctions réellement proposées dans son application."
-          ]
-        },
-        {
-          "title": "Accessibilité locale et expansion progressive",
-          "paragraphs": [
-            "Le projet privilégie des parcours adaptés aux habitudes du marché gabonais et envisage le paiement par les moyens mobiles courants. L’ambition à plus long terme est de servir les utilisateurs francophones de plusieurs pays africains.",
-            "La disponibilité territoriale des paiements, des modèles et de l’application peut varier selon les partenaires et leurs restrictions."
-          ]
-        },
-        {
-          "title": "Ce qu’ORIA ne prétend pas être",
-          "paragraphs": [
-            "ORIA n’est pas un établissement scolaire, un professeur agréé, un service de diagnostic médical, un cabinet juridique ou une institution financière. Ses réponses sont générées par des systèmes automatisés et doivent être contrôlées lorsque leur fiabilité est importante."
-          ]
-        },
-        {
-          "title": "Contact et amélioration continue",
-          "paragraphs": [
-            "Pour signaler une anomalie, demander de l’aide ou proposer une amélioration, vous pouvez écrire à lbv-connect01@gmail.com. Les signalements permettront de prioriser la stabilité, l’accessibilité et la clarté des fonctionnalités."
+            "Une question, une suggestion ou un besoin d’assistance ? Notre équipe est joignable à l’adresse lbv-connect01@gmail.com. Nous attachons de l’importance aux échanges qui nous permettent d’améliorer concrètement ORIA."
           ]
         }
       ]
@@ -107,145 +97,104 @@ const content: LegalContent = {
     {
       "id": "working",
       "label": "Fonctionnement",
-      "subtitle": "Comment utiliser ORIA",
+      "subtitle": "Comprendre les possibilités d’ORIA",
       "icon": "layers-outline",
       "sections": [
         {
-          "title": "Discuter avec ORIA",
+          "title": "Le Chat ORIA",
           "paragraphs": [
-            "Le Chat permet de poser des questions, demander des explications, analyser des fichiers et obtenir du code. Selon le pack, l’utilisateur peut choisir un modèle et un mode de raisonnement (Rapide, Équilibré, Approfondi).",
-            "L’interface peut afficher progressivement les réponses, conserver les conversations et proposer une fonction de modification d’une réponse en cours."
+            "Le Chat est le point de départ de nombreuses actions. Vous pouvez y poser une question, demander une explication, préparer un texte, résoudre un exercice, travailler sur un projet ou solliciter une aide technique.",
+            "Les réponses peuvent être structurées avec des titres, des tableaux, des formules, du code ou des références lorsque la fonction utilisée le permet. Vous gardez la possibilité d’approfondir un sujet au fil de la conversation."
           ]
         },
         {
-          "title": "Les documents et le code",
+          "title": "Choix du modèle et du mode de réponse",
           "paragraphs": [
-            "ORIA prévoit la lecture de fichiers PDF, Word, Excel, CSV, textes et présentations. Son moteur de création peut produire plusieurs familles de fichiers téléchargeables. Les formats disponibles dépendent de la configuration réelle du service.",
-            "Le code généré n’est pas nécessairement exécuté, testé ou sécurisé. L’utilisateur doit le contrôler avant toute utilisation en production."
+            "Selon votre offre, ORIA peut mettre plusieurs modèles d’intelligence artificielle à votre disposition, ainsi que différents niveaux de raisonnement. Chaque option répond à des besoins distincts, de la question courante à l’analyse plus exigeante.",
+            "La disponibilité d’un modèle et les droits associés sont indiqués dans l’application. Les choix proposés tiennent compte du pack, des limites techniques et des règles d’utilisation du service."
           ]
         },
         {
-          "title": "Recherche Web, images et visuels",
+          "title": "Conversations et continuité",
           "paragraphs": [
-            "La recherche Web est activable dans le Chat. Des liens et illustrations peuvent accompagner les réponses quand les sources le permettent. Les images jointes peuvent être analysées selon les capacités du modèle utilisé.",
-            "Le mini-studio Image/Vidéo présente les configurations accessibles pour le pack actif. Le format, la durée, la qualité et le coût effectifs sont déterminés par les options et contrôles du service, et non par les illustrations d’interface."
+            "L’historique vous aide à retrouver vos échanges et à reprendre vos travaux. Pour les discussions longues, des mécanismes de gestion du contexte peuvent être utilisés afin de préserver les éléments utiles à la suite de la conversation.",
+            "Vous pouvez organiser vos échanges selon les options offertes dans votre espace personnel. Une mémoire contextuelle ne remplace toutefois pas la conservation exhaustive de chaque détail d’une conversation."
           ]
         },
         {
-          "title": "ORIA Cours et notes vocales",
+          "title": "Documents et fichiers",
           "paragraphs": [
-            "ORIA Cours est conçu pour enregistrer des cours, préparer une transcription et produire un support pédagogique (PDF ou Word) après validation d’un devis. Le bilan technique prévoit des enregistrements découpés en segments, avec une durée maximale configurée de quatre heures par cours. Le traitement complet nécessite encore des tests de bout en bout.",
-            "Les notes vocales du Chat constituent un parcours distinct : enregistrer, réécouter, transcrire, envoyer comme audio ou modifier le texte reconnu. Le traitement et la facturation dépendent de l’étape réellement déclenchée."
+            "ORIA peut accompagner la lecture, la compréhension et la préparation de contenus tels que les PDF, documents texte, tableaux et présentations. Un fichier joint peut servir de support à une explication, une synthèse, une traduction ou un travail de reformulation.",
+            "Lorsque la création de fichiers est proposée, les formats disponibles sont indiqués dans l’interface. Vous pouvez récupérer les documents effectivement générés au moyen des options de consultation ou de téléchargement prévues."
           ]
         },
         {
-          "title": "Historique et mémoire",
+          "title": "Assistance au code",
           "paragraphs": [
-            "Les conversations peuvent être conservées pour permettre leur reprise. Le backend possède un mécanisme de mémoire conversationnelle qui synthétise parfois les échanges anciens pour maintenir le contexte ; cela ne garantit pas que chaque détail soit mémorisé."
+            "ORIA aide à expliquer, écrire, organiser et corriger du code informatique. Elle peut proposer des exemples, détailler des erreurs et préparer des fichiers sources selon la demande.",
+            "Le code produit doit être relu et testé dans l’environnement auquel il est destiné. Une suggestion générée ne constitue pas, à elle seule, une validation de sécurité ou de compatibilité."
           ]
         },
         {
-          "title": "Évolutions futures",
+          "title": "Recherche sur le Web",
           "paragraphs": [
-            "Les appels vocaux en temps réel, la transcription de discours en direct et certaines fonctions pédagogiques avancées sont des projets futurs. Elles ne doivent pas être considérées comme disponibles tant qu’ORIA ne les annonce pas explicitement."
+            "Avec la recherche Web, ORIA peut compléter une réponse par des informations provenant de sources en ligne, des liens et, lorsqu’elles sont pertinentes, des illustrations.",
+            "Les informations publiées sur Internet changent. Pour un sujet sensible ou dépendant de l’actualité, nous recommandons de consulter les sources d’origine et de vérifier les éléments déterminants."
           ]
         },
         {
-          "title": "Modèles d’IA et accès selon le pack",
+          "title": "Compréhension des images",
           "paragraphs": [
-            "ORIA est conçue pour proposer plusieurs modèles de la famille GPT et des accès différenciés suivant le pack. Le bilan fonctionnel du 23 octobre 2026 mentionne notamment GPT-6 Luna, GPT-5, GPT-5.6 Terra, GPT-6 Sol et GPT-6 Astra comme configurations de l’application.",
-            "Cette liste décrit une configuration de développement à une date donnée, non une garantie que chaque modèle sera disponible en permanence ou pour tous les utilisateurs. Les options autorisées doivent être confirmées par le serveur."
+            "Selon le modèle et les options disponibles, vous pouvez joindre une photographie, une capture d’écran, un schéma ou une illustration afin d’en demander l’analyse, une description ou une explication.",
+            "La précision du résultat dépend notamment de la qualité de l’image, de sa lisibilité et du contexte fourni."
           ]
         },
         {
-          "title": "Modes de raisonnement",
+          "title": "Création d’images",
           "paragraphs": [
-            "Les modes Rapide, Équilibré et Approfondi visent des besoins différents : réponse courante, explication structurée ou tâche complexe. Leur effet concret dépend des capacités du modèle sélectionné, de la demande et des limites techniques.",
-            "Un niveau plus approfondi ne garantit ni exactitude absolue, ni réponse plus pertinente dans tous les cas."
+            "Le studio Image permet de décrire un visuel et de sélectionner les paramètres proposés pour votre offre. Les possibilités peuvent varier en matière de format, de qualité, de style et de coût en crédits.",
+            "Une description claire, accompagnée des contraintes importantes, facilite l’obtention d’un résultat proche de votre intention créative."
           ]
         },
         {
-          "title": "Conversations longues et modification des réponses",
+          "title": "Création de vidéos",
           "paragraphs": [
-            "Lorsqu’une discussion devient longue, ORIA peut s’appuyer sur une synthèse de contexte au lieu de renvoyer sans fin tous les anciens messages. Certains éléments peuvent ne pas être retenus dans cette synthèse.",
-            "Le projet comprend aussi un mécanisme pour réorienter une réponse pendant sa génération. Cette capacité doit être vérifiée en conditions réelles, notamment lorsque plusieurs opérations ont lieu simultanément."
+            "Le studio Vidéo accompagne la production de séquences à partir d’instructions créatives. Les durées, résolutions, variantes et possibilités d’extension dépendent des options effectivement proposées.",
+            "Avant de lancer une génération, prenez connaissance des paramètres et du coût affichés. Le traitement d’une vidéo peut nécessiter davantage de temps qu’une réponse textuelle."
           ]
         },
         {
-          "title": "Joindre des documents ou des images",
+          "title": "Notes vocales",
           "paragraphs": [
-            "Le Chat peut recevoir des documents ou images pour en extraire des éléments, les expliquer ou répondre à des questions. La qualité de l’analyse dépend du format, de la lisibilité et des capacités du modèle.",
-            "Des limites de nombre, de taille et de formats de fichiers sont appliquées par les interfaces et les services. Un fichier joint ne devient pas automatiquement un document public."
+            "Sur les interfaces compatibles, les notes vocales permettent de s’exprimer sans saisir de texte. Il est possible de préparer un enregistrement, de le réécouter et d’utiliser les options de transcription ou d’envoi proposées.",
+            "La qualité d’une transcription dépend de l’environnement sonore, de la prononciation et de la langue utilisée."
           ]
         },
         {
-          "title": "Produire des fichiers et retrouver ses créations",
+          "title": "ORIA Cours",
           "paragraphs": [
-            "L’architecture comporte un moteur destiné à fabriquer de véritables fichiers : documents, tableaux, présentations, textes de programmation et archives. La prise en charge exacte de chaque extension dépend des modules installés et des tests de génération.",
-            "Les créations peuvent être associées au compte et à une conversation et, lorsque le parcours fonctionne, consultées ou téléchargées depuis l’espace personnel. Aucun téléchargement ne doit être considéré comme garanti avant sa livraison effective."
+            "ORIA Cours est un espace destiné à transformer la parole en supports de révision et de compréhension. Selon les fonctions proposées, l’utilisateur peut enregistrer une séance, obtenir une transcription puis demander une organisation pédagogique du contenu dans un document.",
+            "Le traitement peut comporter plusieurs étapes et une estimation de crédits avant confirmation. L’utilisateur reste responsable du respect des règles applicables à l’enregistrement des cours et de la vérification du document obtenu."
           ]
         },
         {
-          "title": "Aide à la programmation",
+          "title": "Analyse et présentation de données",
           "paragraphs": [
-            "ORIA peut expliquer du code, proposer des correctifs, produire plusieurs fichiers sources et présenter de longs programmes dans un lecteur adapté. Les fichiers obtenus ne sont pas automatiquement exécutés, testés, audités ni exempts de failles de sécurité.",
-            "Avant d’exécuter un programme, contrôlez ses dépendances, ses autorisations et son comportement, particulièrement s’il accède à des données privées ou à un système informatique."
+            "Pour certains travaux, ORIA peut produire des tableaux, des calculs commentés, des graphiques, des schémas ou d’autres représentations visuelles. Ces supports servent à rendre les informations plus faciles à comprendre et à exploiter.",
+            "Les résultats importants, notamment lorsqu’ils servent à une décision technique, financière ou scientifique, doivent être contrôlés à partir des données initiales."
           ]
         },
         {
-          "title": "Génération d’images et mini-studio",
+          "title": "Accès Web et Mobile",
           "paragraphs": [
-            "Le mini-studio Image permet de rédiger une description et de sélectionner une configuration autorisée par le pack actif. Les familles mentionnées dans le bilan sont Image Essentielle, Image Plus, Image Pro et Image Business, avec des variantes de qualité.",
-            "Les images de présentation des cartes du mini-studio sont illustratives. Une illustration ne constitue pas une preuve du résultat ou de la qualité qui sera produit par un modèle."
+            "ORIA est pensée pour offrir une expérience cohérente sur le Web et sur mobile. La présentation peut varier pour s’adapter à la taille de l’écran, aux autorisations de l’appareil et aux possibilités de chaque plateforme.",
+            "Certaines fonctions nécessitent une connexion Internet ou l’accès, avec votre accord, à des éléments comme le microphone, les fichiers ou la position de l’appareil."
           ]
         },
         {
-          "title": "Génération de vidéos",
+          "title": "Résultats de l’intelligence artificielle",
           "paragraphs": [
-            "Le mini-studio Vidéo permet de choisir parmi des durées et qualités préconfigurées. Le bilan recense des variantes Léger, Intermédiaire, Pro et Business, dont des formats courts et une option d’extension vidéo.",
-            "Chaque option dépend de la disponibilité effective du fournisseur vidéo et de l’action autorisée côté backend. Certaines variantes prévues peuvent rester temporairement indisponibles tant que leurs appels réels n’ont pas été validés."
-          ]
-        },
-        {
-          "title": "ORIA Cours : enregistrer et transformer un cours",
-          "paragraphs": [
-            "ORIA Cours constitue un espace distinct des notes vocales du Chat. Il est conçu pour donner un titre à une séance, choisir un format final PDF ou Word, enregistrer un cours, reprendre l’enregistrement et réécouter les segments.",
-            "Le bilan technique prévoit jusqu’à quatre heures par séance, découpées en segments d’une durée maximale de cinq minutes. Ces limites sont des paramètres de développement qui doivent être confirmés par les tests réels et les capacités de l’appareil."
-          ]
-        },
-        {
-          "title": "ORIA Cours : étapes de traitement",
-          "paragraphs": [
-            "Après la soumission, le service prévoit un devis avant le traitement payant, une transcription automatique, puis une réécriture pédagogique section par section. Le bilan mentionne gpt-4o-mini-transcribe pour la transcription et GPT-6 Luna pour la structuration des cours.",
-            "Le résultat envisagé comprend un document pédagogique téléchargeable et une transcription séparée. Le système conserve des états de travail pour mieux gérer l’attente de crédits, les reprises et les interruptions. Ce parcours complet doit encore être vérifié de bout en bout."
-          ]
-        },
-        {
-          "title": "Notes vocales du Chat",
-          "paragraphs": [
-            "Une note vocale courte peut être enregistrée et réécoutée avant envoi. Le parcours prévoit deux choix distincts : transmettre la note audio avec accès à sa transcription ou convertir les paroles reconnues en texte modifiable avant envoi.",
-            "Un enregistrement conservé uniquement en brouillon ne devrait pas déclencher, à lui seul, une transcription payante ; la facturation dépend des actions réellement effectuées par le serveur."
-          ]
-        },
-        {
-          "title": "Recherche Web et sources",
-          "paragraphs": [
-            "Lorsque le mode Recherche Web est activé, ORIA peut chercher des informations externes et les compléter par des illustrations ou des liens utiles. Les résultats peuvent être incomplets, biaisés, indisponibles ou devenir obsolètes.",
-            "L’utilisateur doit consulter les sources d’origine lorsque la date, les détails ou la fiabilité d’une information sont essentiels."
-          ]
-        },
-        {
-          "title": "Analyse de données et supports visuels",
-          "paragraphs": [
-            "ORIA peut présenter des tableaux, graphiques, indicateurs, équations, schémas, représentations géométriques, scènes tridimensionnelles et cartes lorsque l’interface et le modèle le permettent.",
-            "Un visuel généré ne prouve pas qu’un calcul ou une analyse statistique a été exécuté par un moteur scientifique indépendant. Les résultats importants doivent être contrôlés."
-          ]
-        },
-        {
-          "title": "Plateformes et disponibilité",
-          "paragraphs": [
-            "Le projet prévoit une application Web Next.js et une application mobile Expo/React Native sur Android et iPhone, reposant sur un backend FastAPI. Selon le moment, certaines capacités peuvent être disponibles sur une plateforme avant l’autre.",
-            "Une connexion Internet, un compte actif et les autorisations nécessaires (fichiers, caméra ou microphone selon l’action) peuvent être requis. Les traitements longs peuvent dépendre d’une file d’attente et des services externes."
+            "Les systèmes d’IA peuvent produire des réponses incomplètes ou incorrectes. ORIA vise à faciliter votre travail, sans remplacer l’expertise humaine lorsque l’enjeu nécessite un avis professionnel, une source officielle ou une vérification indépendante."
           ]
         }
       ]
@@ -253,410 +202,272 @@ const content: LegalContent = {
     {
       "id": "privacy",
       "label": "Confidentialité",
-      "subtitle": "Données personnelles et droits",
+      "subtitle": "Comment nous protégeons vos informations",
       "icon": "shield-checkmark-outline",
       "sections": [
         {
-          "title": "1. Objet de cette politique",
+          "title": "Notre engagement",
           "paragraphs": [
-            "Cette politique provisoire explique les catégories de données susceptibles d’être traitées dans ORIA, pourquoi elles sont utilisées et comment contacter l’équipe. Elle doit être complétée avant la publication officielle, en particulier avec l’identité du responsable de traitement et les durées de conservation."
+            "La confidentialité fait partie de notre conception du service. Les informations que vous confiez à ORIA sont utilisées pour assurer votre accès, traiter vos demandes et améliorer la fiabilité de votre expérience.",
+            "Nous ne vendons pas vos données personnelles. Nous ne publions pas vos conversations ni vos documents dans un espace accessible aux autres utilisateurs."
           ]
         },
         {
-          "title": "2. Qui est responsable ?",
+          "title": "Les informations que nous utilisons",
           "paragraphs": [
-            "Service concerné : ORIA. Contact relatif aux données personnelles : lbv-connect01@gmail.com.",
-            "[À COMPLÉTER AVANT PUBLICATION] Nom ou raison sociale du responsable de traitement, statut juridique, adresse postale, éventuel représentant et délégué à la protection des données."
-          ],
-          "review": true
-        },
-        {
-          "title": "3. Quelles données sont concernées ?",
-          "bullets": [
-            "Compte : identifiant de compte, adresse électronique et éléments nécessaires à l’authentification via Supabase.",
-            "Conversations : messages envoyés, réponses, paramètres de discussion et historique associé.",
-            "Contenus : fichiers, images, code, créations générées et pièces jointes fournies volontairement.",
-            "Audio : notes vocales, segments d’enregistrement, transcriptions et métadonnées de traitement quand ces fonctionnalités sont utilisées.",
-            "Service : pack actif, crédits, réservations, historique d’opérations, états de traitement et données techniques nécessaires à la sécurité.",
-            "Interface : préférences de langue et d’apparence, données temporaires de cache local."
-          ],
-          "paragraphs": [
-            "Les informations contenues dans un document, une photo ou un enregistrement peuvent elles-mêmes être personnelles ou sensibles. Évitez d’envoyer des données de tiers sans autorisation appropriée."
+            "Selon votre utilisation, ORIA peut traiter les informations de création de compte, vos coordonnées, vos préférences, vos conversations, les fichiers que vous joignez, les contenus générés et les données nécessaires au fonctionnement des packs et des crédits.",
+            "Lorsque vous utilisez une fonction audio, image ou géolocalisation, les informations correspondantes sont traitées dans le cadre de l’action que vous avez choisie. Vous restez libre de ne pas utiliser les fonctions qui nécessitent ces données."
           ]
         },
         {
-          "title": "4. Pourquoi ces données sont-elles traitées ?",
-          "bullets": [
-            "Créer le compte, authentifier l’utilisateur et protéger l’accès aux contenus.",
-            "Fournir les réponses IA, analyser les fichiers et générer les médias demandés.",
-            "Gérer l’historique, la continuité de conversation et, lorsque applicable, la mémoire contextuelle.",
-            "Calculer les crédits, prévenir les doubles débits et rapprocher les opérations techniques.",
-            "Traiter les demandes de support, sécuriser le service et diagnostiquer les incidents."
-          ],
+          "title": "Pourquoi nous les utilisons",
           "paragraphs": [
-            "[À COMPLÉTER AVANT PUBLICATION] Pour chaque finalité, préciser la base juridique réellement applicable (contrat, consentement, obligation légale ou autre fondement prévu par la loi)."
-          ],
-          "review": true
-        },
-        {
-          "title": "5. Prestataires et transferts",
-          "paragraphs": [
-            "Selon les fonctions, ORIA s’appuie sur Supabase (compte, données et stockage), des fournisseurs de modèles d’IA et des services d’hébergement ou de paiement. Des contenus envoyés par l’utilisateur peuvent être transmis aux prestataires nécessaires à l’exécution de l’action demandée.",
-            "Les transferts hors du Gabon et le recours à des sous-traitants nécessitent un examen juridique et technique.",
-            "[À COMPLÉTER AVANT PUBLICATION] Liste exacte des prestataires actifs, pays de destination, finalités, clauses contractuelles, garanties et formalités/autorisations exigées."
-          ],
-          "review": true
-        },
-        {
-          "title": "6. Conservation et suppression",
-          "paragraphs": [
-            "Les durées de conservation ne sont pas encore confirmées dans le bilan du projet. Elles doivent être documentées séparément pour les comptes, conversations, fichiers, créations, audios, sauvegardes et journaux de facturation.",
-            "Supprimer un élément dans une interface ne signifie pas nécessairement qu’il est immédiatement effacé de tous les systèmes, sauvegardes ou journaux imposés par la loi.",
-            "[À COMPLÉTER AVANT PUBLICATION] Définir les durées, les critères, la suppression effective et la portée des sauvegardes."
-          ],
-          "review": true
-        },
-        {
-          "title": "7. Vos droits",
-          "paragraphs": [
-            "Selon la loi applicable et les conditions de votre situation, vous pouvez demander des informations, l’accès, la rectification, l’effacement, l’opposition ou la portabilité de vos données, ainsi que retirer un consentement lorsqu’un traitement repose sur celui-ci.",
-            "Pour faire une demande : lbv-connect01@gmail.com. Une vérification raisonnable de votre identité peut être nécessaire afin de protéger vos données. Vous pouvez également saisir l’autorité gabonaise compétente, l’APDPVP."
+            "Ces informations servent principalement à sécuriser votre compte, maintenir vos conversations, exécuter les fonctions demandées, suivre vos crédits, assurer l’assistance et prévenir les usages abusifs.",
+            "Les données liées à une opération de paiement sont utilisées pour la prise en charge et la vérification de cette opération, ainsi que pour la gestion des éventuelles réclamations."
           ]
         },
         {
-          "title": "8. Mineurs",
+          "title": "Des partenaires techniques pour faire fonctionner ORIA",
           "paragraphs": [
-            "ORIA vise également un public scolaire. La loi gabonaise prévoit une autorisation parentale pour le traitement des données personnelles des moins de 18 ans.",
-            "[À VALIDER AVANT OUVERTURE AUX MINEURS] Mettre en place et tester un parcours d’âge, d’autorisation parentale et de conservation de preuve approprié ; la présente page ne remplace pas ce mécanisme."
-          ],
-          "review": true
-        },
-        {
-          "title": "9. Sécurité et incidents",
-          "paragraphs": [
-            "L’architecture prévoit une authentification des requêtes, un contrôle d’accès aux fichiers privés, des secrets conservés côté serveur et des mécanismes de suivi de crédits. Ces mesures doivent être contrôlées en conditions réelles.",
-            "Aucun service connecté ne peut promettre une sécurité absolue. Tout incident sera évalué selon la réglementation applicable et les obligations de notification."
+            "Certaines opérations nécessitent l’intervention de prestataires d’hébergement, d’authentification, de paiement ou de modèles d’intelligence artificielle. Les informations utiles à l’opération peuvent leur être transmises dans le cadre de la fourniture du service.",
+            "Cette intervention technique ne constitue pas une vente de vos données. Les services externes auxquels vous accédez par un lien disposent, pour leur part, de leurs propres règles de confidentialité."
           ]
         },
         {
-          "title": "10. Cookies et stockage local",
+          "title": "Vos conversations, documents et créations",
           "paragraphs": [
-            "Les interfaces peuvent employer les mécanismes nécessaires au maintien de la session et des préférences ainsi que des caches locaux.",
-            "[À COMPLÉTER AVANT PUBLICATION] Inventorier les cookies et traceurs Web réellement utilisés, leurs finalités et durées, les accès au stockage local et les choix disponibles à l’utilisateur."
-          ],
-          "review": true
-        },
-        {
-          "title": "11. Contenus envoyés aux modèles",
-          "paragraphs": [
-            "Les requêtes, documents ou sons soumis à une fonction IA peuvent être traités par des services tiers pour produire une réponse. Les politiques de conservation et d’entraînement propres à ces services doivent être examinées contractuellement.",
-            "ORIA n’affirme pas, à ce stade, que les fournisseurs n’utilisent jamais les données pour améliorer leurs modèles. Cette garantie devra être vérifiée pour chaque service et sa configuration effective."
+            "Les contenus que vous envoyez restent associés à votre utilisation du service, selon les fonctionnalités de votre compte. Un document privé ne devient pas public du seul fait de son analyse par ORIA.",
+            "Évitez de transmettre des mots de passe, des informations bancaires complètes ou des données sensibles qui ne sont pas nécessaires à votre demande. Si un document contient des renseignements concernant un tiers, veillez à disposer des autorisations appropriées."
           ]
         },
         {
-          "title": "12. Mises à jour",
+          "title": "Protection et sécurité",
           "paragraphs": [
-            "La version et la date de cette politique figurent dans cette page. Les changements substantiels devront être portés à la connaissance des utilisateurs selon les obligations applicables."
+            "Nous mettons en place des mesures de protection adaptées aux fonctions proposées, notamment l’authentification, le contrôle des accès, la gestion des fichiers et la sécurisation des échanges avec les services techniques.",
+            "Aucun service numérique ne peut garantir l’absence totale de risque. Nous encourageons chacun à utiliser un mot de passe robuste et à signaler rapidement toute activité inhabituelle."
           ]
         },
         {
-          "title": "13. Cheminement d’une demande envoyée à l’IA",
+          "title": "Conservation et suppression",
           "paragraphs": [
-            "Une question soumise à ORIA peut être associée à une conversation, transmise au backend avec les paramètres du modèle et, selon l’action choisie, envoyée au prestataire IA nécessaire à sa réalisation.",
-            "L’activation de la Recherche Web ou l’envoi de fichiers peut impliquer d’autres traitements que ceux d’un simple message texte. Le contenu transmis au fournisseur doit être limité à ce qui est nécessaire au service. Les données précises par fournisseur restent à documenter."
-          ],
-          "review": true
-        },
-        {
-          "title": "14. Cas particulier des photographies et documents",
-          "paragraphs": [
-            "Les images d’identité, copies de devoirs, relevés, attestations ou documents médicaux peuvent contenir des données sensibles, même lorsque vous ne les avez pas désignés comme tels. Nous vous invitons à masquer les éléments sans rapport avec la demande.",
-            "Les droits d’accès aux fichiers, les liens de téléchargement temporaires et les délais d’effacement effectifs doivent faire l’objet d’une vérification technique spécifique."
-          ],
-          "review": true
-        },
-        {
-          "title": "15. Enregistrements audio et transcriptions",
-          "paragraphs": [
-            "Une note vocale ou un enregistrement de cours peut contenir la voix, l’identité ou les propos de plusieurs personnes. Avant d’enregistrer un cours ou une intervention, assurez-vous de respecter les règles de votre établissement et les droits des personnes concernées.",
-            "L’audio peut nécessiter stockage, segmentation, transcription puis génération de documents. Les politiques de rétention doivent distinguer les fichiers audio bruts, les transcriptions, les documents produits et les copies techniques."
-          ],
-          "review": true
-        },
-        {
-          "title": "16. Mémoire conversationnelle",
-          "paragraphs": [
-            "La fonctionnalité de mémoire peut condenser des échanges anciens pour aider ORIA à conserver le contexte utile. Une synthèse de conversation peut elle-même contenir des informations personnelles.",
-            "[À COMPLÉTER AVANT PUBLICATION] Indiquer si l’utilisateur peut afficher, corriger, désactiver ou demander l’effacement de cette mémoire et comment ces actions se répercutent dans le stockage serveur."
-          ],
-          "review": true
-        },
-        {
-          "title": "17. Facturation et informations de transaction",
-          "paragraphs": [
-            "La gestion des packs et des crédits peut nécessiter l’enregistrement d’un identifiant d’opération, d’un montant, d’un état de paiement, d’un solde et de traces techniques destinées à éviter les erreurs de débit.",
-            "[À COMPLÉTER AVANT PUBLICATION] Vérifier quelles données bancaires ou de Mobile Money sont effectivement reçues ou conservées par ORIA plutôt que traitées uniquement par l’opérateur de paiement."
-          ],
-          "review": true
-        },
-        {
-          "title": "18. Liens et services tiers",
-          "paragraphs": [
-            "Les liens fournis dans les réponses, les résultats de Recherche Web et certaines pages de paiement peuvent conduire à des services externes soumis à leurs propres conditions et politiques. ORIA ne contrôle pas l’ensemble de leur contenu.",
-            "N’entrez pas d’identifiants ou d’informations financières sur une page dont vous n’avez pas vérifié l’origine."
+            "Les informations sont conservées dans la mesure nécessaire à la fourniture du service, à la sécurité, au suivi des opérations et au respect des obligations applicables. Certaines données techniques ou transactionnelles peuvent devoir être maintenues au-delà de la suppression d’un contenu visible.",
+            "Vous pouvez demander la suppression de données vous concernant en nous contactant. Nous examinons chaque demande selon sa nature et les obligations légales applicables."
           ]
         },
         {
-          "title": "19. Journaux de sécurité et suivi des erreurs",
+          "title": "Vos droits",
           "paragraphs": [
-            "Pour assurer les opérations et diagnostiquer les incidents, le service peut devoir enregistrer des informations techniques : dates, événements, erreurs, résultats de facturation ou métadonnées de requêtes.",
-            "[À COMPLÉTER AVANT PUBLICATION] Vérifier la présence éventuelle d’adresses IP, d’identifiants d’appareil ou de contenu de conversation dans les journaux, ainsi que les accès et durées de conservation."
-          ],
-          "review": true
+            "Vous pouvez demander à accéder aux informations personnelles vous concernant, à les corriger ou à en solliciter la suppression, dans les conditions prévues par la réglementation applicable. Vous pouvez également nous contacter pour toute question sur un traitement ou sur l’utilisation de vos données.",
+            "Pour protéger votre compte, nous pouvons demander les éléments nécessaires à la vérification de votre identité avant de donner suite à une demande."
+          ]
         },
         {
-          "title": "20. Traitement des demandes de confidentialité",
+          "title": "Mineurs et respect de la vie privée",
           "paragraphs": [
-            "Pour exercer vos droits, écrivez à lbv-connect01@gmail.com en indiquant le droit concerné et les éléments permettant de retrouver votre compte. Il peut être nécessaire de vérifier votre identité sans exiger plus d’informations que nécessaire.",
-            "[À COMPLÉTER AVANT PUBLICATION] Documenter la procédure interne, les délais légaux, la réponse aux demandes complexes et les restrictions applicables à certaines données conservées pour obligations légales."
-          ],
-          "review": true
+            "Nous accordons une attention particulière à la protection des personnes mineures. Leur utilisation d’ORIA doit respecter les autorisations et les règles de représentation légale applicables.",
+            "Nous recommandons aux parents et responsables légaux d’accompagner les plus jeunes dans l’utilisation des outils d’intelligence artificielle et le partage de contenus."
+          ]
         },
         {
-          "title": "21. Mineurs et informations accessibles",
+          "title": "Cookies, sessions et préférences",
           "paragraphs": [
-            "Les explications destinées aux adolescents doivent employer un langage compréhensible et ne pas dissimuler les conséquences de la collecte des données. La présence d’une simple politique de confidentialité ou d’une case cochée par un mineur ne remplace pas une autorisation parentale valable.",
-            "Tant que le parcours d’âge et d’autorisation n’est pas réellement opérationnel, les modalités d’ouverture du service aux moins de 18 ans doivent être revues."
-          ],
-          "review": true
+            "Sur le Web et sur mobile, ORIA utilise les mécanismes techniques nécessaires à la connexion, au maintien de la session et à l’enregistrement de certains choix, comme la langue ou l’apparence. Ces mécanismes participent au fonctionnement normal de l’application."
+          ]
         },
         {
-          "title": "22. Conformité et formalités avant lancement",
+          "title": "Nous contacter au sujet de vos données",
           "paragraphs": [
-            "La réglementation gabonaise peut imposer des déclarations, avis ou autorisations pour des plateformes traitant des données personnelles et pour certains traitements d’intelligence artificielle. Ces obligations doivent être examinées auprès de l’autorité compétente.",
-            "[À COMPLÉTER AVANT PUBLICATION] Déterminer les formalités applicables à ORIA, le registre des traitements, les éventuelles analyses d’impact et la documentation contractuelle des prestataires."
-          ],
-          "review": true
+            "Pour une demande de confidentialité, écrivez à lbv-connect01@gmail.com. Nous étudierons votre demande et vous répondrons selon les règles applicables. La présente politique pourra être mise à jour afin de refléter l’évolution des services et de leurs modalités de traitement."
+          ]
         }
       ]
     },
     {
       "id": "terms",
       "label": "Conditions d’utilisation",
-      "subtitle": "Règles et responsabilités",
+      "subtitle": "Le cadre d’utilisation de la plateforme",
       "icon": "document-text-outline",
       "sections": [
         {
-          "title": "1. Service et champ d’application",
+          "title": "1. Objet des conditions",
           "paragraphs": [
-            "Les présentes conditions sont une version de travail destinée à encadrer l’accès à ORIA, plateforme d’assistance et de création reposant sur l’intelligence artificielle. Elles ne constituent pas encore des conditions contractuelles définitives.",
-            "[À COMPLÉTER AVANT PUBLICATION] Identité juridique et adresse de l’exploitant ; date d’entrée en vigueur ; droit applicable et dispositif de règlement des litiges."
-          ],
-          "review": true
-        },
-        {
-          "title": "2. Compte et accès",
-          "paragraphs": [
-            "L’ouverture d’un compte permet de découvrir l’interface. Certaines fonctionnalités nécessitent un pack actif et des crédits suffisants. Les identifiants du compte doivent rester personnels et protégés.",
-            "L’accès des mineurs suppose la mise en place de conditions adaptées et des autorisations légalement exigées."
+            "Les présentes conditions encadrent l’accès et l’utilisation d’ORIA, une plateforme d’assistance et de création reposant sur l’intelligence artificielle. L’utilisation du service implique le respect de ces conditions et des règles présentées lors de l’accès aux différentes fonctionnalités.",
+            "L’interface, les offres et les fonctions d’ORIA peuvent évoluer afin de répondre aux besoins des utilisateurs et aux contraintes techniques du service."
           ]
         },
         {
-          "title": "3. Utilisation autorisée",
+          "title": "2. Création et sécurité du compte",
           "paragraphs": [
-            "L’utilisateur doit respecter la loi et les droits des autres personnes. Sont notamment exclus les usages visant la fraude, les violences, les intrusions informatiques non autorisées, la diffusion illicite de données personnelles ou l’atteinte aux droits de propriété intellectuelle.",
-            "Le service peut appliquer des contrôles et restrictions pour prévenir les abus. Les modalités de suspension ou de contestation doivent être précisées dans la version définitive."
+            "Pour accéder à certaines fonctions, vous devez créer un compte et fournir des informations exactes. Votre compte est personnel. Vous êtes responsable de la confidentialité de vos identifiants et des actions effectuées depuis votre espace.",
+            "En cas de suspicion d’accès non autorisé, changez votre mot de passe et contactez notre assistance."
           ]
         },
         {
-          "title": "4. Contenus et droits",
+          "title": "3. Utilisateurs mineurs",
           "paragraphs": [
-            "L’utilisateur reste responsable de la légalité des contenus qu’il transmet et de la vérification des résultats générés avant diffusion.",
-            "[À COMPLÉTER AVANT PUBLICATION] Préciser les licences nécessaires pour traiter les contenus soumis, les droits relatifs aux résultats et les conditions imposées par chaque fournisseur."
-          ],
-          "review": true
-        },
-        {
-          "title": "5. Fiabilité des résultats IA",
-          "paragraphs": [
-            "Les réponses peuvent être inexactes, incomplètes ou obsolètes. ORIA accompagne l’apprentissage et la création mais ne remplace pas les conseils d’un professionnel qualifié, notamment en médecine, en droit, en finance ou en matière de sécurité.",
-            "La génération de code ne garantit ni l’exécution, ni l’absence de vulnérabilités, ni la compatibilité avec l’environnement de l’utilisateur."
+            "L’utilisation d’ORIA par une personne mineure doit respecter la réglementation applicable, notamment les exigences d’autorisation ou d’accompagnement du représentant légal. Les responsables légaux sont invités à encadrer l’utilisation du service et le partage de données personnelles."
           ]
         },
         {
-          "title": "6. Disponibilité",
+          "title": "4. Utilisation responsable",
           "paragraphs": [
-            "L’accès aux fonctions dépend du pack, du modèle, des prestataires et des conditions techniques. Certains outils peuvent évoluer, être temporairement indisponibles ou nécessiter une validation supplémentaire.",
-            "[À COMPLÉTER AVANT PUBLICATION] Politique d’incident, support, suspension, résiliation et gestion des indisponibilités."
-          ],
-          "review": true
-        },
-        {
-          "title": "7. Paiements et réclamations",
-          "paragraphs": [
-            "Les prix et les crédits applicables doivent être affichés avant la commande. Le paiement d’un pack n’est considéré comme confirmé qu’après une validation fiable de la transaction.",
-            "[À COMPLÉTER AVANT PUBLICATION] Conditions de rétractation ou remboursement applicables, gestion des erreurs de paiement, devise, justificatifs, facturation et obligations des boutiques mobiles."
-          ],
-          "review": true
-        },
-        {
-          "title": "8. Contact",
-          "paragraphs": [
-            "Pour toute difficulté liée au service : lbv-connect01@gmail.com."
+            "Vous vous engagez à utiliser ORIA dans le respect des lois, des droits d’autrui et des règles de sécurité. Sont notamment interdits les usages visant la fraude, l’usurpation d’identité, la diffusion illicite de données personnelles, les intrusions informatiques non autorisées ou la production de contenus contraires à la loi.",
+            "Nous pouvons limiter ou suspendre l’accès à une fonction ou à un compte en cas d’abus, de risque pour la sécurité ou de manquement grave aux présentes conditions."
           ]
         },
         {
-          "title": "9. Règles d’inscription",
+          "title": "5. Vos contenus",
           "paragraphs": [
-            "Le compte est personnel. Lorsqu’il crée son profil, l’utilisateur doit fournir les renseignements effectivement demandés par le service et éviter toute usurpation d’identité. Il est responsable de la protection de ses moyens d’accès.",
-            "L’identité de l’exploitant et les règles de résiliation seront précisées avant l’entrée en vigueur définitive des conditions."
-          ],
-          "review": true
-        },
-        {
-          "title": "10. Utilisation de contenus de tiers",
-          "paragraphs": [
-            "L’utilisateur ne doit pas soumettre un document, une image, une voix ou une vidéo lorsqu’il ne dispose pas des droits ou autorisations nécessaires à son utilisation. Un contenu provenant d’un cours peut être soumis à des règles particulières de reproduction ou de diffusion.",
-            "Les fichiers générés ne confèrent pas automatiquement des droits d’auteur sur tous les éléments éventuellement reproduits depuis des sources extérieures."
+            "Vous restez responsable des informations, textes, images, fichiers et enregistrements que vous transmettez. Vous garantissez disposer des droits et autorisations nécessaires à leur utilisation et à leur traitement dans le cadre du service.",
+            "Vous autorisez les traitements techniques nécessaires à l’exécution de vos demandes, conformément à notre Politique de confidentialité."
           ]
         },
         {
-          "title": "11. Images, vidéos et contenus synthétiques",
+          "title": "6. Contenus générés",
           "paragraphs": [
-            "Lors de la génération ou de la publication de médias, l’utilisateur doit respecter le droit à l’image, les droits des tiers et la réglementation applicable. Les productions d’IA peuvent contenir des erreurs de représentation ou ressembler involontairement à des œuvres existantes.",
-            "Les restrictions de contenu des fournisseurs et les contrôles d’ORIA peuvent conduire au refus d’une demande ou d’un résultat sans que cela constitue nécessairement un dysfonctionnement."
+            "Les contenus produits par l’intelligence artificielle peuvent être utilisés dans le respect du droit applicable et des droits de tiers. Il vous revient de contrôler leur exactitude, leur pertinence et leur conformité avant de les diffuser ou de vous en servir.",
+            "Les résultats peuvent contenir des erreurs, présenter des similitudes avec d’autres contenus ou nécessiter des adaptations. La génération d’un résultat ne garantit pas l’existence de droits exclusifs sur celui-ci."
           ]
         },
         {
-          "title": "12. Travail scolaire et intégrité académique",
+          "title": "7. Apprentissage et travaux scolaires",
           "paragraphs": [
-            "ORIA peut expliquer un exercice, aider à réviser ou proposer une méthode de résolution. L’utilisateur reste responsable du respect des consignes de son établissement concernant l’utilisation de l’intelligence artificielle dans les devoirs, examens et travaux remis.",
-            "Les réponses doivent favoriser la compréhension plutôt que remplacer systématiquement le travail personnel."
+            "ORIA accompagne la compréhension et la préparation des travaux. Son utilisation doit respecter les consignes des établissements d’enseignement, les règles des examens et les exigences d’intégrité académique.",
+            "Les réponses apportées ne remplacent ni le travail personnel ni la validation d’un enseignant lorsque celle-ci est requise."
           ]
         },
         {
-          "title": "13. Enregistrements de cours et paroles de tiers",
+          "title": "8. Enregistrements et droits des personnes",
           "paragraphs": [
-            "L’utilisateur qui lance un enregistrement doit respecter les règles de son établissement, informer les personnes lorsqu’une information est requise et disposer des autorisations nécessaires pour capter ou transmettre des voix.",
-            "ORIA ne garantit pas qu’une transcription restitue parfaitement chaque parole : noms propres, accents, bruits et termes techniques peuvent provoquer des erreurs."
+            "Avant d’enregistrer, de transmettre ou de faire transcrire la voix d’une personne, assurez-vous de disposer des autorisations nécessaires. Cette obligation vaut notamment pour les cours, réunions, conférences et conversations privées."
           ]
         },
         {
-          "title": "14. Protection du compte et suspension",
+          "title": "9. Packs, crédits et commandes",
           "paragraphs": [
-            "L’exploitation abusive du service, la fraude aux paiements, les tentatives de contournement des crédits ou les accès non autorisés peuvent conduire à des mesures de sécurité proportionnées.",
-            "[À COMPLÉTER AVANT PUBLICATION] Définir précisément les cas de suspension, les éventuels avertissements, la possibilité de recours et le sort des crédits restants."
-          ],
-          "review": true
+            "L’accès à certaines fonctions nécessite un pack actif ou un solde de crédits suffisant. Les caractéristiques, prix et limites applicables sont présentés dans l’espace de souscription ou avant l’opération concernée.",
+            "Une commande n’est considérée comme réglée qu’après confirmation du paiement. Les modalités de consommation des crédits et de validité des packs sont détaillées dans la rubrique « Packs et crédits »."
+          ]
         },
         {
-          "title": "15. Interruptions et opérations inachevées",
+          "title": "10. Paiements et réclamations",
           "paragraphs": [
-            "Une génération peut échouer, être interrompue ou rester en attente. Le backend prévoit des mécanismes de réservation et de rapprochement destinés à éviter les doubles débits, mais le résultat doit être vérifié sur les opérations réelles.",
-            "[À COMPLÉTER AVANT PUBLICATION] Décrire le traitement contractuel d’une génération échouée, le délai de contestation et la procédure de correction des crédits."
-          ],
-          "review": true
+            "Les paiements peuvent être exécutés par des partenaires spécialisés. En cas de paiement non reconnu, de débit contesté ou d’opération inachevée, contactez l’assistance en indiquant les références utiles, sans transmettre votre mot de passe ni vos codes secrets.",
+            "Les demandes de correction, de remboursement ou de résolution sont examinées selon la situation, les conditions de l’offre et la réglementation applicable."
+          ]
         },
         {
-          "title": "16. Évolution du service et des conditions",
+          "title": "11. Disponibilité et évolution",
           "paragraphs": [
-            "Les modèles, fonctionnalités, prestataires et prix peuvent évoluer. Les modifications contractuelles significatives devront être annoncées conformément aux exigences applicables, en distinguant les nouveaux achats des engagements déjà conclus.",
-            "[À COMPLÉTER AVANT PUBLICATION] Définir les modalités de préavis et de conservation des anciennes versions acceptées."
-          ],
-          "review": true
+            "Nous nous efforçons de maintenir une expérience stable. Toutefois, des opérations de maintenance, incidents techniques, limitations de capacité ou interruptions de prestataires peuvent affecter temporairement certaines fonctions.",
+            "Nous pouvons faire évoluer les modèles, les interfaces et les modalités techniques du service. Lorsque cela est nécessaire, les utilisateurs sont informés des changements importants."
+          ]
         },
         {
-          "title": "17. Réclamations et règlement des différends",
+          "title": "12. Limites des résultats",
           "paragraphs": [
-            "Un problème de compte, de média livré ou de débit doit d’abord pouvoir être signalé à lbv-connect01@gmail.com en décrivant le problème et, si nécessaire, l’identifiant de l’opération.",
-            "[À COMPLÉTER AVANT PUBLICATION] Définir le canal de médiation ou de recours, la juridiction compétente, le droit applicable et les droits impératifs du consommateur."
-          ],
-          "review": true
+            "L’intelligence artificielle ne garantit pas l’exactitude absolue des réponses. Les contenus portant sur la santé, le droit, la finance, l’ingénierie ou la sécurité doivent être confrontés à des sources fiables et, le cas échéant, à l’avis de professionnels qualifiés."
+          ]
+        },
+        {
+          "title": "13. Protection de la plateforme",
+          "paragraphs": [
+            "Il est interdit de contourner les règles d’accès, de détourner les mécanismes de facturation, de perturber le fonctionnement du service ou de tenter d’accéder aux informations d’autres utilisateurs sans autorisation.",
+            "Nous nous réservons la possibilité de prendre des mesures proportionnées pour protéger la plateforme et ses utilisateurs."
+          ]
+        },
+        {
+          "title": "14. Modifications des conditions",
+          "paragraphs": [
+            "Les présentes conditions peuvent être actualisées pour tenir compte de l’évolution des fonctionnalités, des offres ou du cadre réglementaire. La date de mise à jour figure sur cette page. Les changements importants peuvent faire l’objet d’une information spécifique."
+          ]
+        },
+        {
+          "title": "15. Assistance et différends",
+          "paragraphs": [
+            "Pour toute question relative à votre utilisation, à un paiement ou à votre compte, contactez lbv-connect01@gmail.com. Nous privilégions la recherche d’une solution amiable, sans préjudice des droits et recours prévus par la réglementation applicable."
+          ]
         }
       ]
     },
     {
       "id": "credits",
       "label": "Packs et crédits",
-      "subtitle": "Comprendre les coûts",
+      "subtitle": "Comprendre votre accès et votre consommation",
       "icon": "wallet-outline",
       "sections": [
         {
-          "title": "Les packs ORIA",
+          "title": "Des offres adaptées à différents usages",
           "paragraphs": [
-            "ORIA utilise quatre familles de packs : Léger, Intermédiaire, Pro et Business. Le bilan fonctionnel du 23 octobre 2026 prévoit une durée de 35 jours et des volumes de crédits différenciés.",
-            "Les prix et promotions peuvent évoluer. Seule la page « Packs » mise à jour et l’étape de confirmation de commande font foi pour un achat donné."
+            "ORIA propose plusieurs formules d’accès : Léger, Intermédiaire, Pro et Business. Chaque pack donne accès à un ensemble déterminé de fonctions, de modèles et de capacités de création.",
+            "Les fonctionnalités incluses et les éventuelles limites sont précisées dans la présentation de chaque offre. Une fonction non incluse dans votre pack peut nécessiter un changement d’offre ou ne pas être disponible."
           ]
         },
         {
-          "title": "À quoi servent les crédits ?",
+          "title": "Une durée de validité définie",
           "paragraphs": [
-            "Les actions IA consomment des crédits selon le service, le modèle et, pour les médias, la configuration retenue. Le backend peut estimer et réserver une provision avant d’exécuter l’action, puis calculer le coût final et gérer le solde conformément à ses règles.",
-            "Une estimation n’est pas une garantie que le coût final sera identique. L’interface ne doit pas afficher un prix fixe inventé lorsque seul le backend peut établir le coût applicable."
+            "Les packs ORIA sont organisés autour d’une période de validité de 35 jours, sauf indication différente clairement présentée pour une offre donnée. La période applicable et les informations de votre accès sont consultables depuis votre compte.",
+            "La fin de validité d’un pack peut modifier les fonctionnalités accessibles et les conditions d’utilisation des crédits associés."
           ]
         },
         {
-          "title": "Paiements au Gabon",
+          "title": "Le principe des crédits",
           "paragraphs": [
-            "ORIA souhaite faciliter les paiements locaux, notamment par Airtel Money et Moov Money. Le parcours technique de paiement doit être validé de bout en bout avant d’être annoncé comme pleinement opérationnel.",
-            "Une commande ou une tentative de paiement ne suffit pas, à elle seule, à activer un pack : la confirmation de paiement est nécessaire."
+            "Les crédits servent à mesurer la consommation de certaines actions : demandes aux modèles, analyse de documents, génération d’images ou de vidéos et autres traitements proposés. Le coût dépend de la fonction, de la configuration choisie et, dans certains cas, du volume traité.",
+            "Votre solde et l’historique disponible dans l’application vous permettent de suivre votre consommation."
           ]
         },
         {
-          "title": "Durée, renouvellement et remboursements",
+          "title": "Un coût présenté avant les opérations concernées",
           "paragraphs": [
-            "Le bilan décrit des packs d’une durée de 35 jours ; les modalités de renouvellement, d’expiration des crédits, de remboursement et de réclamation doivent être fixées et testées avant publication contractuelle."
-          ],
-          "review": true
-        },
-        {
-          "title": "Répartition des droits entre packs",
-          "paragraphs": [
-            "Les packs Léger, Intermédiaire, Pro et Business proposent des allocations de crédits et des configurations IA différentes. Les modèles de raisonnement, générations d’images, vidéos et essais ne sont pas nécessairement ouverts de la même façon dans chaque formule.",
-            "La liste des modèles et actions disponibles dans l’application doit correspondre aux capacités que le backend autorise pour le pack réellement actif."
+            "Lorsque le service propose un devis ou une estimation, vous pouvez consulter le coût prévu avant de confirmer l’action. Pour les traitements variables, le montant final suit les règles affichées et les opérations réellement exécutées.",
+            "Les réservations temporaires de crédits peuvent être utilisées pour sécuriser une opération en cours. Leur traitement dépend de l’issue de cette opération."
           ]
         },
         {
-          "title": "Valeur de référence des crédits",
+          "title": "Création d’images et de vidéos",
           "paragraphs": [
-            "Le bilan technique mentionne une valeur de référence interne de 0,10 F CFA par crédit ORIA. Il s’agit d’un paramètre de calcul décrit dans le projet, pas d’un engagement autonome sur le coût d’une action.",
-            "Une demande peut coûter des quantités différentes de crédits selon le modèle, le volume traité, les fichiers, les opérations effectuées et les coûts calculés côté serveur."
+            "Les options de génération peuvent présenter des coûts distincts selon le format, la qualité, la durée et le niveau de service. Seules les configurations offertes par votre pack sont accessibles.",
+            "Les informations de tarification affichées au moment de la demande font référence pour la configuration sélectionnée."
           ]
         },
         {
-          "title": "Estimation, provision et coût final",
+          "title": "Documents et enregistrements",
           "paragraphs": [
-            "Avant une action coûteuse, le backend peut estimer puis bloquer temporairement une provision de crédits. Après la réponse du fournisseur, il vise à rapprocher la consommation réelle et à libérer un éventuel surplus.",
-            "En cas d’interruption ou d’incertitude, un contrôle de l’état de la transaction peut être nécessaire. Le détail exact de la réserve et du remboursement de crédits doit correspondre à l’implémentation effectivement testée."
+            "Certaines fonctions, notamment le traitement de contenus longs, peuvent comporter plusieurs étapes. Lorsque cela s’applique, une estimation précède le traitement payant afin de vous permettre de choisir de poursuivre ou non."
           ]
         },
         {
-          "title": "Achats complémentaires",
+          "title": "Paiements",
           "paragraphs": [
-            "Le bilan prévoit des achats de crédits en complément des quatre packs. Leur disponibilité, leur compatibilité avec un abonnement, leur date de péremption et leurs modalités de remboursement doivent être confirmées par les conditions commerciales affichées."
-          ],
-          "review": true
-        },
-        {
-          "title": "Affichage du prix et confirmation du paiement",
-          "paragraphs": [
-            "Le prix et les conditions applicables doivent être présentés avant validation. Une tentative de paiement ou une commande enregistrée ne vaut pas confirmation de versement.",
-            "L’activation d’un pack doit intervenir après réception d’un résultat de paiement confirmé et vérifiable par le système."
+            "Les moyens de paiement disponibles sont indiqués dans l’application et peuvent varier selon votre pays. Le règlement est pris en compte après confirmation de la transaction par le service de paiement.",
+            "Les prix et les devises affichés au moment de la commande sont ceux applicables à l’achat envisagé."
           ]
         },
         {
-          "title": "Erreurs de débit et contestations",
+          "title": "Accéder à votre suivi",
           "paragraphs": [
-            "En cas d’écart entre une estimation et un solde débité, conservez l’heure de l’opération et toute référence de transaction affichée dans l’application. Le support pourra rechercher l’opération correspondante.",
-            "[À COMPLÉTER AVANT PUBLICATION] Fixer la procédure et les délais de contrôle, de régularisation et de remboursement d’un éventuel débit indu."
-          ],
-          "review": true
+            "Votre espace Crédits vous permet de consulter les informations mises à disposition sur votre solde et vos opérations. Votre espace Packs présente les offres et les droits associés à votre accès.",
+            "Si vous constatez une incohérence, transmettez à l’assistance les éléments permettant d’identifier l’opération."
+          ]
         },
         {
-          "title": "Offres de lancement",
+          "title": "Incidents et corrections",
           "paragraphs": [
-            "Le bilan prévoit l’éventualité de tarifs promotionnels pour une première vague de clients. Une promotion n’existe contractuellement que si son prix, sa durée et ses conditions sont effectivement présentés dans l’application au moment de la commande.",
-            "Aucune remise particulière n’est promise par la présente rubrique."
+            "En cas de traitement interrompu, de paiement non confirmé ou de consommation contestée, nos mécanismes de suivi et notre assistance permettent d’examiner la situation.",
+            "Une interruption technique ne donne pas automatiquement lieu à une facturation définitive ; l’issue dépend de l’état réel de l’opération et des règles applicables à la fonction concernée."
+          ]
+        },
+        {
+          "title": "Évolution des offres",
+          "paragraphs": [
+            "Les caractéristiques des packs et les coûts de certaines fonctions peuvent évoluer. Les informations présentées avant l’achat ou l’utilisation de la fonction permettent de connaître les conditions applicables à votre choix."
+          ]
+        },
+        {
+          "title": "Une question sur votre solde ?",
+          "paragraphs": [
+            "Notre assistance est accessible à lbv-connect01@gmail.com. Pour faciliter le traitement d’une demande, indiquez la date, la fonction concernée et, si possible, l’identifiant de l’opération, sans communiquer d’informations de connexion sensibles."
           ]
         }
       ]
@@ -664,117 +475,103 @@ const content: LegalContent = {
     {
       "id": "principles",
       "label": "Nos engagements",
-      "subtitle": "Une IA responsable",
+      "subtitle": "Les principes qui orientent ORIA",
       "icon": "sparkles-outline",
       "sections": [
         {
-          "title": "Transparence",
+          "title": "Clarté",
           "paragraphs": [
-            "Distinguer les fonctions disponibles des fonctions annoncées ou en test. Expliquer les limites, coûts et prérequis sans présenter une démonstration comme un service déjà validé."
+            "Nous voulons une intelligence artificielle compréhensible. Les interfaces, les explications et les étapes d’utilisation doivent aider chacun à savoir ce qu’il fait, ce qu’il obtient et les éventuelles limites du résultat."
           ]
         },
         {
-          "title": "Confidentialité et respect",
+          "title": "Liberté d’apprendre et de créer",
           "paragraphs": [
-            "Limiter les traitements aux besoins du service, protéger les comptes et les contenus, documenter les prestataires et faciliter les demandes liées aux données personnelles. La politique finale précisera les engagements vérifiés."
+            "Nous croyons aux outils qui renforcent l’autonomie. ORIA accompagne la curiosité, le travail personnel, la maîtrise de nouvelles compétences et l’expression des idées."
           ]
         },
         {
-          "title": "Contrôle humain",
+          "title": "Respect de la vie privée",
           "paragraphs": [
-            "Rappeler qu’une réponse d’IA peut être fausse, biaisée ou incomplète. Encourager la vérification des faits, des calculs, des références et des contenus générés."
+            "Nous considérons les conversations, les documents et les informations de compte comme des éléments qui méritent protection et discrétion. Leur traitement est encadré par la fourniture du service et les engagements de confidentialité présentés sur cette page."
+          ]
+        },
+        {
+          "title": "Des coûts compréhensibles",
+          "paragraphs": [
+            "Nous cherchons à rendre les offres et la consommation de crédits lisibles, en privilégiant l’affichage des paramètres utiles avant les actions qui engagent des ressources."
+          ]
+        },
+        {
+          "title": "Responsabilité",
+          "paragraphs": [
+            "Les systèmes d’IA peuvent se tromper. Nous encourageons l’esprit critique, la vérification des informations et le recours à une expertise humaine lorsque les conséquences d’une décision le nécessitent."
           ]
         },
         {
           "title": "Amélioration continue",
           "paragraphs": [
-            "Prioriser la stabilité du produit, la sécurité des données, la fiabilité de la facturation et les tests sur appareils réels plutôt que la multiplication de fonctions non éprouvées."
+            "La qualité d’un service numérique repose sur l’écoute, la correction des difficultés et la régularité des améliorations. Les retours de nos utilisateurs contribuent à faire progresser ORIA dans la durée."
           ]
         },
         {
-          "title": "Protéger les utilisateurs les plus jeunes",
+          "title": "Accessibilité",
           "paragraphs": [
-            "Puisque ORIA vise notamment les élèves, son fonctionnement doit intégrer les règles de protection des mineurs et des explications adaptées à leur âge. Une politique écrite ne suffit pas sans mécanismes techniques appropriés."
-          ],
-          "review": true
-        },
-        {
-          "title": "Favoriser l’esprit critique",
-          "paragraphs": [
-            "ORIA doit aider l’utilisateur à comprendre les raisonnements, trouver les limites d’une réponse et vérifier les sources, plutôt que demander une confiance aveugle dans un texte généré."
-          ]
-        },
-        {
-          "title": "Ne pas promettre des fonctions non testées",
-          "paragraphs": [
-            "Un parcours visible en interface n’est pas forcément disponible de bout en bout. Nous distinguons le développement, les essais, la stabilité et la mise à disposition réelle du service."
-          ]
-        },
-        {
-          "title": "Traiter les erreurs de manière vérifiable",
-          "paragraphs": [
-            "Lorsque des crédits, une livraison de fichier ou une tâche longue échouent, l’objectif est de retrouver l’opération, de comprendre son état et de corriger les incohérences constatées. L’effectivité de ces mécanismes doit être validée."
+            "Nous développons ORIA avec l’objectif d’élargir l’accès à des outils numériques utiles, notamment pour les publics scolaires et universitaires d’Afrique francophone."
           ]
         }
       ]
     },
     {
       "id": "legal",
-      "label": "Mentions légales",
-      "subtitle": "Exploitant et contact",
+      "label": "Informations légales",
+      "subtitle": "Édition du service et contact",
       "icon": "business-outline",
       "sections": [
         {
-          "title": "Éditeur du service",
+          "title": "ORIA",
           "paragraphs": [
-            "Nom du service : ORIA.",
-            "Adresse de contact : lbv-connect01@gmail.com.",
-            "[À COMPLÉTER AVANT PUBLICATION] Nom légal, forme d’exploitation, numéro d’immatriculation s’il existe, siège ou adresse professionnelle, responsable de publication."
-          ],
-          "review": true
-        },
-        {
-          "title": "Technologies et hébergement",
-          "paragraphs": [
-            "Le bilan technique décrit une application Web Next.js, une application mobile Expo/React Native, une API FastAPI ainsi que des services Supabase. La configuration d’hébergement effective, les entités contractantes et leur localisation doivent être confirmées."
-          ],
-          "review": true
-        },
-        {
-          "title": "Textes de référence",
-          "paragraphs": [
-            "La rédaction définitive doit tenir compte notamment de la loi gabonaise n°025/2023 modifiant la loi n°001/2011 relative à la protection des données à caractère personnel, ainsi que des autres textes applicables aux transactions électroniques et à la consommation.",
-            "Lien officiel : https://journal-officiel.ga/20085-025-2023-/"
+            "ORIA est un service numérique d’assistance et de création par intelligence artificielle, destiné notamment aux utilisateurs du Gabon et de l’espace francophone. Il est présenté et exploité sous la marque ORIA."
           ]
         },
         {
-          "title": "Contact et demandes",
+          "title": "Contact",
           "paragraphs": [
-            "Pour les questions sur ORIA, une demande relative à vos données ou une réclamation : lbv-connect01@gmail.com."
+            "Pour toute demande relative au service, à votre compte, à la confidentialité ou à une opération, vous pouvez joindre l’équipe ORIA à l’adresse lbv-connect01@gmail.com."
           ]
         },
         {
-          "title": "Responsable du traitement et interlocuteur",
+          "title": "Conditions et confidentialité",
           "paragraphs": [
-            "La politique définitive doit indiquer la personne physique ou morale qui détermine les finalités et les moyens du traitement des données. Le simple nom commercial ORIA ne suffit pas à établir cette responsabilité.",
-            "[À COMPLÉTER AVANT PUBLICATION] Identité juridique, coordonnées professionnelles et, le cas échéant, personne désignée pour les demandes relatives aux données."
-          ],
-          "review": true
-        },
-        {
-          "title": "Accès au droit gabonais de la protection des données",
-          "paragraphs": [
-            "La loi gabonaise n°025/2023 modifiant la loi n°001/2011 relative à la protection des données à caractère personnel contient notamment des dispositions sur la transparence, les droits des personnes, la protection des mineurs et certains traitements d’intelligence artificielle.",
-            "Référence officielle à consulter : https://journal-officiel.ga/20085-025-2023-/. La conformité d’ORIA ne peut être déduite de la simple présence d’un lien vers la loi."
+            "Les rubriques « Conditions d’utilisation » et « Confidentialité » précisent les règles d’accès au service, les responsabilités des utilisateurs ainsi que les principes de traitement des informations personnelles.",
+            "En cas d’évolution de ces textes, la date de mise à jour figurant dans le Centre d’informations est actualisée."
           ]
         },
         {
-          "title": "Version et entrée en vigueur",
+          "title": "Propriété intellectuelle",
           "paragraphs": [
-            "Cette page porte une version documentaire interne et une date de mise à jour. Le texte définitif devra mentionner sa date réelle d’entrée en vigueur et les modalités de consultation des versions antérieures.",
-            "[À COMPLÉTER AVANT PUBLICATION] Procédure de notification des mises à jour importantes et, selon le cas, recueil de l’accord lorsque nécessaire."
-          ],
-          "review": true
+            "Le nom ORIA, sa présentation, ses éléments distinctifs et les composants originaux de la plateforme sont protégés dans les conditions prévues par le droit applicable. Leur reproduction ou leur exploitation non autorisée n’est pas permise.",
+            "Les droits relatifs aux contenus fournis par les utilisateurs et aux résultats générés sont traités conformément aux Conditions d’utilisation et aux droits des tiers."
+          ]
+        },
+        {
+          "title": "Fourniture du service",
+          "paragraphs": [
+            "ORIA s’appuie sur des technologies et des prestataires nécessaires à l’hébergement, à l’authentification, au traitement des demandes et aux paiements. Les règles propres aux services externes peuvent s’appliquer lorsqu’ils sont utilisés."
+          ]
+        },
+        {
+          "title": "Droit applicable et demandes",
+          "paragraphs": [
+            "Les relations liées à l’utilisation d’ORIA s’inscrivent dans le cadre des dispositions légales et réglementaires applicables, notamment au Gabon, sans préjudice des protections impératives dont bénéficient les utilisateurs selon leur situation.",
+            "Pour signaler un contenu, exercer un droit ou soumettre une réclamation, contactez lbv-connect01@gmail.com."
+          ]
+        },
+        {
+          "title": "Mise à jour des informations",
+          "paragraphs": [
+            "Ces informations sont susceptibles d’être adaptées pour suivre l’évolution de la plateforme, de son organisation et des services proposés. La date affichée en haut de page permet d’identifier l’édition consultée."
+          ]
         }
       ]
     }
@@ -840,11 +637,7 @@ export default function OriaLegalPage() {
           <h1 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">Informations et politiques</h1>
           <p className="mt-3 max-w-2xl text-sm leading-7 text-[#abb0be] sm:text-base">{content.intro}</p>
           <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[#a5abb9]">
-            <span>Version {content.version}</span><span>Mis à jour le {content.updated}</span>
-          </div>
-          <div role="status" className="mt-5 flex items-start gap-3 rounded-2xl border border-[#76602c]/50 bg-[#282113]/70 p-4 text-sm leading-6 text-[#f3d99d]">
-            <AlertCircle size={19} className="mt-0.5 shrink-0" aria-hidden />
-            <p><strong>Brouillon de validation.</strong> Certaines mentions sont à compléter avant de publier cette page comme politique contractuelle ou de la relier à l'inscription.</p>
+            <span>Mis à jour le {content.updated}</span>
           </div>
         </section>
 
@@ -882,9 +675,8 @@ export default function OriaLegalPage() {
                 <section key={`${selected.id}-${index}`} className="max-w-[75ch]">
                   <h3 className="mb-3 flex flex-wrap items-center gap-2 text-base font-semibold text-[#f7f7fb] sm:text-lg">
                     {section.title}
-                    {"review" in section && section.review ? <span className="rounded-md border border-[#6f5a2a] bg-[#332714] px-2 py-0.5 text-[10px] font-medium text-[#eed190]">À vérifier</span> : null}
                   </h3>
-                  {"paragraphs" in section && section.paragraphs?.map((text, i) => <p key={i} className={`mb-3 text-sm leading-[1.9] ${text.startsWith("[") ? "font-medium text-[#e8c68d]" : "text-[#c8cbd4]"}`}>{text}</p>)}
+                  {"paragraphs" in section && section.paragraphs?.map((text, i) => <p key={i} className="mb-3 text-sm leading-[1.9] text-[#c8cbd4]">{text}</p>)}
                   {"bullets" in section && section.bullets ? <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-[1.85] text-[#c8cbd4]">{section.bullets.map((value, i) => <li key={i}>{value}</li>)}</ul> : null}
                 </section>
               ))}
@@ -895,7 +687,7 @@ export default function OriaLegalPage() {
             </div>
           </article>
         </div>
-        <footer className="pt-8 text-center text-xs text-[#7e8493]">ORIA · {content.updated} · Documentation provisoire</footer>
+        <footer className="pt-8 text-center text-xs text-[#7e8493]">© ORIA · Informations et politiques · {content.updated}</footer>
       </div>
     </main>
   );
