@@ -715,9 +715,64 @@ _CODE_FENCE = re.compile(
 )
 _CODE_LABEL = re.compile(
     r"(?:^#{1,6}\s*|^\*\*|^fichier\s*:\s*|^file\s*:\s*)"
-    r"(?P<filename>[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,8}|\.[A-Za-z0-9_-]{2,20})",
+    r"(?P<filename>[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,8}|\.[A-Za-z0-9_-]{2,20}"
+    r"|(?:[A-Za-z0-9_./\\-]*/)?(?:Dockerfile|Makefile|LICENSE))",
     flags=re.IGNORECASE,
 )
+
+# Noms sans extension : ils doivent conserver leur chemin exact dans le ZIP.
+_PROJECT_TEXT_FILENAMES = frozenset({"dockerfile", "makefile", "license"})
+_CODE_FENCE_LINE = re.compile(r"^```", flags=re.MULTILINE)
+_PROJECT_MANIFEST_HEADER = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:FICHIERS\s+ATTENDUS|EXPECTED\s+FILES)\s*:\s*$",
+    flags=re.IGNORECASE,
+)
+_PROJECT_MANIFEST_ENTRY = re.compile(r"^\s*[-*]\s+`?([^`\r\n]+?)`?\s*$")
+
+
+def _assert_code_fences_closed(response_text: str) -> None:
+    """Empêche de publier les premières clôtures d'une réponse coupée.
+
+    Ce contrôle prouve seulement l'équilibrage des délimitations Markdown,
+    pas l'exhaustivité sémantique du programme ni sa bonne exécution.
+    """
+    if len(_CODE_FENCE_LINE.findall(response_text)) % 2:
+        raise ValueError(
+            "Réponse de code interrompue : un bloc Markdown n'est pas fermé. "
+            "Aucun fichier de code partiel ne sera livré."
+        )
+
+
+def _declared_project_files(source: str) -> list[str] | None:
+    """Lit uniquement une liste explicite de chemins, sans inférer de fichiers.
+
+    Un inventaire venant du modèle ne prouve PAS que le projet est complet
+    par rapport à la demande. Il sert seulement de contrat interne vérifiable.
+    """
+    lines = source.splitlines()
+    for i, line in enumerate(lines):
+        if not _PROJECT_MANIFEST_HEADER.fullmatch(line):
+            continue
+        names: list[str] = []
+        for candidate in lines[i + 1:]:
+            match = _PROJECT_MANIFEST_ENTRY.fullmatch(candidate)
+            if not match:
+                if not candidate.strip() and not names:
+                    continue
+                break
+            name = match.group(1).strip()
+            if not name:
+                break
+            # Ne garder que des noms de fichiers, pas des explications.
+            if any(char in name for char in ("\t", " • ", " — ")):
+                raise ValueError("Inventaire des fichiers attendus ambigu.")
+            names.append(name)
+            if len(names) > ArtifactService.MAX_ARCHIVE_FILES:
+                raise ValueError("Inventaire de projet trop long.")
+        if not names:
+            raise ValueError("Inventaire des fichiers attendus vide ou invalide.")
+        return names
+    return None
 
 
 def _is_code_task(
@@ -760,7 +815,11 @@ def _code_output_instruction(
         "un bloc de code balisé avec le langage. Garde les explications "
         "hors des blocs de code. Si tu ne peux pas fournir le fichier "
         "complet, indique explicitement ce qui manque et ne présente "
-        "pas un extrait comme un fichier complet."
+        "pas un extrait comme un fichier complet. "
+        "Pour plusieurs fichiers d'un même projet, commence par une section "
+        "FICHIERS ATTENDUS: avec un chemin exact par ligne (- src/main.py), "
+        "puis livre chaque fichier sous un titre Markdown identique suivi "
+        "d'un bloc de code intégral. N'invente pas les fichiers absents."
     )
 
 
@@ -770,6 +829,7 @@ def _response_code_blocks(
     """Extrait les blocs Markdown et les noms de fichiers explicitement indiqués."""
     blocks = []
     text = str(response_text or "")
+    _assert_code_fences_closed(text)
     for match in _CODE_FENCE.finditer(text):
         code = match.group("code")
         language = (match.group("language") or "").lower()
@@ -784,8 +844,11 @@ def _response_code_blocks(
                 break
         if not code.strip() and not (include_named_empty and filename):
             continue
-        if filename and "." in filename:
+        if filename and "." in PurePath(filename).name:
             extension = filename.rsplit(".", 1)[-1].lower()
+        elif filename and PurePath(filename).name.lower() in _PROJECT_TEXT_FILENAMES:
+            # Dockerfile/Makefile/LICENSE n'ont pas d'extension.
+            extension = "txt"
         blocks.append({
             "code": code.rstrip("\n") + "\n" if code.strip() else "",
             "filename": filename,
@@ -825,7 +888,12 @@ def _code_artifact_requests_after_response(
     existing: list[dict[str, str | None]],
 ) -> list[dict[str, str | None]]:
     """Ajoute automatiquement un fichier source uniquement pour un tour de code."""
-    if existing or not _is_code_task(message, attachments):
+    if not _is_code_task(message, attachments):
+        return existing
+    # Une réponse tronquée ne doit pas être exportée, même si un premier
+    # bloc correctement fermé a été trouvé avant le bloc interrompu.
+    _assert_code_fences_closed(response_text)
+    if existing:
         return existing
     blocks = _response_code_blocks(response_text)
     if not blocks:
@@ -1087,20 +1155,30 @@ def _markdown_table_rows(
 
 def _zip_content_from_response(
     response_text: str,
+    *,
+    strict_code_project: bool = False,
+    requested_text: str = "",
 ) -> dict[str, Any]:
-    """Assemble des fichiers de projet nommés sans perdre leur arborescence.
+    """Construit un ZIP avec un inventaire vérifiable quand il est disponible.
 
-    L'extraction réutilise le même parseur que l'export source individuel.
-    Un ZIP demandé sans code conserve l'ancien comportement README.md.
-    Un projet multi-fichiers ambigu est refusé au lieu d'inventer des noms.
+    Un ZIP générique garde son comportement historique. Un ZIP de code ne
+    fabrique pas de faux README en l'absence de code, et ne devine aucun nom.
+    Aucun appel modèle supplémentaire ni aucune exécution de code.
     """
     text_value = str(response_text or "")
     blocks = _response_code_blocks(text_value, include_named_empty=True)
     files: list[dict[str, Any]] = []
-    if blocks and len(blocks) > 1 and not all(item["filename"] for item in blocks):
+    if strict_code_project and not blocks:
         raise ValueError(
-            "Chaque bloc de code d'un projet ZIP doit avoir un nom de fichier "
-            "explicite pour préserver les imports et les sous-dossiers."
+            "Aucun fichier source complet dans la réponse : "
+            "le ZIP de code ne sera pas créé."
+        )
+    if blocks and (strict_code_project or len(blocks) > 1) and not all(
+        item["filename"] for item in blocks
+    ):
+        raise ValueError(
+            "Chaque bloc d'un projet ZIP doit porter son nom et chemin exacts. "
+            "Impossible de livrer un projet aux noms inventés."
         )
     for index, item in enumerate(blocks, start=1):
         name = item["filename"] or f"fichier-{index}.{item['extension'] or 'txt'}"
@@ -1121,13 +1199,22 @@ def _zip_content_from_response(
             "L'archive dépasse le nombre de fichiers autorisés : aucun fichier "
             "ne doit être supprimé silencieusement."
         )
-    return {"files": files}
+    result: dict[str, Any] = {"files": files}
+    if strict_code_project:
+        # La demande explicite est prioritaire sur l'inventaire du modèle.
+        expected = (_declared_project_files(requested_text)
+                    or _declared_project_files(text_value))
+        if expected is not None:
+            result["expected_files"] = expected
+    return result
 
 
 def _artifact_content_from_response(
     *,
     file_type: str,
     response_text: str,
+    strict_code_project: bool = False,
+    requested_text: str = "",
 ) -> Any:
     """
     Adapte la réponse finale au format demandé sans nouvel appel IA.
@@ -1179,7 +1266,11 @@ def _artifact_content_from_response(
         return [{"content": cleaned}]
 
     if normalized_type == "zip":
-        return _zip_content_from_response(cleaned)
+        return _zip_content_from_response(
+            cleaned,
+            strict_code_project=strict_code_project,
+            requested_text=requested_text,
+        )
 
     return cleaned
 
@@ -1217,6 +1308,8 @@ def _create_and_persist_artifact(
     generation_id: str | None,
     attempt_id: str | None,
     reasoning_mode: str,
+    user_message: str = "",
+    user_attachments: list[ChatAttachment] | None = None,
 ) -> dict[str, Any]:
     """Fabrique puis persiste un artifact privé dans Supabase."""
     file_type = str(
@@ -1225,9 +1318,17 @@ def _create_and_persist_artifact(
 
     filename = artifact_request.get("filename")
 
+    is_code_project = (
+        file_type.strip().lower().lstrip(".") == "zip"
+        and _is_code_task(user_message, user_attachments or [])
+    )
+    if is_code_project or file_type.strip().lower().lstrip(".") in _CODE_SOURCE_EXTENSIONS:
+        _assert_code_fences_closed(response_text)
     content = _artifact_content_from_response(
         file_type=file_type,
         response_text=response_text,
+        strict_code_project=is_code_project,
+        requested_text=user_message,
     )
 
     generated = ARTIFACT_SERVICE.create(
@@ -3330,13 +3431,28 @@ async def chat(
 
     generated_artifacts: list[dict[str, Any]] = []
     artifact_errors: list[str] = []
+    # Même si une réponse textuelle a été facturée, aucun fichier de code
+    # ne doit être exporté depuis une réponse explicitement incomplète.
+    provider_payload = _as_mapping(openai_response) or {}
+    provider_status = str(provider_payload.get("status") or "").lower()
+    if provider_status and provider_status != "completed" and (
+        _is_code_task(message, attachments)
+    ):
+        artifact_errors.append(
+            f"Réponse IA non terminée ({provider_status}) : "
+            "aucun fichier de code ne sera créé."
+        )
+        artifact_requests = [request for request in artifact_requests
+                             if str(request.get("file_type") or "").lower()
+                             not in _CODE_SOURCE_EXTENSIONS | {"zip"}]
     try:
         artifact_requests = _code_artifact_requests_after_response(
             message=message,
             attachments=attachments,
             response_text=response_text,
             existing=artifact_requests,
-        )
+        ) if not (provider_status and provider_status != "completed" and
+                  _is_code_task(message, attachments)) else artifact_requests
     except ValueError as error:
         artifact_errors.append(str(error))
     web_images = _public_web_images(
@@ -3359,6 +3475,8 @@ async def chat(
                     generation_id=None,
                     attempt_id=None,
                     reasoning_mode=reasoning_mode,
+                    user_message=message,
+                    user_attachments=attachments,
                 )
             )
         except Exception as error:
@@ -5817,6 +5935,8 @@ async def chat_stream(
                         generation_id=generation_id,
                         attempt_id=attempt_id,
                         reasoning_mode=current_reasoning_mode,
+                        user_message=message,
+                        user_attachments=attachments,
                     )
 
                     generated_artifacts.append(artifact_payload)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import csv
 import hashlib
 import io
@@ -316,6 +317,10 @@ class ArtifactService:
             data = self._create_zip(
                 content,
                 depth=_archive_depth,
+                # Un ZIP demandé depuis le Chat peut contenir un vrai projet.
+                # Contrairement à une archive de données, aucun chemin ni
+                # nom de fichier ne doit être modifié silencieusement.
+                strict_project=(metadata or {}).get("source") == "oria-chat",
             )
         elif normalized_type == "rtf":
             data = self._create_rtf(content)
@@ -341,6 +346,15 @@ class ArtifactService:
                     "ou des octets, pas un objet structuré."
                 )
             data = self._create_text(content)
+            if (
+                normalized_type in self.CODE_SOURCE_TYPES
+                and (metadata or {}).get("source") == "oria-chat"
+            ):
+                self._validate_chat_source(
+                    filename=safe_filename,
+                    extension=normalized_type,
+                    data=data,
+                )
         elif allow_text_fallback:
             if self._looks_binary_extension(normalized_type):
                 raise UnsupportedArtifactTypeError(
@@ -1305,11 +1319,48 @@ class ArtifactService:
     # ZIP
     # ============================================================
 
+    @staticmethod
+    def _validate_chat_source(
+        *,
+        filename: str,
+        extension: str,
+        data: bytes,
+    ) -> None:
+        """Contrôles *statiques* prudents, jamais une exécution du code.
+
+        Le service ne connaît ni le projet ni la version cible de tous les
+        langages. Il vérifie seulement ce qu'il peut réellement prouver.
+        """
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise ArtifactError(
+                f"Le fichier source '{filename}' n'est pas en UTF-8."
+            ) from error
+
+        # Un bloc Markdown complet est un emballage, pas un fichier source.
+        if text.lstrip().startswith("```"):
+            raise ArtifactError(
+                f"Le fichier source '{filename}' contient encore une "
+                "délimitation Markdown au lieu du code brut."
+            )
+
+        if extension == "py" and text.strip():
+            try:
+                ast.parse(text, filename=filename)
+            except SyntaxError as error:
+                raise ArtifactError(
+                    f"Syntaxe Python invalide dans '{filename}', "
+                    f"ligne {error.lineno or '?'} : {error.msg}. "
+                    "Aucune exécution n'a été effectuée."
+                ) from error
+
     def _create_zip(
         self,
         content: Any,
         *,
         depth: int,
+        strict_project: bool = False,
     ) -> bytes:
         if depth >= self.MAX_ARCHIVE_DEPTH:
             raise ArtifactError(
@@ -1328,11 +1379,39 @@ class ArtifactService:
                 "Une archive ZIP attend une liste 'files'."
             )
 
+        if strict_project and not files:
+            raise ArtifactError(
+                "Un ZIP de projet ORIA ne peut pas être vide."
+            )
+
         if len(files) > self.MAX_ARCHIVE_FILES:
             raise ArtifactError(
                 f"Une archive Oria accepte au maximum "
                 f"{self.MAX_ARCHIVE_FILES} fichiers."
             )
+
+        # Un éventuel inventaire explicite permet au futur orchestrateur de
+        # refuser une livraison partielle. Sans inventaire, aucune promesse
+        # d'exhaustivité des fichiers demandés n'est possible.
+        expected_names: set[str] | None = None
+        if strict_project and "expected_files" in content:
+            expected = content["expected_files"]
+            if (not isinstance(expected, list) or not expected
+                    or len(expected) > self.MAX_ARCHIVE_FILES):
+                raise ArtifactError("Inventaire expected_files invalide.")
+            expected_names = set()
+            expected_casefold: set[str] = set()
+            for name in expected:
+                if not isinstance(name, str):
+                    raise ArtifactError("Un nom attendu doit être du texte.")
+                safe = self._safe_archive_name(name)
+                self._validate_project_archive_name(name, safe)
+                if safe.casefold() in expected_casefold:
+                    raise ArtifactError(
+                        f"Nom dupliqué dans l'inventaire : {name!r}."
+                    )
+                expected_names.add(safe)
+                expected_casefold.add(safe.casefold())
 
         buffer = io.BytesIO()
 
@@ -1344,6 +1423,7 @@ class ArtifactService:
         ) as archive:
             used_names: set[str] = set()
             used_code_names_casefold: set[str] = set()
+            used_project_names_casefold: set[str] = set()
             total_uncompressed_bytes = 0
 
             for index, item in enumerate(files, start=1):
@@ -1367,9 +1447,23 @@ class ArtifactService:
                 normalized_type = self._normalize_type(item_type, archive_name)
                 is_code_source = normalized_type in self.CODE_SOURCE_TYPES
 
-                if is_code_source:
-                    # Pour un projet exécutable, altérer silencieusement un
-                    # chemin ou renommer un module peut casser les imports.
+                # Dans un projet issu du Chat, TOUT fichier compte :
+                # package.json, README.md, .env, Dockerfile, etc. Un renommage
+                # automatique peut briser l'exécution autant qu'un .py.
+                if strict_project:
+                    self._validate_project_archive_name(item_name, archive_name)
+                    suffix = PurePosixPath(archive_name).suffix.lstrip(".").lower()
+                    if suffix and suffix != normalized_type:
+                        raise ArtifactError(
+                            f"Extension incohérente pour '{archive_name}' : "
+                            f"le contenu est déclaré '{normalized_type}'."
+                        )
+                    if archive_name.casefold() in used_project_names_casefold:
+                        raise ArtifactError(
+                            f"Fichier dupliqué dans le projet ZIP : {archive_name}."
+                        )
+                elif is_code_source:
+                    # Compatibilité conservée pour les ZIP génériques.
                     self._validate_project_archive_name(item_name, archive_name)
                     declared_suffix = PurePosixPath(archive_name).suffix.lstrip(".")
                     if declared_suffix and declared_suffix != normalized_type:
@@ -1399,21 +1493,60 @@ class ArtifactService:
                         "texte ou des octets."
                     )
 
-                if is_code_source and item_content in ("", b""):
-                    # `__init__.py` vide est parfaitement valide. Le validateur
-                    # générique refuse les fichiers vides : exception ZIP ciblée.
+                if (is_code_source and item_content in ("", b"")
+                        and PurePosixPath(archive_name).name == "__init__.py"):
+                    # Seul __init__.py est volontairement accepté vide.
+                    # Un main.py vide n'est pas un projet livré correctement.
                     generated_data = b""
                 else:
+                    item_metadata = item.get("metadata")
+                    if strict_project and normalized_type == "zip":
+                        item_metadata = {
+                            **(item_metadata if isinstance(item_metadata, dict) else {}),
+                            "source": "oria-chat",
+                        }
                     generated = self.create(
                         file_type=item_type,
                         content=item_content,
                         filename=archive_name,
                         title=item.get("title"),
-                        metadata=item.get("metadata"),
+                        metadata=item_metadata,
                         allow_text_fallback=True,
                         _archive_depth=depth + 1,
                     )
                     generated_data = generated.data
+
+                if strict_project:
+                    if is_code_source and generated_data:
+                        self._validate_chat_source(
+                            filename=archive_name,
+                            extension=normalized_type,
+                            data=generated_data,
+                        )
+                    # Ne jamais transformer silencieusement un package.json
+                    # invalide en chaîne JSON via _create_json().
+                    if normalized_type == "json":
+                        def forbid_non_json_constant(value: str) -> None:
+                            raise ValueError(f"Constante JSON interdite : {value}")
+
+                        # Le validateur porte sur les OCTETS livrés, pas
+                        # seulement sur le texte initial : pas de NaN/Infinity.
+                        try:
+                            if isinstance(item_content, str):
+                                json.loads(item_content, parse_constant=forbid_non_json_constant)
+                            json.loads(
+                                generated_data.decode("utf-8-sig"),
+                                parse_constant=forbid_non_json_constant,
+                            )
+                        except json.JSONDecodeError as error:
+                            raise ArtifactError(
+                                f"JSON invalide dans '{archive_name}' : "
+                                f"ligne {error.lineno}."
+                            ) from error
+                        except (ValueError, UnicodeDecodeError) as error:
+                            raise ArtifactError(
+                                f"JSON non conforme dans '{archive_name}' : {error}."
+                            ) from error
 
                 total_uncompressed_bytes += len(generated_data)
                 if total_uncompressed_bytes > self.MAX_ARCHIVE_UNCOMPRESSED_BYTES:
@@ -1426,6 +1559,40 @@ class ArtifactService:
                 used_names.add(archive_name)
                 if is_code_source:
                     used_code_names_casefold.add(archive_name.casefold())
+                if strict_project:
+                    used_project_names_casefold.add(archive_name.casefold())
+
+        if strict_project:
+            # 'src' ne peut pas être à la fois un fichier et le dossier qui
+            # contient 'src/main.py' : certains extracteurs écraseraient l'un.
+            for name in used_names:
+                path_parts = name.split("/")
+                for count in range(1, len(path_parts)):
+                    if "/".join(path_parts[:count]).casefold() in used_project_names_casefold:
+                        raise ArtifactError(
+                            f"Conflit fichier/dossier dans le ZIP : '{name}'."
+                        )
+
+        if expected_names is not None:
+            missing = sorted(expected_names - used_names)
+            if missing:
+                raise ArtifactError(
+                    "Projet incomplet : fichiers absents du ZIP : "
+                    + ", ".join(missing[:12])
+                    + ("…" if len(missing) > 12 else "")
+                )
+
+        # Vérifie la table centrale et les noms effectivement archivés,
+        # sans décompresser intégralement le projet (coût Render maîtrisé).
+        if strict_project:
+            try:
+                with zipfile.ZipFile(io.BytesIO(buffer.getvalue()), "r") as check:
+                    if set(check.namelist()) != used_names:
+                        raise ArtifactError(
+                            "Le ZIP final ne contient pas tous les fichiers annoncés."
+                        )
+            except (zipfile.BadZipFile, OSError) as error:
+                raise ArtifactError("Le ZIP créé est illisible.") from error
 
         return buffer.getvalue()
 
@@ -1913,11 +2080,20 @@ class ArtifactService:
         """Refuse les noms dangereux ou altérés pour les fichiers source ZIP."""
         raw = original_name.replace("\\", "/").strip()
         parts = raw.split("/")
+        reserved = {"CON", "PRN", "AUX", "NUL"}
+        reserved.update(f"COM{i}" for i in range(1, 10))
+        reserved.update(f"LPT{i}" for i in range(1, 10))
+        windows_incompatible = any(
+            part.split(".", 1)[0].upper() in reserved
+            or part.endswith((".", " "))
+            for part in parts
+        )
         if (
             not raw
             or raw.startswith("/")
             or re.match(r"^[A-Za-z]:", raw)
             or any(part in {"", ".", ".."} for part in parts)
+            or windows_incompatible
             or len(raw) > 240
             or raw != archive_name
         ):
