@@ -1693,6 +1693,62 @@ type LocalChatCache = {
 
 const LOCAL_CACHE_PREFIX = "oria_chat_cache_v1";
 
+// Sur iOS/Android, une absence de 30 minutes peut rouvrir le Chat sur
+// l'accueil. L'historique, son identifiant actif et la mémoire serveur
+// restent inchangés : il ne s'agit que d'une préférence de présentation.
+const ORIA_MOBILE_RETURN_HOME_AFTER_MS = 30 * 60 * 1000;
+const ORIA_MOBILE_AWAY_PREFIX = "oria_mobile_last_background_v1";
+
+function shouldShowMobileReturnHome(
+  backgroundAt: number | null,
+  now: number,
+): boolean {
+  return backgroundAt !== null &&
+    Number.isFinite(backgroundAt) &&
+    Number.isFinite(now) &&
+    now >= backgroundAt &&
+    now - backgroundAt >= ORIA_MOBILE_RETURN_HOME_AFTER_MS;
+}
+
+async function readMobileBackgroundAt(userId: string): Promise<number | null> {
+  if (Platform.OS === "web") return null;
+  try {
+    const value = await SecureStore.getItemAsync(
+      `${ORIA_MOBILE_AWAY_PREFIX}_${userId}`,
+    );
+    if (value === null) return null;
+    const timestamp = Number(value);
+    return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+  } catch (error) {
+    console.warn("Horodatage de retour ORIA indisponible :", error);
+    return null;
+  }
+}
+
+async function writeMobileBackgroundAt(
+  userId: string,
+  timestamp: number,
+): Promise<void> {
+  if (Platform.OS === "web") return;
+  try {
+    await SecureStore.setItemAsync(
+      `${ORIA_MOBILE_AWAY_PREFIX}_${userId}`,
+      String(timestamp),
+    );
+  } catch (error) {
+    console.warn("Impossible d'enregistrer la mise en arrière-plan ORIA :", error);
+  }
+}
+
+async function clearMobileBackgroundAt(userId: string): Promise<void> {
+  if (Platform.OS === "web") return;
+  try {
+    await SecureStore.deleteItemAsync(`${ORIA_MOBILE_AWAY_PREFIX}_${userId}`);
+  } catch (error) {
+    console.warn("Impossible de nettoyer l'horodatage ORIA :", error);
+  }
+}
+
 function cacheKey(userId: string) {
   return `${LOCAL_CACHE_PREFIX}_${userId}`;
 }
@@ -4237,6 +4293,13 @@ export default function ChatPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] =
     useState<string | null>(null);
+  // Vue d'accueil uniquement : ne pas effacer la conversation sauvegardée.
+  const [showReturnWelcome, setShowReturnWelcome] = useState(false);
+  const appStateRef = useRef(AppState.currentState);
+  const backgroundAtRef = useRef<number | null>(null);
+  const backgroundWriteRef = useRef<Promise<void> | null>(null);
+  const chatScreenFocusedRef = useRef(false);
+  const chatViewActionRef = useRef(0);
   const [activeCapability, setActiveCapability] =
     useState<string | null>(null);
   const [wallet, setWallet] = useState<WalletData | null>(null);
@@ -4391,6 +4454,73 @@ export default function ChatPage() {
   // un pack expiré/inactif doit apparaître à 0 dans l'interface mobile.
   const availableBalance = wallet?.is_pack_active ? wallet.balance : 0;
 
+  // Conditions à respecter avant un retour à l'accueil : aucune saisie,
+  // génération, création ou note vocale ne doit être interrompue.
+  const mobileReturnGuardRef = useRef(false);
+  mobileReturnGuardRef.current = Boolean(
+    !isInitialized || !activeConversationId ||
+    isThinking || activeGenerationId || isApplyingModification ||
+    message.trim() || attachments.length ||
+    voiceDraft || localVoiceDraft || voiceUploading ||
+    audioBusyRef.current || stoppingRecordingRef.current ||
+    recorderState.isRecording || mediaPrompt.trim() || mediaMenuOpen ||
+    coursesOpen || drawerVisible || codePreview ||
+    modificationPanelOpen
+  );
+
+  useFocusEffect(useCallback(() => {
+    chatScreenFocusedRef.current = true;
+    return () => { chatScreenFocusedRef.current = false; };
+  }, []));
+
+  // Une vraie transition de l'application vers l'arrière-plan déclenche le
+  // compteur. Pas de minuterie active : une suspension de l'app n'efface rien.
+  useEffect(() => {
+    if (Platform.OS === "web" || !currentUserId) return;
+    let disposed = false;
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      const previous = appStateRef.current;
+      appStateRef.current = nextState;
+
+      if (nextState === "inactive" || nextState === "background") {
+        if (previous === "active" && backgroundAtRef.current === null) {
+          const at = Date.now();
+          backgroundAtRef.current = at;
+          backgroundWriteRef.current = writeMobileBackgroundAt(currentUserId, at);
+        }
+        return;
+      }
+
+      if (nextState === "active" && previous !== "active") {
+        const localAwayAt = backgroundAtRef.current;
+        backgroundAtRef.current = null;
+        const expectedAction = chatViewActionRef.current;
+        void (async () => {
+          // La transition inactive -> active peut être rapide : attendre la
+          // sauvegarde pour éviter un ancien horodatage après le nettoyage.
+          if (backgroundWriteRef.current) {
+            await backgroundWriteRef.current;
+            backgroundWriteRef.current = null;
+          }
+          const storedAwayAt = localAwayAt ??
+            await readMobileBackgroundAt(currentUserId);
+          // Ne jamais laisser un ancien horodatage provoquer un retour
+          // inattendu à l'accueil pendant une session active.
+          await clearMobileBackgroundAt(currentUserId);
+          if (!disposed &&
+              expectedAction === chatViewActionRef.current &&
+              chatScreenFocusedRef.current &&
+              !mobileReturnGuardRef.current &&
+              shouldShowMobileReturnHome(storedAwayAt, Date.now())) {
+            Keyboard.dismiss();
+            setShowReturnWelcome(true);
+          }
+        })();
+      }
+    });
+    return () => { disposed = true; subscription.remove(); };
+  }, [currentUserId]);
+
   const remainingDays = wallet?.pack_expires_at
     ? Math.max(
         0,
@@ -4413,7 +4543,27 @@ export default function ChatPage() {
         const userId = session.user.id;
         setCurrentUserId(userId);
 
-        const cache = await readLocalCache(userId);
+        // Démarrage après fermeture complète : la date de dernier passage
+        // en arrière-plan est conservée indépendamment du cache de messages.
+        const [cache, storedAwayAt, persistedVoiceDraftId] = await Promise.all([
+          readLocalCache(userId),
+          readMobileBackgroundAt(userId),
+          readVoiceDraftId(userId).catch(() => null),
+        ]);
+        if (cancelled) return;
+        if (
+          Platform.OS !== "web" &&
+          cache?.activeConversationId &&
+          !persistedVoiceDraftId &&
+          shouldShowMobileReturnHome(storedAwayAt, Date.now())
+        ) {
+          setShowReturnWelcome(true);
+        }
+        // Pas de suppression de l'historique ; l'horodatage ne concerne
+        // que le prochain retour à l'application.
+        await clearMobileBackgroundAt(userId);
+        if (cancelled) return;
+        setCurrentUserId(userId);
 
         if (cache) {
           setConversations(cache.conversations);
@@ -4850,13 +5000,19 @@ export default function ChatPage() {
     if (audioBusyRef.current) return;
     audioBusyRef.current = true;
     setVoiceUploading(true);
-    let conversationId = activeConversationId;
+    const startingFromWelcome = showReturnWelcome;
+    let conversationId = startingFromWelcome ? null : activeConversationId;
     try {
       // Le lien conversation est obligatoire pour que l'audio puisse être
       // rattaché au futur message sans mélange entre conversations.
       if (!conversationId) {
         const remote = await createConversationRemote("Nouvelle conversation");
         conversationId = remote.id;
+        if (startingFromWelcome) {
+          chatViewActionRef.current += 1;
+          setShowReturnWelcome(false);
+          setMessages([]);
+        }
         setConversations((current) => [remote, ...current]);
         setActiveConversationId(remote.id);
       }
@@ -5212,6 +5368,8 @@ export default function ChatPage() {
   }
 
   async function createConversation() {
+    chatViewActionRef.current += 1;
+    setShowReturnWelcome(false);
     const now = new Date().toISOString();
     const localId = uid();
 
@@ -5277,6 +5435,8 @@ export default function ChatPage() {
   }
 
   async function selectConversation(conversationId: string) {
+    chatViewActionRef.current += 1;
+    setShowReturnWelcome(false);
     setActiveConversationId(conversationId);
     closeDrawer();
     setError(null);
@@ -5862,7 +6022,15 @@ export default function ChatPage() {
     }
 
     const now = new Date().toISOString();
-    let conversationId = activeConversationId;
+    // Depuis l'accueil de retour, une création média démarre une nouvelle
+    // conversation, jamais celle conservée comme dernière discussion.
+    const startingFromWelcome = showReturnWelcome;
+    let conversationId = startingFromWelcome ? null : activeConversationId;
+    if (startingFromWelcome) {
+      chatViewActionRef.current += 1;
+      setShowReturnWelcome(false);
+      setMessages([]);
+    }
 
     setIsThinking(true);
     setChatStatusStep("media_generation");
@@ -6098,7 +6266,13 @@ export default function ChatPage() {
     }
 
     const now = new Date().toISOString();
-    let conversationId = activeConversationId;
+    const startingFromWelcome = showReturnWelcome;
+    let conversationId = startingFromWelcome ? null : activeConversationId;
+    if (startingFromWelcome) {
+      chatViewActionRef.current += 1;
+      setShowReturnWelcome(false);
+      setMessages([]);
+    }
 
     if (!conversationId) {
       const localId = uid();
@@ -6940,6 +7114,7 @@ export default function ChatPage() {
     } finally {
       if (currentUserId) {
         await removeLocalCache(currentUserId);
+        await clearMobileBackgroundAt(currentUserId);
       }
       router.replace("/login" as any);
     }
@@ -7293,7 +7468,15 @@ export default function ChatPage() {
     );
   }
 
-  const activeTitle = getDisplayConversationTitle(
+  const lastConversationTitle = getDisplayConversationTitle(
+    conversations.find(
+      (conversation) => conversation.id === activeConversationId,
+    )?.title || "Nouvelle conversation",
+    language,
+  );
+  const activeTitle = showReturnWelcome
+    ? t.newConversation
+    : getDisplayConversationTitle(
     conversations.find(
       (conversation) =>
         conversation.id === activeConversationId,
@@ -7442,7 +7625,7 @@ export default function ChatPage() {
             </View>
           ) : null}
 
-          {messages.length === 0 ? (
+          {messages.length === 0 || showReturnWelcome ? (
             <View style={styles.emptyState}>
               <View style={styles.brandRow}>
                 <View style={styles.brandIcon}>
@@ -7467,6 +7650,27 @@ export default function ChatPage() {
               <Text style={styles.emptyDescription}>
                 {t.welcomeDescription}
               </Text>
+              {showReturnWelcome && activeConversationId ? (
+                <Pressable
+                  onPress={() => void selectConversation(activeConversationId)}
+                  style={styles.returnConversationCard}
+                  accessibilityRole="button"
+                  accessibilityLabel={language === "fr"
+                    ? "Reprendre ma dernière discussion"
+                    : "Resume my last conversation"}
+                >
+                  <View style={styles.returnConversationText}>
+                    <Text style={styles.returnConversationHeading}>
+                      {language === "fr" ? "Reprendre ma discussion" : "Resume my conversation"}
+                    </Text>
+                    <Text style={styles.returnConversationSubtitle} numberOfLines={1}>
+                      {lastConversationTitle}
+                    </Text>
+                  </View>
+                  <Ionicons name="arrow-forward-outline" size={20}
+                    color={themedIconColor("#555555", isDark)} />
+                </Pressable>
+              ) : null}
             </View>
           ) : (
             <FlatList
@@ -8523,7 +8727,7 @@ export default function ChatPage() {
                       }
                       style={[
                         styles.conversationItem,
-                        item.id === activeConversationId &&
+                        !showReturnWelcome && item.id === activeConversationId &&
                           styles.conversationItemActive,
                       ]}
                     >
@@ -9782,6 +9986,30 @@ const baseStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "transparent",
+  },
+  returnConversationCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    alignSelf: "stretch",
+    marginTop: 28,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#e0e0dc",
+    backgroundColor: "#f7f7f5",
+  },
+  returnConversationText: { flex: 1, paddingRight: 12 },
+  returnConversationHeading: {
+    color: "#171715",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  returnConversationSubtitle: {
+    color: "#777771",
+    fontSize: 12,
+    marginTop: 5,
   },
   newConversationButton: {
     minHeight: 58,
