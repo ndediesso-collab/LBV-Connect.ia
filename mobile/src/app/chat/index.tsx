@@ -7,6 +7,7 @@ import {
   BackHandler,
   FlatList,
   Image,
+  ImageBackground,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
@@ -922,6 +923,12 @@ const ACCEPTED_IMAGE_TYPES = [
   "image/webp",
   "image/gif",
 ];
+
+// Images intégrées à l’application Expo, sans téléchargement ni URL distante.
+const ORIA_STUDIO_VISUALS = {
+  image: require("@/assets/images/oria-mini-studio-image.jpg"),
+  video: require("@/assets/images/oria-mini-studio-video.jpg"),
+};
 
 const MEDIA_GENERATION_CONFIGS = [
   {
@@ -4438,7 +4445,9 @@ export default function ChatPage() {
   const recorderState = useAudioRecorderState(recorder);
   const audioBusyRef = useRef(false);
   const stoppingRecordingRef = useRef(false);
+  // Même mini-studio que sur le Web, ouvert en véritable écran natif.
   const [mediaMenuOpen, setMediaMenuOpen] = useState(false);
+  const [studioShowOtherConfigurations, setStudioShowOtherConfigurations] = useState(false);
   const [isLoadingMediaCapabilities, setIsLoadingMediaCapabilities] =
     useState(false);
 
@@ -6202,6 +6211,7 @@ export default function ChatPage() {
 
       setMediaPrompt("");
       setMediaMenuOpen(false);
+      setStudioShowOtherConfigurations(false);
 
       const refreshedTrials = await loadTrials();
       await loadWallet(refreshedTrials);
@@ -6256,12 +6266,6 @@ export default function ChatPage() {
       (!content && outgoingAttachments.length === 0) ||
       isThinking || recorderState.isRecording || voiceUploading
     ) {
-      return;
-    }
-
-    if (activeCapability === "Création" && options?.contentOverride === undefined) {
-      setMediaPrompt(content);
-      await handleGenerateMedia(content);
       return;
     }
 
@@ -7097,11 +7101,15 @@ export default function ChatPage() {
     }
 
     if (label === "Création") {
-      setActiveCapability("Création");
+      // Studio indépendant : ne transforme plus la saisie du Chat en prompt média.
+      Keyboard.dismiss();
+      setActiveCapability(null);
       setMediaMenuOpen(true);
+      setStudioShowOtherConfigurations(false);
       setError(null);
       setMediaCapabilities([]);
       setSelectedMediaAction("");
+      setMediaPrompt("");
       if (hasActivePack) {
         void loadMediaCapabilities();
       }
@@ -7484,6 +7492,26 @@ export default function ChatPage() {
     language,
   );
 
+  // Le backend décide des actions réellement autorisées : aucune fausse option
+  // de ratio/résolution n'est ajoutée au frontend.
+  const studioSelected = mediaCapabilities.find((option) => option.action === selectedMediaAction);
+  const studioConfig = studioSelected ? getMediaGenerationConfig(studioSelected.action) : undefined;
+  const studioConfigurations = studioSelected
+    ? mediaCapabilities.filter((option) => option.type === studioSelected.type)
+    : [];
+  const studioEstimatedCredits = studioSelected?.estimated_credits ?? studioSelected?.credits;
+  const studioBusy = isThinking || isLoadingMediaCapabilities;
+
+  const closeStudio = () => {
+    if (isThinking) return;
+    Keyboard.dismiss();
+    setMediaMenuOpen(false);
+    setStudioShowOtherConfigurations(false);
+    setMediaPrompt("");
+    setSelectedMediaAction("");
+    setError(null);
+  };
+
   return (
     <OriaThemeContext.Provider value={theme}>
       <Modal
@@ -7531,6 +7559,277 @@ export default function ChatPage() {
                 <HighlightedCode code={codePreview?.code || ""} />
               </ScrollView>
             </ScrollView>
+          </SafeAreaView>
+        </SafeAreaProvider>
+      </Modal>
+      {/* ORIA mini-studio mobile : mêmes visuels et contrats que la version Web. */}
+      <Modal
+        visible={mediaMenuOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        statusBarTranslucent={Platform.OS === "android"}
+        navigationBarTranslucent={Platform.OS === "android"}
+        onRequestClose={closeStudio}
+      >
+        <SafeAreaProvider style={studioStyles.screen}>
+          <StatusBar barStyle={isDark ? "light-content" : "dark-content"}
+            backgroundColor={isDark ? "#101012" : "#f8f8fa"} />
+          <SafeAreaView
+            style={[studioStyles.screen, isDark && studioStyles.screenDark]}
+            edges={["top", "bottom", "left", "right"]}
+          >
+            <KeyboardAvoidingView
+              style={[studioStyles.screen, isDark && studioStyles.screenDark]}
+              behavior={Platform.OS === "ios" ? "padding" : undefined}
+            >
+              <ScrollView
+                style={[studioStyles.screen, isDark && studioStyles.screenDark]}
+                contentContainerStyle={studioStyles.scrollBody}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={studioStyles.headingRow}>
+                  <View style={studioStyles.headingText}>
+                    <View style={studioStyles.studioBrandRow}>
+                      <Ionicons name="sparkles-outline" size={24} color="#6B65E8" />
+                      <Text style={[studioStyles.headingTitle, isDark && studioStyles.textLight]}>
+                        {language === "fr" ? "Créer avec ORIA" : "Create with ORIA"}
+                      </Text>
+                    </View>
+                    <Text style={[studioStyles.headingSubtitle, isDark && studioStyles.textMutedDark]}>
+                      {language === "fr" ? "Donnez vie à vos idées, en toute simplicité." : "Bring your ideas to life, simply."}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={language === "fr" ? "Fermer le studio" : "Close studio"}
+                    disabled={isThinking}
+                    onPress={closeStudio}
+                    style={[studioStyles.closeButton, isDark && studioStyles.surfaceDark]}
+                  >
+                    <Ionicons name="close" size={22} color={isDark ? "#ffffff" : "#252630"} />
+                  </Pressable>
+                </View>
+
+                <View style={studioStyles.visualRow}>
+                  {(["image", "video"] as const).map((type) => {
+                    const choices = mediaCapabilities.filter((item) => item.type === type);
+                    const selected = studioSelected?.type === type;
+                    const unavailable = choices.length === 0 || !hasActivePack;
+                    return (
+                      <Pressable
+                        key={type}
+                        accessibilityRole="button"
+                        accessibilityLabel={type === "image" ? t.generateImage : t.generateVideo}
+                        accessibilityState={{ selected: Boolean(selected), disabled: unavailable || studioBusy }}
+                        disabled={unavailable || studioBusy}
+                        onPress={() => {
+                          setSelectedMediaAction(choices[0].action);
+                          setStudioShowOtherConfigurations(false);
+                          setError(null);
+                        }}
+                        style={[
+                          studioStyles.visualCard,
+                          selected && studioStyles.visualCardSelected,
+                        ]}
+                      >
+                        <ImageBackground
+                          source={ORIA_STUDIO_VISUALS[type]}
+                          style={studioStyles.visualImage}
+                          resizeMode="cover"
+                          imageStyle={studioStyles.visualImageCorners}
+                        >
+                          <View style={studioStyles.visualCaption}>
+                            <View style={studioStyles.visualLabelRow}>
+                              <Ionicons name={type === "image" ? "image-outline" : "videocam-outline"}
+                                size={19} color="#ffffff" />
+                              <Text style={studioStyles.visualTitle}>
+                                {type === "image" ? "Image" : (language === "fr" ? "Vidéo" : "Video")}
+                              </Text>
+                              {selected ? <Ionicons name="checkmark-circle" size={19} color="#ffffff" /> : null}
+                            </View>
+                            <Text style={studioStyles.visualDescription} numberOfLines={2}>
+                              {type === "image"
+                                ? (language === "fr" ? "Photos, affiches et créations." : "Photos, posters and creations.")
+                                : (language === "fr" ? "Scènes et vidéos animées." : "Scenes and animated videos.")}
+                            </Text>
+                            <Text style={studioStyles.visualAvailability} numberOfLines={2}>
+                              {isLoadingMediaCapabilities
+                                ? t.loading
+                                : unavailable
+                                  ? (language === "fr" ? "Non disponible avec votre pack" : "Unavailable with your pack")
+                                  : `${choices.length} ${choices.length > 1 ? t.configurations : t.configuration}`}
+                            </Text>
+                          </View>
+                        </ImageBackground>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+
+                {!hasActivePack ? (
+                  <View style={[studioStyles.notice, isDark && studioStyles.surfaceDark]}>
+                    <Ionicons name="lock-closed-outline" size={20} color={isDark ? "#c6c6cd" : "#555563"} />
+                    <View style={studioStyles.noticeText}>
+                      <Text style={[studioStyles.noticeHeading, isDark && studioStyles.textLight]}>{t.creationLocked}</Text>
+                      <Text style={[studioStyles.mutedText, isDark && studioStyles.textMutedDark]}>{t.creationLockedDescription}</Text>
+                    </View>
+                  </View>
+                ) : isLoadingMediaCapabilities ? (
+                  <View style={studioStyles.loadingLine}>
+                    <ActivityIndicator size="small" color="#6B65E8" />
+                    <Text style={[studioStyles.mutedText, isDark && studioStyles.textMutedDark]}>{t.loading}</Text>
+                  </View>
+                ) : mediaCapabilities.length === 0 ? (
+                  <Text style={[studioStyles.mutedText, studioStyles.emptyHint, isDark && studioStyles.textMutedDark]}>
+                    {t.noCreationOption}
+                  </Text>
+                ) : null}
+
+                <View style={[studioStyles.formCard, isDark && studioStyles.surfaceDark]}>
+                  {studioSelected ? (
+                    <>
+                      <View style={studioStyles.formHeadingRow}>
+                        <View style={studioStyles.formIcon}>
+                          <Ionicons name={studioSelected.type === "image" ? "image-outline" : "videocam-outline"}
+                            size={22} color="#4c55c9" />
+                        </View>
+                        <View style={studioStyles.formHeadingText}>
+                          <Text style={[studioStyles.formTitle, isDark && studioStyles.textLight]}>
+                            {studioSelected.type === "image" ? t.generateImage : t.generateVideo}
+                          </Text>
+                          <Text style={[studioStyles.mutedText, isDark && studioStyles.textMutedDark]}>
+                            {language === "fr" ? "Décrivez votre idée et choisissez une option." : "Describe your idea and choose an option."}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={[studioStyles.fieldLabel, isDark && studioStyles.textLight]}>
+                        {studioSelected.type === "image"
+                          ? (language === "fr" ? "Décrivez votre image" : "Describe your image")
+                          : (language === "fr" ? "Décrivez votre vidéo" : "Describe your video")}
+                      </Text>
+                      <TextInput
+                        value={mediaPrompt}
+                        onChangeText={setMediaPrompt}
+                        placeholder={studioSelected.type === "image" ? t.imagePrompt : t.videoPrompt}
+                        placeholderTextColor={isDark ? "#9e9ea7" : "#95959a"}
+                        multiline
+                        editable={hasActivePack && !studioBusy}
+                        textAlignVertical="top"
+                        style={[studioStyles.promptInput, isDark && studioStyles.promptInputDark]}
+                      />
+
+                      <View style={[studioStyles.configBox, isDark && studioStyles.configBoxDark]}>
+                        <View style={studioStyles.configHeader}>
+                          <View style={studioStyles.configHeaderText}>
+                            <Text style={[studioStyles.fieldLabel, studioStyles.configLabel, isDark && studioStyles.textLight]}>
+                              {t.generationConfiguration}
+                            </Text>
+                            <Text style={[studioStyles.selectedConfigName, isDark && studioStyles.textLight]}>
+                              {studioConfig?.label || studioSelected.action}
+                            </Text>
+                            <Text style={[studioStyles.mutedText, isDark && studioStyles.textMutedDark]}>
+                              {[studioSelected.quality || studioConfig?.configuration,
+                                studioSelected.seconds ? `${studioSelected.seconds} s` : null,
+                                studioSelected.size,
+                                studioSelected.model || studioConfig?.model].filter(Boolean).join(" · ")}
+                            </Text>
+                          </View>
+                          {studioConfigurations.length > 1 ? (
+                            <Pressable
+                              disabled={isThinking}
+                              accessibilityRole="button"
+                              accessibilityLabel={language === "fr" ? "Changer de configuration" : "Change configuration"}
+                              onPress={() => setStudioShowOtherConfigurations((value) => !value)}
+                              style={[studioStyles.changeConfigButton, isDark && studioStyles.changeConfigDark]}
+                            >
+                              <Text style={[studioStyles.changeConfigText, isDark && studioStyles.textLight]}>
+                                {language === "fr" ? "Changer" : "Change"}
+                              </Text>
+                              <Ionicons name={studioShowOtherConfigurations ? "chevron-up" : "chevron-down"}
+                                size={15} color={isDark ? "#ffffff" : "#333333"} />
+                            </Pressable>
+                          ) : null}
+                        </View>
+                        {studioShowOtherConfigurations && studioConfigurations.length > 1 ? (
+                          <View style={studioStyles.optionList}>
+                            {studioConfigurations.map((option) => {
+                              const config = getMediaGenerationConfig(option.action);
+                              const selected = option.action === selectedMediaAction;
+                              return (
+                                <Pressable
+                                  key={option.action}
+                                  onPress={() => setSelectedMediaAction(option.action)}
+                                  disabled={isThinking}
+                                  style={[studioStyles.optionItem,
+                                    isDark && studioStyles.optionDark,
+                                    selected && (isDark ? studioStyles.optionSelectedDark : studioStyles.optionSelected)]}
+                                >
+                                  <View style={studioStyles.optionLabelWrap}>
+                                    <Text style={[studioStyles.optionName, isDark && studioStyles.textLight]}>
+                                      {config?.label || option.action}
+                                    </Text>
+                                    <Text style={[studioStyles.mutedText, isDark && studioStyles.textMutedDark]}>
+                                      {config?.configuration || ""} {option.model || config?.model || ""}
+                                    </Text>
+                                  </View>
+                                  {selected ? <Ionicons name="checkmark-circle" size={19} color="#7066e6" /> : null}
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                        ) : null}
+                      </View>
+
+                      <View style={[studioStyles.creditsBox, isDark && studioStyles.creditsBoxDark]}>
+                        <View style={studioStyles.creditsTitleRow}>
+                          <Ionicons name="wallet-outline" size={18} color={isDark ? "#c4caff" : "#3b55bf"} />
+                          <Text style={[studioStyles.creditsTitle, isDark && studioStyles.textLight]}>
+                            {language === "fr" ? "Crédits et facturation" : "Credits and billing"}
+                          </Text>
+                        </View>
+                        <Text style={[studioStyles.creditsText, isDark && studioStyles.textMutedDark]}>
+                          {studioEstimatedCredits != null
+                            ? `${t.cost} : ${formatCredits(studioEstimatedCredits, language)} ${t.credits}`
+                            : (language === "fr" ? "Coût dynamique : estimation indisponible." : "Dynamic cost: no estimate available.")}
+                        </Text>
+                        <Text style={[studioStyles.creditsNote, isDark && studioStyles.textMutedDark]}>
+                          {t.backendValidation}
+                        </Text>
+                      </View>
+
+                      {error ? (
+                        <Text accessibilityRole="alert" style={studioStyles.errorText}>{error}</Text>
+                      ) : null}
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => void handleGenerateMedia()}
+                        disabled={!hasActivePack || studioBusy || !mediaPrompt.trim() || !studioSelected}
+                        style={[studioStyles.submitButton,
+                          (!hasActivePack || studioBusy || !mediaPrompt.trim() || !studioSelected) && studioStyles.submitDisabled]}
+                      >
+                        {isThinking ? <ActivityIndicator size="small" color="#ffffff" />
+                          : <Ionicons name="sparkles" size={18} color="#ffffff" />}
+                        <Text style={studioStyles.submitText}>
+                          {isThinking ? t.generating : studioSelected.type === "image" ? t.generateTheImage : t.generateTheVideo}
+                        </Text>
+                      </Pressable>
+                    </>
+                  ) : (
+                    <View style={studioStyles.emptyForm}>
+                      <Ionicons name="sparkles-outline" size={25} color={isDark ? "#aaaaaf" : "#92929d"} />
+                      <Text style={[studioStyles.mutedText, isDark && studioStyles.textMutedDark]}>
+                        {hasActivePack && isLoadingMediaCapabilities
+                          ? t.loading
+                          : hasActivePack && mediaCapabilities.length > 0
+                            ? (language === "fr" ? "Choisissez Image ou Vidéo." : "Choose Image or Video.")
+                            : t.noCreationOption}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
           </SafeAreaView>
         </SafeAreaProvider>
       </Modal>
@@ -8072,299 +8371,8 @@ export default function ChatPage() {
               </View>
             ) : null}
 
-            {activeCapability === "Création" ? (
-              <View style={styles.mediaPanel}>
-                <View style={styles.rowBetween}>
-                  <View style={styles.flex}>
-                    <Text style={styles.capabilityTitle}>
-                      {t.mediaCreation}
-                    </Text>
-                    <Text style={styles.capabilityDescription}>
-                      {t.mediaCreationDescription}
-                    </Text>
-                  </View>
-                  <Pressable
-                    onPress={() => {
-                      setActiveCapability(null);
-                      setSelectedMediaAction("");
-                      setMediaPrompt("");
-                      setMediaMenuOpen(false);
-                    }}
-                  >
-                    <Ionicons
-                      name="close"
-                      size={18}
-                      color={themedIconColor("#666666", isDark)}
-                    />
-                  </Pressable>
-                </View>
-
-                {!hasActivePack ? (
-                  <View style={styles.mediaLockedBanner}>
-                    <Ionicons
-                      name="lock-closed-outline"
-                      size={17}
-                      color={themedIconColor("#555555", isDark)}
-                    />
-                    <View style={styles.flex}>
-                      <Text style={styles.mediaLockedTitle}>
-                        {t.creationLocked}
-                      </Text>
-                      <Text style={styles.mediaLockedText}>
-                        {t.creationLockedDescription}
-                      </Text>
-                    </View>
-                  </View>
-                ) : null}
-
-                {hasActivePack &&
-                (isLoadingMediaCapabilities || mediaCapabilities.length === 0) ? (
-                  <Text style={styles.smallMuted}>
-                    {isLoadingMediaCapabilities ? t.loading : t.noCreationOption}
-                  </Text>
-                ) : null}
-
-                <View style={styles.mediaTypeRow}>
-                  {(["image", "video"] as const).map((type) => {
-                    const configurationsForType =
-                      mediaCapabilities.filter(
-                        (item) => item.type === type,
-                      );
-
-                    const selectedType =
-                      getMediaGenerationConfig(
-                        selectedMediaAction,
-                      )?.type;
-
-                    return (
-                      <Pressable
-                        key={type}
-                        disabled={!hasActivePack || isLoadingMediaCapabilities || configurationsForType.length === 0}
-                        onPress={() => {
-                          if (hasActivePack && !isLoadingMediaCapabilities && configurationsForType.length > 0) {
-                            setSelectedMediaAction(
-                              configurationsForType[0].action,
-                            );
-                            setError(null);
-                          }
-                        }}
-                        style={[
-                          styles.mediaTypeButton,
-                          selectedType === type &&
-                            styles.mediaTypeButtonActive,
-                          (!hasActivePack || isLoadingMediaCapabilities || configurationsForType.length === 0) &&
-                            styles.mediaTypeButtonLocked,
-                        ]}
-                      >
-                        <Ionicons
-                          name={
-                            type === "image"
-                              ? "image-outline"
-                              : "videocam-outline"
-                          }
-                          size={23}
-                          color={themedIconColor("#111111", isDark)}
-                        />
-                        <Text style={styles.mediaTypeText}>
-                          {type === "image"
-                            ? t.generateImage
-                            : t.generateVideo}
-                        </Text>
-                        <Text style={styles.smallMuted}>
-                          {configurationsForType.length}{" "}
-                          {configurationsForType.length > 1
-                            ? t.configurations
-                            : t.configuration}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-
-                {selectedMediaAction ? (
-                  <>
-                    <Text style={styles.mediaSectionLabel}>
-                      {t.generationConfiguration}
-                    </Text>
-
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={styles.horizontalOptions}
-                    >
-                      {mediaCapabilities
-                        .filter(
-                          (item) =>
-                            item.type ===
-                            getMediaGenerationConfig(
-                              selectedMediaAction,
-                            )?.type,
-                        )
-                        .map((capability) => {
-                          const config = getMediaGenerationConfig(
-                            capability.action,
-                          );
-
-                          if (!config) return null;
-
-                          const selected =
-                            selectedMediaAction === config.action;
-
-                          const estimate =
-                            capability.estimated_credits ??
-                            capability.credits;
-
-                          return (
-                            <Pressable
-                              key={config.action}
-                              disabled={!hasActivePack || isLoadingMediaCapabilities}
-                              onPress={() =>
-                                setSelectedMediaAction(config.action)
-                              }
-                              style={[
-                                styles.mediaOption,
-                                selected &&
-                                  styles.mediaOptionActive,
-                                !hasActivePack &&
-                                  styles.mediaOptionLocked,
-                              ]}
-                            >
-                              <View style={styles.rowBetween}>
-                                <Text
-                                  style={styles.mediaOptionTitle}
-                                >
-                                  {config.label}
-                                </Text>
-                                {selected ? (
-                                  <Ionicons
-                                    name="checkmark"
-                                    size={15}
-                                    color={themedIconColor("#111111", isDark)}
-                                  />
-                                ) : null}
-                              </View>
-
-                              <Text style={styles.smallMuted}>
-                                {getMediaDescription(
-                                  config.action,
-                                  config.description,
-                                  language,
-                                )}
-                              </Text>
-
-                              <View style={styles.rowBetween}>
-                                <Text style={styles.smallMuted}>
-                                  {config.configuration}
-                                </Text>
-                                <Text style={styles.smallMuted}>
-                                  {capability.model || config.model}
-                                </Text>
-                              </View>
-
-                              {estimate != null ? (
-                                <Text style={styles.smallMuted}>
-                                  {t.cost} : {formatCredits(estimate, language)} {t.credits}
-                                </Text>
-                              ) : null}
-                            </Pressable>
-                          );
-                        })}
-                    </ScrollView>
-
-                    <TextInput
-                      value={mediaPrompt}
-                      onChangeText={setMediaPrompt}
-                      placeholder={
-                        (
-                          getMediaGenerationConfig(
-                            selectedMediaAction,
-                          )?.type
-                        ) === "video"
-                          ? t.videoPrompt
-                          : t.imagePrompt
-                      }
-                      multiline
-                      editable={hasActivePack && !isThinking && !isLoadingMediaCapabilities}
-                      style={[
-                        styles.mediaPrompt,
-                        !hasActivePack && styles.mediaPromptLocked,
-                      ]}
-                    />
-
-                    <View style={styles.rowBetween}>
-                      <View style={styles.flex}>
-                        {(() => {
-                          const selected =
-                            mediaCapabilities.find(
-                              (item) =>
-                                item.action === selectedMediaAction,
-                            );
-
-                          const estimate =
-                            selected?.estimated_credits ??
-                            selected?.credits;
-
-                          return (
-                            <Text style={styles.smallMuted}>
-                              {estimate != null
-                                ? `${t.cost} : ${formatCredits(
-                                    estimate,
-                                    language,
-                                  )} ${t.credits}`
-                                : language === "en"
-                                  ? "Dynamic cost · calculated from actual API usage"
-                                  : "Coût dynamique · calculé selon l'utilisation réelle de l'API"}
-                            </Text>
-                          );
-                        })()}
-                        <Text style={styles.smallMuted}>
-                          {t.backendValidation}
-                        </Text>
-                      </View>
-
-                      <Pressable
-                        disabled={
-                          !hasActivePack ||
-                          isLoadingMediaCapabilities ||
-                          !mediaPrompt.trim() ||
-                          !selectedMediaAction ||
-                          isThinking
-                        }
-                        onPress={() =>
-                          void handleGenerateMedia()
-                        }
-                        style={[
-                          styles.generateButton,
-                          (!hasActivePack ||
-                            isLoadingMediaCapabilities ||
-                            !mediaPrompt.trim() ||
-                            !selectedMediaAction ||
-                            isThinking) &&
-                            styles.generateButtonDisabled,
-                        ]}
-                      >
-                        <Ionicons
-                          name="sparkles"
-                          size={15}
-                          color="#ffffff"
-                        />
-                        <Text style={styles.generateButtonText}>
-                          {isThinking
-                            ? t.generating
-                            : (
-                                getMediaGenerationConfig(
-                                  selectedMediaAction,
-                                )?.type
-                              ) === "video"
-                              ? t.generateTheVideo
-                              : t.generateTheImage}
-                        </Text>
-                      </Pressable>
-                    </View>
-                  </>
-                ) : null}
-              </View>
-            ) : null}
+            {/* Le mini-studio est désormais un écran natif dédié (Modal).
+                Le Chat n’affiche plus de formulaire de création au-dessus du composer. */}
 
             <View
               style={[
@@ -8400,9 +8408,7 @@ export default function ChatPage() {
                   )
                 }
                 placeholder={
-                  activeCapability === "Création"
-                    ? t.creationPrompt
-                    : t.messagePrompt
+                  t.messagePrompt
                 }
                 placeholderTextColor={themedIconColor("#999999", isDark)}
                 editable={!isThinking}
@@ -8538,7 +8544,7 @@ export default function ChatPage() {
                     <Pressable
                       style={[
                         styles.capabilityButton,
-                        activeCapability === "Création" &&
+                        mediaMenuOpen &&
                           styles.capabilityActive,
                       ]}
                       onPress={() => selectCapability("Création")}
@@ -8547,7 +8553,7 @@ export default function ChatPage() {
                         name="videocam-outline"
                         size={19}
                         color={
-                          activeCapability === "Création"
+                          mediaMenuOpen
                             ? "#ffffff"
                             : themedIconColor("#555555", isDark)
                         }
@@ -8555,7 +8561,7 @@ export default function ChatPage() {
                       <Text
                         style={[
                           styles.capabilityButtonText,
-                          activeCapability === "Création" &&
+                          mediaMenuOpen &&
                             styles.capabilityActiveText,
                         ]}
                       >
@@ -8864,6 +8870,74 @@ export default function ChatPage() {
     </OriaThemeContext.Provider>
   );
 }
+
+
+// Mini-studio mobile (Image/Vidéo), découplé du Chat et du backend.
+const studioStyles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: "#f8f8fa" },
+  screenDark: { backgroundColor: "#101012" },
+  scrollBody: { width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 16, paddingTop: 17, paddingBottom: 38 },
+  headingRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 19 },
+  headingText: { flex: 1 },
+  studioBrandRow: { flexDirection: "row", alignItems: "center", gap: 9 },
+  headingTitle: { fontSize: 24, lineHeight: 31, fontWeight: "800", color: "#171823", letterSpacing: -0.6 },
+  headingSubtitle: { fontSize: 12, color: "#777783", marginTop: 5, lineHeight: 17 },
+  closeButton: { padding: 10, borderRadius: 14, borderWidth: 1, borderColor: "#e1e1e8", backgroundColor: "#ffffff" },
+  visualRow: { flexDirection: "row", gap: 10, marginBottom: 15 },
+  visualCard: { flex: 1, minWidth: 0, height: 168, borderRadius: 19, overflow: "hidden", borderWidth: 2, borderColor: "transparent", backgroundColor: "#292936" },
+  visualCardSelected: { borderColor: "#6962ec" },
+  visualImage: { flex: 1, justifyContent: "flex-end" },
+  visualImageCorners: { borderRadius: 16 },
+  visualCaption: { backgroundColor: "rgba(0,0,0,0.70)", paddingHorizontal: 11, paddingTop: 11, paddingBottom: 10, minHeight: 88 },
+  visualLabelRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  visualTitle: { color: "#ffffff", fontSize: 17, lineHeight: 23, fontWeight: "800", flex: 1 },
+  visualDescription: { marginTop: 3, color: "#efeff2", fontSize: 10, lineHeight: 13 },
+  visualAvailability: { marginTop: 4, color: "#d5d5de", fontSize: 9, lineHeight: 12 },
+  notice: { padding: 13, borderRadius: 14, borderWidth: 1, borderColor: "#dedee5", backgroundColor: "#ffffff", flexDirection: "row", alignItems: "center", gap: 11, marginBottom: 14 },
+  noticeText: { flex: 1 },
+  noticeHeading: { color: "#22222b", fontSize: 12, fontWeight: "700", marginBottom: 3 },
+  loadingLine: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 13 },
+  emptyHint: { marginBottom: 13 },
+  formCard: { borderRadius: 22, borderWidth: 1, borderColor: "#e8e8ee", backgroundColor: "#ffffff", padding: 16, gap: 0 },
+  formHeadingRow: { flexDirection: "row", alignItems: "center", gap: 11, marginBottom: 20 },
+  formIcon: { height: 42, width: 42, borderRadius: 13, backgroundColor: "#eeeeff", alignItems: "center", justifyContent: "center" },
+  formHeadingText: { flex: 1 },
+  formTitle: { fontSize: 16, fontWeight: "800", color: "#171823", marginBottom: 3 },
+  mutedText: { fontSize: 11, lineHeight: 16, color: "#797984" },
+  fieldLabel: { fontSize: 12, lineHeight: 17, fontWeight: "700", color: "#252531", marginBottom: 8 },
+  promptInput: { minHeight: 122, maxHeight: 240, borderWidth: 1, borderColor: "#d9d9e2", backgroundColor: "#ffffff", borderRadius: 13, padding: 12, fontSize: 13, lineHeight: 20, color: "#24242e", marginBottom: 16 },
+  promptInputDark: { backgroundColor: "#212126", borderColor: "#3c3c46", color: "#f5f5f6" },
+  configBox: { borderWidth: 1, borderColor: "#e1e1e8", borderRadius: 15, padding: 12, marginBottom: 15 },
+  configBoxDark: { borderColor: "#3d3d46" },
+  configHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  configHeaderText: { flex: 1 },
+  configLabel: { marginBottom: 5 },
+  selectedConfigName: { fontSize: 13, fontWeight: "700", marginBottom: 5, color: "#292932" },
+  changeConfigButton: { paddingHorizontal: 9, paddingVertical: 8, borderWidth: 1, borderRadius: 10, borderColor: "#dadbe4", flexDirection: "row", alignItems: "center", gap: 4 },
+  changeConfigDark: { borderColor: "#555560" },
+  changeConfigText: { fontSize: 11, color: "#33333b", fontWeight: "600" },
+  optionList: { paddingTop: 12, gap: 7 },
+  optionItem: { padding: 11, borderWidth: 1, borderColor: "#e0e0e7", borderRadius: 10, flexDirection: "row", alignItems: "center" },
+  optionSelected: { borderColor: "#7066e6", backgroundColor: "#f6f5ff" },
+  optionDark: { backgroundColor: "#22222a", borderColor: "#444450" },
+  optionSelectedDark: { backgroundColor: "#2c2946", borderColor: "#a6a0ff" },
+  optionLabelWrap: { flex: 1 },
+  optionName: { fontSize: 12, fontWeight: "700", color: "#2b2b35", marginBottom: 4 },
+  creditsBox: { padding: 13, backgroundColor: "#ecf2ff", borderRadius: 13, marginBottom: 16 },
+  creditsBoxDark: { backgroundColor: "#262b3b" },
+  creditsTitleRow: { flexDirection: "row", alignItems: "center", gap: 7, marginBottom: 7 },
+  creditsTitle: { fontSize: 12, fontWeight: "700", color: "#3b55bf" },
+  creditsText: { fontSize: 11, color: "#596579", marginBottom: 4 },
+  creditsNote: { fontSize: 10, color: "#687286", lineHeight: 15 },
+  errorText: { backgroundColor: "#fff2f2", borderRadius: 10, padding: 10, color: "#bd2525", fontSize: 11, marginBottom: 14 },
+  submitButton: { minHeight: 47, borderRadius: 13, backgroundColor: "#111118", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  submitDisabled: { opacity: 0.36 },
+  submitText: { fontSize: 13, fontWeight: "700", color: "#ffffff" },
+  emptyForm: { minHeight: 85, alignItems: "center", justifyContent: "center", gap: 9 },
+  surfaceDark: { backgroundColor: "#1d1d22", borderColor: "#36363d" },
+  textLight: { color: "#f5f5f8" },
+  textMutedDark: { color: "#aaaab7" },
+});
 
 const baseStyles = StyleSheet.create({
   safe: {

@@ -4135,6 +4135,28 @@ export default function ChatPage() {
   const [mediaMenuOpen, setMediaMenuOpen] =
     useState(false);
 
+  // Le mini-studio ne crée aucun nouveau paramètre backend : il expose
+  // uniquement les actions connues de /ai/media-capabilities.
+  const [studioShowOtherConfigurations, setStudioShowOtherConfigurations] =
+    useState(false);
+
+  useEffect(() => {
+    if (activeCapability !== "Création") return;
+    const oldOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isThinking) {
+        setActiveCapability(null);
+        setStudioShowOtherConfigurations(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = oldOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [activeCapability, isThinking]);
+
   // Ajouts Chat Web : lecteur source, images de recherche, notes vocales.
   const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
   const [webImagesByMessage, setWebImagesByMessage] = useState<Record<string, WebIllustration[]>>({});
@@ -5503,6 +5525,7 @@ export default function ChatPage() {
     if (label === "Création") {
       setActiveCapability("Création");
       setMediaMenuOpen(true);
+      setStudioShowOtherConfigurations(false);
       setError(null);
       void loadMediaCapabilities();
     }
@@ -6009,6 +6032,8 @@ export default function ChatPage() {
 
       setMediaPrompt("");
       setMediaMenuOpen(false);
+      setStudioShowOtherConfigurations(false);
+      setActiveCapability(null);
 
       const refreshedTrials =
         await loadTrials();
@@ -7275,6 +7300,19 @@ export default function ChatPage() {
       ? wallet.balance
       : 0;
 
+  // Toutes les configurations proviennent de la liste autorisée par l'API.
+  // Le frontend n'invente ni format, ni durée, ni montant de crédits.
+  const studioSelected = mediaCapabilities.find(
+    (item) => item.action === selectedMediaAction,
+  ) ?? null;
+  const studioSelectedConfig = studioSelected
+    ? getMediaGenerationConfig(studioSelected.action)
+    : null;
+  const studioConfigurations = studioSelected
+    ? mediaCapabilities.filter((item) => item.type === studioSelected.type)
+    : [];
+  const studioEstimate = studioSelected?.estimated_credits ?? studioSelected?.credits;
+
   /*
    * ==========================================================
    * AFFICHAGE
@@ -7284,6 +7322,256 @@ export default function ChatPage() {
   return (
     <main className="min-h-dvh overflow-hidden bg-background text-foreground">
       {codePreview ? <CodePreviewModal preview={codePreview} onClose={() => setCodePreview(null)} language={language}/> : null}
+      {activeCapability === "Création" && (
+        <div
+          className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/65 px-3 py-4 backdrop-blur-sm sm:items-center sm:px-6 sm:py-8"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !isThinking) {
+              setActiveCapability(null);
+              setStudioShowOtherConfigurations(false);
+            }
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="oria-studio-title"
+            className="w-full max-w-[1060px] rounded-[28px] border border-border bg-background p-4 shadow-2xl sm:p-6 lg:p-7"
+          >
+            <div className="mb-5 flex items-start justify-between gap-3 sm:mb-6">
+              <div className="flex items-center gap-3">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-surface-tertiary text-foreground">
+                  <Sparkles size={22} />
+                </span>
+                <div>
+                  <h2 id="oria-studio-title" className="text-xl font-semibold tracking-tight sm:text-2xl">
+                    {language === "fr" ? "Créer avec ORIA" : "Create with ORIA"}
+                  </h2>
+                  <p className="mt-1 text-xs text-muted sm:text-sm">
+                    {language === "fr" ? "Donnez vie à vos idées, en toute simplicité." : "Bring your ideas to life, simply."}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isThinking}
+                onClick={() => {
+                  setActiveCapability(null);
+                  setStudioShowOtherConfigurations(false);
+                }}
+                className="rounded-xl border border-border p-2.5 text-muted hover:bg-surface-secondary hover:text-foreground disabled:opacity-40"
+                aria-label={UI[language].closeMediaCreation}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid gap-5 lg:grid-cols-[0.91fr_1.09fr] lg:items-start">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1" aria-label={language === "fr" ? "Type de création" : "Creation type"}>
+                {(["image", "video"] as const).map((type) => {
+                  const options = mediaCapabilities.filter((item) => item.type === type);
+                  const selected = studioSelected?.type === type;
+                  const noAccess = options.length === 0;
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      disabled={noAccess || isThinking || isLoadingMediaCapabilities}
+                      onClick={() => {
+                        setSelectedMediaAction(options[0].action);
+                        setStudioShowOtherConfigurations(false);
+                        setError(null);
+                      }}
+                      className={`group relative min-h-[166px] overflow-hidden rounded-[20px] border text-left shadow-sm transition sm:min-h-[196px] lg:min-h-[211px] ${
+                        selected ? "border-2 border-accent ring-2 ring-accent/15" : "border-border hover:border-muted-strong"
+                      } disabled:cursor-not-allowed`}
+                      aria-pressed={selected}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className="absolute inset-0 bg-cover bg-center transition-transform duration-500 group-hover:scale-[1.03]"
+                        style={{ backgroundImage: `url('/oria/oria-mini-studio-${type}.webp')` }}
+                      />
+                      <span aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-black/0" />
+                      <span className="absolute inset-x-4 bottom-4 flex items-end justify-between gap-2 text-white">
+                        <span className="flex min-w-0 flex-col gap-1">
+                          <span className="flex items-center gap-2 text-lg font-semibold">
+                            {type === "image" ? <ImageIcon size={19}/> : <Video size={19}/>}
+                            {type === "image" ? UI[language].generateImage : UI[language].generateVideo}
+                          </span>
+                          <span className="text-[11px] leading-4 text-white/85">
+                            {type === "image"
+                              ? (language === "fr" ? "Visuels, photos, affiches et idées créatives." : "Visuals, photos, posters and creative ideas.")
+                              : (language === "fr" ? "Scènes, mouvements et créations vidéo." : "Scenes, motion and video creations.")}
+                          </span>
+                          <span className="mt-1 text-[10px] text-white/80">
+                            {isLoadingMediaCapabilities
+                              ? (language === "fr" ? "Chargement des options…" : "Loading options…")
+                              : noAccess
+                                ? (language === "fr" ? "Indisponible avec votre pack" : "Not available with your pack")
+                                : `${options.length} ${options.length > 1 ? UI[language].configurations : UI[language].configuration}`}
+                          </span>
+                        </span>
+                        {selected && <Check size={19} className="shrink-0" />}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="min-w-0 rounded-[22px] border border-border bg-surface p-4 shadow-sm sm:p-5">
+                {studioSelected ? (
+                  <>
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-surface-tertiary">
+                        {studioSelected.type === "image" ? <ImageIcon size={19}/> : <Video size={19}/>}
+                      </span>
+                      <div>
+                        <h3 className="text-base font-semibold">
+                          {studioSelected.type === "image"
+                            ? (language === "fr" ? "Générer une image" : "Generate an image")
+                            : (language === "fr" ? "Générer une vidéo" : "Generate a video")}
+                        </h3>
+                        <p className="mt-0.5 text-xs text-muted">
+                          {language === "fr" ? "Décrivez votre idée puis choisissez une option disponible." : "Describe your idea and choose an available option."}
+                        </p>
+                      </div>
+                    </div>
+
+                    <label htmlFor="oria-studio-prompt" className="mt-5 block text-xs font-semibold">
+                      {studioSelected.type === "image"
+                        ? (language === "fr" ? "Décrivez votre image" : "Describe your image")
+                        : (language === "fr" ? "Décrivez votre vidéo" : "Describe your video")}
+                    </label>
+                    <textarea
+                      id="oria-studio-prompt"
+                      rows={4}
+                      value={mediaPrompt}
+                      onChange={(event) => setMediaPrompt(event.target.value)}
+                      placeholder={studioSelected.type === "video" ? UI[language].preciseVideo : UI[language].preciseImage}
+                      disabled={isThinking || !wallet?.is_pack_active || isLoadingMediaCapabilities}
+                      onKeyDown={(event) => {
+                        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                          event.preventDefault();
+                          void handleGenerateMedia();
+                        }
+                      }}
+                      className="mt-2 w-full resize-y rounded-2xl border border-border bg-background px-3.5 py-3 text-sm leading-6 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
+                    />
+
+                    <div className="mt-4 rounded-2xl border border-border p-3.5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold">{UI[language].generationConfiguration}</p>
+                          <p className="mt-1 text-sm font-medium">
+                            {studioSelectedConfig ? getMediaLabel(studioSelected.action, language, studioSelectedConfig.label) : studioSelected.action}
+                          </p>
+                          <p className="mt-1 text-[11px] leading-5 text-muted">
+                            {studioSelectedConfig?.configuration}
+                            {studioSelected.model ? ` · ${studioSelected.model}` : studioSelectedConfig ? ` · ${studioSelectedConfig.model}` : ""}
+                          </p>
+                        </div>
+                        {studioConfigurations.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setStudioShowOtherConfigurations((current) => !current)}
+                            disabled={isThinking}
+                            className="flex shrink-0 items-center gap-1 rounded-xl border border-border px-2.5 py-2 text-[11px] font-medium hover:bg-surface-secondary disabled:opacity-40"
+                            aria-expanded={studioShowOtherConfigurations}
+                          >
+                            {language === "fr" ? "Changer" : "Change"}
+                            <ChevronDown size={14} className={studioShowOtherConfigurations ? "rotate-180" : ""}/>
+                          </button>
+                        )}
+                      </div>
+                      {studioShowOtherConfigurations && studioConfigurations.length > 1 && (
+                        <div className="mt-3 grid max-h-44 gap-2 overflow-y-auto border-t border-border pt-3">
+                          {studioConfigurations.map((item) => {
+                            const config = getMediaGenerationConfig(item.action);
+                            return (
+                              <button
+                                type="button"
+                                key={item.action}
+                                aria-pressed={item.action === selectedMediaAction}
+                                onClick={() => setSelectedMediaAction(item.action)}
+                                className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left text-xs transition ${item.action === selectedMediaAction ? "border-border-strong bg-surface-tertiary" : "border-border hover:bg-surface-secondary"}`}
+                              >
+                                <span>
+                                  <span className="block font-semibold">{config ? getMediaLabel(item.action, language, config.label) : item.action}</span>
+                                  <span className="mt-1 block text-[11px] text-muted">{config?.configuration}</span>
+                                </span>
+                                {item.action === selectedMediaAction && <Check size={15} className="shrink-0"/>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 rounded-2xl bg-surface-secondary px-3.5 py-3">
+                      <div className="flex items-center gap-2 text-xs font-semibold">
+                        <Wallet size={15} />
+                        {language === "fr" ? "Crédits et facturation" : "Credits and billing"}
+                      </div>
+                      <p className="mt-1 text-xs text-muted">
+                        {studioEstimate != null
+                          ? `${language === "fr" ? "Réservation estimée" : "Estimated reservation"} : ${studioEstimate.toLocaleString(language === "fr" ? "fr-FR" : "en-US")} ${UI[language].creditsUnit}`
+                          : (language === "fr" ? "Coût dynamique : estimation indisponible pour cette option." : "Dynamic cost: no estimate available for this option.")}
+                      </p>
+                      <p className="mt-1 text-[11px] leading-4 text-muted">{UI[language].backendValidation}</p>
+                    </div>
+
+                    {error && (
+                      <p role="alert" className="mt-3 rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+                        {localizeFrontendError(error, language)}
+                      </p>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={!mediaPrompt.trim() || !wallet?.is_pack_active || isThinking || isLoadingMediaCapabilities || !studioSelected}
+                      onClick={() => void handleGenerateMedia()}
+                      className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {isThinking ? <Loader2 size={17} className="animate-spin" /> : <Sparkles size={17} />}
+                      {isThinking
+                        ? UI[language].generation
+                        : studioSelected.type === "image"
+                          ? UI[language].generateTheImage
+                          : UI[language].generateTheVideo}
+                    </button>
+                    <p className="mt-2 text-center text-[10px] text-muted">
+                      {language === "fr" ? "Une génération utilise les crédits de votre pack." : "A generation uses credits from your pack."}
+                    </p>
+                  </>
+                ) : (
+                  <div className="flex min-h-64 flex-col items-center justify-center gap-3 text-center">
+                    {isLoadingMediaCapabilities ? <Loader2 size={25} className="animate-spin text-muted"/> : <Sparkles size={26} className="text-muted"/>}
+                    <p className="text-sm font-semibold">
+                      {isLoadingMediaCapabilities
+                        ? (language === "fr" ? "Chargement des créations disponibles…" : "Loading available creations…")
+                        : (language === "fr" ? "Aucune création disponible" : "No creation available")}
+                    </p>
+                    <p className="max-w-sm text-xs leading-5 text-muted">
+                      {language === "fr" ? "Les options dépendent de votre pack actif et des capacités annoncées par ORIA." : "Options depend on your active plan and the capabilities returned by ORIA."}
+                    </p>
+                    {!wallet?.is_pack_active ? (
+                      <Link href="/credits" className="rounded-xl bg-accent px-4 py-2.5 text-xs font-semibold text-accent-foreground">
+                        {language === "fr" ? "Voir les packs" : "View plans"}
+                      </Link>
+                    ) : !isLoadingMediaCapabilities ? (
+                      <button type="button" onClick={() => void loadMediaCapabilities()} className="rounded-xl border border-border px-4 py-2.5 text-xs font-medium hover:bg-surface-secondary">
+                        {language === "fr" ? "Actualiser les options" : "Refresh options"}
+                      </button>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
       {sidebarOpen && (
         <button
           type="button"
@@ -8306,210 +8594,8 @@ export default function ChatPage() {
               </div>
             )}
 
-            {activeCapability === "Création" && (
-  <div className="mx-auto mt-3 w-full max-w-3xl rounded-2xl border border-border bg-surface p-4 shadow-sm">
-    <div className="flex items-start justify-between gap-4">
-      <div>
-        <p className="text-sm font-medium">{UI[language].mediaCreation}</p>
-        <p className="mt-1 text-[11px] text-muted">
-          {UI[language].mediaCreationDescription}
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={() => {
-          setActiveCapability(null);
-          setSelectedMediaAction("");
-          setMediaPrompt("");
-        }}
-        className="rounded-lg p-2 text-muted hover:bg-surface-tertiary hover:text-foreground"
-        aria-label={UI[language].closeMediaCreation}
-      >
-        <X size={16} />
-      </button>
-    </div>
-
-    <div className="mt-4 grid grid-cols-2 gap-3">
-      {(["image", "video"] as const).map((type) => {
-        // Une catégorie absente de la réponse serveur reste indisponible.
-        const selectable = mediaCapabilities.filter((item) => item.type === type);
-
-        const selectedType = selectedMediaAction
-          ? mediaCapabilities.find(
-              (item) => item.action === selectedMediaAction,
-            )?.type ??
-            getMediaGenerationConfig(selectedMediaAction)?.type
-          : undefined;
-
-        return (
-          <button
-            key={type}
-            type="button"
-            disabled={selectable.length === 0}
-            onClick={() => {
-              if (selectable.length > 0) {
-                setSelectedMediaAction(selectable[0].action);
-                setError(null);
-              }
-            }}
-            className={`flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border px-4 py-3 text-sm font-medium transition ${
-              selectedType === type
-                ? "border-border-strong bg-surface-tertiary"
-                : "border-border hover:bg-surface-secondary"
-            } disabled:cursor-not-allowed disabled:opacity-40`}
-          >
-            {type === "image" ? <ImageIcon size={22} /> : <Video size={22} />}
-            <span>{type === "image" ? UI[language].generateImage : UI[language].generateVideo}</span>
-            <span className="text-[10px] font-normal text-muted">
-              {selectable.length} {selectable.length > 1 ? UI[language].configurations : UI[language].configuration}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-
-    {selectedMediaAction && (
-      <>
-        <div className="mt-4">
-          <p className="mb-2 text-[11px] font-medium text-muted">
-            {UI[language].generationConfiguration}
-          </p>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {(() => {
-              const selectedType =
-                mediaCapabilities.find(
-                  (item) => item.action === selectedMediaAction,
-                )?.type ??
-                getMediaGenerationConfig(selectedMediaAction)?.type;
-
-              const configurations = mediaCapabilities.filter(
-                (item) => item.type === selectedType,
-              );
-
-              return configurations.map((media) => {
-                const config = getMediaGenerationConfig(media.action);
-                if (!config) return null;
-
-                const selected = selectedMediaAction === media.action;
-
-                return (
-                  <button
-                    key={media.action}
-                    type="button"
-                    onClick={() => setSelectedMediaAction(media.action)}
-                    className={`rounded-xl border px-3 py-3 text-left transition ${
-                      selected
-                        ? "border-border-strong bg-surface-tertiary"
-                        : "border-border hover:bg-surface-secondary"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">{getMediaLabel(config.action, language, config.label)}</p>
-                        <p className="mt-1 text-[11px] text-muted">
-                          {getMediaDescription(config.action, language, config.description)}
-                        </p>
-                      </div>
-                      {selected && <Check size={15} className="shrink-0" />}
-                    </div>
-                    <div className="mt-3 flex items-center justify-between gap-3 text-[10px] text-muted">
-                      <span>{config.configuration}</span>
-                      <span className="text-right">{media.model || config.model}</span>
-                    </div>
-                    {(media.estimated_credits ?? media.credits) != null && (
-                      <p className="mt-1 text-[10px] text-muted">
-                        {language === "en" ? "Estimated reservation" : "Réservation estimée"} :{" "}
-                        {(media.estimated_credits ?? media.credits)!.toLocaleString(
-                          language === "en" ? "en-US" : "fr-FR",
-                        )}{" "}
-                        {UI[language].creditsUnit}
-                      </p>
-                    )}
-                  </button>
-                );
-              });
-            })()}
-          </div>
-        </div>
-
-        <textarea
-          rows={4}
-          value={mediaPrompt}
-          onChange={(event) => setMediaPrompt(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void handleGenerateMedia();
-            }
-          }}
-          placeholder={
-            (
-              mediaCapabilities.find(
-                (item) => item.action === selectedMediaAction,
-              )?.type ??
-              getMediaGenerationConfig(selectedMediaAction)?.type
-            ) === "video"
-              ? UI[language].preciseVideo
-              : UI[language].preciseImage
-          }
-          disabled={isThinking || isLoadingMediaCapabilities || !wallet?.is_pack_active}
-          className="mt-4 w-full resize-none rounded-xl border border-border bg-transparent px-4 py-3 text-sm leading-6 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
-        />
-
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            {(() => {
-              const selected = mediaCapabilities.find(
-                (item) => item.action === selectedMediaAction,
-              );
-              const estimate = selected?.estimated_credits ?? selected?.credits;
-
-              return (
-                <>
-                  <p className="text-[10px] text-muted">
-                    {estimate != null
-                      ? `${language === "en" ? "Estimated reservation" : "Réservation estimée"} : ${estimate.toLocaleString(language === "en" ? "en-US" : "fr-FR")} ${UI[language].creditsUnit}`
-                      : language === "en"
-                        ? "Dynamic cost · calculated from actual API usage"
-                        : "Coût dynamique · calculé selon l'utilisation réelle de l'API"}
-                  </p>
-                  <p className="mt-0.5 text-[10px] text-muted">
-                    {UI[language].backendValidation}
-                  </p>
-                </>
-              );
-            })()}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => void handleGenerateMedia()}
-            disabled={
-              !mediaPrompt.trim() ||
-              !selectedMediaAction ||
-              !wallet?.is_pack_active ||
-              isLoadingMediaCapabilities ||
-              isThinking
-            }
-            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-accent px-5 py-3 text-xs font-semibold text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
-          >
-            <Sparkles size={15} />
-            {isThinking
-              ? UI[language].generation
-              : (
-                  mediaCapabilities.find(
-                    (item) => item.action === selectedMediaAction,
-                  )?.type ??
-                  getMediaGenerationConfig(selectedMediaAction)?.type
-                ) === "video"
-                ? UI[language].generateTheVideo
-                : UI[language].generateTheImage}
-          </button>
-        </div>
-      </>
-    )}
-  </div>
-)}
+            {/* Le mini-studio Création est affiché dans sa fenêtre dédiée plus haut.
+                Le Chat et son composer restent inchangés sous la fenêtre. */}
 
             {activeCapability === "Cours" ? (
               <OriaCoursesPanel language={language} wallet={wallet} userId={currentUserId}
