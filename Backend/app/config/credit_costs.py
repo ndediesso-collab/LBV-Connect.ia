@@ -1,282 +1,142 @@
 from enum import Enum
 
-
-
 class ComplementaryCreditPack(str, Enum):
-
-
 
     CREDIT_1000 = "credit_1000"
 
-
-
     CREDIT_2000 = "credit_2000"
-
-
 
     CREDIT_4000 = "credit_4000"
 
-
-
     CREDIT_10000 = "credit_10000"
-
-
 
 class CreditAction(str, Enum):
 
-
-
     # ========================================================
-
-
 
     # CHAT — LUNA
 
-
-
     # ========================================================
-
-
 
     CHAT_LUNA = "chat_luna"
 
-
-
     CHAT_LUNA_WEB = "chat_luna_web"
 
-
-
     # ========================================================
-
-
 
     # CHAT — GPT-5
 
-
-
     # ========================================================
-
-
 
     CHAT_GPT5 = "chat_gpt5"
 
-
-
     CHAT_GPT5_WEB = "chat_gpt5_web"
 
-
-
     # ========================================================
-
-
 
     # CHAT — GPT-5.6 TERRA
 
-
-
     # ========================================================
-
-
 
     CHAT_TERRA = "chat_terra"
 
-
-
     CHAT_TERRA_WEB = "chat_terra_web"
 
-
-
     # ========================================================
-
-
 
     # CHAT — GPT-6 SOL
 
-
-
     # ========================================================
-
-
 
     CHAT_SOL = "chat_sol"
 
-
-
     CHAT_SOL_WEB = "chat_sol_web"
 
-
-
     # ========================================================
-
-
 
     # CHAT — GPT-6 ASTRA
 
-
-
     # ========================================================
-
-
 
     CHAT_ASTRA = "chat_astra"
 
-
-
     CHAT_ASTRA_WEB = "chat_astra_web"
 
-
-
     # ========================================================
-
-
 
     # IMAGES — PACK LÉGER
 
-
-
     # ========================================================
-
-
 
     IMAGE_480 = "image_480"
 
-
-
     IMAGE_720 = "image_720"
 
-
-
     # ========================================================
-
-
 
     # IMAGES — PACK PRO
 
-
-
     # ========================================================
-
-
 
     IMAGE_PRO = "image_pro"
 
-
-
     IMAGE_PRO_STANDARD = "image_pro_standard"
-
-
 
     IMAGE_PRO_ULTRA = "image_pro_ultra"
 
-
-
     # ========================================================
-
-
 
     # IMAGES — PACK BUSINESS
 
-
-
     # ========================================================
-
-
 
     IMAGE_BUSINESS = "image_business"
 
-
-
     IMAGE_BUSINESS_HD = "image_business_hd"
-
-
 
     IMAGE_BUSINESS_ULTRA = "image_business_ultra"
 
-
-
     # ========================================================
-
-
 
     # VIDÉOS — PACK LÉGER
 
-
-
     # ========================================================
-
-
 
     VIDEO_4S = "video_4s"
 
-
-
     VIDEO_8S = "video_8s"
 
-
-
     # ========================================================
-
-
 
     # VIDÉO — PACK INTERMÉDIAIRE
 
-
-
     # ========================================================
-
-
 
     VIDEO_LITE = "video_lite"
 
-
-
     # ========================================================
-
-
 
     # VIDÉO — PACK PRO
 
-
-
     # ========================================================
-
-
 
     VIDEO_PRO_FAST = "video_pro_fast"
 
-
-
     VIDEO_PRO_STANDARD = "video_pro_standard"
-
-
 
     VIDEO_PRO_EXTENSION = "video_pro_extension"
 
-
-
     # ========================================================
-
-
 
     # VIDÉO — PACK BUSINESS
 
-
-
     # ========================================================
-
-
 
     VIDEO_BUSINESS_FAST = "video_business_fast"
 
-
-
     VIDEO_BUSINESS_STANDARD = "video_business_standard"
 
-
-
     VIDEO_BUSINESS_LONG = "video_business_long"
-
-
 
     # ========================================================
 
@@ -287,7 +147,7 @@ class CreditAction(str, Enum):
     # L'audio est facture selon sa duree reelle dans audio_service.py.
     # Le tarif par minute est configure sur le serveur avec la variable
     # ORIA_AUDIO_CREDITS_PER_MINUTE (entier positif).
-    # Ne pas ajouter de cout fixe dans CREDIT_COSTS : la duree varie.
+    # Ne pas ajouter de forfait de transcription par action : la duree varie.
 
     AUDIO_TRANSCRIPTION = "audio_transcription"
 
@@ -299,83 +159,30 @@ class CreditAction(str, Enum):
     COURSE_TRANSCRIPTION = "course_transcription"
     COURSE_DOCUMENT_GENERATION = "course_document_generation"
 
-
-
 # ========================================================
-
-
 
 # COÛTS DE RÉFÉRENCE
 
-
-
 # ============================================================
 
-
-
 # ============================================================
-
-
 
 # FACTURATION DYNAMIQUE DU CHAT — RÉFÉRENCES ÉCONOMIQUES
 
-
-
 # ============================================================
 
-
-
 #
-
-
-
-# PHASE DE TRANSITION :
-
-
-
-# Ces constantes préparent le futur calcul :
-
-
-
-# usage OpenAI -> coût USD -> coût XAF -> crédits Oria.
-
-
-
-#
-
-
-
-# Elles ne remplacent PAS encore CREDIT_COSTS dans le backend actuel.
-
-
-
-# Les coûts fixes CHAT_\\\\\\* restent actifs jusqu'au branchement complet
-
-
-
-# via token_billing_service.py + reserve/settle.
-
-
-
-#
-
-
+# Calcul economique : usage OpenAI -> USD -> XAF -> credits ORIA.
+# Les prix ci-dessous sont des TARIFS UNITAIRES, jamais des forfaits fixes
+# par appel. Les usages doivent etre mesures et factures par les services.
 
 ORIA_CREDIT_VALUE_XAF = 0.10
 
-
-
 ACCOUNTING_USD_XAF = 600.0
-
-
 
 PACK_API_SAFETY_RESERVE_RATIO = 0.20
 
-
-
 MAX_CHAT_INPUT_TOKENS = 250_000
-
-
 
 MAX_CHAT_OUTPUT_TOKENS = 32_000
 
@@ -385,27 +192,15 @@ MAX_CHAT_OUTPUT_TOKENS = 32_000
 # Ne change pas la limite de 32 000 tokens du Chat général.
 COURSE_MAX_OUTPUT_TOKENS = 12_288
 
-
-
 LONG_CONTEXT_THRESHOLD_TOKENS = 272_000
-
-
 
 MAX_WEB_SEARCH_CALLS_PER_ACTION = 3
 
-
-
 # 10 USD / 1 000 appels = 0,01 USD par recherche Web.
-
-
 
 WEB_SEARCH_COST_USD_PER_CALL = 0.01
 
-
-
 # Tarifs Standard OpenAI en USD par million de tokens.
-
-
 
 MODEL_TOKEN_PRICING_USD_PER_MILLION = {
     "luna": {
@@ -442,31 +237,17 @@ MODEL_TOKEN_PRICING_USD_PER_MILLION = {
 
 # Soldes cibles à activer UNIQUEMENT avec la facturation dynamique.
 
-
-
 TARGET_PACK_CREDITS = {
-
-
 
     "light": 15_000,
 
-
-
     "intermediate": 27_000,
-
-
 
     "pro": 36_000,
 
-
-
     "business": 120_000,
 
-
-
 }
-
-
 
 # ============================================================
 
@@ -498,15 +279,11 @@ TARGET_PACK_CREDITS = {
 
 # Les tarifs ci-dessous sont des références API en USD ; la conversion
 
-# en crédits est effectuée par le futur media_billing_service.py.
+# en crédits est effectuée par le service de facturation correspondant.
 
 #
 
-
-
 MEDIA_PRICING_REFERENCE_DATE = "2026-09-25"
-
-
 
 # ------------------------------------------------------------
 
@@ -529,8 +306,6 @@ MEDIA_PRICING_REFERENCE_DATE = "2026-09-25"
 #   ces modèles sans modifier les routes ni la logique de facturation.
 
 #
-
-
 
 IMAGE_MODEL_BY_PACK: dict[str, str] = {
     "light_pack": "gpt-image-2",
@@ -608,7 +383,8 @@ IMAGE_REFERENCE_OUTPUT_COST_USD_1024_SQUARE = {
 # VIDÉO — OPENAI / SORA 2
 # ------------------------------------------------------------
 #
-# Oria conserve OpenAI comme fournisseur vidéo.
+# Les routes historiques /ai/video utilisent encore OpenAI.
+# Le nouveau Mini-Studio /ai/google-media/video utilise Google.
 # Sora 2 / Sora 2 Pro sont classés Legacy par OpenAI : mapping centralisé
 # afin de permettre une migration rapide dès qu'un successeur est publié.
 #
@@ -652,473 +428,35 @@ VIDEO_ACTION_DURATION_SECONDS: dict[CreditAction, int | None] = {
     CreditAction.VIDEO_BUSINESS_LONG: 12,
 }
 
-# LEGACY / TRANSITION :
-
-
-
-# Les coûts CHAT_\\\\\\* ci-dessous restent actifs uniquement jusqu'à la migration
-
-
-
-# du routeur vers le futur token_billing_service.py.
-
-
-
-CREDIT_COSTS: dict[CreditAction, int] = {
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # LUNA
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # GPT-5
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # TERRA
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # SOL
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # ASTRA
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # IMAGES — LÉGER
-
-
-
-    # --------------------------------------------------------
-
-
-
-    CreditAction.IMAGE_480: 50,
-
-
-
-    CreditAction.IMAGE_720: 75,
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # VIDÉOS — LÉGER
-
-
-
-    # --------------------------------------------------------
-
-
-
-    CreditAction.VIDEO_4S: 500,
-
-
-
-    CreditAction.VIDEO_8S: 1_000,
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # VIDÉO — INTERMÉDIAIRE
-
-
-
-    # --------------------------------------------------------
-
-
-
-    CreditAction.VIDEO_LITE: 1_500,
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # IMAGES — PRO
-
-
-
-    # --------------------------------------------------------
-
-
-
-    CreditAction.IMAGE_PRO: 100,
-
-
-
-    CreditAction.IMAGE_PRO_STANDARD: 180,
-
-
-
-    CreditAction.IMAGE_PRO_ULTRA: 270,
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # VIDÉOS — PRO
-
-
-
-    # --------------------------------------------------------
-
-
-
-    CreditAction.VIDEO_PRO_FAST: 1_500,
-
-
-
-    CreditAction.VIDEO_PRO_STANDARD: 3_000,
-
-
-
-    CreditAction.VIDEO_PRO_EXTENSION: 1_500,
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # IMAGES — BUSINESS
-
-
-
-    # À RECALCULER AVEC LES COÛTS API RÉELS
-
-
-
-    # --------------------------------------------------------
-
-
-
-    CreditAction.IMAGE_BUSINESS: 250,
-
-
-
-    CreditAction.IMAGE_BUSINESS_HD: 400,
-
-
-
-    CreditAction.IMAGE_BUSINESS_ULTRA: 600,
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # VIDÉOS — BUSINESS
-
-
-
-    # À RECALCULER AVEC LES COÛTS API RÉELS
-
-
-
-    # --------------------------------------------------------
-
-
-
-    CreditAction.VIDEO_BUSINESS_FAST: 2_500,
-
-
-
-    CreditAction.VIDEO_BUSINESS_STANDARD: 5_000,
-
-
-
-    CreditAction.VIDEO_BUSINESS_LONG: 10_000,
-
-
-
-}
-
-
 
 # ============================================================
-
-
-
-# SUPPLÉMENTS D'ANALYSE MULTIMODALE
-
-
-
+# FACTURATION DES ACTIONS IA : UNIQUEMENT DYNAMIQUE
 # ============================================================
-
-
-
-#
-
-
-
-# Ces coûts NE remplacent PAS le coût du chat.
-
-
-
-# Ils sont ajoutés au coût de base du modèle.
-
-
-
-#
-
-
-
-# Maximum frontend prévu : 3 images/fichiers par message.
-
-
-
-#
-
-
-
-# LEGACY / TRANSITION :
-
-
-
-# À remplacer plus tard par l'impact réel sur l'usage/tokenisation.
-
-
-
-IMAGE_ANALYSIS_COSTS: dict[CreditAction, int] = {
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # LUNA
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # GPT-5
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # TERRA
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # SOL
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # ASTRA
-
-
-
-    # --------------------------------------------------------
-
-
-
-}
-
-
-
-# LEGACY / TRANSITION :
-
-
-
-# À remplacer plus tard par l'impact réel sur l'usage/tokenisation.
-
-
-
-FILE_ANALYSIS_COSTS: dict[CreditAction, int] = {
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # LUNA
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # GPT-5
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # TERRA
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # SOL
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # --------------------------------------------------------
-
-
-
-    # ASTRA
-
-
-
-    # --------------------------------------------------------
-
-
-
-}
-
-
-
-# ============================================================
-
-
-
-# LIMITES MULTIMODALES
-
-
-
-# ============================================================
-
-
+# Aucun montant fixe en credits n'est attribue ici a une action image,
+# video, document, audio ou Chat.
+# OpenAI : la consommation reelle de tokens et les prix unitaires du modele
+# sont traites par TokenBillingService / MediaBillingService.
+# Google : les devis et le reglement utilisent la grille Google ci-dessous
+# et les informations d'usage renvoyees par le fournisseur.
+# Les anciennes actions CreditAction restent des identifiants d'API,
+# d'historique et d'autorisations, PAS des prix.
+# Ne pas reintroduire de bareme forfaitaire en credits par action.
+# Le plafond API par pack est COMMUN aux deux fournisseurs. Son application
+# effective necessite un controle atomique du budget dans Supabase.
 
 MAX_MULTIMODAL_ATTACHMENTS = 3
 
-
-
 # ============================================================
-
-
 
 # PACK LÉGER
 
-
-
 # ============================================================
 
-
-
 # ------------------------------------------------------------
-
-
 
 # SOLDES ACTIFS — FACTURATION DYNAMIQUE DU CHAT
 
-
-
 # ------------------------------------------------------------
-
-
 
 # Cibles actives :
 
@@ -1131,196 +469,101 @@ MAX_MULTIMODAL_ATTACHMENTS = 3
 
 #
 
-# Budgets API conservés :
+# Plafonds API communs OpenAI + Google (par pack) :
 
 #   2_500 / 4_500 / 6_000 / 20_000 XAF
 
-
-
 #
-
-
 
 LIGHT_PACK_CREDITS = 15_000
 
-
-
 LIGHT_PACK_PRICE_XAF = 4_000
-
-
 
 LIGHT_PACK_DURATION_DAYS = 35
 
-
-
 LIGHT_PACK_API_BUDGET_XAF = 2_500
 
-
-
 # ============================================================
-
-
 
 # PACK INTERMÉDIAIRE
 
-
-
 # ============================================================
-
-
-
 
 INTERMEDIATE_PACK_CREDITS = 27_000
 
-
-
 INTERMEDIATE_PACK_PRICE_XAF = 8_000
-
-
 
 INTERMEDIATE_PACK_DURATION_DAYS = 35
 
-
-
 INTERMEDIATE_PACK_API_BUDGET_XAF = 4_500
 
-
-
 # ============================================================
-
-
 
 # PACK PRO
 
-
-
 # ============================================================
-
-
 
 PRO_PACK_CREDITS = 36_000
 
-
-
 PRO_PACK_PRICE_XAF = 12_000
-
-
 
 PRO_PACK_DURATION_DAYS = 35
 
-
-
 PRO_PACK_API_BUDGET_XAF = 6_000
 
-
-
 # ============================================================
-
-
 
 # PACK BUSINESS
 
-
-
 # ============================================================
-
-
 
 BUSINESS_PACK_CREDITS = 120_000
 
-
-
 BUSINESS_PACK_PRICE_XAF = 45_000
-
-
 
 BUSINESS_PACK_DURATION_DAYS = 35
 
-
-
 BUSINESS_PACK_API_BUDGET_XAF = 20_000
 
-
-
 # ============================================================
-
-
 
 # PACKS DE CRÉDITS COMPLÉMENTAIRES
 
-
-
 # ============================================================
-
-
 
 COMPLEMENTARY_CREDIT_PACKS = {
 
-
-
     ComplementaryCreditPack.CREDIT_1000: {
-
-
 
         "credits": 1_000,
 
-
-
         "price_xaf": 563,
 
-
-
     },
-
-
 
     ComplementaryCreditPack.CREDIT_2000: {
 
-
-
         "credits": 2_000,
-
-
 
         "price_xaf": 1_000,
 
-
-
     },
-
-
 
     ComplementaryCreditPack.CREDIT_4000: {
 
-
-
         "credits": 4_000,
-
-
 
         "price_xaf": 2_000,
 
-
-
     },
-
-
 
     ComplementaryCreditPack.CREDIT_10000: {
 
-
-
         "credits": 10_000,
-
-
 
         "price_xaf": 5_000,
 
-
-
     },
-
-
 
 }
 
@@ -1645,13 +888,14 @@ def build_course_credit_quote(
     )
 
 # ============================================================
-# GOOGLE — CONFIGURATION MEDIA ET TARIFS (ETAPE 1, NON ACTIVE)
+# GOOGLE — CONFIGURATION MEDIA ET TARIFS DYNAMIQUES
 # ============================================================
 # Ce fichier est la source des droits commerciaux ORIA et du catalogue
 # de prix Google. Il n'appelle aucune API et n'effectue aucun debit.
 # Les services et routes historiques OpenAI restent inchanges :
 # IMAGE_MODEL_BY_PACK / VIDEO_PROVIDER_BY_PACK pointent encore vers OpenAI.
-# La migration sera active apres raccordement et tests des autres couches.
+# Les routes Google s'activent uniquement lorsque les controles backend
+# et la verification du stockage / de la facturation sont termines.
 # Source des tarifs STANDARD (non Batch) :
 # https://ai.google.dev/gemini-api/docs/pricing
 # Identifiants officiels : https://ai.google.dev/gemini-api/docs/models
