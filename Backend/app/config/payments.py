@@ -1,28 +1,44 @@
-from app.config.credit_costs import (
-    LIGHT_PACK_CREDITS,
-    INTERMEDIATE_PACK_CREDITS,
-    PRO_PACK_CREDITS,
-    BUSINESS_PACK_CREDITS,
-)
-
 PRIMARY_PACKS = {
     "light_pack": {
         "price": 4000,
-        "credits": LIGHT_PACK_CREDITS,
+        "credits": 15000,
     },
 
     "intermediate_pack": {
         "price": 8000,
-        "credits": INTERMEDIATE_PACK_CREDITS,
+        "credits": 27000,
     },
 
     "pro_pack": {
         "price": 12000,
-        "credits": PRO_PACK_CREDITS,
+        "credits": 36000,
     },
 
     "business_pack": {
         "price": 45000,
-        "credits": BUSINESS_PACK_CREDITS,
+        "credits": 120000,
+    },
+}
+
+
+ADDON_PACKS = {
+    "credits_1000_563": {
+        "price": 563,
+        "credits": 1000,
+    },
+
+    "credits_2000": {
+        "price": 1000,
+        "credits": 2000,
+    },
+
+    "credits_4000": {
+        "price": 2000,
+        "credits": 4000,
+    },
+
+    "credits_10000": {
+        "price": 5000,
+        "credits": 10000,
     },
 }
