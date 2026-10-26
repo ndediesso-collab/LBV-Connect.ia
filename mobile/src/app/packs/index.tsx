@@ -126,14 +126,14 @@ const packs: Pack[] = [
     launchPrice: "3 000 XAF",
     credits: "15 000",
     duration: "35 jours",
-    description:
-      "L'accès essentiel à Oria pour les usages courants, avec GPT-6 Luna et les créations légères.",
+    description: "L’essentiel d’ORIA avec GPT-6 Luna, la création d’images 1K, la retouche simple et des clips vidéo courts.",
     features: [
       "GPT-6 Luna",
       "Recherche Web avec GPT-6 Luna",
-      "GPT Image 2",
-      "Vidéos courtes avec Sora 2",
-      "Analyse de fichiers et d'images",
+      "Images Google en 1K",
+      "Retouche avec 1 photo",
+      "Clips vidéo de 4 ou 8 s en 720p",
+      "Analyse de fichiers et d’images",
     ],
     models: [
       { name: "GPT-6 Luna", available: true },
@@ -143,33 +143,11 @@ const packs: Pack[] = [
       { name: "GPT-6 Astra", available: false },
     ],
     media: [
-      {
-        name: "Image Essentielle",
-        available: true,
-        model: "GPT Image 2",
-        configuration: "Qualité basse",
-      },
-      {
-        name: "Image Plus",
-        available: true,
-        model: "GPT Image 2",
-        configuration: "Qualité moyenne",
-      },
-      {
-        name: "Vidéo 4 s",
-        available: true,
-        model: "Sora 2",
-        configuration: "4 secondes · 720p",
-      },
-      {
-        name: "Vidéo 8 s",
-        available: true,
-        model: "Sora 2",
-        configuration: "8 secondes · 720p",
-      },
+      { name: "Création d’images 1K", available: true, model: "Gemini 3.1 Flash Lite Image", configuration: "Texte vers image" },
+      { name: "Retouche avec 1 photo", available: true, model: "Gemini 3.1 Flash Lite Image", configuration: "1 photo de référence" },
+      { name: "Vidéos 4 ou 8 s", available: true, model: "Gemini Omni 1.1 Flash", configuration: "720p · texte ou image vers vidéo" },
     ],
   },
-
   {
     id: "intermediate_pack",
     name: "Intermédiaire",
@@ -177,16 +155,16 @@ const packs: Pack[] = [
     launchPrice: "5 500 XAF",
     credits: "27 000",
     duration: "35 jours",
-    description:
-      "Un niveau plus polyvalent avec GPT-5 et davantage de capacité pour les usages quotidiens et créatifs.",
+    description: "Plus de polyvalence avec GPT-5, images jusqu’à 2K et outils vidéo enrichis.",
     popular: true,
     features: [
       "Tout le pack Léger",
-      "GPT-5",
-      "Recherche Web avec GPT-5",
-      "GPT Image 2",
-      "Vidéo Lite avec Sora 2",
-      "Analyse avancée de fichiers et d'images",
+      "GPT-5 et recherche Web",
+      "Images Google jusqu’à 2K",
+      "Retouche à partir d’une photo",
+      "Clips vidéo jusqu’à 10 s en 720p",
+      "Multi-références et projets 20 s",
+      "Analyse avancée des fichiers",
     ],
     models: [
       { name: "GPT-6 Luna", available: true },
@@ -196,27 +174,13 @@ const packs: Pack[] = [
       { name: "GPT-6 Astra", available: false },
     ],
     media: [
-      {
-        name: "Image Essentielle",
-        available: true,
-        model: "GPT Image 2",
-        configuration: "Qualité basse",
-      },
-      {
-        name: "Image Plus",
-        available: true,
-        model: "GPT Image 2",
-        configuration: "Qualité moyenne",
-      },
-      {
-        name: "Vidéo Lite",
-        available: true,
-        model: "Sora 2",
-        configuration: "4 secondes · 720p",
-      },
+      { name: "Images jusqu’à 2K", available: true, model: "Gemini Flash Lite + Nano Banana 2.1", configuration: "1K ou 2K" },
+      { name: "Retouche photo", available: true, model: "Gemini Nano Banana 2.1", configuration: "1 photo de référence" },
+      { name: "Jusqu’à 3 photos de référence", available: true, model: "Gemini Nano Banana 2.1", configuration: "Multi-références" },
+      { name: "Clips vidéo 4 à 10 s", available: true, model: "Gemini Omni 1.1 Flash", configuration: "720p · texte ou photo vers vidéo" },
+      { name: "Projet vidéo 20 s", available: true, model: "Montage multi-scènes", configuration: "2 scènes" },
     ],
   },
-
   {
     id: "pro_pack",
     name: "Pro",
@@ -224,16 +188,14 @@ const packs: Pack[] = [
     launchPrice: "8 000 XAF",
     credits: "36 000",
     duration: "35 jours",
-    description:
-      "Pour les utilisateurs intensifs qui recherchent davantage de raisonnement, de puissance et de création professionnelle.",
+    description: "Raisonnement avancé et images jusqu’à 4K, avec des outils de création professionnelle supplémentaires.",
     features: [
-      "GPT-6 Luna",
-      "GPT-5.6 Terra",
-      "GPT-6 Sol",
+      "GPT-6 Luna, GPT-5.6 Terra et GPT-6 Sol",
       "Recherche Web avancée",
-      "GPT Image 2.5 Flare",
-      "Vidéos Pro avec Sora 2",
-      "Capacités créatives avancées",
+      "Images Google jusqu’à 4K",
+      "Retouche photo et clips vidéo 720p",
+      "Jusqu’à 6 références",
+      "Retouche avancée et projet 40 s",
     ],
     models: [
       { name: "GPT-6 Luna", available: true },
@@ -243,45 +205,15 @@ const packs: Pack[] = [
       { name: "GPT-6 Astra", available: false },
     ],
     media: [
-      {
-        name: "Image Pro",
-        available: true,
-        model: "GPT Image 2.5 Flare",
-        configuration: "Qualité basse",
-      },
-      {
-        name: "Image Pro HD",
-        available: true,
-        model: "GPT Image 2.5 Flare",
-        configuration: "Qualité haute",
-      },
-      {
-        name: "Image Pro Ultra",
-        available: true,
-        model: "GPT Image 2.5 Flare",
-        configuration: "Qualité XHigh",
-      },
-      {
-        name: "Vidéo Pro Fast",
-        available: true,
-        model: "Sora 2",
-        configuration: "4 secondes · 720p",
-      },
-      {
-        name: "Vidéo Pro Standard",
-        available: true,
-        model: "Sora 2",
-        configuration: "8 secondes · 720p",
-      },
-      {
-        name: "Vidéo Pro Extension",
-        available: true,
-        model: "Sora 2",
-        configuration: "4 secondes · 720p",
-      },
+      { name: "Images jusqu’à 4K", available: true, model: "Gemini 3 Pro Image", configuration: "1K, 2K ou 4K" },
+      { name: "Retouche photo", available: true, model: "Gemini 3 Pro Image", configuration: "1 photo de référence" },
+      { name: "Jusqu’à 6 photos de référence", available: true, model: "Gemini Nano Banana / 3 Pro", configuration: "Multi-références" },
+      { name: "Retouche avancée", available: true, model: "Gemini 3 Pro Image", configuration: "Outils avancés" },
+      { name: "Clips vidéo 4 à 10 s", available: true, model: "Gemini Omni 1.1 Flash", configuration: "720p · texte ou photo vers vidéo" },
+      { name: "Projet vidéo 40 s", available: true, model: "Montage et prolongation", configuration: "Jusqu’à 16 scènes" },
+      { name: "Vidéo : édition avancée", available: true, model: "Mini-Studio ORIA", configuration: "Images de début / fin" },
     ],
   },
-
   {
     id: "business_pack",
     name: "Business",
@@ -289,17 +221,14 @@ const packs: Pack[] = [
     launchPrice: "25 000 XAF",
     credits: "120 000",
     duration: "35 jours",
-    description:
-      "L'offre haut de gamme d'Oria pour les usages IA et créatifs les plus exigeants.",
+    description: "Le niveau premium d’ORIA : images 4K, modèles Chat haut de gamme et projets vidéo étendus.",
     features: [
-      "GPT-5.6 Terra",
-      "GPT-6 Sol",
-      "GPT-6 Astra",
-      "Recherche Web avec Terra, Sol et Astra",
-      "GPT Image 2.5 Sunburst",
-      "Sora 2 Pro",
-      "Vidéos Business jusqu'à 12 secondes",
-      "Capacités IA premium",
+      "GPT-5.6 Terra, GPT-6 Sol et GPT-6 Astra",
+      "Recherche Web premium",
+      "Images Google jusqu’à 4K",
+      "Retouche photo et clips vidéo 720p",
+      "Jusqu’à 10 références",
+      "Retouche avancée et projets 120 s",
     ],
     models: [
       { name: "GPT-6 Luna", available: false },
@@ -309,42 +238,13 @@ const packs: Pack[] = [
       { name: "GPT-6 Astra", available: true },
     ],
     media: [
-      {
-        name: "Image Business",
-        available: true,
-        model: "GPT Image 2.5 Sunburst",
-        configuration: "Qualité moyenne",
-      },
-      {
-        name: "Image Business HD",
-        available: true,
-        model: "GPT Image 2.5 Sunburst",
-        configuration: "Qualité XHigh",
-      },
-      {
-        name: "Image Business Max",
-        available: true,
-        model: "GPT Image 2.5 Sunburst",
-        configuration: "Qualité Max",
-      },
-      {
-        name: "Vidéo Business Fast",
-        available: true,
-        model: "Sora 2 Pro",
-        configuration: "4 secondes",
-      },
-      {
-        name: "Vidéo Business Standard",
-        available: true,
-        model: "Sora 2 Pro",
-        configuration: "8 secondes",
-      },
-      {
-        name: "Vidéo Business Long",
-        available: true,
-        model: "Sora 2 Pro",
-        configuration: "12 secondes",
-      },
+      { name: "Images jusqu’à 4K", available: true, model: "Gemini 3 Pro Image", configuration: "1K, 2K ou 4K" },
+      { name: "Retouche photo", available: true, model: "Gemini 3 Pro Image", configuration: "1 photo de référence" },
+      { name: "Jusqu’à 10 photos de référence", available: true, model: "Gemini Nano Banana / 3 Pro", configuration: "Multi-références" },
+      { name: "Retouche avancée", available: true, model: "Gemini 3 Pro Image", configuration: "Outils avancés" },
+      { name: "Clips vidéo 4 à 10 s", available: true, model: "Gemini Omni 1.1 Flash", configuration: "720p · texte ou photo vers vidéo" },
+      { name: "Projet vidéo 120 s", available: true, model: "Montage et prolongation", configuration: "Jusqu’à 32 scènes" },
+      { name: "Vidéo : édition avancée", available: true, model: "Mini-Studio ORIA", configuration: "Images de début / fin" },
     ],
   },
 ];
@@ -356,41 +256,14 @@ const packs: Pack[] = [
  */
 
 const faqs = [
-  {
-    question: "Combien de temps mes crédits sont-ils valables ?",
-    answer:
-      "Les crédits sont valables pendant la durée de votre pack. Tous les packs Oria sont actuellement configurés pour une durée de 35 jours.",
-  },
-  {
-    question: "Que se passe-t-il lorsque mon pack expire ?",
-    answer:
-      "Le portefeuille associé au pack devient inactif à sa date d'expiration. Les crédits restants ne peuvent alors plus être consommés avec ce portefeuille expiré.",
-  },
-  {
-    question: "Combien de crédits contient chaque pack ?",
-    answer:
-      "Le pack Léger contient 15 000 crédits, l'Intermédiaire 27 000, le Pro 36 000 et le Business 120 000.",
-  },
-  {
-    question: "Toutes les actions consomment-elles le même nombre de crédits ?",
-    answer:
-      "Non. Oria utilise une facturation dynamique. Une estimation est d'abord réservée, puis le coût réel est calculé après l'action. Les crédits réservés mais non consommés sont automatiquement rendus au portefeuille.",
-  },
-  {
-    question: "Puis-je acheter des crédits supplémentaires ?",
-    answer:
-      "Oui. Vous pouvez acheter des recharges complémentaires de 1 000 crédits pour 563 XAF, 2 000 crédits pour 1 000 XAF, 4 000 crédits pour 2 000 XAF ou 10 000 crédits pour 5 000 XAF.",
-  },
-  {
-    question: "Quels modèles sont inclus dans chaque pack ?",
-    answer:
-      "Léger inclut GPT-6 Luna. Intermédiaire inclut GPT-6 Luna et GPT-5. Pro inclut GPT-6 Luna, GPT-5.6 Terra et GPT-6 Sol. Business inclut GPT-5.6 Terra, GPT-6 Sol et GPT-6 Astra.",
-  },
-  {
-    question: "Les images et vidéos sont-elles disponibles sur tous les packs ?",
-    answer:
-      "Oui, mais le modèle, la qualité, la durée et les configurations disponibles dépendent du pack. Les images évoluent de GPT Image 2 vers GPT Image 2.5 Flare puis Sunburst, tandis que la vidéo évolue de Sora 2 vers Sora 2 Pro.",
-  },
+  { question: "Combien de temps mes crédits sont-ils valables ?", answer: "Les crédits suivent la durée du pack, actuellement de 35 jours." },
+  { question: "Que se passe-t-il lorsque mon pack expire ?", answer: "Le portefeuille associé devient inactif à la date d'expiration ; les crédits restants de ce pack ne sont plus consommables." },
+  { question: "Combien de crédits contient chaque pack ?", answer: "Léger : 15 000 ; Intermédiaire : 27 000 ; Pro : 36 000 ; Business : 120 000 crédits." },
+  { question: "Toutes les actions consomment-elles le même nombre de crédits ?", answer: "Non. Le coût dépend notamment du modèle, de la résolution et de la durée. Le Mini-Studio affiche un devis en crédits avant chaque création." },
+  { question: "Puis-je acheter des crédits supplémentaires ?", answer: "Vous pouvez recharger votre solde : 1 000 crédits (563 XAF), 2 000 (1 000 XAF), 4 000 (2 000 XAF) ou 10 000 (5 000 XAF)." },
+  { question: "Quels modèles Chat sont inclus dans chaque pack ?", answer: "Léger : GPT-6 Luna ; Intermédiaire : Luna et GPT-5 ; Pro : Luna, GPT-5.6 Terra et GPT-6 Sol ; Business : Terra, Sol et GPT-6 Astra." },
+  { question: "Quelles sont les possibilités du Mini-Studio selon mon pack ?", answer: "Chaque pack propose la création d’images, la retouche photo et la vidéo. Selon votre formule, les images atteignent 1K, 2K ou 4K, et les projets vidéo peuvent combiner plusieurs séquences." },
+  { question: "Comment connaître les options accessibles avec mon pack ?", answer: "Le Mini-Studio adapte les modèles, résolutions, durées et options de retouche à votre pack actif et affiche le devis avant confirmation." },
 ];
 
 
@@ -601,7 +474,7 @@ const UI = {
     myCredits: "Mes crédits",
     packsOria: "Packs Oria",
     heroTitle: "Choisissez votre accès à l'IA.",
-    heroDescription: "Chaque pack vous donne un volume de crédits utilisable pendant 35 jours. Les modèles et capacités accessibles dépendent du pack choisi, et chaque action est facturée selon sa consommation réelle.",
+    heroDescription: "Chaque pack donne des crédits valables 35 jours. Le Mini-Studio propose images, retouches et vidéos selon le pack.",
     launchPromotion: "Promotion de lancement",
     launchOffer: "Prix de lancement",
     launchLimit: "Offre réservée aux 300 premiers clients payants.",
@@ -635,7 +508,8 @@ const UI = {
     locked: "Verrouillé",
     media: "Médias",
     generation: "génération",
-    mediaCostNote: "Le coût n’est pas fixe : Oria réserve une estimation avant la génération, puis ne conserve que les crédits correspondant au coût réel.",
+    mediaCostNote: "Le coût dépend de la configuration : consultez le devis avant la génération.",
+    mediaAvailabilityNotice: "Les options de création et les paramètres disponibles dépendent du pack sélectionné.",
     included: "Inclus",
     redirecting: "Redirection...",
     choose: "Choisir",
@@ -648,7 +522,7 @@ const UI = {
     myCredits: "My credits",
     packsOria: "Oria Packs",
     heroTitle: "Choose your AI access.",
-    heroDescription: "Each pack gives you a volume of credits usable for 35 days. Available models and capabilities depend on the pack you choose, and each action is charged according to its actual usage.",
+    heroDescription: "Each pack includes credits valid for 35 days. Mini-Studio offers pack-dependent images, editing and video.",
     launchPromotion: "Launch promotion",
     launchOffer: "Launch price",
     launchLimit: "Offer reserved for the first 300 paying customers.",
@@ -682,105 +556,133 @@ const UI = {
     locked: "Locked",
     media: "Media",
     generation: "generation",
-    mediaCostNote: "The cost is not fixed: Oria reserves an estimate before generation, then keeps only the credits matching the actual cost.",
+    mediaCostNote: "The cost depends on your configuration: review the quote before generation.",
+    mediaAvailabilityNotice: "Creation options and available settings depend on the selected pack.",
     included: "Included",
     redirecting: "Redirecting...",
     choose: "Choose",
   },
 } as const;
 
-const PACK_TEXT_EN: Record<
-  PackId,
-  {
-    name: string;
-    duration: string;
-    description: string;
-    features: string[];
-    mediaNames: string[];
-  }
-> = {
+const PACK_TEXT_EN: Record<PackId, {
+  name: string;
+  duration: string;
+  description: string;
+  features: string[];
+  mediaNames: string[];
+  mediaConfigurations: string[];
+}> = {
   light_pack: {
     name: "Light",
     duration: "35 days",
-    description: "Essential access to Oria for everyday AI use.",
+    description: "Essential ORIA access with GPT-6 Luna, 1K image creation, simple photo editing and short video clips.",
     features: [
       "GPT-6 Luna",
       "Web Search with GPT-6 Luna",
-      "GPT Image 2 creation",
-      "Short Sora 2 videos",
+      "Google image creation in 1K",
+      "Editing with 1 photo",
+      "4 or 8-second clips at 720p",
       "File and image analysis",
     ],
     mediaNames: [
-      "Essential Image",
-      "Image Plus",
-      "Video 4s",
-      "Video 8s",
+      "1K image creation",
+      "Editing with 1 photo",
+      "4 or 8-second videos",
+    ],
+    mediaConfigurations: [
+      "Text to image",
+      "1 reference photo",
+      "720p · text or image to video",
     ],
   },
   intermediate_pack: {
     name: "Intermediate",
     duration: "35 days",
-    description:
-      "A more versatile tier with GPT-5 and broader creative capabilities.",
+    description: "More flexibility with GPT-5, images up to 2K, and enhanced video tools.",
     features: [
-      "Everything in the Light pack",
-      "GPT-5",
-      "Web Search with GPT-5",
-      "GPT Image 2 creation",
-      "Sora 2 video creation",
-      "Advanced file and image analysis",
+      "All Light-pack features",
+      "GPT-5 and Web Search",
+      "Google images up to 2K",
+      "Editing from one photo",
+      "Video clips up to 10 seconds at 720p",
+      "Multi-reference and 20-second projects",
+      "Advanced file analysis",
     ],
     mediaNames: [
-      "Essential Image",
-      "Image Plus",
-      "Lite Video",
+      "Images up to 2K",
+      "Photo editing",
+      "Up to 3 reference photos",
+      "Video clips from 4 to 10 s",
+      "20-second video project",
+    ],
+    mediaConfigurations: [
+      "1K or 2K",
+      "1 reference photo",
+      "Multi-reference",
+      "720p · text or photo to video",
+      "2 scenes",
     ],
   },
   pro_pack: {
     name: "Pro",
     duration: "35 days",
-    description:
-      "For intensive users who need advanced reasoning and professional creative tools.",
+    description: "Advanced reasoning and images up to 4K, with professional creation tools.",
     features: [
-      "GPT-6 Luna",
-      "GPT-5.6 Terra",
-      "GPT-6 Sol",
+      "GPT-6 Luna, GPT-5.6 Terra and GPT-6 Sol",
       "Advanced Web Search",
-      "GPT Image 2.5 Flare",
-      "Professional Sora 2 videos",
-      "Advanced creative capabilities",
+      "Google images up to 4K",
+      "Photo editing and 720p video clips",
+      "Up to 6 references",
+      "Advanced editing and 40-second projects",
     ],
     mediaNames: [
-      "Pro Image",
-      "Pro HD Image",
-      "Pro Ultra Image",
-      "Pro Fast Video",
-      "Pro Standard Video",
-      "Pro Extension Video",
+      "Images up to 4K",
+      "Photo editing",
+      "Up to 6 reference photos",
+      "Advanced editing",
+      "Video clips from 4 to 10 s",
+      "40-second video project",
+      "Video: advanced editing",
+    ],
+    mediaConfigurations: [
+      "1K, 2K or 4K",
+      "1 reference photo",
+      "Multi-reference",
+      "Advanced tools",
+      "720p · text or photo to video",
+      "Up to 16 scenes",
+      "First / last frames",
     ],
   },
   business_pack: {
     name: "Business",
     duration: "35 days",
-    description:
-      "Oria's premium tier for demanding AI, image, and video workloads.",
+    description: "ORIA premium tier: 4K images, high-end Chat models, and extended video projects.",
     features: [
-      "GPT-5.6 Terra",
-      "GPT-6 Sol",
-      "GPT-6 Astra",
-      "Web Search with Terra, Sol and Astra",
-      "GPT Image 2.5 Sunburst",
-      "Sora 2 Pro",
-      "Long-form Business video capabilities",
-      "Premium AI capabilities",
+      "GPT-5.6 Terra, GPT-6 Sol and GPT-6 Astra",
+      "Premium Web Search",
+      "Google images up to 4K",
+      "Photo editing and 720p video clips",
+      "Up to 10 references",
+      "Advanced editing and 120-second projects",
     ],
     mediaNames: [
-      "Business Image",
-      "Business HD Image",
-      "Business Max Image",
-      "Business Fast Video",
-      "Business Standard Video",
-      "Business Long Video",
+      "Images up to 4K",
+      "Photo editing",
+      "Up to 10 reference photos",
+      "Advanced editing",
+      "Video clips from 4 to 10 s",
+      "120-second video project",
+      "Video: advanced editing",
+    ],
+    mediaConfigurations: [
+      "1K, 2K or 4K",
+      "1 reference photo",
+      "Multi-reference",
+      "Advanced tools",
+      "720p · text or photo to video",
+      "Up to 32 scenes",
+      "First / last frames",
     ],
   },
 };
@@ -793,42 +695,15 @@ const TOP_UP_DESCRIPTION_EN: Record<string, string> = {
 };
 
 const FAQS_EN = [
-  {
-    question: "How long are my credits valid?",
-    answer:
-      "Credits remain valid for the duration of your pack. All Oria packs are currently configured for 35 days.",
-  },
-  {
-    question: "What happens when my pack expires?",
-    answer:
-      "The wallet linked to the pack becomes inactive on its expiration date. Remaining credits can no longer be used from that expired wallet.",
-  },
-  {
-    question: "How many credits are included in each pack?",
-    answer:
-      "Light includes 15,000 credits, Intermediate 27,000, Pro 36,000, and Business 120,000.",
-  },
-  {
-    question: "Do all actions consume the same number of credits?",
-    answer:
-      "No. Oria uses dynamic billing. Before an action, an estimate is reserved. After the provider returns the real usage, Oria charges the actual cost and returns any unused reserved credits.",
-  },
-  {
-    question: "Can I buy additional credits?",
-    answer:
-      "Yes. You can buy top-ups of 1,000 credits for 563 XAF, 2,000 credits for 1,000 XAF, 4,000 credits for 2,000 XAF, or 10,000 credits for 5,000 XAF.",
-  },
-  {
-    question: "Which models are included in each pack?",
-    answer:
-      "Light includes GPT-6 Luna. Intermediate includes GPT-6 Luna and GPT-5. Pro includes GPT-6 Luna, GPT-5.6 Terra and GPT-6 Sol. Business includes GPT-5.6 Terra, GPT-6 Sol and GPT-6 Astra.",
-  },
-  {
-    question: "Are image and video tools available on every pack?",
-    answer:
-      "Yes, but the available model, quality, duration, and configuration depend on the pack. Images progress from GPT Image 2 to GPT Image 2.5 Flare and Sunburst, while video progresses from Sora 2 to Sora 2 Pro.",
-  },
-];
+  { question: "How long are my credits valid?", answer: "All packs currently last 35 days." },
+  { question: "What happens when my pack expires?", answer: "The linked wallet becomes inactive at expiration, and its remaining credits can no longer be used." },
+  { question: "How many credits are included in each pack?", answer: "Light: 15,000; Intermediate: 27,000; Pro: 36,000; Business: 120,000 credits." },
+  { question: "Do all actions cost the same number of credits?", answer: "No. Costs vary by model, resolution and duration. Mini-Studio displays a credit quote before each creation." },
+  { question: "Can I buy extra credits?", answer: "You can top up your balance: 1,000 credits (563 XAF), 2,000 (1,000 XAF), 4,000 (2,000 XAF), or 10,000 (5,000 XAF)." },
+  { question: "Which Chat models are included in each pack?", answer: "Light: GPT-6 Luna; Intermediate: Luna and GPT-5; Pro: Luna, GPT-5.6 Terra and GPT-6 Sol; Business: Terra, Sol and GPT-6 Astra." },
+  { question: "What can I create with Mini-Studio on my pack?", answer: "Each pack offers image creation, photo editing and video. Depending on your tier, images reach 1K, 2K or 4K, and video projects can combine multiple clips." },
+  { question: "How do I know which settings my pack allows?", answer: "Mini-Studio adapts models, resolutions, durations and editing options to your active pack, and shows the credit quote before confirmation." },
+] as const;
 
 async function readOriaLanguage(): Promise<OriaLanguage> {
   try {
@@ -871,6 +746,7 @@ function localizePack(pack: Pack, language: OriaLanguage): Pack {
     media: pack.media.map((item, index) => ({
       ...item,
       name: translated.mediaNames[index] ?? item.name,
+      configuration: translated.mediaConfigurations[index] ?? item.configuration,
     })),
   };
 }
@@ -2414,7 +2290,7 @@ function PackCard({
               styles.popularMutedText,
           ]}
         >
-{t.mediaCostNote}
+{t.mediaCostNote}{"\n"}{t.mediaAvailabilityNotice}
         </Text>
       </View>
 
