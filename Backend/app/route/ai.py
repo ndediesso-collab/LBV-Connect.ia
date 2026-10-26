@@ -1936,6 +1936,247 @@ def get_media_capabilities(
 
 
 # ============================================================
+# GOOGLE — MINI-STUDIO : CAPACITES ET DEVIS (SANS GENERATION)
+# ============================================================
+# Etape de compatibilite : raccorde le nouveau catalogue Google au vrai
+# wallet ORIA, SANS remplacer les endpoints OpenAI /image et /video.
+# Aucun appel fournisseur, reserve/settle, ni frais n'est declenche ici.
+# IMPORTANT : les devis sont indicatifs, non des autorisations de depense.
+
+
+class GoogleMediaQuoteRequest(BaseModel):
+    """L'utilisateur ne choisit jamais son pack, les tarifs ou le taux de change.
+
+    Les modes de creation doivent correspondre a credit_costs.py. Les devis
+    longue duree restent informatifs tant que le moteur de montage est absent.
+    """
+
+    media_type: str
+    model: str | None = None
+    mode: str | None = None
+    resolution: str | None = None
+    reference_count: int = 0
+    count: int = 1
+    final_duration_seconds: int | None = None
+    scene_durations_seconds: list[int] | None = None
+
+
+def _google_billing_engine():
+    """Chargement differe : le routeur historique marche meme sans Stage1."""
+    try:
+        from app.services.token_billing_service import GoogleMediaBillingService
+    except ImportError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Le calculateur des medias Google n'est pas encore installe.",
+        ) from error
+    return GoogleMediaBillingService
+
+
+def _google_pricing_config():
+    """Echoue en mode ferme si une grille Stage1 manque sur le serveur."""
+    required = (
+        "GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK",
+        "GOOGLE_IMAGE_OUTPUT_USD_BY_MODEL",
+        "GOOGLE_VIDEO_MAX_PROJECT_SECONDS_BY_PACK",
+        "GOOGLE_VIDEO_MODEL",
+    )
+    if not all(hasattr(credit_costs_config, key) for key in required):
+        raise HTTPException(
+            status_code=503,
+            detail="La configuration des creations Google n'est pas installee.",
+        )
+    return credit_costs_config
+
+
+def _google_wallet_for_quote(
+    *, user_id: str | None, authorization: str | None,
+):
+    """Pack et solde verifies par Supabase, jamais declares par le client."""
+    authenticated_user_id = _authenticate_chat_user(
+        user_id=user_id, authorization=authorization,
+    )
+    wallet = SupabaseCreditRepository(supabase).get_wallet(authenticated_user_id)
+    if wallet is None:
+        raise HTTPException(status_code=404, detail="Portefeuille ORIA introuvable.")
+    if not wallet.is_pack_active:
+        raise HTTPException(status_code=403, detail="Un pack actif est necessaire.")
+    return wallet
+
+
+@router.get("/google-media/capabilities")
+def get_google_media_capabilities(
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Droits COMMERCIAUX du pack actif et fonctions TECHNIQUES disponibles.
+
+    Une offre Pro/Business autorisant 40/120 s n'implique pas que le montage
+    multi-scenes soit disponible dans l'API ORIA aujourd'hui.
+    """
+    cfg = _google_pricing_config()
+    _google_billing_engine()  # Echoue clairement si le calculateur manque.
+    wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization)
+    rights = cfg.google_media_capabilities_for_pack(wallet.pack_id)
+    enabled = _google_generations_active()
+    image_models = [
+        {
+            "model": model,
+            "resolutions": [
+                r for r in rights["image_resolutions"]
+                if r in cfg.GOOGLE_IMAGE_OUTPUT_USD_BY_MODEL[model]
+            ],
+            "max_references_supported_now": 1,
+        }
+        for model in rights["image_models"]
+    ]
+    # Seules les actions video courte historiques ont un appel Google direct.
+    direct_video_actions = {
+        "light_pack": ("video_4s", "video_8s"),
+        "intermediate_pack": ("video_lite",),
+        "pro_pack": ("video_pro_fast", "video_pro_standard"),
+        "business_pack": ("video_business_fast", "video_business_standard"),
+    }
+    return {
+        "success": True,
+        "provider": "google",
+        "pack_id": wallet.pack_id,
+        "pack_active": True,
+        "quote_available": True,
+        "generation_available": enabled,
+        "images": {
+            "models": image_models,
+            "resolutions": list(rights["image_resolutions"]),
+            "allowed_modes": list(rights["image_modes"]),
+            "max_reference_images_in_pack": rights["max_reference_images"],
+            "available_now_modes": ["text_to_image", "image_edit"] if enabled else [],
+            "max_reference_images_per_call_now": 1,
+            "max_images_per_call_now": 1,
+        },
+        "video": {
+            "model": rights["video_model"],
+            "allowed_modes": list(rights["video_modes"]),
+            "available_now_modes": ["text_to_video", "image_to_video"] if enabled else [],
+            "duration_choices_seconds": list(rights["video_duration_choices"]),
+            "max_project_seconds": rights["max_video_project_seconds"],
+            "max_project_scenes": rights["max_video_scenes"],
+            "billable_resolutions": list(rights["video_billable_resolutions"]),
+            "provider_per_call_seconds": {
+                "min": cfg.GOOGLE_VIDEO_PROVIDER_MIN_CLIP_SECONDS,
+                "max": cfg.GOOGLE_VIDEO_PROVIDER_MAX_CLIP_SECONDS,
+            },
+            "short_clip_actions_available_now": list(direct_video_actions.get(wallet.pack_id, ()))
+                if enabled else [],
+            "long_projects_generation_available": False,
+        },
+        "notice": (
+            "Droits du pack et fonctionnalites disponibles aujourd'hui distingues. "
+            "Aucun appel payant n'est effectue par cette route."
+        ),
+    }
+
+
+@router.post("/google-media/quote")
+def quote_google_media(
+    payload: GoogleMediaQuoteRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Devis seul, sans reserver de credits ni appeler l'API Google."""
+    cfg = _google_pricing_config()
+    engine = _google_billing_engine()
+    wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization)
+    media_type = str(payload.media_type or "").strip().lower()
+    mode = str(payload.mode or "").strip().lower()
+    available_now = False
+    try:
+        if media_type == "image":
+            if payload.final_duration_seconds is not None or payload.scene_durations_seconds is not None:
+                raise MediaBillingError("Des parametres video ont ete envoyes pour une image.")
+            allowed = cfg.GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK.get(wallet.pack_id, ())
+            model = payload.model or (allowed[0] if allowed else "")
+            resolution = str(payload.resolution or "1K").upper()
+            mode = mode or ("image_edit" if payload.reference_count else "text_to_image")
+            cfg.validate_google_image_configuration(
+                pack_id=wallet.pack_id, model=model, resolution=resolution,
+                mode=mode, reference_count=payload.reference_count,
+            )
+            quote = engine.estimate_google_image(
+                pack_id=wallet.pack_id, model=model,
+                resolution=resolution, count=payload.count,
+            )
+            available_now = (
+                payload.count == 1 and mode in {"text_to_image", "image_edit"}
+                and payload.reference_count <= 1
+            )
+        elif media_type == "video":
+            if payload.reference_count not in (0, 1):
+                raise MediaBillingError("Une seule image de reference est prise en charge pour une video courte.")
+            if payload.resolution not in (None, "720p"):
+                raise MediaBillingError("Seul le devis video 720p est disponible.")
+            if payload.count != 1:
+                raise MediaBillingError("count doit etre 1 pour les projets video.")
+            if payload.model not in (None, cfg.GOOGLE_VIDEO_MODEL):
+                raise MediaBillingError("Modele video non autorise.")
+            if payload.final_duration_seconds is None or payload.scene_durations_seconds is None:
+                raise MediaBillingError("Duree et generations prevues requises pour un devis video.")
+            scene_count = len(payload.scene_durations_seconds)
+            mode = mode or ("multi_scene" if scene_count > 1 else
+                            "image_to_video" if payload.reference_count else "text_to_video")
+            cfg.validate_google_video_configuration(
+                pack_id=wallet.pack_id,
+                mode=mode, duration_seconds=payload.final_duration_seconds,
+                scene_count=scene_count, resolution="720p",
+            )
+            if mode == "image_to_video" and payload.reference_count != 1:
+                raise MediaBillingError("L'animation video necessite une photo.")
+            if mode == "text_to_video" and payload.reference_count != 0:
+                raise MediaBillingError("Le mode texte vers video n'accepte pas de photo.")
+            quote_scenes = list(payload.scene_durations_seconds)
+            # Devis prudent : un clip de 4/8 s pourrait produire 10 s.
+            if scene_count == 1 and 3 <= payload.final_duration_seconds <= 10:
+                quote_scenes = [10]
+            quote = engine.estimate_google_video(
+                pack_id=wallet.pack_id,
+                final_duration_seconds=payload.final_duration_seconds,
+                scene_durations_seconds=quote_scenes,
+            )
+            available_now = (
+                mode in {"text_to_video", "image_to_video"}
+                and scene_count == 1 and payload.final_duration_seconds <= 8
+            )
+        else:
+            raise MediaBillingError("media_type doit etre 'image' ou 'video'.")
+    except ValueError as error:
+        # La configuration commerciale utilise ValueError, le calculateur
+        # utilise MediaBillingError (sous-classe de ValueError).
+        code = 403 if isinstance(error, UnsupportedMediaBillingModelError) else 400
+        raise HTTPException(status_code=code, detail=str(error)) from error
+
+    available_credits = int(wallet.balance)
+    return {
+        "success": True,
+        "provider": "google",
+        "media_type": quote.media_type,
+        "mode": mode,
+        "pack_id": wallet.pack_id,
+        "model": quote.model,
+        "pricing_reference_date": quote.pricing_reference_date,
+        "estimated_credits": quote.estimated_credits,
+        "reservation_credits": quote.reservation_credits,
+        "credits_available": available_credits,
+        "credits_sufficient": available_credits >= quote.reservation_credits,
+        "details": quote.details,
+        "generation_available": _google_generations_active() and available_now,
+        "quote_only": True,
+        "notice": (
+            "Estimation sans frais. Une generation courte implique un nouvel "
+            "accord avant la reservation. Les montages longs ne sont pas actifs."
+        ),
+    }
+
+
+# ============================================================
 
 # AUTHENTIFICATION
 
@@ -6073,3 +6314,403 @@ async def chat_stream(
     )
 
     
+
+# ============================================================
+# GOOGLE MEDIA — APPELS REELS (ETAPE 4, CLIPS COURTS UNIQUEMENT)
+# ============================================================
+# Routes separees pour eviter de casser les anciens clients /ai/image,/ai/video.
+# En production, les activer uniquement APRES audit du stockage et du wallet.
+# Aucun utilisateur ne choisit son pack, sa grille USD ou sa valeur de credit.
+import os as _oria_os
+import tempfile as _oria_tempfile
+from pathlib import Path as _OriaPath
+
+
+class GoogleImageGenerationRequest(BaseModel):
+    action: str
+    prompt: str
+    mode: str | None = None
+    model: str | None = None
+    resolution: str = "1K"
+    aspect_ratio: str = "1:1"
+    reference_image_b64: str | None = None
+    reference_mime_type: str | None = None
+    accepted_max_credits: int
+    conversation_id: str | None = None
+
+
+class GoogleVideoGenerationRequest(BaseModel):
+    action: str
+    prompt: str
+    mode: str | None = None
+    aspect_ratio: str = "16:9"
+    requested_seconds: int = 8
+    reference_image_b64: str | None = None
+    reference_mime_type: str | None = None
+    accepted_max_credits: int
+    conversation_id: str | None = None
+
+
+def _google_generations_active() -> bool:
+    return (_oria_os.getenv("ORIA_GOOGLE_PAID_CREATIONS_ENABLED", "0") == "1"
+            and _oria_os.getenv("ORIA_GOOGLE_STORAGE_REVIEWED", "0") == "1")
+
+
+def _google_load_env() -> None:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+
+def _google_ready_or_503() -> None:
+    _google_load_env()
+    if not _google_generations_active():
+        raise HTTPException(503, "Google non active : verifier la facturation et la confidentialite du stockage.")
+    if not _oria_os.getenv("GOOGLE_LBV_KEY", "").strip():
+        raise HTTPException(503, "La cle Google du backend est absente.")
+    try:
+        from google import genai  # noqa: F401
+    except ImportError as error:
+        raise HTTPException(503, "Installer le SDK google-genai dans le backend.") from error
+
+
+def _google_validate_ref(b64: str | None, mime: str | None, target: _OriaPath) -> str | None:
+    if not b64:
+        if mime:
+            raise HTTPException(400, "Une image de reference est requise pour son type MIME.")
+        return None
+    mime = str(mime or "").lower()
+    extensions = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+    if mime not in extensions:
+        raise HTTPException(400, "Reference JPEG, PNG ou WebP obligatoire.")
+    if len(b64) > 14_000_000:
+        raise HTTPException(413, "Image de reference trop volumineuse.")
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except Exception as error:
+        raise HTTPException(400, "Contenu base64 de la reference invalide.") from error
+    if not raw or len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(413, "La reference doit tenir dans 10 Mo.")
+    signature_ok = {
+        "image/png": raw.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg": raw.startswith(b"\xff\xd8\xff"),
+        "image/webp": raw.startswith(b"RIFF") and raw[8:12] == b"WEBP",
+    }[mime]
+    if not signature_ok:
+        raise HTTPException(400, "La reference ne correspond pas a son format.")
+    out = target.with_suffix(extensions[mime])
+    out.write_bytes(raw)
+    return str(out)
+
+
+def _google_require_consent(quote, accepted: int, balance: int) -> None:
+    if type(accepted) is not int or accepted < quote.reservation_credits:
+        raise HTTPException(409, "Confirmer le nouveau devis Google avant de generer.")
+    if balance < quote.reservation_credits:
+        raise HTTPException(402, INSUFFICIENT_ACTION_CREDITS_MESSAGE)
+
+
+def _google_action_resolution(pack_id: str, action: CreditAction, resolution: str) -> None:
+    caps = {
+        CreditAction.IMAGE_480: "1K",
+        CreditAction.IMAGE_720: "2K" if pack_id == "intermediate_pack" else "1K",
+        CreditAction.IMAGE_PRO: "1K",
+        CreditAction.IMAGE_PRO_STANDARD: "2K",
+        CreditAction.IMAGE_PRO_ULTRA: "4K",
+        CreditAction.IMAGE_BUSINESS: "2K",
+        CreditAction.IMAGE_BUSINESS_HD: "4K",
+        CreditAction.IMAGE_BUSINESS_ULTRA: "4K",
+    }
+    if resolution not in {"1K", "2K", "4K"}:
+        raise HTTPException(400, "Resolution image invalide.")
+    if (action not in caps or {"1K":1,"2K":2,"4K":4}[resolution]
+            > {"1K":1,"2K":2,"4K":4}[caps[action]]):
+        raise HTTPException(403, "Resolution indisponible pour cette action du pack.")
+
+
+def _google_settle_actual(
+    *, repository, user_id: str, reservation_id: str, quote, actual, wallet
+):
+    # Ne jamais inventer de consommation et ne pas sous-facturer un dépassement.
+    if actual.reservation_credits > quote.reservation_credits:
+        raise RuntimeError("Depassement du devis : reservation maintenue pour reconciliation.")
+    settled = repository.settle_credit_reservation(
+        user_id=user_id,
+        reference_id=reservation_id,
+        actual_amount=actual.estimated_credits,
+        actual_api_cost_xaf=actual.estimated_provider_xaf,
+    )
+    percentage = (
+        max(0.0, 100.0 * settled.balance / settled.initial_credits)
+        if settled.initial_credits > 0 else 0.0
+    )
+    return SimpleNamespace(
+        cost=actual.estimated_credits,
+        previous_balance=wallet.balance,
+        new_balance=settled.balance,
+        remaining_percentage=percentage,
+    )
+
+
+def _google_response(*, generated, saved, result, action: CreditAction,
+                     media_type: str, conversation_id: str | None,
+                     video_seconds: int | None = None) -> MediaResponse:
+    raw = _OriaPath(generated.file_path).read_bytes()
+    media_url = saved.get("media_url") or saved.get("url")
+    return MediaResponse(
+        success=True, type=media_type, action=action.value, model=generated.model,
+        cost=result.cost, previous_balance=result.previous_balance,
+        credits_remaining=result.new_balance,
+        remaining_percentage=result.remaining_percentage,
+        mime_type=generated.mime_type, data=base64.b64encode(raw).decode("ascii"),
+        media_id=saved.get("id"), conversation_id=conversation_id,
+        media_url=media_url, public_url=saved.get("public_url"), url=saved.get("url"),
+        video_id=generated.interaction_id if media_type == "video" else None,
+        # Duree NON certifiee : requested_seconds n'est pas la duree réelle.
+        seconds=None, size=None,
+    )
+
+
+@router.post("/google-media/image", response_model=MediaResponse)
+async def google_generate_image(
+    payload: GoogleImageGenerationRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Image/retouche Google avec pack reel et reservation AVANT appel payant."""
+    _google_ready_or_503()
+    if len(payload.prompt) > 8000:
+        raise HTTPException(400, "Description trop longue.")
+    (uid, repo, wallet, action, prompt) = _prepare_media(
+        action_value=payload.action, prompt=payload.prompt,
+        user_id=user_id, authorization=authorization,
+    )
+    if action not in IMAGE_ACTIONS:
+        raise HTTPException(400, "Action image attendue.")
+    resolution = str(payload.resolution).upper()
+    _google_action_resolution(wallet.pack_id, action, resolution)
+    cfg = _google_pricing_config()
+    allowed = cfg.GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK.get(wallet.pack_id, ())
+    model = payload.model or (allowed[0] if allowed else "")
+    reference_count = 1 if payload.reference_image_b64 else 0
+    mode = (payload.mode or ("image_edit" if reference_count else "text_to_image")).strip().lower()
+    if mode not in {"text_to_image", "image_edit"}:
+        raise HTTPException(501, "Retouches multi-references et avancees non implementees dans cette etape.")
+    try:
+        cfg.validate_google_image_configuration(
+            pack_id=wallet.pack_id, model=model, resolution=resolution,
+            mode=mode, reference_count=reference_count,
+        )
+    except ValueError as error:
+        raise HTTPException(403, str(error)) from error
+    try:
+        quote = _google_billing_engine().estimate_google_image(
+            pack_id=wallet.pack_id, model=model, resolution=resolution, count=1
+        )
+    except UnsupportedMediaBillingModelError as error:
+        raise HTTPException(403, str(error)) from error
+    except MediaBillingError as error:
+        raise HTTPException(400, str(error)) from error
+    _google_require_consent(quote, payload.accepted_max_credits, wallet.balance)
+    if payload.aspect_ratio not in {"1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"}:
+        raise HTTPException(400, "Format d'image non autorise.")
+    from app.services.ggle_media_service import GoogleMediaService
+    service = GoogleMediaService(enabled=True)
+    # Préchauffage client / validation clé avant de bloquer le portefeuille.
+    try:
+        service._get_client()
+    except Exception as error:
+        raise HTTPException(503, "Connecteur Google indisponible.") from error
+    with _oria_tempfile.TemporaryDirectory(prefix="oria-google-image-") as directory:
+        reference = _google_validate_ref(
+            payload.reference_image_b64, payload.reference_mime_type,
+            _OriaPath(directory) / "reference",
+        )
+        reservation_id = str(uuid4())
+        try:
+            repo.reserve_credits(
+                user_id=uid, amount=quote.reservation_credits,
+                action=action, reference_id=reservation_id,
+                api_reservation_xaf=quote.estimated_provider_xaf * Decimal("1.2"),
+            )
+        except Exception as error:
+            raise _billing_reservation_failure(error) from error
+        # Une erreur apres soumission peut encore etre facturee par Google.
+        # Ne pas rembourser aveuglement ; conserver l'ID pour reconciliation.
+        try:
+            generated = await asyncio.to_thread(
+                service.create_image, prompt=prompt,
+                destination=_OriaPath(directory) / "result.png",
+                tier={"gemini-3.1-flash-lite-image":"lite",
+                      "gemini-nano-banana-2.1":"standard",
+                      "gemini-3-pro-image":"premium"}[model],
+                size=resolution, aspect_ratio=payload.aspect_ratio,
+                reference_image=reference,
+            )
+        except Exception as error:
+            raise HTTPException(502, "Google n'a pas termine la generation. Reservation a reconciler.") from error
+        try:
+            actual = _google_billing_engine().calculate_google_image_actual(
+                quote=quote, usage=generated.usage,
+            )
+            result = _google_settle_actual(
+                repository=repo, user_id=uid, reservation_id=reservation_id,
+                quote=quote, actual=actual, wallet=wallet,
+            )
+        except Exception as error:
+            raise HTTPException(502, "Usage Google ou reglement non confirme. Reservation conservee.") from error
+        try:
+            saved = MediaService().save_google_image(
+                user_id=uid, generated=generated, action=action.value,
+                prompt=prompt, credits_cost=result.cost,
+                conversation_id=payload.conversation_id,
+            )
+        except Exception as error:
+            # Ne pas perdre le resultat deja regle : renvoyer le fichier meme
+            # si l'upload Supabase a echoue, comme la route OpenAI historique.
+            print("[ORIA GOOGLE IMAGE] persistence_failed", type(error).__name__, flush=True)
+            saved = {}
+        return _google_response(
+            generated=generated, saved=saved, result=result,
+            action=action, media_type="image", conversation_id=payload.conversation_id,
+        )
+
+
+@router.post("/google-media/video", response_model=MediaResponse)
+async def google_generate_short_video(
+    payload: GoogleVideoGenerationRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Clip Google simple. Les montages 20/40/120 s restent des jobs futurs."""
+    _google_ready_or_503()
+    if len(payload.prompt) > 8000:
+        raise HTTPException(400, "Description trop longue.")
+    uid, repo, wallet, action, prompt = _prepare_media(
+        action_value=payload.action, prompt=payload.prompt,
+        user_id=user_id, authorization=authorization,
+    )
+    if action not in VIDEO_ACTIONS:
+        raise HTTPException(400, "Action video attendue.")
+    # Les actions d'extension et de film long exigent un job asynchrone.
+    direct_actions = {
+        CreditAction.VIDEO_4S, CreditAction.VIDEO_8S,
+        CreditAction.VIDEO_LITE, CreditAction.VIDEO_PRO_FAST,
+        CreditAction.VIDEO_PRO_STANDARD, CreditAction.VIDEO_BUSINESS_FAST,
+        CreditAction.VIDEO_BUSINESS_STANDARD,
+    }
+    if action not in direct_actions:
+        raise HTTPException(501, "Cette action necessite le moteur de prolongation ou de montage.")
+    reference_count = 1 if payload.reference_image_b64 else 0
+    mode = (payload.mode or ("image_to_video" if reference_count else "text_to_video")).strip().lower()
+    if mode not in {"text_to_video", "image_to_video"}:
+        raise HTTPException(501, "Ce mode video sera disponible avec le moteur video avance.")
+    try:
+        _google_pricing_config().validate_google_video_configuration(
+            pack_id=wallet.pack_id, mode=mode,
+            duration_seconds=payload.requested_seconds,
+            scene_count=1, resolution="720p",
+        )
+    except ValueError as error:
+        raise HTTPException(403, str(error)) from error
+    if mode == "image_to_video" and not reference_count:
+        raise HTTPException(400, "Une photo est requise pour une animation video.")
+    if mode == "text_to_video" and reference_count:
+        raise HTTPException(400, "Le mode texte vers video n'accepte pas de photo.")
+    if type(payload.requested_seconds) is not int or not (3 <= payload.requested_seconds <= 10):
+        raise HTTPException(400, "Les clips Google doivent durer de 3 a 10 s.")
+    if wallet.pack_id == "light_pack" and payload.requested_seconds > 8:
+        raise HTTPException(403, "Le pack Leger est limite a 8 s.")
+    # Les anciens identifiants d'actions ORIA conservent leurs plafonds.
+    action_max = credit_costs_config.VIDEO_ACTION_DURATION_SECONDS.get(action)
+    if action_max is None or payload.requested_seconds > action_max:
+        raise HTTPException(403, "Duree superieure au plafond de cette action ORIA.")
+    if payload.aspect_ratio not in {"16:9", "9:16"}:
+        raise HTTPException(400, "Format video invalide.")
+    # Google Omni ne garantit pas a l'avance la duree exacte du clip ;
+    # toujours reserver un maximum de 10 secondes et informer l'utilisateur.
+    try:
+        quote = _google_billing_engine().estimate_google_video(
+            pack_id=wallet.pack_id, final_duration_seconds=payload.requested_seconds,
+            scene_durations_seconds=[10],
+        )
+    except MediaBillingError as error:
+        raise HTTPException(400, str(error)) from error
+    _google_require_consent(quote, payload.accepted_max_credits, wallet.balance)
+    from app.services.ggle_media_service import GoogleMediaService
+    service = GoogleMediaService(enabled=True)
+    try:
+        service._get_client()
+    except Exception as error:
+        raise HTTPException(503, "Connecteur Google indisponible.") from error
+    with _oria_tempfile.TemporaryDirectory(prefix="oria-google-video-") as directory:
+        reference = _google_validate_ref(
+            payload.reference_image_b64, payload.reference_mime_type,
+            _OriaPath(directory) / "reference",
+        )
+        reservation_id = str(uuid4())
+        try:
+            repo.reserve_credits(
+                user_id=uid, amount=quote.reservation_credits,
+                action=action, reference_id=reservation_id,
+                api_reservation_xaf=quote.estimated_provider_xaf * Decimal("1.2"),
+            )
+        except Exception as error:
+            raise _billing_reservation_failure(error) from error
+        try:
+            generated = await asyncio.to_thread(
+                service.create_short_video,
+                prompt=prompt, destination=_OriaPath(directory) / "clip.mp4",
+                aspect_ratio=payload.aspect_ratio, reference_image=reference,
+                requested_seconds=payload.requested_seconds,
+            )
+        except Exception as error:
+            raise HTTPException(502, "Generation Google non confirmee. Reservation a reconciler.") from error
+        try:
+            actual = _google_billing_engine().calculate_google_video_actual(
+                quote=quote, usage=generated.usage,
+            )
+            result = _google_settle_actual(
+                repository=repo, user_id=uid, reservation_id=reservation_id,
+                quote=quote, actual=actual, wallet=wallet,
+            )
+        except Exception as error:
+            raise HTTPException(502, "Usage Google ou reglement non confirme. Reservation conservee.") from error
+        try:
+            saved = MediaService().save_google_video(
+                user_id=uid, generated=generated, action=action.value,
+                prompt=prompt, credits_cost=result.cost,
+                conversation_id=payload.conversation_id,
+            )
+        except Exception as error:
+            print("[ORIA GOOGLE VIDEO] persistence_failed", type(error).__name__, flush=True)
+            saved = {}
+        return _google_response(
+            generated=generated, saved=saved, result=result,
+            action=action, media_type="video", conversation_id=payload.conversation_id,
+        )
+
+
+@router.get("/google-media/status")
+async def google_status(
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Teste les droits du projet Google, sans image/video facturee."""
+    _authenticate_chat_user(user_id=user_id, authorization=authorization)
+    _google_load_env()
+    if not _oria_os.getenv("GOOGLE_LBV_KEY", "").strip():
+        raise HTTPException(503, "GOOGLE_LBV_KEY est absente du backend.")
+    from app.services.ggle_media_service import GoogleMediaService
+    try:
+        data = await asyncio.to_thread(GoogleMediaService().check_connection)
+    except Exception as error:
+        raise HTTPException(502, "Acces aux modeles Google non confirme.") from error
+    return {"success": True, "provider": "google",
+            "models_seen_in_list": data["models_seen_in_list"],
+            "configured_models": data["configured_models"],
+            "generations_enabled": _google_generations_active(),
+            "note": "La liste seule ne garantit ni acces payant ni quotas."}
+   

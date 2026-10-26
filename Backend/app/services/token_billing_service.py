@@ -2303,3 +2303,299 @@ class CourseBillingService:
             model=chosen, calls=len(usages), total_cost_usd=total_usd,
             total_cost_xaf=xaf, credits=credits,
         )
+
+# ============================================================
+# GOOGLE — DEVIS DE RESERVATION MEDIA (SANS APPEL API NI DEBIT)
+# ============================================================
+# Cette extension complète MediaBillingService, sans modifier le moteur
+# OpenAI, les achats de packs, les crédits Cours ni le wallet.
+# Le routeur doit recontrôler le pack réel, réserver atomiquement en base,
+# puis autoriser le fournisseur. Aucun appel Google ici.
+from collections.abc import Sequence as _SequenceGoogle
+from app.config.credit_costs import (
+    GOOGLE_IMAGE_OUTPUT_USD_BY_MODEL,
+    GOOGLE_IMAGE_INPUT_USD_PER_MILLION,
+    GOOGLE_IMAGE_TEXT_OUTPUT_USD_PER_MILLION,
+    GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK,
+    GOOGLE_VIDEO_MODEL,
+    GOOGLE_VIDEO_PRICING_STANDARD,
+    GOOGLE_VIDEO_MAX_PROJECT_SECONDS_BY_PACK,
+    GOOGLE_MEDIA_PRICING_REFERENCE_DATE,
+)
+
+
+@dataclass(frozen=True)
+class GoogleMediaQuote:
+    """Devis sur le tarif Google Standard, sans autorisation de paiement."""
+    media_type: str
+    pack_id: str
+    model: str
+    estimated_provider_usd: Decimal
+    estimated_provider_xaf: Decimal
+    estimated_credits: int
+    reservation_credits: int
+    pricing_reference_date: str
+    details: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "media_type": self.media_type,
+            "pack_id": self.pack_id,
+            "model": self.model,
+            "estimated_provider_usd": str(self.estimated_provider_usd),
+            "estimated_provider_xaf": str(self.estimated_provider_xaf),
+            "estimated_credits": self.estimated_credits,
+            "reservation_credits": self.reservation_credits,
+            "pricing_reference_date": self.pricing_reference_date,
+            "details": self.details,
+        }
+
+
+class GoogleMediaBillingService(MediaBillingService):
+    """Tarif Google → USD/XAF/crédits, sans duplication du wallet."""
+
+    @staticmethod
+    def _money(value: Any, key: str) -> Decimal:
+        try:
+            amount = Decimal(str(value))
+        except (ValueError, TypeError, ArithmeticError) as exc:
+            raise MediaBillingError(f"{key} invalide.") from exc
+        if not amount.is_finite() or amount < 0:
+            raise MediaBillingError(f"{key} doit être fini et positif ou nul.")
+        return amount
+
+    @classmethod
+    def _quote(
+        cls, *, media_type: str, pack_id: str, model: str,
+        cost_usd: Decimal, details: dict[str, Any]
+    ) -> GoogleMediaQuote:
+        cost = cls._money(cost_usd, "cost_usd")
+        fx = cls._money(ACCOUNTING_USD_XAF, "ACCOUNTING_USD_XAF")
+        credit_value = cls._money(ORIA_CREDIT_VALUE_XAF, "ORIA_CREDIT_VALUE_XAF")
+        safety_ratio = cls._money(
+            PACK_API_SAFETY_RESERVE_RATIO, "PACK_API_SAFETY_RESERVE_RATIO"
+        )
+        if fx <= 0 or credit_value <= 0 or safety_ratio > 1:
+            raise MediaBillingError("Configuration de facturation Google invalide.")
+        cost_xaf = cost * fx
+        estimated = max(1, int((cost_xaf / credit_value).to_integral_value(
+            rounding=ROUND_CEILING
+        )))
+        reserve = max(estimated, int((
+            cost_xaf * (Decimal(1) + safety_ratio) / credit_value
+        ).to_integral_value(rounding=ROUND_CEILING)))
+        return GoogleMediaQuote(
+            media_type=media_type, pack_id=pack_id, model=model,
+            estimated_provider_usd=cost, estimated_provider_xaf=cost_xaf,
+            estimated_credits=estimated, reservation_credits=reserve,
+            pricing_reference_date=GOOGLE_MEDIA_PRICING_REFERENCE_DATE,
+            details=details,
+        )
+
+    @classmethod
+    def estimate_google_image(
+        cls, *, pack_id: str, model: str, resolution: str,
+        count: int = 1, max_input_tokens: int = 8192,
+        max_text_output_tokens: int = 4096,
+        mode: str = "text_to_image", reference_count: int = 0,
+    ) -> GoogleMediaQuote:
+        """Devis prudent : prix officiel par image + budgets tokens."""
+        pack = str(pack_id).strip()
+        model = str(model).strip()
+        if model not in GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK.get(pack, ()):
+            raise UnsupportedMediaBillingModelError("Modèle image non autorisé pour ce pack.")
+        from app.config.credit_costs import validate_google_image_configuration
+        try:
+            validate_google_image_configuration(
+                pack_id=pack, model=model, resolution=str(resolution).upper(),
+                mode=mode, reference_count=reference_count,
+            )
+        except ValueError as error:
+            raise MediaBillingError(str(error)) from error
+        price_table = GOOGLE_IMAGE_OUTPUT_USD_BY_MODEL[model]
+        res = str(resolution).upper()
+        from app.config.credit_costs import GOOGLE_IMAGE_RESOLUTIONS_ALLOWED_BY_PACK
+        if res not in GOOGLE_IMAGE_RESOLUTIONS_ALLOWED_BY_PACK.get(pack, ()):
+            raise MediaBillingError("Resolution image non autorisee pour ce pack.")
+        if res not in price_table:
+            raise MediaBillingError("Résolution image non prise en charge par le modele.")
+        if type(count) is not int or not (1 <= count <= 4):
+            raise MediaBillingError("Le nombre d'images doit être compris entre 1 et 4.")
+        if type(max_input_tokens) is not int or not 0 <= max_input_tokens <= 131072:
+            raise MediaBillingError("Plafond tokens d'entrée image invalide.")
+        if type(max_text_output_tokens) is not int or not 0 <= max_text_output_tokens <= 32768:
+            raise MediaBillingError("Plafond tokens de sortie texte image invalide.")
+        price_output = cls._money(price_table[res], "image_output_usd") * count
+        price_input = (
+            Decimal(max_input_tokens * count) *
+            cls._money(GOOGLE_IMAGE_INPUT_USD_PER_MILLION[model], "image_input_rate")
+            / _ONE_MILLION
+        )
+        price_text_out = (
+            Decimal(max_text_output_tokens * count) *
+            cls._money(GOOGLE_IMAGE_TEXT_OUTPUT_USD_PER_MILLION[model], "text_output_rate")
+            / _ONE_MILLION
+        )
+        return cls._quote(
+            media_type="image", pack_id=pack, model=model,
+            cost_usd=price_output + price_input + price_text_out,
+            details={"resolution": res, "count": count,
+                     "max_input_tokens_per_generation": max_input_tokens,
+                     "max_text_output_tokens_per_generation": max_text_output_tokens},
+        )
+
+    @classmethod
+    def estimate_google_video(
+        cls, *, pack_id: str, final_duration_seconds: int,
+        scene_durations_seconds: _SequenceGoogle[int],
+        max_input_tokens: int = 8192,
+        max_text_output_tokens: int = 4096,
+    ) -> GoogleMediaQuote:
+        """Devis scène par scène ; la somme facturable peut dépasser le film final."""
+        pack = str(pack_id).strip()
+        max_duration = GOOGLE_VIDEO_MAX_PROJECT_SECONDS_BY_PACK.get(pack)
+        if max_duration is None:
+            raise MediaBillingError("Pack vidéo inconnu.")
+        from app.config.credit_costs import (
+            GOOGLE_VIDEO_DURATION_CHOICES_BY_PACK,
+            GOOGLE_VIDEO_MAX_SCENES_BY_PACK,
+        )
+        if (type(final_duration_seconds) is not int
+                or final_duration_seconds not in
+                    GOOGLE_VIDEO_DURATION_CHOICES_BY_PACK.get(pack, ())
+                or final_duration_seconds > max_duration):
+            raise MediaBillingError("Durée finale hors du plafond du pack.")
+        if (not isinstance(scene_durations_seconds, (list, tuple))
+                or not 1 <= len(scene_durations_seconds)
+                    <= GOOGLE_VIDEO_MAX_SCENES_BY_PACK.get(pack, 0)):
+            raise MediaBillingError("Le nombre de generations depasse le quota de scenes du pack.")
+        if final_duration_seconds > 10 and len(scene_durations_seconds) < 2:
+            raise MediaBillingError("Une video longue requiert plusieurs generations.")
+        if any(type(s) is not int or not 3 <= s <= 10
+               for s in scene_durations_seconds):
+            raise MediaBillingError("Chaque génération Google doit durer de 3 à 10 s.")
+        total_generated = sum(scene_durations_seconds)
+        if total_generated < final_duration_seconds:
+            raise MediaBillingError("La durée facturable ne couvre pas le montage final.")
+        if type(max_input_tokens) is not int or not 0 <= max_input_tokens <= 131072:
+            raise MediaBillingError("Plafond tokens vidéo d'entrée invalide.")
+        if type(max_text_output_tokens) is not int or not 0 <= max_text_output_tokens <= 32768:
+            raise MediaBillingError("Plafond tokens texte de sortie invalide.")
+        rates = GOOGLE_VIDEO_PRICING_STANDARD
+        cost_video = (
+            Decimal(total_generated)
+            * Decimal(int(rates["video_output_tokens_per_second_720p"]))
+            * cls._money(rates["video_output_usd_per_million"], "video_rate")
+            / _ONE_MILLION
+        )
+        cost_input = (
+            Decimal(max_input_tokens * len(scene_durations_seconds))
+            * cls._money(rates["input_usd_per_million"], "input_rate")
+            / _ONE_MILLION
+        )
+        cost_text = (
+            Decimal(max_text_output_tokens * len(scene_durations_seconds))
+            * cls._money(rates["text_output_usd_per_million"], "text_rate")
+            / _ONE_MILLION
+        )
+        return cls._quote(
+            media_type="video", pack_id=pack, model=GOOGLE_VIDEO_MODEL,
+            cost_usd=cost_video + cost_input + cost_text,
+            details={"resolution": "720p", "final_duration_seconds": final_duration_seconds,
+                     "provider_billable_seconds": total_generated,
+                     "scene_durations_seconds": list(scene_durations_seconds),
+                     "max_input_tokens_per_generation": max_input_tokens,
+                     "max_text_output_tokens_per_generation": max_text_output_tokens},
+        )
+
+    # ------------------------------------------------------------
+    # RAPPROCHEMENT DE LA CONSOMMATION EFFECTIVE GOOGLE (ETAPE 4)
+    # ------------------------------------------------------------
+    @classmethod
+    def _measured_usage(cls, usage: Mapping[str, Any] | None) -> tuple[int, int, int, dict[str, int]]:
+        """Requiert les compteurs officiels et refuse tout usage partiel.
+
+        Les prix de sortie média ne doivent pas être refacturés une seconde
+        fois comme des tokens de texte. Les coûts manquants n'impliquent
+        jamais une consommation nulle.
+        """
+        if not isinstance(usage, Mapping):
+            raise InvalidMediaUsageError("Google n'a pas renvoyé les statistiques de facturation.")
+        try:
+            in_tokens = usage["total_input_tokens"]
+            out_tokens = usage["total_output_tokens"]
+            thought = usage.get("total_thought_tokens", 0)
+        except KeyError as exc:
+            raise InvalidMediaUsageError("Statistiques de facturation Google incomplètes.") from exc
+        if any(type(v) is not int for v in (in_tokens, out_tokens, thought)):
+            raise InvalidMediaUsageError("Statistiques de facturation Google non entieres.")
+        if min(in_tokens, out_tokens, thought) < 0:
+            raise InvalidMediaUsageError("Tokens Google négatifs.")
+        if thought > out_tokens:
+            raise InvalidMediaUsageError("Tokens de raisonnement superieurs a la sortie Google.")
+        detail = usage.get("output_tokens_by_modality")
+        if not isinstance(detail, list) or not detail:
+            raise InvalidMediaUsageError("Répartition des tokens de sortie Google manquante.")
+        breakdown: dict[str, int] = {}
+        for item in detail:
+            if not isinstance(item, Mapping):
+                raise InvalidMediaUsageError("Détail de sortie invalide.")
+            modality = str(item.get("modality") or "").lower()
+            raw = item.get("tokens")
+            if type(raw) is not int or raw < 0 or not modality:
+                raise InvalidMediaUsageError("Nombre de tokens multimodaux invalide.")
+            breakdown[modality] = breakdown.get(modality, 0) + raw
+        if sum(breakdown.values()) > out_tokens:
+            raise InvalidMediaUsageError("Double comptage potentiel des sorties Google.")
+        return in_tokens, out_tokens, thought, breakdown
+
+    @classmethod
+    def calculate_google_image_actual(
+        cls, *, quote: GoogleMediaQuote, usage: Mapping[str, Any] | None
+    ) -> GoogleMediaQuote:
+        """Prix de sortie d'une image + tokens d'entrée/texte effectivement observés."""
+        if quote.media_type != "image":
+            raise MediaBillingError("Un devis image est requis.")
+        inp, total_out, thought, details = cls._measured_usage(usage)
+        if details.get("image", 0) <= 0:
+            raise InvalidMediaUsageError("Aucun token de sortie image déclaré par Google.")
+        if any(count > 0 and modality not in {"image", "text"} for modality, count in details.items()):
+            raise InvalidMediaUsageError("Modalite de sortie image non tarifee : audit requis.")
+        if quote.details.get("count") != 1:
+            raise MediaBillingError("Cette version ne produit qu'une image.")
+        res = quote.details["resolution"]
+        output_fixed = cls._money(GOOGLE_IMAGE_OUTPUT_USD_BY_MODEL[quote.model][res], "image_output_usd")
+        rate_in = cls._money(GOOGLE_IMAGE_INPUT_USD_PER_MILLION[quote.model], "image_input_rate")
+        rate_text = cls._money(GOOGLE_IMAGE_TEXT_OUTPUT_USD_PER_MILLION[quote.model], "text_output_rate")
+        # Thought tokens peuvent être séparés selon le modèle. On les couvre
+        # par prudence comme sortie texte, mais on évite de compter 2 fois.
+        non_image = max(total_out - details["image"], details.get("text", 0), thought)
+        actual_usd = (output_fixed + Decimal(inp) * rate_in / _ONE_MILLION
+                      + Decimal(non_image) * rate_text / _ONE_MILLION)
+        return cls._quote(media_type="image", pack_id=quote.pack_id, model=quote.model,
+                          cost_usd=actual_usd, details={**quote.details, "measured": True})
+
+    @classmethod
+    def calculate_google_video_actual(
+        cls, *, quote: GoogleMediaQuote, usage: Mapping[str, Any] | None
+    ) -> GoogleMediaQuote:
+        """Les secondes demandées ne servent PAS de mesure finale."""
+        if quote.media_type != "video":
+            raise MediaBillingError("Un devis vidéo est requis.")
+        inp, total_out, thought, details = cls._measured_usage(usage)
+        video_tokens = details.get("video", 0)
+        if video_tokens <= 0:
+            raise InvalidMediaUsageError("Aucun token de sortie vidéo déclaré par Google.")
+        if any(count > 0 and modality not in {"video", "text"} for modality, count in details.items()):
+            raise InvalidMediaUsageError("Modalite de sortie video non tarifee : audit requis.")
+        rates = GOOGLE_VIDEO_PRICING_STANDARD
+        text_tokens = max(total_out - video_tokens, details.get("text", 0), thought)
+        actual_usd = (
+            Decimal(inp) * cls._money(rates["input_usd_per_million"], "input_rate") / _ONE_MILLION
+            + Decimal(video_tokens) * cls._money(rates["video_output_usd_per_million"], "video_rate") / _ONE_MILLION
+            + Decimal(text_tokens) * cls._money(rates["text_output_usd_per_million"], "text_rate") / _ONE_MILLION
+        )
+        return cls._quote(media_type="video", pack_id=quote.pack_id, model=quote.model,
+                          cost_usd=actual_usd, details={**quote.details,
+                                                       "measured_output_video_tokens": video_tokens,
+                                                       "measured": True})

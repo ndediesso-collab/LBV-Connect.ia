@@ -1643,3 +1643,236 @@ def build_course_credit_quote(
         total_estimated_credits=transcription.estimated_credits + document_estimated_credits,
         total_reservation_credits=reserved,
     )
+
+# ============================================================
+# GOOGLE — CONFIGURATION MEDIA ET TARIFS (ETAPE 1, NON ACTIVE)
+# ============================================================
+# Ce fichier est la source des droits commerciaux ORIA et du catalogue
+# de prix Google. Il n'appelle aucune API et n'effectue aucun debit.
+# Les services et routes historiques OpenAI restent inchanges :
+# IMAGE_MODEL_BY_PACK / VIDEO_PROVIDER_BY_PACK pointent encore vers OpenAI.
+# La migration sera active apres raccordement et tests des autres couches.
+# Source des tarifs STANDARD (non Batch) :
+# https://ai.google.dev/gemini-api/docs/pricing
+# Identifiants officiels : https://ai.google.dev/gemini-api/docs/models
+# Les tarifs sont en USD; les devis doivent aussi prendre en compte
+# les tokens en entree, les sorties texte/reflexion et le montage.
+
+GOOGLE_MEDIA_PRICING_REFERENCE_DATE = "2026-10-25"
+
+# Prix de SORTIE pour UNE image, selon le modele et la resolution.
+# Les options non repertoriees ne sont pas tarifees et sont donc refusees.
+GOOGLE_IMAGE_OUTPUT_USD_BY_MODEL: dict[str, dict[str, str]] = {
+    "gemini-3.1-flash-lite-image": {"1K": "0.0336"},
+    "gemini-nano-banana-2.1": {
+        "1K": "0.0336", "2K": "0.0504", "4K": "0.113"
+    },
+    "gemini-3-pro-image": {
+        "1K": "0.134", "2K": "0.134", "4K": "0.24"
+    },
+}
+GOOGLE_IMAGE_INPUT_USD_PER_MILLION: dict[str, str] = {
+    "gemini-3.1-flash-lite-image": "0.25",
+    "gemini-nano-banana-2.1": "1.50",
+    "gemini-3-pro-image": "2.00",
+}
+GOOGLE_IMAGE_TEXT_OUTPUT_USD_PER_MILLION: dict[str, str] = {
+    "gemini-3.1-flash-lite-image": "1.50",
+    "gemini-nano-banana-2.1": "7.50",
+    "gemini-3-pro-image": "12.00",
+}
+
+GOOGLE_VIDEO_MODEL = "gemini-omni-1.1-flash"
+GOOGLE_VIDEO_PRICING_STANDARD: dict[str, str | int] = {
+    "input_usd_per_million": "1.50",
+    "video_output_usd_per_million": "17.50",
+    "text_output_usd_per_million": "9.00",
+    "video_output_tokens_per_second_720p": 5792,
+}
+# Le tarif de 720p est documente. Un cout 1080p/4K ne peut pas
+# etre extrapole a partir de ce taux pour autoriser une transaction.
+GOOGLE_VIDEO_BILLABLE_RESOLUTIONS = ("720p",)
+GOOGLE_VIDEO_PROVIDER_MIN_CLIP_SECONDS = 3
+GOOGLE_VIDEO_PROVIDER_MAX_CLIP_SECONDS = 10
+
+# ------------------------------------------------------------
+# DROITS COMMERCIAUX DES QUATRE PACKS (35 jours inchanges)
+# ------------------------------------------------------------
+# Identifiants de packs provenant du wallet, jamais de la requete client.
+# Image : "image_edit" couvre la retouche d'une photo importee;
+# "multi_reference" la creation/retouche avec plusieurs references;
+# "advanced_edit" indique les outils plus complets du Mini-studio.
+# Ces modes sont des droits ORIA, pas des noms de taches Google.
+GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK: dict[str, tuple[str, ...]] = {
+    "light_pack": ("gemini-3.1-flash-lite-image",),
+    "intermediate_pack": (
+        "gemini-3.1-flash-lite-image", "gemini-nano-banana-2.1"
+    ),
+    "pro_pack": (
+        "gemini-3.1-flash-lite-image", "gemini-nano-banana-2.1",
+        "gemini-3-pro-image",
+    ),
+    "business_pack": (
+        "gemini-3.1-flash-lite-image", "gemini-nano-banana-2.1",
+        "gemini-3-pro-image",
+    ),
+}
+GOOGLE_IMAGE_RESOLUTIONS_ALLOWED_BY_PACK: dict[str, tuple[str, ...]] = {
+    "light_pack": ("1K",),
+    "intermediate_pack": ("1K", "2K"),
+    "pro_pack": ("1K", "2K", "4K"),
+    "business_pack": ("1K", "2K", "4K"),
+}
+GOOGLE_IMAGE_MAX_REFERENCE_IMAGES_BY_PACK: dict[str, int] = {
+    "light_pack": 1,
+    "intermediate_pack": 3,
+    "pro_pack": 6,
+    "business_pack": 10,
+}
+# Plafond d'usage prudent PAR MODELE (restriction ORIA, pas limite API) :
+# Lite reste reserve a l'edition avec une reference; pour les montages
+# complexes, le Mini-studio devra choisir Nano Banana 2.1 ou Pro.
+GOOGLE_IMAGE_MAX_REFERENCE_IMAGES_BY_MODEL: dict[str, int] = {
+    "gemini-3.1-flash-lite-image": 1,
+    "gemini-nano-banana-2.1": 14,
+    "gemini-3-pro-image": 14,
+}
+
+GOOGLE_IMAGE_CREATION_MODES_BY_PACK: dict[str, tuple[str, ...]] = {
+    "light_pack": ("text_to_image", "image_edit"),
+    "intermediate_pack": ("text_to_image", "image_edit", "multi_reference"),
+    "pro_pack": (
+        "text_to_image", "image_edit", "multi_reference", "advanced_edit"
+    ),
+    "business_pack": (
+        "text_to_image", "image_edit", "multi_reference", "advanced_edit"
+    ),
+}
+
+# Duration maximum = duree du PROJET final, et non duree d'un appel Google.
+# Au-dela de 10s : prolongation ou montage de plusieurs appels payants.
+GOOGLE_VIDEO_MAX_PROJECT_SECONDS_BY_PACK: dict[str, int] = {
+    "light_pack": 8,
+    "intermediate_pack": 20,
+    "pro_pack": 40,
+    "business_pack": 120,
+}
+GOOGLE_VIDEO_DURATION_CHOICES_BY_PACK: dict[str, tuple[int, ...]] = {
+    "light_pack": (4, 8),
+    "intermediate_pack": (4, 8, 10, 20),
+    "pro_pack": (4, 8, 10, 20, 40),
+    "business_pack": (4, 8, 10, 20, 40, 60, 120),
+}
+GOOGLE_VIDEO_MODES_ALLOWED_BY_PACK: dict[str, tuple[str, ...]] = {
+    "light_pack": ("text_to_video", "image_to_video"),
+    "intermediate_pack": (
+        "text_to_video", "image_to_video", "multi_scene", "extend_video"
+    ),
+    "pro_pack": (
+        "text_to_video", "image_to_video", "multi_scene", "extend_video",
+        "first_last_frame", "edit_video",
+    ),
+    "business_pack": (
+        "text_to_video", "image_to_video", "multi_scene", "extend_video",
+        "first_last_frame", "edit_video",
+    ),
+}
+GOOGLE_VIDEO_MAX_SCENES_BY_PACK: dict[str, int] = {
+    "light_pack": 1,
+    "intermediate_pack": 2,
+    "pro_pack": 16,
+    "business_pack": 32,
+}
+# Pendant cette etape, seuls les clips 720p sont chiffrables.
+# Les sorties 1080p (Pro) et 4K (Business) restent des objectifs a
+# activer plus tard avec leurs vrais tarifs et le moteur de montage.
+GOOGLE_VIDEO_RESOLUTIONS_ALLOWED_BY_PACK: dict[str, tuple[str, ...]] = {
+    "light_pack": ("720p",),
+    "intermediate_pack": ("720p",),
+    "pro_pack": ("720p",),
+    "business_pack": ("720p",),
+}
+GOOGLE_VIDEO_FUTURE_EXPORT_RESOLUTIONS_BY_PACK: dict[str, tuple[str, ...]] = {
+    "light_pack": ("720p",),
+    "intermediate_pack": ("720p",),
+    "pro_pack": ("720p", "1080p"),
+    "business_pack": ("720p", "1080p", "4K"),
+}
+
+
+def google_media_capabilities_for_pack(pack_id: str) -> dict[str, object]:
+    """Decrit les droits proposes pour un pack connu, sinon refuse.
+
+    Cette fonction ne verifie PAS l'abonnement ni le wallet : le routeur
+    doit lire le pack ACTIF en base avant de l'appeler.
+    """
+    if pack_id not in GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK:
+        raise ValueError("Pack ORIA inconnu pour les creations Google.")
+    return {
+        "image_models": GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK[pack_id],
+        "image_resolutions": GOOGLE_IMAGE_RESOLUTIONS_ALLOWED_BY_PACK[pack_id],
+        "image_modes": GOOGLE_IMAGE_CREATION_MODES_BY_PACK[pack_id],
+        "max_reference_images": GOOGLE_IMAGE_MAX_REFERENCE_IMAGES_BY_PACK[pack_id],
+        "video_model": GOOGLE_VIDEO_MODEL,
+        "video_modes": GOOGLE_VIDEO_MODES_ALLOWED_BY_PACK[pack_id],
+        "video_duration_choices": GOOGLE_VIDEO_DURATION_CHOICES_BY_PACK[pack_id],
+        "max_video_project_seconds": GOOGLE_VIDEO_MAX_PROJECT_SECONDS_BY_PACK[pack_id],
+        "max_video_scenes": GOOGLE_VIDEO_MAX_SCENES_BY_PACK[pack_id],
+        "video_billable_resolutions": GOOGLE_VIDEO_RESOLUTIONS_ALLOWED_BY_PACK[pack_id],
+    }
+
+
+def validate_google_image_configuration(
+    *, pack_id: str, model: str, resolution: str,
+    mode: str, reference_count: int = 0,
+) -> None:
+    """Refuse les combinaisons non configurees, avant tout appel payant."""
+    rights = google_media_capabilities_for_pack(pack_id)
+    if model not in rights["image_models"]:
+        raise ValueError("Modele Google interdit pour ce pack ORIA.")
+    if resolution not in rights["image_resolutions"]:
+        raise ValueError("Resolution image indisponible pour ce pack.")
+    if resolution not in GOOGLE_IMAGE_OUTPUT_USD_BY_MODEL[model]:
+        raise ValueError("Resolution indisponible pour le modele Google choisi.")
+    if mode not in rights["image_modes"]:
+        raise ValueError("Mode de creation image interdit pour ce pack.")
+    if type(reference_count) is not int or not 0 <= reference_count <= rights["max_reference_images"]:
+        raise ValueError("Nombre de photos de reference hors limite du pack.")
+    if reference_count > GOOGLE_IMAGE_MAX_REFERENCE_IMAGES_BY_MODEL[model]:
+        raise ValueError("Trop de references pour cette configuration de modele Google.")
+    if mode == "text_to_image" and reference_count != 0:
+        raise ValueError("Une creation texte vers image ne prend pas de photo de reference.")
+    if mode in {"image_edit", "multi_reference", "advanced_edit"} and reference_count < 1:
+        raise ValueError("Une retouche necessite une photo de reference.")
+    if mode == "multi_reference" and reference_count < 2:
+        raise ValueError("Le mode multi-reference necessite au moins deux images.")
+
+
+def validate_google_video_configuration(
+    *, pack_id: str, mode: str, duration_seconds: int,
+    scene_count: int = 1, resolution: str = "720p",
+) -> None:
+    """Verifie les droits commerciaux, PAS le devis ou le wallet.
+
+    Les videos >10s exigent une extension ou un projet multi-scenes.
+    Chaque appel de generation reste borne a 3-10s par Google.
+    """
+    rights = google_media_capabilities_for_pack(pack_id)
+    if mode not in rights["video_modes"]:
+        raise ValueError("Mode video interdit pour ce pack ORIA.")
+    if type(duration_seconds) is not int or duration_seconds not in rights["video_duration_choices"]:
+        raise ValueError("Duree video indisponible pour ce pack ORIA.")
+    if type(scene_count) is not int or not 1 <= scene_count <= rights["max_video_scenes"]:
+        raise ValueError("Nombre de scenes hors limite du pack.")
+    if resolution not in rights["video_billable_resolutions"]:
+        raise ValueError("Resolution video non tarifee ou non autorisee.")
+    if duration_seconds > GOOGLE_VIDEO_PROVIDER_MAX_CLIP_SECONDS and mode not in {
+        "multi_scene", "extend_video"
+    }:
+        raise ValueError("Video longue : montage ou prolongation requis.")
+    if mode == "multi_scene" and scene_count < 2:
+        raise ValueError("Un montage multi-scenes requiert au moins deux scenes.")
+    if mode != "multi_scene" and scene_count != 1:
+        raise ValueError("Le nombre de scenes n'est applicable qu'au montage.")
+    if mode == "multi_scene" and scene_count * GOOGLE_VIDEO_PROVIDER_MAX_CLIP_SECONDS < duration_seconds:
+        raise ValueError("Les scenes prevues ne couvrent pas la duree finale.")

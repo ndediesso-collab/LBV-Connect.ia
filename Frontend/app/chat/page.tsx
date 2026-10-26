@@ -41,6 +41,12 @@ const OriaVisualAdvanced = dynamic(
   { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted">Chargement du visuel interactif…</div> },
 );
 
+// Chargement à la demande : aucun composant de création dans le Chat.
+const OriaMiniStudio = dynamic(
+  () => import("@/components/oria-mini-studio/OriaMiniStudio"),
+  { ssr: false },
+);
+
 // Moteurs visuels complémentaires, chargés uniquement pour les blocs concernés.
 const OriaVisualCore = dynamic(
   () => import("@/components/oria-visual/OriaVisualCore"),
@@ -94,47 +100,6 @@ type ChatResponse = {
   response?: string;
   message?: string;
   web_images?: WebIllustration[];
-};
-
-type MediaCapability = {
-  action: string;
-  type: "image" | "video";
-  // Le backend peut exposer une estimation, mais le coût final est dynamique.
-  estimated_credits?: number | null;
-  credits?: number | null; // compatibilité temporaire avec une ancienne réponse API
-  model?: string | null;
-  quality?: string | null;
-  seconds?: number | string | null;
-  size?: string | null;
-};
-
-type MediaCapabilitiesResponse = {
-  success: boolean;
-  pack_id: string | null;
-  pack_active?: boolean;
-  // L'API renvoie principalement des identifiants, pas des objets.
-  // Certaines versions peuvent aussi renvoyer des objets enrichis.
-  images?: unknown[];
-  videos?: unknown[];
-  media?: unknown[];
-};
-
-type GeneratedMedia = {
-  id: string;
-  user_id?: string;
-  conversation_id?: string | null;
-  prompt?: string | null;
-  created_at?: string | null;
-  media_type?: "image" | "video";
-  type: "image" | "video";
-  mimeType: string;
-  url: string;
-  action: string;
-  model: string;
-  cost: number;
-  creditsRemaining: number;
-  seconds?: string | null;
-  size?: string | null;
 };
 
 type GeneratedArtifact = {
@@ -298,15 +263,14 @@ const ORIA_CHAT_STATUS_LABELS = {
   processing_attachments: { fr: "Traitement des pièces jointes…", en: "Processing attachments…" },
   processing: { fr: "Génération de la réponse…", en: "Generating response…" },
   restarting: { fr: "Ajustement de la réponse…", en: "Updating response…" },
-  media_generation: { fr: "Création du média…", en: "Generating media…" },
 } as const satisfies Record<string, Record<OriaLanguage, string>>;
 
 type OriaChatStatusStep = keyof typeof ORIA_CHAT_STATUS_LABELS;
 
 function readOriaChatStatusStep(value: unknown): OriaChatStatusStep | null {
   if (typeof value !== "string") return null;
-  // Deux étapes sont exclusivement locales au navigateur.
-  if (value === "sending" || value === "media_generation") return null;
+  // Etape "sending" exclusivement locale au navigateur.
+  if (value === "sending") return null;
   return Object.prototype.hasOwnProperty.call(ORIA_CHAT_STATUS_LABELS, value)
     ? (value as OriaChatStatusStep)
     : null;
@@ -377,40 +341,22 @@ const UI = {
     howCanIHelp: "Comment puis-je vous aider ?",
     welcomeDescription: "Discutez avec les modèles disponibles et utilisez la recherche Web directement depuis votre espace.",
     download: "Télécharger",
-    downloadCreation: "Télécharger cette création",
     model: "Modèle",
     trial: "Essai",
     noModel: "Aucun modèle disponible avec ce pack.",
     webEnabled: "Recherche Web activée",
     webEnabledDescription: "La recherche Web reste active pour les prochains messages jusqu'à sa désactivation.",
     disableWeb: "Désactiver la recherche Web",
-    mediaCreation: "Création média",
-    mediaCreationDescription: "Choisissez Image ou Vidéo, puis la configuration avant de générer.",
-    closeMediaCreation: "Fermer la création média",
-    generateImage: "Générer une image",
-    generateVideo: "Générer une vidéo",
-    generationConfiguration: "Configuration de génération",
-    creditsUnit: "crédits",
-    generation: "Génération...",
-    generateTheVideo: "Générer la vidéo",
-    generateTheImage: "Générer l'image",
-    describeCreation: "Décrivez votre création...",
     writeToOria: "Écrivez à Oria...",
     comingSoon: "Arrive bientôt",
     send: "Envoyer",
-    attachmentsHelp: "fichiers ou images peuvent être joints à un message. Les créations image et vidéo dépendent du pack actif.",
+    attachmentsHelp: "fichiers ou images peuvent être joints à un message. Les créations sont disponibles dans le Mini-Studio.",
     copy: "Copier",
     copied: "Copié",
     copyMessage: "Copier le message",
     mathExpression: "Expression mathématique",
     trialExhausted: "Les 5 essais de ce modèle sont épuisés.",
     superiorModelTrial: "{UI[language].superiorModelTrial}",
-    generatedImageAlt: "Image générée par Oria",
-    configuration: "configuration",
-    configurations: "configurations",
-    preciseVideo: "Décrivez précisément la vidéo à créer...",
-    preciseImage: "Décrivez précisément l'image à créer...",
-    backendValidation: "Oria réserve une estimation, puis facture uniquement le coût réel de la génération.",
   },
   en: {
     file: "File",
@@ -436,40 +382,22 @@ const UI = {
     howCanIHelp: "How can I help you?",
     welcomeDescription: "Chat with the available models and use Web Search directly from your workspace.",
     download: "Download",
-    downloadCreation: "Download this creation",
     model: "Model",
     trial: "Trial",
     noModel: "No model is available with this pack.",
     webEnabled: "Web Search enabled",
     webEnabledDescription: "Web Search stays enabled for your next messages until you turn it off.",
     disableWeb: "Disable Web Search",
-    mediaCreation: "Media creation",
-    mediaCreationDescription: "Choose Image or Video, then select the configuration before generating.",
-    closeMediaCreation: "Close media creation",
-    generateImage: "Generate an image",
-    generateVideo: "Generate a video",
-    generationConfiguration: "Generation configuration",
-    creditsUnit: "credits",
-    generation: "Generating...",
-    generateTheVideo: "Generate video",
-    generateTheImage: "Generate image",
-    describeCreation: "Describe your creation...",
     writeToOria: "Message Oria...",
     comingSoon: "Coming soon",
     send: "Send",
-    attachmentsHelp: "files or images can be attached to a message. Image and video creation depends on your active pack.",
+    attachmentsHelp: "files or images can be attached to a message. Create images and videos in the Mini Studio.",
     copy: "Copy",
     copied: "Copied",
     copyMessage: "Copy message",
     mathExpression: "Math expression",
     trialExhausted: "The 5 trials for this model have been used.",
     superiorModelTrial: "Higher model · 5 trials maximum",
-    generatedImageAlt: "Image generated by Oria",
-    configuration: "configuration",
-    configurations: "configurations",
-    preciseVideo: "Describe the video you want to create...",
-    preciseImage: "Describe the image you want to create...",
-    backendValidation: "Oria reserves an estimate, then charges only the actual generation cost.",
   },
 } as const;
 
@@ -542,214 +470,6 @@ function getModelDescription(modelId: string, language: OriaLanguage): string {
   };
 
   return descriptions[modelId]?.[language] ?? "";
-}
-
-function getMediaDescription(action: string, language: OriaLanguage, fallback: string): string {
-  if (language === "fr") return fallback;
-
-  const descriptions: Record<string, string> = {
-    image_480: "Light image generation",
-    image_720: "Light image generation",
-    image_pro: "Professional image generation",
-    image_pro_standard: "Standard professional quality",
-    image_pro_ultra: "Maximum professional quality",
-    image_business: "Business image generation",
-    image_business_hd: "High-definition business generation",
-    image_business_ultra: "Maximum business generation",
-    video_4s: "Light video generation",
-    video_8s: "Light video generation",
-    video_lite: "Intermediate video generation",
-    video_pro_fast: "Fast professional video generation",
-    video_pro_standard: "Standard professional video generation",
-    video_pro_extension: "Extend a Pro video generation",
-    video_business_fast: "Fast business video generation",
-    video_business_standard: "Standard business video generation",
-    video_business_long: "Long business video generation",
-  };
-
-  return descriptions[action] ?? fallback;
-}
-
-function getMediaLabel(action: string, language: OriaLanguage, fallback: string): string {
-  if (language === "fr") return fallback;
-  return fallback
-    .replace(/^Vidéo /, "Video ")
-    .replace(/ 4 s$/, " 4s")
-    .replace(/ 8 s$/, " 8s");
-}
-
-
-const MEDIA_GENERATION_CONFIGS = [
-  {
-    action: "image_480", type: "image", label: "Image Essentielle",
-    description: "Génération rapide avec GPT Image 2", configuration: "Qualité basse",
-    packs: ["light_pack", "intermediate_pack"], model: "GPT Image 2",
-  },
-  {
-    action: "image_720", type: "image", label: "Image Plus",
-    description: "Génération équilibrée avec GPT Image 2", configuration: "Qualité moyenne",
-    packs: ["light_pack", "intermediate_pack"], model: "GPT Image 2",
-  },
-  {
-    action: "image_pro", type: "image", label: "Image Pro",
-    description: "Génération professionnelle avec GPT Image 2.5 Flare", configuration: "Qualité basse",
-    packs: ["pro_pack"], model: "GPT Image 2.5 Flare",
-  },
-  {
-    action: "image_pro_standard", type: "image", label: "Image Pro HD",
-    description: "Rendu professionnel détaillé", configuration: "Qualité haute",
-    packs: ["pro_pack"], model: "GPT Image 2.5 Flare",
-  },
-  {
-    action: "image_pro_ultra", type: "image", label: "Image Pro Ultra",
-    description: "Rendu professionnel très haute qualité", configuration: "Qualité XHigh",
-    packs: ["pro_pack"], model: "GPT Image 2.5 Flare",
-  },
-  {
-    action: "image_business", type: "image", label: "Image Business",
-    description: "Création premium avec GPT Image 2.5 Sunburst", configuration: "Qualité moyenne",
-    packs: ["business_pack"], model: "GPT Image 2.5 Sunburst",
-  },
-  {
-    action: "image_business_hd", type: "image", label: "Image Business HD",
-    description: "Création premium haute définition", configuration: "Qualité XHigh",
-    packs: ["business_pack"], model: "GPT Image 2.5 Sunburst",
-  },
-  {
-    action: "image_business_ultra", type: "image", label: "Image Business Max",
-    description: "Qualité maximale pour les créations exigeantes", configuration: "Qualité Max",
-    packs: ["business_pack"], model: "GPT Image 2.5 Sunburst",
-  },
-
-  {
-    action: "video_4s", type: "video", label: "Vidéo 4 s",
-    description: "Génération vidéo OpenAI courte", configuration: "4 secondes · 720p",
-    packs: ["light_pack"], model: "Sora 2",
-  },
-  {
-    action: "video_8s", type: "video", label: "Vidéo 8 s",
-    description: "Génération vidéo OpenAI étendue", configuration: "8 secondes · 720p",
-    packs: ["light_pack"], model: "Sora 2",
-  },
-  {
-    action: "video_lite", type: "video", label: "Vidéo Lite",
-    description: "Génération vidéo intermédiaire", configuration: "4 secondes · 720p",
-    packs: ["intermediate_pack"], model: "Sora 2",
-  },
-  {
-    action: "video_pro_fast", type: "video", label: "Vidéo Pro Fast",
-    description: "Génération professionnelle rapide", configuration: "4 secondes · 720p",
-    packs: ["pro_pack"], model: "Sora 2",
-  },
-  {
-    action: "video_pro_standard", type: "video", label: "Vidéo Pro Standard",
-    description: "Génération professionnelle standard", configuration: "8 secondes · 720p",
-    packs: ["pro_pack"], model: "Sora 2",
-  },
-  {
-    action: "video_pro_extension", type: "video", label: "Vidéo Pro Extension",
-    description: "Extension d'une génération Pro", configuration: "4 secondes · 720p",
-    packs: ["pro_pack"], model: "Sora 2",
-  },
-  {
-    action: "video_business_fast", type: "video", label: "Vidéo Business Fast",
-    description: "Génération premium rapide", configuration: "4 secondes",
-    packs: ["business_pack"], model: "Sora 2 Pro",
-  },
-  {
-    action: "video_business_standard", type: "video", label: "Vidéo Business Standard",
-    description: "Génération premium standard", configuration: "8 secondes",
-    packs: ["business_pack"], model: "Sora 2 Pro",
-  },
-  {
-    action: "video_business_long", type: "video", label: "Vidéo Business Long",
-    description: "Génération premium longue", configuration: "12 secondes",
-    packs: ["business_pack"], model: "Sora 2 Pro",
-  },
-] as const;
-
-function getLocalMediaCapabilities(packId: string | null): MediaCapability[] {
-  if (!packId) return [];
-
-  return MEDIA_GENERATION_CONFIGS
-    .filter((item) => item.packs.includes(packId as never))
-    .map((item) => ({
-      action: item.action,
-      type: item.type,
-      model: item.model,
-    }));
-}
-
-type MediaGenerationType = (typeof MEDIA_GENERATION_CONFIGS)[number]["type"];
-
-function getMediaGenerationConfig(action: string) {
-  return MEDIA_GENERATION_CONFIGS.find((item) => item.action === action);
-}
-
-// La réponse réelle de /ai/media-capabilities est une liste d'actions
-// (ex. "image_480"). On accepte aussi les objets enrichis pour compatibilité.
-// La configuration locale sert uniquement aux libellés et aux métadonnées :
-// les actions réellement accessibles proviennent de l'API.
-function normalizeMediaCapability(raw: unknown): MediaCapability | null {
-  const item = typeof raw === "string" ? { action: raw } : raw;
-
-  if (!item || typeof item !== "object" || Array.isArray(item)) {
-    return null;
-  }
-
-  const record = item as Record<string, unknown>;
-  const action = typeof record.action === "string" ? record.action : "";
-  const config = getMediaGenerationConfig(action);
-
-  if (!config) return null;
-
-  return {
-    action: config.action,
-    type: config.type,
-    model:
-      typeof record.model === "string" && record.model.trim()
-        ? record.model
-        : config.model,
-    estimated_credits:
-      typeof record.estimated_credits === "number" &&
-      Number.isFinite(record.estimated_credits) &&
-      record.estimated_credits >= 0
-        ? record.estimated_credits
-        : null,
-    credits:
-      typeof record.credits === "number" &&
-      Number.isFinite(record.credits) && record.credits >= 0
-        ? record.credits
-        : null,
-    quality: typeof record.quality === "string" ? record.quality : null,
-    seconds:
-      typeof record.seconds === "string" || typeof record.seconds === "number"
-        ? record.seconds
-        : null,
-    size: typeof record.size === "string" ? record.size : null,
-  };
-}
-
-const ORIA_MEDIA_MARKER_REGEX =
-  /\[\[ORIA_MEDIA_ID:([^\]]+)\]\]/;
-
-function buildMediaMessageContent(
-  type: "image" | "video",
-  action: string,
-  mediaId: string,
-): string {
-  return `${type === "image" ? "Image" : "Vidéo"} générée · ${action}
-[[ORIA_MEDIA_ID:${mediaId}]]`;
-}
-
-function extractMediaIdFromMessage(
-  content: string,
-): string | null {
-  return (
-    content.match(
-      ORIA_MEDIA_MARKER_REGEX,
-    )?.[1] ?? null
-  );
 }
 
 const ORIA_AUDIO_MARKER_REGEX = /\[\[ORIA_AUDIO_ID:([^\]]+)\]\]/;
@@ -1363,20 +1083,6 @@ async function apiFetch<T>(
   }
 
   return response.json();
-}
-
-async function apiMediaFetch<T>(
-  path: string,
-  payload: {
-    action: string;
-    prompt: string;
-    conversation_id?: string | null;
-  },
-): Promise<T> {
-  return apiFetch<T>(path, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
 }
 
 /*
@@ -4100,6 +3806,15 @@ export default function ChatPage() {
   const [error, setError] =
     useState<string | null>(null);
 
+  // Artifacts du Chat (PDF, DOCX, code, etc.) : indépendants du Mini-Studio.
+  // Cette collection doit rester dans le Chat pour le streaming,
+  // les marqueurs ORIA_ARTIFACT_ID et les téléchargements.
+  const [generatedArtifacts, setGeneratedArtifacts] =
+    useState<GeneratedArtifact[]>([]);
+
+  // Le Chat ne conserve que le déclencheur : tout le Mini-Studio est isolé.
+  const [isMiniStudioOpen, setIsMiniStudioOpen] = useState(false);
+
   const [
     isInitialized,
     setIsInitialized,
@@ -4109,53 +3824,6 @@ export default function ChatPage() {
     currentUserId,
     setCurrentUserId,
   ] = useState<string | null>(null);
-
-  // Seules les actions annoncées par le backend sont affichées en temps
-  // normal. En cas d'échec réseau, le fallback local reste disponible
-  // uniquement si le wallet local indique un pack actif.
-  // Le backend contrôle toujours l'autorisation lors de la génération.
-  const [mediaCapabilities, setMediaCapabilities] =
-    useState<MediaCapability[]>([]);
-
-  const [selectedMediaAction, setSelectedMediaAction] =
-    useState<string>("");
-
-  const [mediaPrompt, setMediaPrompt] =
-    useState("");
-
-  const [generatedMedia, setGeneratedMedia] =
-    useState<GeneratedMedia[]>([]);
-
-  const [generatedArtifacts, setGeneratedArtifacts] =
-    useState<GeneratedArtifact[]>([]);
-
-  const [isLoadingMediaCapabilities, setIsLoadingMediaCapabilities] =
-    useState(false);
-
-  const [mediaMenuOpen, setMediaMenuOpen] =
-    useState(false);
-
-  // Le mini-studio ne crée aucun nouveau paramètre backend : il expose
-  // uniquement les actions connues de /ai/media-capabilities.
-  const [studioShowOtherConfigurations, setStudioShowOtherConfigurations] =
-    useState(false);
-
-  useEffect(() => {
-    if (activeCapability !== "Création") return;
-    const oldOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !isThinking) {
-        setActiveCapability(null);
-        setStudioShowOtherConfigurations(false);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = oldOverflow;
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [activeCapability, isThinking]);
 
   // Ajouts Chat Web : lecteur source, images de recherche, notes vocales.
   const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
@@ -4274,9 +3942,6 @@ export default function ChatPage() {
         data.wallet;
 
       setWallet(walletData);
-      // Ne pas conserver les capacités d'un éventuel ancien pack.
-      setMediaCapabilities([]);
-      setSelectedMediaAction("");
 
       const availableModels =
         getSelectableModels(
@@ -4307,8 +3972,6 @@ export default function ChatPage() {
 
       // Une session sans wallet vérifié ne doit pas réutiliser des droits périmés.
       setWallet(null);
-      setMediaCapabilities([]);
-      setSelectedMediaAction("");
 
       setError(
         requestError instanceof Error
@@ -4508,7 +4171,7 @@ export default function ChatPage() {
           }
 
           setActiveCapability(
-            localCache.activeCapability,
+            localCache.activeCapability === "Création" ? null : localCache.activeCapability,
           );
 
           if (
@@ -4542,13 +4205,9 @@ export default function ChatPage() {
           loadConversations(
             localCache,
           ),
-          loadPersistedMedia(),
           loadPersistedArtifacts(),
         ]);
 
-        // Les capacités média sont chargées à l'ouverture du mode
-        // « Création » afin qu'un endpoint indisponible ne bloque pas
-        // l'initialisation générale du chat.
         void cancelled;
       } catch (requestError) {
         console.error(
@@ -4817,103 +4476,6 @@ export default function ChatPage() {
           ? `${requestError.message} Les messages locaux restent affichés.`
           : "Impossible de charger les messages cloud. Les données locales restent affichées.",
       );
-    }
-  }
-
-  /*
-   * ==========================================================
-   * CHARGEMENT DES CAPACITÉS MÉDIA
-   * ==========================================================
-   */
-
-  /*
-   * ==========================================================
-   * MÉDIAS PERSISTÉS — SUPABASE
-   * ==========================================================
-   */
-
-  async function loadPersistedMedia(): Promise<void> {
-    try {
-      const data = await apiFetch<{
-        success?: boolean;
-        media?: Array<{
-          id: string;
-          media_type?: "image" | "video";
-          type?: "image" | "video";
-          mime_type?: string | null;
-          public_url?: string | null;
-          media_url?: string | null;
-          url?: string | null;
-          action?: string | null;
-          model?: string | null;
-          cost?: number | null;
-          credits_remaining?: number | null;
-          seconds?: string | number | null;
-          size?: string | number | null;
-          size_bytes?: number | null;
-          prompt?: string | null;
-          conversation_id?: string | null;
-          created_at?: string | null;
-          createdAt?: string | null;
-        }>;
-      }>("/media");
-
-      const restored: GeneratedMedia[] = (data.media ?? []).flatMap(
-        (item): GeneratedMedia[] => {
-          const type: "image" | "video" =
-            item.media_type === "video" || item.type === "video"
-              ? "video"
-              : "image";
-
-          const rawUrl =
-            item.public_url ??
-            item.media_url ??
-            item.url;
-
-          const url =
-            typeof rawUrl === "string"
-              ? rawUrl.trim()
-              : "";
-
-          if (!url) {
-            return [];
-          }
-
-          const media: GeneratedMedia = {
-            id: item.id,
-            conversation_id: item.conversation_id ?? null,
-            prompt: item.prompt ?? null,
-            created_at:
-              item.created_at ??
-              item.createdAt ??
-              null,
-            type,
-            media_type: type,
-            mimeType:
-              item.mime_type ??
-              (type === "image" ? "image/png" : "video/mp4"),
-            url,
-            action: item.action ?? "",
-            model: item.model ?? "",
-            cost: item.cost ?? 0,
-            creditsRemaining: item.credits_remaining ?? 0,
-            seconds:
-              item.seconds === null || item.seconds === undefined
-                ? undefined
-                : String(item.seconds),
-            size:
-              item.size === null || item.size === undefined
-                ? undefined
-                : String(item.size),
-          };
-
-          return [media];
-        },
-      );
-
-      setGeneratedMedia(restored);
-    } catch (requestError) {
-      console.error("Erreur chargement créations Oria :", requestError);
     }
   }
 
@@ -5303,189 +4865,6 @@ export default function ChatPage() {
     }
   }
 
-  function findMediaForMessage(
-    item: ChatMessage,
-  ): GeneratedMedia | null {
-    if (item.role !== "assistant") {
-      return null;
-    }
-
-    const exact = generatedMedia.find(
-      (media) => media.id === item.id,
-    );
-
-    if (exact) {
-      return exact;
-    }
-
-    const markerId = extractMediaIdFromMessage(
-      item.content || "",
-    );
-
-    if (markerId) {
-      const byMarker = generatedMedia.find(
-        (media) => media.id === markerId,
-      );
-
-      if (byMarker) {
-        return byMarker;
-      }
-    }
-
-    const visibleContent =
-      getVisibleMessageContent(
-        item.content || "",
-      );
-
-    const actionMatch = visibleContent.match(
-      /^(?:Image|Vidéo) générée · (.+)$/u,
-    );
-
-    if (!actionMatch) {
-      return null;
-    }
-
-    const candidates =
-      generatedMedia.filter(
-        (media) =>
-          media.conversation_id ===
-            item.conversationId &&
-          media.action === actionMatch[1],
-      );
-
-    if (candidates.length === 0) {
-      return null;
-    }
-
-    if (
-      candidates.length === 1 ||
-      !item.createdAt
-    ) {
-      return candidates[0];
-    }
-
-    const messageTime =
-      new Date(item.createdAt).getTime();
-
-    return [...candidates].sort(
-      (a, b) => {
-        const aTime = new Date(
-          a.created_at ?? 0,
-        ).getTime();
-
-        const bTime = new Date(
-          b.created_at ?? 0,
-        ).getTime();
-
-        return (
-          Math.abs(aTime - messageTime) -
-          Math.abs(bTime - messageTime)
-        );
-      },
-    )[0];
-  }
-
-  async function downloadMedia(media: GeneratedMedia): Promise<void> {
-    try {
-      const response = await fetch(media.url);
-
-      if (!response.ok) {
-        throw new Error("Téléchargement impossible.");
-      }
-
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-
-      const extension =
-        media.mimeType?.split("/")[1]?.split(";")[0] ??
-        (media.type === "video" ? "mp4" : "png");
-
-      const safeExtension =
-        extension === "jpeg" ? "jpg" : extension;
-
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = `oria-${media.id}.${safeExtension}`;
-      link.rel = "noopener";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-
-      window.setTimeout(() => {
-        URL.revokeObjectURL(objectUrl);
-      }, 1000);
-    } catch (downloadError) {
-      console.error("Erreur téléchargement média Oria :", downloadError);
-
-      // Fallback navigateur : ouvre directement l'URL publique persistée.
-      window.open(media.url, "_blank", "noopener,noreferrer");
-    }
-  }
-
-
-  async function loadMediaCapabilities(): Promise<void> {
-    try {
-      setIsLoadingMediaCapabilities(true);
-      // Une ancienne sélection ne doit pas rester utilisable pendant la requête.
-      setMediaCapabilities([]);
-      setSelectedMediaAction("");
-
-      const data = await apiFetch<MediaCapabilitiesResponse>(
-        "/ai/media-capabilities",
-      );
-
-      const rawMedia =
-        Array.isArray(data.media) && data.media.length > 0
-          ? data.media
-          : [
-              ...(Array.isArray(data.images) ? data.images : []),
-              ...(Array.isArray(data.videos) ? data.videos : []),
-            ];
-
-      const normalized = rawMedia
-        .map(normalizeMediaCapability)
-        .filter((item): item is MediaCapability => item !== null);
-
-      // Une liste vide fournie par le backend est une vraie réponse :
-      // ne jamais réactiver les actions avec le fallback dans ce cas.
-      // De même, ne rien afficher pour un pack inactif ou différent du wallet.
-      const packIsActive =
-        data.success === true &&
-        data.pack_active === true &&
-        wallet?.is_pack_active === true &&
-        data.pack_id === wallet.pack_id;
-
-      const next = packIsActive ? normalized : [];
-
-      setMediaCapabilities(next);
-      setSelectedMediaAction((current) =>
-        current && next.some((item) => item.action === current)
-          ? current
-          : next[0]?.action ?? "",
-      );
-    } catch (requestError) {
-      console.warn(
-        "Capacités média indisponibles pour le compte courant :",
-        requestError,
-      );
-
-      // Secours en cas d'erreur réseau uniquement, jamais en remplacement
-      // d'une réponse valide (même vide) du backend.
-      const fallback = wallet?.is_pack_active
-        ? getLocalMediaCapabilities(wallet.pack_id)
-        : [];
-
-      setMediaCapabilities(fallback);
-      setSelectedMediaAction((current) =>
-        current && fallback.some((item) => item.action === current)
-          ? current
-          : fallback[0]?.action ?? "",
-      );
-    } finally {
-      setIsLoadingMediaCapabilities(false);
-    }
-  }
-
   /*
    * ==========================================================
    * CAPACITÉS
@@ -5497,7 +4876,6 @@ export default function ChatPage() {
   ) {
     if (label === "Cours") {
       setActiveCapability((current) => current === "Cours" ? null : "Cours");
-      setMediaMenuOpen(false);
       setError(null);
       return;
     }
@@ -5518,16 +4896,13 @@ export default function ChatPage() {
             ? null
             : label,
       );
-      setMediaMenuOpen(false);
       return;
     }
 
     if (label === "Création") {
-      setActiveCapability("Création");
-      setMediaMenuOpen(true);
-      setStudioShowOtherConfigurations(false);
+      setIsMiniStudioOpen(true);
       setError(null);
-      void loadMediaCapabilities();
+      return;
     }
   }
 
@@ -5713,349 +5088,6 @@ export default function ChatPage() {
     );
   }
 
-  async function handleGenerateMedia(promptOverride?: string) {
-    const prompt = (promptOverride ?? mediaPrompt).trim();
-
-    if (!prompt || isThinking) {
-      return;
-    }
-
-    if (!selectedMediaAction) {
-      setError(
-        "Aucune option de création n'est disponible.",
-      );
-      return;
-    }
-
-    if (!wallet?.is_pack_active || isLoadingMediaCapabilities) {
-      setError("Un pack actif est nécessaire pour créer un média.");
-      return;
-    }
-
-    // Ne jamais envoyer une action absente des capacités réellement affichées.
-    // En cas d'indisponibilité de l'API, celles-ci peuvent provenir du
-    // fallback local restreint au pack actif ; le backend vérifie les droits.
-    const capability = mediaCapabilities.find(
-      (item) => item.action === selectedMediaAction,
-    );
-
-    if (!capability) {
-      setError(
-        "Cette option de création n'existe pas.",
-      );
-      return;
-    }
-
-    const now =
-      new Date().toISOString();
-
-    let conversationId =
-      activeConversationId;
-
-    setIsThinking(true);
-    setChatStatusStep("media_generation");
-    setError(null);
-
-    try {
-      if (!conversationId) {
-        const localId =
-          crypto.randomUUID();
-
-        const title =
-          prompt.length > 45
-            ? `${prompt.slice(0, 45)}...`
-            : prompt;
-
-        const localConversation:
-          Conversation = {
-          id: localId,
-          title,
-          createdAt: now,
-          updatedAt: now,
-        };
-
-        conversationId = localId;
-
-        setConversations(
-          (current) => [
-            localConversation,
-            ...current,
-          ],
-        );
-
-        setActiveConversationId(localId);
-
-        if (currentUserId) {
-          const cache =
-            readLocalCache(
-              currentUserId,
-            );
-
-          writeLocalCache(
-            currentUserId,
-            {
-              conversations: [
-                localConversation,
-                ...(cache?.conversations ||
-                  conversations),
-              ],
-              messages: {
-                ...(cache?.messages || {}),
-                [localId]: [],
-              },
-              activeConversationId:
-                localId,
-              selectedModel,
-              activeCapability: "Création",
-            },
-          );
-        }
-
-        try {
-          const remoteConversation =
-            await createConversationRemote(title);
-
-          setConversations(
-            (current) =>
-              current.map(
-                (conversation) =>
-                  conversation.id === localId
-                    ? remoteConversation
-                    : conversation,
-              ),
-          );
-
-          conversationId =
-            remoteConversation.id;
-
-          setActiveConversationId(
-            remoteConversation.id,
-          );
-        } catch (requestError) {
-          console.error(
-            "Création conversation cloud échouée :",
-            requestError,
-          );
-        }
-      }
-
-      const userMessage:
-        ChatMessage = {
-        id: crypto.randomUUID(),
-        conversationId,
-        role: "user",
-        content:
-          `[Création ${capability.type === "image" ? "image" : "vidéo"} · ${selectedMediaAction}]\n${prompt}`,
-        createdAt: now,
-      };
-
-      setMessages(
-        (current) => [
-          ...current,
-          userMessage,
-        ],
-      );
-
-      try {
-        await saveMessageRemote(
-          userMessage,
-        );
-      } catch (saveError) {
-        console.error(
-          "Erreur sauvegarde prompt média :",
-          saveError,
-        );
-      }
-
-      const endpoint =
-        capability.type === "image"
-          ? "/ai/image"
-          : "/ai/video";
-
-      const response =
-        await apiMediaFetch<{
-          success: boolean;
-          type: "image" | "video";
-          action: string;
-          model: string;
-          cost: number;
-          credits_remaining: number;
-          mime_type: string;
-          data?: string | null;
-          seconds?: string | null;
-          size?: string | null;
-          media_id?: string | null;
-          id?: string | null;
-          public_url?: string | null;
-          media_url?: string | null;
-          url?: string | null;
-          conversation_id?: string | null;
-        }>(
-          endpoint,
-          {
-            action:
-              selectedMediaAction,
-            prompt,
-            conversation_id:
-              conversationId,
-          },
-        );
-
-      if (!response.success) {
-        throw new Error(
-          "La génération du média a échoué.",
-        );
-      }
-
-      /*
-       * Le backend peut renvoyer directement l'URL du média sauvegardé
-       * dans Supabase. Le base64 reste accepté comme fallback.
-       */
-      const rawUrl =
-        response.public_url ||
-        response.media_url ||
-        response.url ||
-        "";
-
-      let url =
-        typeof rawUrl === "string"
-          ? rawUrl.trim()
-          : "";
-
-      const mimeType =
-        response.mime_type ||
-        (response.type === "image"
-          ? "image/png"
-          : "video/mp4");
-
-      if (!url && response.data) {
-        const binaryString =
-          window.atob(response.data);
-
-        const bytes =
-          new Uint8Array(
-            binaryString.length,
-          );
-
-        for (
-          let index = 0;
-          index < binaryString.length;
-          index++
-        ) {
-          bytes[index] =
-            binaryString.charCodeAt(index);
-        }
-
-        const blob =
-          new Blob(
-            [bytes],
-            { type: mimeType },
-          );
-
-        url = URL.createObjectURL(blob);
-      }
-
-      if (!url) {
-        throw new Error(
-          "Le serveur a généré le média mais n'a retourné aucune URL exploitable.",
-        );
-      }
-
-      const mediaId =
-        response.media_id ||
-        response.id;
-
-      if (!mediaId) {
-        throw new Error(
-          "Le serveur a généré le média mais n'a retourné aucun identifiant.",
-        );
-      }
-
-      setGeneratedMedia(
-        (current) => [
-          ...current.filter(
-            (media) => media.id !== mediaId,
-          ),
-          {
-            id: mediaId,
-            conversation_id:
-              response.conversation_id ??
-              conversationId,
-            prompt,
-            created_at: new Date().toISOString(),
-            type: response.type,
-            media_type: response.type,
-            mimeType,
-            url,
-            action: response.action,
-            model: response.model,
-            cost: response.cost,
-            creditsRemaining:
-              response.credits_remaining,
-            seconds: response.seconds,
-            size: response.size,
-          },
-        ],
-      );
-
-      const assistantMessage:
-        ChatMessage = {
-        id: mediaId,
-        conversationId,
-        role: "assistant",
-        content: buildMediaMessageContent(
-          response.type,
-          response.action,
-          mediaId,
-        ),
-        createdAt:
-          new Date().toISOString(),
-      };
-
-      setMessages(
-        (current) => [
-          ...current,
-          assistantMessage,
-        ],
-      );
-
-      try {
-        await saveMessageRemote(
-          assistantMessage,
-        );
-      } catch (saveError) {
-        console.error(
-          "Erreur sauvegarde résultat média :",
-          saveError,
-        );
-      }
-
-      setMediaPrompt("");
-      setMediaMenuOpen(false);
-      setStudioShowOtherConfigurations(false);
-      setActiveCapability(null);
-
-      const refreshedTrials =
-        await loadTrials();
-
-      await loadWallet(
-        refreshedTrials,
-      );
-
-      await loadMediaCapabilities();
-    } catch (requestError) {
-      const errorMessage =
-        requestError instanceof Error
-          ? requestError.message
-          : "La création média a échoué.";
-
-      setError(errorMessage);
-    } finally {
-      setChatStatusStep(null);
-      setIsThinking(false);
-    }
-  }
-
   /*
    * ==========================================================
    * ENVOI MESSAGE
@@ -6238,12 +5270,6 @@ export default function ChatPage() {
       (!content && attachments.length === 0) ||
       isThinking
     ) {
-      return;
-    }
-
-    if (activeCapability === "Création") {
-      setMediaPrompt(content);
-      await handleGenerateMedia(content);
       return;
     }
 
@@ -7300,19 +6326,6 @@ export default function ChatPage() {
       ? wallet.balance
       : 0;
 
-  // Toutes les configurations proviennent de la liste autorisée par l'API.
-  // Le frontend n'invente ni format, ni durée, ni montant de crédits.
-  const studioSelected = mediaCapabilities.find(
-    (item) => item.action === selectedMediaAction,
-  ) ?? null;
-  const studioSelectedConfig = studioSelected
-    ? getMediaGenerationConfig(studioSelected.action)
-    : null;
-  const studioConfigurations = studioSelected
-    ? mediaCapabilities.filter((item) => item.type === studioSelected.type)
-    : [];
-  const studioEstimate = studioSelected?.estimated_credits ?? studioSelected?.credits;
-
   /*
    * ==========================================================
    * AFFICHAGE
@@ -7322,255 +6335,12 @@ export default function ChatPage() {
   return (
     <main className="min-h-dvh overflow-hidden bg-background text-foreground">
       {codePreview ? <CodePreviewModal preview={codePreview} onClose={() => setCodePreview(null)} language={language}/> : null}
-      {activeCapability === "Création" && (
-        <div
-          className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/65 px-3 py-4 backdrop-blur-sm sm:items-center sm:px-6 sm:py-8"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !isThinking) {
-              setActiveCapability(null);
-              setStudioShowOtherConfigurations(false);
-            }
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="oria-studio-title"
-            className="w-full max-w-[1060px] rounded-[28px] border border-border bg-background p-4 shadow-2xl sm:p-6 lg:p-7"
-          >
-            <div className="mb-5 flex items-start justify-between gap-3 sm:mb-6">
-              <div className="flex items-center gap-3">
-                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-surface-tertiary text-foreground">
-                  <Sparkles size={22} />
-                </span>
-                <div>
-                  <h2 id="oria-studio-title" className="text-xl font-semibold tracking-tight sm:text-2xl">
-                    {language === "fr" ? "Créer avec ORIA" : "Create with ORIA"}
-                  </h2>
-                  <p className="mt-1 text-xs text-muted sm:text-sm">
-                    {language === "fr" ? "Donnez vie à vos idées, en toute simplicité." : "Bring your ideas to life, simply."}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                disabled={isThinking}
-                onClick={() => {
-                  setActiveCapability(null);
-                  setStudioShowOtherConfigurations(false);
-                }}
-                className="rounded-xl border border-border p-2.5 text-muted hover:bg-surface-secondary hover:text-foreground disabled:opacity-40"
-                aria-label={UI[language].closeMediaCreation}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="grid gap-5 lg:grid-cols-[0.91fr_1.09fr] lg:items-start">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-1" aria-label={language === "fr" ? "Type de création" : "Creation type"}>
-                {(["image", "video"] as const).map((type) => {
-                  const options = mediaCapabilities.filter((item) => item.type === type);
-                  const selected = studioSelected?.type === type;
-                  const noAccess = options.length === 0;
-                  return (
-                    <button
-                      key={type}
-                      type="button"
-                      disabled={noAccess || isThinking || isLoadingMediaCapabilities}
-                      onClick={() => {
-                        setSelectedMediaAction(options[0].action);
-                        setStudioShowOtherConfigurations(false);
-                        setError(null);
-                      }}
-                      className={`group relative min-h-[166px] overflow-hidden rounded-[20px] border text-left shadow-sm transition sm:min-h-[196px] lg:min-h-[211px] ${
-                        selected ? "border-2 border-accent ring-2 ring-accent/15" : "border-border hover:border-muted-strong"
-                      } disabled:cursor-not-allowed`}
-                      aria-pressed={selected}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className="absolute inset-0 bg-cover bg-center transition-transform duration-500 group-hover:scale-[1.03]"
-                        style={{ backgroundImage: `url('/oria/oria-mini-studio-${type}.webp')` }}
-                      />
-                      <span aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-black/0" />
-                      <span className="absolute inset-x-4 bottom-4 flex items-end justify-between gap-2 text-white">
-                        <span className="flex min-w-0 flex-col gap-1">
-                          <span className="flex items-center gap-2 text-lg font-semibold">
-                            {type === "image" ? <ImageIcon size={19}/> : <Video size={19}/>}
-                            {type === "image" ? UI[language].generateImage : UI[language].generateVideo}
-                          </span>
-                          <span className="text-[11px] leading-4 text-white/85">
-                            {type === "image"
-                              ? (language === "fr" ? "Visuels, photos, affiches et idées créatives." : "Visuals, photos, posters and creative ideas.")
-                              : (language === "fr" ? "Scènes, mouvements et créations vidéo." : "Scenes, motion and video creations.")}
-                          </span>
-                          <span className="mt-1 text-[10px] text-white/80">
-                            {isLoadingMediaCapabilities
-                              ? (language === "fr" ? "Chargement des options…" : "Loading options…")
-                              : noAccess
-                                ? (language === "fr" ? "Indisponible avec votre pack" : "Not available with your pack")
-                                : `${options.length} ${options.length > 1 ? UI[language].configurations : UI[language].configuration}`}
-                          </span>
-                        </span>
-                        {selected && <Check size={19} className="shrink-0" />}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="min-w-0 rounded-[22px] border border-border bg-surface p-4 shadow-sm sm:p-5">
-                {studioSelected ? (
-                  <>
-                    <div className="flex items-center gap-3">
-                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-surface-tertiary">
-                        {studioSelected.type === "image" ? <ImageIcon size={19}/> : <Video size={19}/>}
-                      </span>
-                      <div>
-                        <h3 className="text-base font-semibold">
-                          {studioSelected.type === "image"
-                            ? (language === "fr" ? "Générer une image" : "Generate an image")
-                            : (language === "fr" ? "Générer une vidéo" : "Generate a video")}
-                        </h3>
-                        <p className="mt-0.5 text-xs text-muted">
-                          {language === "fr" ? "Décrivez votre idée puis choisissez une option disponible." : "Describe your idea and choose an available option."}
-                        </p>
-                      </div>
-                    </div>
-
-                    <label htmlFor="oria-studio-prompt" className="mt-5 block text-xs font-semibold">
-                      {studioSelected.type === "image"
-                        ? (language === "fr" ? "Décrivez votre image" : "Describe your image")
-                        : (language === "fr" ? "Décrivez votre vidéo" : "Describe your video")}
-                    </label>
-                    <textarea
-                      id="oria-studio-prompt"
-                      rows={4}
-                      value={mediaPrompt}
-                      onChange={(event) => setMediaPrompt(event.target.value)}
-                      placeholder={studioSelected.type === "video" ? UI[language].preciseVideo : UI[language].preciseImage}
-                      disabled={isThinking || !wallet?.is_pack_active || isLoadingMediaCapabilities}
-                      onKeyDown={(event) => {
-                        if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-                          event.preventDefault();
-                          void handleGenerateMedia();
-                        }
-                      }}
-                      className="mt-2 w-full resize-y rounded-2xl border border-border bg-background px-3.5 py-3 text-sm leading-6 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
-                    />
-
-                    <div className="mt-4 rounded-2xl border border-border p-3.5">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-semibold">{UI[language].generationConfiguration}</p>
-                          <p className="mt-1 text-sm font-medium">
-                            {studioSelectedConfig ? getMediaLabel(studioSelected.action, language, studioSelectedConfig.label) : studioSelected.action}
-                          </p>
-                          <p className="mt-1 text-[11px] leading-5 text-muted">
-                            {studioSelectedConfig?.configuration}
-                            {studioSelected.model ? ` · ${studioSelected.model}` : studioSelectedConfig ? ` · ${studioSelectedConfig.model}` : ""}
-                          </p>
-                        </div>
-                        {studioConfigurations.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => setStudioShowOtherConfigurations((current) => !current)}
-                            disabled={isThinking}
-                            className="flex shrink-0 items-center gap-1 rounded-xl border border-border px-2.5 py-2 text-[11px] font-medium hover:bg-surface-secondary disabled:opacity-40"
-                            aria-expanded={studioShowOtherConfigurations}
-                          >
-                            {language === "fr" ? "Changer" : "Change"}
-                            <ChevronDown size={14} className={studioShowOtherConfigurations ? "rotate-180" : ""}/>
-                          </button>
-                        )}
-                      </div>
-                      {studioShowOtherConfigurations && studioConfigurations.length > 1 && (
-                        <div className="mt-3 grid max-h-44 gap-2 overflow-y-auto border-t border-border pt-3">
-                          {studioConfigurations.map((item) => {
-                            const config = getMediaGenerationConfig(item.action);
-                            return (
-                              <button
-                                type="button"
-                                key={item.action}
-                                aria-pressed={item.action === selectedMediaAction}
-                                onClick={() => setSelectedMediaAction(item.action)}
-                                className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left text-xs transition ${item.action === selectedMediaAction ? "border-border-strong bg-surface-tertiary" : "border-border hover:bg-surface-secondary"}`}
-                              >
-                                <span>
-                                  <span className="block font-semibold">{config ? getMediaLabel(item.action, language, config.label) : item.action}</span>
-                                  <span className="mt-1 block text-[11px] text-muted">{config?.configuration}</span>
-                                </span>
-                                {item.action === selectedMediaAction && <Check size={15} className="shrink-0"/>}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="mt-4 rounded-2xl bg-surface-secondary px-3.5 py-3">
-                      <div className="flex items-center gap-2 text-xs font-semibold">
-                        <Wallet size={15} />
-                        {language === "fr" ? "Crédits et facturation" : "Credits and billing"}
-                      </div>
-                      <p className="mt-1 text-xs text-muted">
-                        {studioEstimate != null
-                          ? `${language === "fr" ? "Réservation estimée" : "Estimated reservation"} : ${studioEstimate.toLocaleString(language === "fr" ? "fr-FR" : "en-US")} ${UI[language].creditsUnit}`
-                          : (language === "fr" ? "Coût dynamique : estimation indisponible pour cette option." : "Dynamic cost: no estimate available for this option.")}
-                      </p>
-                      <p className="mt-1 text-[11px] leading-4 text-muted">{UI[language].backendValidation}</p>
-                    </div>
-
-                    {error && (
-                      <p role="alert" className="mt-3 rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600">
-                        {localizeFrontendError(error, language)}
-                      </p>
-                    )}
-
-                    <button
-                      type="button"
-                      disabled={!mediaPrompt.trim() || !wallet?.is_pack_active || isThinking || isLoadingMediaCapabilities || !studioSelected}
-                      onClick={() => void handleGenerateMedia()}
-                      className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {isThinking ? <Loader2 size={17} className="animate-spin" /> : <Sparkles size={17} />}
-                      {isThinking
-                        ? UI[language].generation
-                        : studioSelected.type === "image"
-                          ? UI[language].generateTheImage
-                          : UI[language].generateTheVideo}
-                    </button>
-                    <p className="mt-2 text-center text-[10px] text-muted">
-                      {language === "fr" ? "Une génération utilise les crédits de votre pack." : "A generation uses credits from your pack."}
-                    </p>
-                  </>
-                ) : (
-                  <div className="flex min-h-64 flex-col items-center justify-center gap-3 text-center">
-                    {isLoadingMediaCapabilities ? <Loader2 size={25} className="animate-spin text-muted"/> : <Sparkles size={26} className="text-muted"/>}
-                    <p className="text-sm font-semibold">
-                      {isLoadingMediaCapabilities
-                        ? (language === "fr" ? "Chargement des créations disponibles…" : "Loading available creations…")
-                        : (language === "fr" ? "Aucune création disponible" : "No creation available")}
-                    </p>
-                    <p className="max-w-sm text-xs leading-5 text-muted">
-                      {language === "fr" ? "Les options dépendent de votre pack actif et des capacités annoncées par ORIA." : "Options depend on your active plan and the capabilities returned by ORIA."}
-                    </p>
-                    {!wallet?.is_pack_active ? (
-                      <Link href="/credits" className="rounded-xl bg-accent px-4 py-2.5 text-xs font-semibold text-accent-foreground">
-                        {language === "fr" ? "Voir les packs" : "View plans"}
-                      </Link>
-                    ) : !isLoadingMediaCapabilities ? (
-                      <button type="button" onClick={() => void loadMediaCapabilities()} className="rounded-xl border border-border px-4 py-2.5 text-xs font-medium hover:bg-surface-secondary">
-                        {language === "fr" ? "Actualiser les options" : "Refresh options"}
-                      </button>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-        </div>
+      {isMiniStudioOpen && (
+        <OriaMiniStudio
+          language={language}
+          onClose={() => setIsMiniStudioOpen(false)}
+          onWalletRefresh={() => { void loadWallet(); }}
+        />
       )}
       {sidebarOpen && (
         <button
@@ -7745,13 +6515,7 @@ export default function ChatPage() {
           >
             <ImageIcon size={17} />
             {UI[language].myCreations}
-            {(generatedMedia.length +
-              generatedArtifacts.length) > 0 && (
-              <span className="ml-auto rounded-full bg-surface-tertiary px-2 py-0.5 text-[10px] text-muted">
-                {generatedMedia.length +
-                  generatedArtifacts.length}
-              </span>
-            )}
+
           </Link>
 
           <Link
@@ -8164,52 +6928,6 @@ export default function ChatPage() {
                         ) : null}
 
                         {(() => {
-                          const mediaForMessage =
-                            findMediaForMessage(item);
-
-                          if (!mediaForMessage) {
-                            return null;
-                          }
-
-                          const media =
-                            mediaForMessage;
-
-                          return (
-                            <div className="mt-3 max-w-[90%]">
-                              <div className="relative inline-block max-w-full">
-                                {media.type === "image" ? (
-                                  <img
-                                    src={media.url}
-                                    alt={UI[language].generatedImageAlt}
-                                    className="max-h-[620px] w-auto rounded-2xl border border-border shadow-sm"
-                                  />
-                                ) : (
-                                  <video
-                                    src={media.url}
-                                    controls
-                                    playsInline
-                                    className="max-h-[620px] w-full rounded-2xl border border-border bg-black shadow-sm"
-                                  />
-                                )}
-
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    void downloadMedia(media)
-                                  }
-                                  className="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-xl border border-white/20 bg-black/75 px-3 py-2 text-xs font-medium text-white shadow-lg backdrop-blur transition hover:bg-black"
-                                  title={UI[language].download}
-                                  aria-label={UI[language].downloadCreation}
-                                >
-                                  <Download size={14} />
-                                  {UI[language].download}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })()}
-
-                        {(() => {
                           const artifactsForMessage =
                             findArtifactsForMessage(
                               item,
@@ -8594,8 +7312,6 @@ export default function ChatPage() {
               </div>
             )}
 
-            {/* Le mini-studio Création est affiché dans sa fenêtre dédiée plus haut.
-                Le Chat et son composer restent inchangés sous la fenêtre. */}
 
             {activeCapability === "Cours" ? (
               <OriaCoursesPanel language={language} wallet={wallet} userId={currentUserId}
@@ -8781,7 +7497,7 @@ export default function ChatPage() {
                       handleSendMessage();
                     }
                   }}
-                  placeholder={activeCapability === "Création" ? UI[language].describeCreation : UI[language].writeToOria}
+                  placeholder={UI[language].writeToOria}
                   disabled={
                     isThinking
                   }

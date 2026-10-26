@@ -7,6 +7,8 @@ import binascii
 from typing import Any, Optional
 
 from uuid import UUID, uuid4
+from pathlib import Path
+from collections.abc import Mapping
 
 from app.repositories.supabase_media_repository import (
 
@@ -45,6 +47,11 @@ class MediaService:
              ↓
 
         Frontend
+
+    ATTENTION CONFIDENTIALITE : ce service utilise get_public_url().
+    Pour stocker des photos privées, le repository Supabase et le bucket
+    doivent être audités avant d'activer ORIA_GOOGLE_STORAGE_REVIEWED.
+    Cette version n'invente PAS une méthode de liens signés absente du repo.
 
     Cette classe ne gère pas les crédits.
 
@@ -387,6 +394,172 @@ class MediaService:
         return media
 
     # ============================================================
+    # GOOGLE / FOURNISSEURS FICHIERS LOCAUX -> PERSISTANCE
+    # ============================================================
+    # L'adaptateur Google renvoie actuellement un MediaResult (file_path,
+    # media_type, model, mime_type, interaction_id). Il ne gere ni wallet,
+    # ni droits du pack. Ces controles doivent etre valides AVANT l'appel API.
+    #
+    # Les chemins de fichier proviennent UNIQUEMENT du service backend,
+    # jamais d'un parametre URL/JSON envoye par le client.
+
+    MAX_GOOGLE_IMAGE_FILE_BYTES = 30 * 1024 * 1024
+    MAX_GOOGLE_VIDEO_FILE_BYTES = 256 * 1024 * 1024
+
+    @staticmethod
+    def _generated_field(generated: Any, field: str) -> Any:
+        if isinstance(generated, Mapping):
+            return generated.get(field)
+        return getattr(generated, field, None)
+
+    @classmethod
+    def _read_google_file(
+        cls, *, generated: Any, expected_type: str,
+    ) -> tuple[bytes, str, str | None, str | None]:
+        """Valide un fichier local remis par l'adaptateur Google.
+
+        Garde-fous contre fichiers absents, liens symboliques, type inattendu
+        et sortie anormalement volumineuse. Un fichier utilisateur ne doit
+        jamais etre lu par cette methode.
+        """
+        media_type = cls._generated_field(generated, "media_type")
+        if media_type != expected_type:
+            raise ValueError("Le type de media Google ne correspond pas a l'action demandee.")
+
+        raw_path = cls._generated_field(generated, "file_path")
+        if not isinstance(raw_path, (str, Path)) or not str(raw_path).strip():
+            raise ValueError("Fichier Google local manquant.")
+        file_path = Path(raw_path)
+        if file_path.is_symlink() or not file_path.is_file():
+            raise ValueError("Le fichier Google doit etre un fichier regulier existant.")
+
+        mime = str(cls._generated_field(generated, "mime_type") or "").lower().strip()
+        permitted = ({"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+                     if expected_type == "image"
+                     else {"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov"})
+        if mime not in permitted:
+            raise ValueError("Format media Google non autorise.")
+        # JPEG peut porter .jpeg ; QuickTime est parfois encapsule en .mp4.
+        valid_extensions = {permitted[mime]}
+        if mime == "image/jpeg":
+            valid_extensions.add(".jpeg")
+        if mime == "video/quicktime":
+            valid_extensions.add(".mp4")
+        if file_path.suffix.lower() not in valid_extensions:
+            raise ValueError("Extension du fichier Google incoherente avec son format.")
+
+        upper_bound = (cls.MAX_GOOGLE_IMAGE_FILE_BYTES if expected_type == "image"
+                       else cls.MAX_GOOGLE_VIDEO_FILE_BYTES)
+        before = file_path.stat()
+        size = before.st_size
+        if size < 12 or size > upper_bound:
+            raise ValueError("Taille du fichier Google hors limites ORIA.")
+
+        file_bytes = file_path.read_bytes()
+        after = file_path.stat()
+        # La taille ne suffit pas : un job pourrait remplacer le fichier
+        # entre le contrôle MIME et l'upload. Refuser plutôt que persister
+        # un résultat dont l'origine ou le contenu a changé.
+        if (len(file_bytes) != size or after.st_size != size
+                or after.st_mtime_ns != before.st_mtime_ns
+                or after.st_ino != before.st_ino
+                or after.st_dev != before.st_dev):
+            raise RuntimeError("Le fichier Google a change durant sa lecture.")
+        signatures = {
+            "image/png": file_bytes.startswith(b"\x89PNG\r\n\x1a\n"),
+            "image/jpeg": file_bytes.startswith(b"\xff\xd8\xff"),
+            "image/webp": file_bytes[:4] == b"RIFF" and file_bytes[8:12] == b"WEBP",
+            "video/mp4": file_bytes[4:8] == b"ftyp",
+            "video/webm": file_bytes.startswith(b"\x1a\x45\xdf\xa3"),
+            "video/quicktime": file_bytes[4:8] == b"ftyp",
+        }
+        if not signatures[mime]:
+            raise ValueError("Le contenu du fichier Google ne correspond pas au MIME annonce.")
+
+        model = cls._generated_field(generated, "model")
+        interaction_id = cls._generated_field(generated, "interaction_id")
+        return (file_bytes, mime,
+                str(model) if model is not None else None,
+                str(interaction_id) if interaction_id is not None else None)
+
+    def save_google_image(
+        self, *, user_id: str | UUID, generated: Any,
+        action: str, prompt: Optional[str] = None,
+        credits_cost: int = 0, conversation_id: Optional[str] = None,
+        width: Optional[int] = None, height: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Stocke une image issue de Google sans dependance au SDK Google.
+
+        Le routeur est responsable de la reservation et du settlement.
+        Le fichier local est nettoye par le service qui l'a cree, apres
+        confirmation de la persistance. Ne jamais annoncer une livraison
+        avant le retour de cette methode.
+        """
+        if type(credits_cost) is not int or credits_cost <= 0:
+            raise ValueError(
+                "Un cout final strictement positif est requis pour persister une creation Google."
+            )
+        data, mime, model, _interaction_id = self._read_google_file(
+            generated=generated, expected_type="image",
+        )
+        return self.save_image(
+            user_id=user_id, image_bytes=data, action=action,
+            model=model, prompt=prompt, credits_cost=credits_cost,
+            conversation_id=conversation_id, mime_type=mime,
+            width=width, height=height,
+        )
+
+    def save_google_video(
+        self, *, user_id: str | UUID, generated: Any,
+        action: str, prompt: Optional[str] = None,
+        credits_cost: int = 0, conversation_id: Optional[str] = None,
+        seconds: Optional[int] = None,
+        width: Optional[int] = None, height: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Stocke un clip Google, avec ID d'interaction pour la traçabilité.
+
+        Pour une video multi-scenes, seule la version finale assemblee doit
+        etre livree comme telle ; ce stockage ne constitue pas un moteur de
+        montage ni une file de taches asynchrone.
+        """
+        if type(credits_cost) is not int or credits_cost <= 0:
+            raise ValueError(
+                "Un cout final strictement positif est requis pour persister une creation Google."
+            )
+        if seconds is not None and (type(seconds) is not int or seconds <= 0):
+            raise ValueError("La duree du clip doit etre un entier positif.")
+        data, mime, model, interaction_id = self._read_google_file(
+            generated=generated, expected_type="video",
+        )
+        return self.save_video(
+            user_id=user_id, video_bytes=data, action=action,
+            model=model, prompt=prompt, credits_cost=credits_cost,
+            conversation_id=conversation_id, video_id=interaction_id,
+            seconds=seconds, mime_type=mime, width=width, height=height,
+        )
+
+    def save_generated_image(
+        self, *, user_id: str | UUID, generated: Any,
+        action: Optional[str] = None, prompt: Optional[str] = None,
+        credits_cost: int = 0, conversation_id: Optional[str] = None,
+        image_index: int = 0,
+    ) -> dict[str, Any]:
+        """Entree commune, tout en maintenant le format historique OpenAI."""
+        if self._generated_field(generated, "file_path") is not None:
+            if image_index != 0:
+                raise ValueError("Le resultat Google ne contient qu'une image.")
+            return self.save_google_image(
+                user_id=user_id, generated=generated, action=action or "image",
+                prompt=prompt, credits_cost=credits_cost,
+                conversation_id=conversation_id,
+            )
+        return self.save_openai_image(
+            user_id=user_id, generated=generated, action=action,
+            prompt=prompt, credits_cost=credits_cost,
+            conversation_id=conversation_id, image_index=image_index,
+        )
+
+    # ============================================================
 
     # FOURNISSEUR IA → PERSISTANCE
 
@@ -608,17 +781,24 @@ class MediaService:
         self,
         *,
         user_id: str | UUID,
-        generated: dict[str, Any],
+        generated: Any,
         action: Optional[str] = None,
         prompt: Optional[str] = None,
         credits_cost: int = 0,
         conversation_id: Optional[str] = None,
+        seconds: Optional[int] = None,
     ) -> dict[str, Any]:
         """
         Alias fournisseur-agnostique pour la persistance vidéo.
 
         Permet de remplacer le backend vidéo sans modifier les routes.
         """
+        if self._generated_field(generated, "file_path") is not None:
+            return self.save_google_video(
+                user_id=user_id, generated=generated, action=action or "video",
+                prompt=prompt, credits_cost=credits_cost,
+                conversation_id=conversation_id, seconds=seconds,
+            )
         return self.save_openai_video(
             user_id=user_id,
             generated=generated,
