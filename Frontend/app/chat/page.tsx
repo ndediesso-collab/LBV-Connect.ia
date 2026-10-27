@@ -6839,8 +6839,8 @@ export default function ChatPage() {
           WORKSPACE
           ====================================================== */}
 
-      <section className="flex min-h-dvh min-w-0 flex-col">
-        <header className="sticky top-0 z-20 flex h-16 min-w-0 shrink-0 items-center justify-between gap-2 bg-background/95 px-4 backdrop-blur-sm sm:px-8">
+      <section className="flex min-h-dvh w-full min-w-0 max-w-full flex-col">
+        <header className="relative z-20 flex h-16 min-w-0 shrink-0 items-center justify-between gap-2 bg-background/95 px-4 backdrop-blur-sm sm:sticky sm:top-0 sm:px-8">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -6906,8 +6906,8 @@ export default function ChatPage() {
           </div>
         </header>
 
-        <div className="flex min-w-0 flex-1 flex-col px-3 pb-3 sm:px-8 sm:pb-4">
-          <div className="relative mx-auto flex min-w-0 w-full flex-1 flex-col">
+        <div className="flex w-full min-w-0 max-w-full flex-1 flex-col px-3 pb-3 sm:px-8 sm:pb-4">
+          <div className="relative mx-auto flex w-full min-w-0 max-w-full flex-1 flex-col">
             {error && (
               <div className="mx-auto mt-4 w-full max-w-3xl rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm text-muted-strong">
                 {localizeFrontendError(error, language)}
@@ -6958,10 +6958,10 @@ export default function ChatPage() {
 
             {messages.length >
               0 && (
-              <div className="relative min-w-0 w-full flex-1">
-                <div className="min-w-0 w-full py-4 sm:py-8"
+              <div className="relative w-full min-w-0 max-w-full flex-1">
+                <div className="w-full min-w-0 max-w-full pb-10 pt-4 sm:pb-12 sm:pt-8"
                   aria-label={language === "fr" ? "Historique des messages" : "Message history"}>
-                <div className="mx-auto flex w-full min-w-0 max-w-[1060px] flex-col gap-7 px-2 sm:gap-9 sm:px-5 lg:px-7">
+                <div className="mx-auto flex w-full min-w-0 max-w-[880px] flex-col gap-7 px-1 sm:gap-9 sm:px-4 lg:px-5">
                   {messages.filter(
                     (item) => !(
                       isThinking &&
@@ -6988,8 +6988,8 @@ export default function ChatPage() {
                             "user"
                               ? editingMessageId === item.id
                               ? "hidden"
-                              : "min-w-0 max-w-[90%] break-words rounded-3xl rounded-br-lg bg-accent px-4 py-3 text-[15px] leading-7 text-accent-foreground sm:max-w-[82%] sm:px-5 sm:py-3.5 sm:text-base"
-                              : "w-full min-w-0 break-words text-[15px] leading-7 text-foreground sm:text-base"
+                              : "min-w-0 max-w-[88%] break-words [overflow-wrap:anywhere] rounded-3xl rounded-br-lg bg-accent px-4 py-3 text-[15px] leading-7 text-accent-foreground sm:max-w-[82%] sm:px-5 sm:py-3.5 sm:text-base"
+                              : "w-full min-w-0 max-w-full break-words [overflow-wrap:anywhere] text-[15px] leading-7 text-foreground sm:text-base"
                           }
                         >
                           {item.role ===
@@ -7298,14 +7298,14 @@ export default function ChatPage() {
                           }
 
                           return (
-                            <div className="mt-3 grid w-full max-w-xl gap-2">
+                            <div className="mt-3 grid w-full min-w-0 max-w-xl grid-cols-[minmax(0,1fr)] gap-2">
                               {artifactsForMessage.map(
                                 (artifact) => (
                                   <div
                                     key={
                                       artifact.id
                                     }
-                                    className="flex items-center gap-3 rounded-2xl border border-border bg-surface px-3.5 py-3 shadow-sm"
+                                    className="flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 overflow-hidden rounded-2xl border border-border bg-surface px-3 py-3 shadow-sm sm:gap-3 sm:px-3.5"
                                   >
                                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-secondary text-muted-strong">
                                       <FileText
@@ -7313,8 +7313,8 @@ export default function ChatPage() {
                                       />
                                     </div>
 
-                                    <div className="min-w-0 flex-1">
-                                      <p className="truncate text-sm font-medium">
+                                    <div className="min-w-0 flex-[1_1_120px]">
+                                      <p className="block min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium">
                                         {
                                           artifact.filename
                                         }
@@ -7423,19 +7423,8 @@ export default function ChatPage() {
                 tandis que l'historique fait défiler la page du navigateur. */}
             <div className={activeCapability === "Cours"
               ? "relative w-full min-w-0"
-              : "sticky bottom-0 z-30 w-full min-w-0 bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-sm"}>
-              {showJumpToBottom && messages.length > 0 && activeCapability !== "Cours" && (
-                <div className="pointer-events-none absolute inset-x-0 -top-12 z-40">
-                  <div className="relative mx-auto w-full max-w-3xl">
-                    <button type="button" onClick={() => scrollToLatest("smooth")}
-                      aria-label={language === "fr" ? "Aller en bas de la conversation" : "Jump to latest message"}
-                      title={language === "fr" ? "Dernier message" : "Latest message"}
-                      className="pointer-events-auto absolute bottom-0 right-3 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface text-foreground shadow-lg transition hover:bg-surface-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:right-0">
-                      <ArrowDown size={19} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-              )}
+              : "sticky bottom-0 z-30 w-full min-w-0 max-w-full bg-background/95 pb-[calc(12px+env(safe-area-inset-bottom))] pt-2 backdrop-blur-sm"}>
+
 
             {/* ==================================================
                 MODÈLE + PUISSANCE DE RÉFLEXION
@@ -7670,6 +7659,18 @@ export default function ChatPage() {
                           </p>
                         )}
                     </div>
+                  )}
+
+                  {showJumpToBottom && messages.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => scrollToLatest("smooth")}
+                      aria-label={language === "fr" ? "Aller en bas de la conversation" : "Jump to latest message"}
+                      title={language === "fr" ? "Dernier message" : "Latest message"}
+                      className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-foreground shadow-sm transition hover:bg-surface-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:h-10 sm:w-10"
+                    >
+                      <ArrowDown size={18} aria-hidden="true" />
+                    </button>
                   )}
                 </div>
               </div>
