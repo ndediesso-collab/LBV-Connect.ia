@@ -339,11 +339,36 @@ CONTRAT DE SORTIE — STRICT ET EXCLUSIF
   native_data si les caractéristiques natives sont incompatibles.
 - native_data doit être une structure JSON adaptée au format :
   * XLSX/ODS : feuilles, cellules typées, valeurs, formules et graphiques ;
+    Pour un classeur XLSX : privilégie une feuille « Vue d'ensemble »
+    synthétique (titre, indicateurs, tableau court) et une ou plusieurs
+    feuilles de données/sources quand cela apporte de la valeur. Les intitulés
+    de colonnes doivent être courts, les colonnes textuelles explicites, les
+    chiffres stockés en nombres (pas en chaînes), et les calculs dérivés en
+    formules. Ne concentre pas des paragraphes entiers dans une cellule étroite.
+    Ne mélange pas des bilans statistiques non comparables sans signaler
+    clairement leurs périmètres et leurs sources. Les graphiques doivent
+    représenter des données chiffrées présentes dans le classeur ;
   * PPTX/ODP : diapositives, objets, textes, tableaux, images autorisées,
     données de graphiques et organisation éditable ;
   * CSV/TSV/JSON/JSONL/SQLite : données, colonnes, types et valeurs valides ;
-  * DOCX/ODT/EPUB : styles, titres, paragraphes, listes, tableaux,
-    chapitres et liens ; aucun balisage source ne doit ressortir littéralement.
+  * PDF/DOCX/ODT/RTF/EPUB en mode natif : fournis
+    native_data={"blocks":[{"type":"title","text":"Titre du document"},
+    {"type":"subtitle","text":"Sous-titre"},
+    {"type":"heading","level":2,"text":"Section"},
+    {"type":"paragraph","text":"Contenu rédigé"},
+    {"type":"bullet_list","items":["Point A","Point B"]},
+    {"type":"numbered_list","items":["Étape 1","Étape 2"]},
+    {"type":"table","headers":["Colonne A","Colonne B"],
+     "rows":[["Valeur 1","Valeur 2"]]},
+    {"type":"page_break"}]}.
+    Types de blocs autorisés : title, subtitle, heading (level 1 à 6),
+    paragraph, bullet_list, numbered_list, table, page_break, spacer,
+    ou leurs équivalents courts h1…h6, p, bullet, number.
+    Les chapitres peuvent être structurés dans native_data.chapters.
+    N'invente jamais de nouveau type de bloc ; ne transforme pas du JSON
+    structurel en paragraphe brut. Conserve styles, titres, paragraphes,
+    listes, tableaux et chapitres ; aucun balisage source ne doit ressortir
+    littéralement.
 - Le backend seul confirmera dans le Chat la création du fichier et affichera
   sa carte APRÈS succès réel de la validation, conversion et sauvegarde.
   N'ajoute donc PAS de champ chat_message à cette sortie technique.

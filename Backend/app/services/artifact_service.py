@@ -1934,13 +1934,23 @@ class ArtifactService:
                     raise ArtifactError("Valeur SVG dangereuse.")
 
     @staticmethod
-    def _blocked_document_resource(url: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        # WeasyPrint invoque ce callback pour CHAQUE ressource incluse. Aucune
-        # lecture du filesystem, du reseau ou d'URL file:// n'est permise.
-        if not url.lower().startswith("data:"):
+    def _blocked_document_resource(url: str, *args: Any, **kwargs: Any) -> Any:
+        """Ne charge que les images base64 deja controlees par ORIA.
+
+        WeasyPrint 70 n'accepte plus les anciens dictionnaires des fetchers.
+        Retourner un URLFetcherResponse natif est compatible avec >= 68 et
+        evite le AssertionError constate sur Render. Ne JAMAIS deleguer au
+        fetcher par defaut : il pourrait lire le disque ou acceder au reseau.
+        """
+        if not isinstance(url, str) or not url.lower().startswith("data:"):
             raise ArtifactError("Chargement externe interdit pendant le rendu.")
         mime, data = ArtifactService._image_data_uri(url)
-        return {"string": data, "mime_type": "image/" + mime, "redirected_url": url}
+        from weasyprint.urls import URLFetcherResponse
+        return URLFetcherResponse(
+            url=url,
+            body=data,
+            headers={"Content-Type": "image/" + mime},
+        )
 
     def _build_contract_bytes(
         self, fmt: str, kind: str | None, source: str | None,
@@ -2012,22 +2022,33 @@ class ArtifactService:
             kind = block.get("type", "p")
             label = html_escape(str(block.get("text", "")))
             if kind in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-                markup.append(f"<{kind}>{label}</{kind}>")
+                css_class = ' class="oria-document-title"' if block.get("role") in {"title", "document_title"} else ""
+                markup.append(f"<{kind}{css_class}>{label}</{kind}>")
             elif kind == "page_break":
                 markup.append('<div class="page-break"></div>')
-            elif kind == "bullet":
+            elif kind in {"bullet", "number"}:
                 items = "".join(f"<li>{html_escape(str(v))}</li>" for v in block.get("items", []))
-                markup.append("<ul>" + items + "</ul>")
+                wrapper = "ol" if kind == "number" else "ul"
+                markup.append(f"<{wrapper}>" + items + f"</{wrapper}>")
             elif kind == "table":
                 markup.append("<table>" + "".join("<tr>" + "".join(
                     f"<td>{html_escape(str(v if v is not None else ''))}</td>" for v in row
                 ) + "</tr>" for row in block.get("rows", [])) + "</table>")
+            elif kind == "spacer":
+                markup.append('<div class="oria-document-spacer"></div>')
+            elif block.get("role") == "subtitle":
+                markup.append(f'<p class="oria-document-subtitle">{label}</p>')
+            elif block.get("role") in {"quote", "blockquote"}:
+                markup.append(f'<blockquote>{label}</blockquote>')
             else:
                 markup.append(f"<p>{label}</p>")
         body = "\n".join(markup)
         return ('<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
                 '<style>@page{size:A4;margin:20mm}body{font:11pt/1.55 Arial,sans-serif;color:#202d40}'
                 'h1,h2,h3{color:#17356d;break-after:avoid}p{orphans:3;widows:3}'
+                '.oria-document-title{font-size:24pt;margin-bottom:8mm;text-align:center}'
+                '.oria-document-subtitle{font-size:13pt;color:#667085;text-align:center}'
+                '.oria-document-spacer{height:8mm}blockquote{border-left:3px solid #b6c5dd;padding-left:4mm}'
                 '.page-break{break-before:page}table{border-collapse:collapse;width:100%}'
                 'td,th{border:1px solid #ccd5e0;padding:6px}</style></head><body><main>'
                 + body + '</main></body></html>')
@@ -2060,8 +2081,19 @@ class ArtifactService:
                 "Rendu PDF HTML/CSS indisponible : verifier WeasyPrint, Pango et GLib."
             ) from error
         try:
+            from weasyprint.urls import URLFetcher
+
+            class _OriaImageOnlyFetcher(URLFetcher):
+                """Fetcher natif WeasyPrint, sans reseau ni filesystem."""
+
+                def __init__(self) -> None:
+                    super().__init__(allowed_protocols=("data",), fail_on_errors=True)
+
+                def fetch(self, url: str, headers: Any = None) -> Any:
+                    return ArtifactService._blocked_document_resource(url)
+
             return HTML(string=source, base_url=None,
-                        url_fetcher=self._blocked_document_resource).write_pdf()
+                        url_fetcher=_OriaImageOnlyFetcher()).write_pdf()
         except ArtifactError:
             raise
         except OSError as error:
@@ -2123,26 +2155,115 @@ class ArtifactService:
             visit(child)
         return blocks
 
+    def _normalize_contract_native_blocks(self, content: Any) -> list[dict[str, Any]]:
+        """Normalise explicitement le vocabulaire documentaire JSON du modèle.
+
+        Les alias connus sont convertis en blocs standards, jamais en texte
+        JSON brut. Un type inconnu demeure une erreur claire (pas de perte
+        silencieuse). Ce chemin concerne uniquement oria.artifact.v1.
+        """
+        raw_blocks = content.get("blocks") if isinstance(content, dict) else None
+        if raw_blocks is None:
+            return self._normalize_document_blocks(content)
+        if not isinstance(raw_blocks, list):
+            raise ArtifactError("native_data.blocks doit etre un tableau JSON.")
+        if len(raw_blocks) > self.MAX_CONTRACT_ELEMENTS:
+            raise ArtifactError("Document natif trop volumineux.")
+
+        aliases = {
+            "paragraph": "p", "paragraphs": "p", "text": "p", "body": "p",
+            "description": "p", "quote": "p", "blockquote": "p",
+            "title": "h1", "document_title": "h1", "subtitle": "p",
+            "section_title": "h2", "subheading": "h3",
+            "bullet_list": "bullet", "bulleted_list": "bullet",
+            "unordered_list": "bullet", "bullets": "bullet",
+            "numbered_list": "number", "ordered_list": "number",
+            "number_list": "number", "numbered": "number",
+            "pagebreak": "page_break", "new_page": "page_break",
+            "divider": "spacer", "horizontal_rule": "spacer",
+        }
+        normalized: list[dict[str, Any]] = []
+        for index, raw in enumerate(raw_blocks):
+            if not isinstance(raw, dict):
+                raise ArtifactError(
+                    f"Bloc documentaire {index + 1} invalide : objet attendu."
+                )
+            original = str(raw.get("type") or "p").strip().lower().replace("-", "_")
+            if original == "heading" or original == "section_heading":
+                level = raw.get("level", 2 if original == "section_heading" else 1)
+                try:
+                    heading_level = int(level)
+                except (TypeError, ValueError) as error:
+                    raise ArtifactError("Niveau de titre documentaire invalide.") from error
+                if heading_level not in range(1, 7):
+                    raise ArtifactError("Niveau de titre attendu entre 1 et 6.")
+                typ = f"h{heading_level}"
+            elif original == "list":
+                mode = str(raw.get("list_type") or raw.get("style") or "").lower()
+                typ = "number" if (raw.get("ordered") is True or mode in {
+                    "number", "numbered", "ordered", "decimal",
+                }) else "bullet"
+            elif original in {"heading1", "heading2", "heading3", "heading4", "heading5", "heading6"}:
+                typ = "h" + original[-1]
+            else:
+                typ = aliases.get(original, original)
+            if typ not in {"p", "h1", "h2", "h3", "h4", "h5", "h6",
+                           "bullet", "number", "table", "page_break", "spacer"}:
+                raise ArtifactError("Bloc documentaire natif non supporte : " + original)
+
+            text_value = raw.get("text")
+            if text_value is None:
+                text_value = ("" if typ in {"bullet", "number", "table"}
+                              else raw.get("content", raw.get("value", raw.get("title", ""))))
+            if isinstance(text_value, (dict, list)):
+                raise ArtifactError("Texte d'un bloc documentaire invalide.")
+            block: dict[str, Any] = {"type": typ, "text": "" if text_value is None else str(text_value)}
+            if original in {"title", "document_title", "subtitle", "quote", "blockquote"}:
+                block["role"] = original
+            if typ in {"bullet", "number"}:
+                raw_items = raw.get("items", raw.get("entries", raw.get("content", [])))
+                if not isinstance(raw_items, list):
+                    raise ArtifactError("Une liste documentaire doit contenir un tableau items.")
+                items: list[str] = []
+                for item in raw_items:
+                    if isinstance(item, dict):
+                        item = item.get("text", item.get("content", ""))
+                    if isinstance(item, (list, dict)):
+                        raise ArtifactError("Element de liste documentaire invalide.")
+                    items.append("" if item is None else str(item))
+                block["items"] = items
+            elif typ == "table":
+                rows = self._normalize_rows(raw.get("rows", raw.get("data", [])))
+                headers = raw.get("headers")
+                if headers is not None:
+                    if not isinstance(headers, list) or any(isinstance(v, (dict, list)) for v in headers):
+                        raise ArtifactError("En-tetes de tableau documentaire invalides.")
+                    rows.insert(0, ["" if h is None else str(h) for h in headers])
+                block["rows"] = rows
+            normalized.append(block)
+        return normalized
+
     def _contract_blocks(self, kind: str | None, source: str | None, native: Any) -> list[dict[str, Any]]:
         if native is not None and (source is None or kind == "svg"):
-            if isinstance(native,dict) and not ({'blocks','chapters'} & set(native)):
-                raise ArtifactError('Structure documentaire native inconnue.')
-            if isinstance(native, dict) and isinstance(native.get('chapters'),list):
-                blocks=[]
-                for chapter in native['chapters']:
+            if not isinstance(native, dict) or not ({"blocks", "chapters"} & set(native)):
+                raise ArtifactError("Structure documentaire native inconnue.")
+            if "chapters" in native:
+                chapters = native["chapters"]
+                if not isinstance(chapters, list) or not chapters or len(chapters) > 100:
+                    raise ArtifactError("Liste de chapitres documentaires invalide.")
+                blocks: list[dict[str, Any]] = []
+                for chapter in chapters:
                     if not isinstance(chapter, dict):
-                        raise ArtifactError('Chapitre documentaire invalide.')
-                    blocks.append({'type':'h1','text':str(chapter.get('title') or 'Chapitre')})
-                    content=chapter.get('blocks',chapter.get('content',chapter.get('text','')))
-                    if isinstance(content,list):content={'blocks':content}
-                    blocks.extend(self._normalize_document_blocks(content))
+                        raise ArtifactError("Chapitre documentaire invalide.")
+                    blocks.append({"type": "h1", "text": str(chapter.get("title") or "Chapitre")})
+                    content = chapter.get("blocks", chapter.get("content", chapter.get("text", "")))
+                    if isinstance(content, list):
+                        content = {"blocks": content}
+                    blocks.extend(self._normalize_contract_native_blocks(content))
+                    if len(blocks) > self.MAX_CONTRACT_ELEMENTS:
+                        raise ArtifactError("Document natif trop volumineux.")
                 return blocks
-            blocks=self._normalize_document_blocks(native)
-            supported={'p','h1','h2','h3','h4','h5','h6','bullet','number','table','page_break','spacer'}
-            for b in blocks:
-                if b['type'] not in supported:
-                    raise ArtifactError('Bloc documentaire natif non supporte : '+b['type'])
-            return blocks
+            return self._normalize_contract_native_blocks(native)
         if source is None:
             raise ArtifactError("Document sans source interpretable.")
         if kind == "svg":
@@ -2190,17 +2311,26 @@ class ArtifactService:
             if typ == 'page_break':
                 document.add_page_break()
             elif typ.startswith('h') and typ[1:].isdigit():
-                para = document.add_heading(level=min(int(typ[1:]), 4))
+                if block.get('role') in {'title', 'document_title'}:
+                    para = document.add_paragraph(style='Title')
+                    para.alignment = 1  # WD_ALIGN_PARAGRAPH.CENTER
+                else:
+                    para = document.add_heading(level=min(int(typ[1:]), 4))
                 if block.get('element'):
                     rich_runs(para, block['element'])
                 else:
                     para.add_run(block.get('text', ''))
             elif typ == 'p':
-                para = document.add_paragraph()
+                para = document.add_paragraph(style='Subtitle' if block.get('role') == 'subtitle' else None)
+                if block.get('role') == 'subtitle':
+                    para.alignment = 1
                 if block.get('element'):
                     rich_runs(para, block['element'])
                 else:
                     para.add_run(block.get('text', ''))
+            elif typ == 'spacer':
+                para = document.add_paragraph()
+                para.paragraph_format.space_after = Pt(12)
             elif typ in {'bullet', 'number'}:
                 for index, item in enumerate(block.get('items', [])):
                     para = document.add_paragraph(style='List Number' if typ == 'number' else 'List Bullet')
@@ -2647,19 +2777,121 @@ class ArtifactService:
                     else:
                         cell.font=Font(name='Aptos',size=10,color='22334B')
                         if r%2==0:cell.fill=PatternFill('solid',fgColor='EDF3FC')
-            if rows:
-                ws.row_dimensions[1].height=25
-                for col in range(1,min(len(rows[0]),100)+1):
-                    width=min(55,max(13,max((len(str((r[col-1] if col<=len(r) else '') or '')) for r in rows[:150]),default=8)+3))
-                    ws.column_dimensions[get_column_letter(col)].width=width
-            ws.freeze_panes=str(s.get('freeze_panes') or ('A2' if rows else 'A1'))
-            if s.get('auto_filter',True) and rows:
-                ws.auto_filter.ref=ws.dimensions
-            merged=s.get('merged_cells',[])
-            if not isinstance(merged,list) or len(merged)>100:raise ArtifactError('Plages fusionnees invalides.')
-            for merge in merged:
+            # Mise en page lisible : une feuille peut commencer par un titre et
+            # plusieurs notes avant sa VRAIE ligne de titres de colonnes.
+            from math import ceil
+            from openpyxl.utils.cell import coordinate_from_string
+            from openpyxl.styles import Protection
+            ws.sheet_view.showGridLines = False
+            max_cols = max((len(line) for line in rows), default=1)
+            max_cols = max(1, min(max_cols, 100))
+            header_number = 1
+            for row_number, record in enumerate(rows[:18], 1):
+                values = [item.get('value', '') if isinstance(item, dict) else item for item in record]
+                cells_filled = sum(bool(value is not None and str(value).strip()) for value in values)
+                # Ne pas interpréter une introduction en prose comme des en-têtes.
+                if cells_filled >= 3 and all(len(str(value or '')) < 140 for value in values):
+                    header_number = row_number
+                    break
+            header = rows[header_number-1] if rows else []
+            widths = []
+            for col in range(max_cols):
+                title = str(header[col] if col < len(header) else '').lower()
+                text_rows = [str(line[col]) for line in rows[header_number: min(len(rows), 151)]
+                             if col < len(line) and line[col] is not None and
+                             not isinstance(line[col], dict)]
+                lengths = sorted(len(item) for item in text_rows)
+                typical = lengths[int((len(lengths)-1)*.75)] if lengths else 0
+                if any(key in title for key in ('note','précaution','perim','périm','référence','reference','source','usage','limite','description','méthode','methode')):
+                    desired = 46
+                elif any(key in title for key in ('chiffre','estim','valeur','nombre','personne','total','coût','montant')):
+                    desired = 26
+                elif any(key in title for key in ('période','periode','année','annee','date')):
+                    desired = 18
+                else:
+                    desired = max(17, min(43, max(len(title)+4, typical+3)))
+                if col == 0:
+                    desired = max(23, min(35, desired))
+                widths.append(min(50, desired))
+                ws.column_dimensions[get_column_letter(col+1)].width = widths[-1]
+
+            explicit_merges = s.get('merged_cells', [])
+            if not isinstance(explicit_merges,list) or len(explicit_merges)>100:
+                raise ArtifactError('Plages fusionnees invalides.')
+            explicit_rows = set()
+            for merge in explicit_merges:
                 if not isinstance(merge,str) or not re.fullmatch(r'[A-Z]{1,3}\d+:[A-Z]{1,3}\d+',merge):
                     raise ArtifactError('Plage de fusion invalide.')
+                left, right = merge.split(':')
+                firstrow = int(re.search(r'\d+',left).group())
+                lastrow = int(re.search(r'\d+',right).group())
+                explicit_rows.update(range(firstrow,min(lastrow+1,10001)))
+
+            for row_number, record in enumerate(rows,1):
+                values = [item.get('value') if isinstance(item,dict) else item for item in record]
+                nonblank = [(i,value) for i,value in enumerate(values)
+                            if value is not None and str(value).strip()]
+                is_title = row_number == 1 and len(nonblank)==1 and max_cols>1
+                is_note = (row_number < header_number and len(nonblank)==1 and
+                          len(str(nonblank[0][1]))>26 and max_cols>1)
+                is_summary = (row_number > header_number and len(nonblank)==2 and
+                              str(nonblank[0][1]).strip().lower() in
+                              {'à retenir','a retenir','synthèse','synthese','conclusion','important'})
+                if row_number == header_number and len(nonblank)>1:
+                    for cell in ws[row_number][:max_cols]:
+                        cell.font=Font(name='Aptos',size=10,bold=True,color='FFFFFF')
+                        cell.fill=PatternFill('solid',fgColor='18335D')
+                        cell.alignment=Alignment(vertical='center',wrap_text=True)
+                    ws.row_dimensions[row_number].height=34
+                elif is_title:
+                    for cell in ws[row_number][:max_cols]:
+                        cell.fill=PatternFill('solid',fgColor='18335D')
+                    ws.cell(row_number,1).font=Font(name='Aptos Display',size=16,bold=True,color='FFFFFF')
+                    ws.row_dimensions[row_number].height=43
+                elif row_number < header_number:
+                    for cell in ws[row_number][:max_cols]:
+                        cell.fill=PatternFill('solid',fgColor='EEF3F8')
+                    ws.row_dimensions[row_number].height=42 if is_note else 28
+                elif is_summary:
+                    for cell in ws[row_number][:max_cols]:
+                        cell.fill=PatternFill('solid',fgColor='E6F3F2')
+                        cell.font=Font(name='Aptos',size=10,bold=True,color='174B54')
+                elif row_number>header_number:
+                    for cell in ws[row_number][:max_cols]:
+                        cell.fill=PatternFill('solid',fgColor='F3F6FA' if (row_number-header_number)%2==0 else 'FFFFFF')
+                        cell.font=Font(name='Aptos',size=10,color='233347')
+                # Les introductions et les résumés doivent se lire sur plusieurs
+                # colonnes, pas dans une cellule très étroite de 20 caractères.
+                if row_number not in explicit_rows and max_cols>1:
+                    if (is_title or is_note) and nonblank[0][0]==0:
+                        ws.merge_cells(start_row=row_number,start_column=1,
+                                       end_row=row_number,end_column=max_cols)
+                    elif is_summary and nonblank[0][0]==0 and nonblank[1][0]==1:
+                        ws.merge_cells(start_row=row_number,start_column=2,
+                                       end_row=row_number,end_column=max_cols)
+                # Hauteur calculée seulement à partir des cellules contenant du
+                # texte ; limiter les tableaux trop serrés sans lignes infinies.
+                if row_number > header_number:
+                    estimated_lines = 1
+                    for col,value in nonblank:
+                        if col>=len(widths):continue
+                        span_width = (sum(widths[col:]) if
+                                      is_summary and col==1 and row_number not in explicit_rows
+                                      else widths[col])
+                        estimated_lines = max(estimated_lines, ceil(len(str(value))/max(12,span_width-3)))
+                    ws.row_dimensions[row_number].height = min(160,max(28,18*estimated_lines+5))
+                for col,value in nonblank:
+                    if col < max_cols and isinstance(value,(int,float)) and not isinstance(value,bool):
+                        cell=ws.cell(row_number,col+1)
+                        if cell.number_format=='General' and abs(value)>=1000:
+                            cell.number_format='#,##0.##'
+            # Les formules s'évaluent dans Excel/LibreOffice lors de l'ouverture.
+            ws.freeze_panes = str(s.get('freeze_panes') or
+                                  (f'A{header_number+1}' if rows else 'A1'))
+            if s.get('auto_filter', True) and len(rows)>header_number and max_cols>1:
+                ws.auto_filter.ref=(f'A{header_number}:'
+                                    f'{get_column_letter(max_cols)}{len(rows)}')
+            for merge in explicit_merges:
                 ws.merge_cells(merge)
             charts=s.get('charts',[])
             if not isinstance(charts,list) or len(charts)>10:raise ArtifactError('Graphiques invalides.')
