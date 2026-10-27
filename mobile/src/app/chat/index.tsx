@@ -814,6 +814,25 @@ type GeneratedArtifact = {
   messageId?: string | null;
 };
 
+type WordPreviewRun = { type: "text" | "image"; text?: string; src?: string;
+  bold?: boolean; italic?: boolean; underline?: boolean };
+type WordPreviewBlock = { type: "title" | "subtitle" | "heading" | "paragraph" | "bullet" | "number" | "table";
+  level?: number; runs?: WordPreviewRun[]; rows?: string[][] };
+type WordPreviewData = { id: string; filename: string; blocks: WordPreviewBlock[];
+  truncated: boolean; image_count: number };
+
+type SpreadsheetPreviewSheet = {
+  name: string;
+  rows: Array<Array<string | number | boolean | null>>;
+  truncated: boolean;
+};
+type SpreadsheetPreviewData = {
+  id: string;
+  filename: string;
+  sheets: SpreadsheetPreviewSheet[];
+  truncated: boolean;
+};
+
 type WebIllustration = {
   image_url: string;
   source_url: string;
@@ -1144,8 +1163,8 @@ function normalizeGeneratedArtifact(
       : `fichier-${id}`;
 
   const extension =
-    typeof raw.extension === "string"
-      ? raw.extension.replace(/^\./, "").toLowerCase()
+    typeof raw.extension === "string" && raw.extension.trim()
+      ? raw.extension.trim().replace(/^\./, "").toLowerCase()
       : filename.includes(".")
         ? filename.split(".").pop()?.toLowerCase() || ""
         : "";
@@ -1172,12 +1191,9 @@ function normalizeGeneratedArtifact(
       : typeof raw.previewUrl === "string"
         ? raw.previewUrl
         : null;
-  // La liste GET /ai/artifacts sans include_urls ne fournit pas ce drapeau.
-  // Un PDF reste prévisualisable : l'accès est toujours revalidé au clic.
-  const declaredPreview = typeof raw.preview_supported === "boolean"
-    ? raw.preview_supported
-    : typeof raw.previewSupported === "boolean" ? raw.previewSupported : null;
-  const previewSupported = declaredPreview ?? extension === "pdf";
+  // Toujours proposer l'apercu des PDF; les liens signes et autorisations
+  // se verifient au clic, jamais lors de l'affichage de la carte.
+  const previewSupported = ["pdf", "docx", "xlsx"].includes(extension);
   const previewAvailable = raw.preview_available === true || raw.previewAvailable === true;
 
   return {
@@ -4217,6 +4233,9 @@ export default function ChatPage() {
   const [localVoiceDraft, setLocalVoiceDraft] = useState<LocalVoiceDraft | null>(null);
   const [voiceUploading, setVoiceUploading] = useState(false);
   const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
+  const [wordPreview, setWordPreview] = useState<WordPreviewData | null>(null);
+  const [spreadsheetPreview, setSpreadsheetPreview] = useState<SpreadsheetPreviewData | null>(null);
+  const [spreadsheetSheetIndex, setSpreadsheetSheetIndex] = useState(0);
   const [artifactBusyId, setArtifactBusyId] = useState<string | null>(null);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
@@ -4244,7 +4263,7 @@ export default function ChatPage() {
     voiceDraft || localVoiceDraft || voiceUploading ||
     audioBusyRef.current || stoppingRecordingRef.current ||
     recorderState.isRecording || miniStudioOpen ||
-    coursesOpen || drawerVisible || codePreview || artifactBusyId ||
+    coursesOpen || drawerVisible || codePreview || wordPreview || artifactBusyId ||
     modificationPanelOpen
   );
 
@@ -5075,14 +5094,52 @@ export default function ChatPage() {
     }
   }
 
+  async function openWordPreview(artifact: GeneratedArtifact): Promise<void> {
+    if (artifact.extension.toLowerCase() !== "docx" || artifactBusyId) return;
+    setArtifactBusyId(artifact.id);
+    try {
+      const result = await apiFetch<{
+        success: boolean; filename: string; artifact_id: string;
+        blocks: WordPreviewBlock[]; truncated: boolean; image_count: number;
+      }>(`/ai/artifacts/${encodeURIComponent(artifact.id)}/document-preview`);
+      if (!result.success || !Array.isArray(result.blocks)) {
+        throw new Error(language === "fr" ? "Aperçu Word indisponible." : "Word preview unavailable.");
+      }
+      setWordPreview({ id: artifact.id, filename: result.filename || artifact.filename,
+        blocks: result.blocks, truncated: result.truncated, image_count: result.image_count });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message :
+        language === "fr" ? "Lecture du document Word impossible." : "Unable to preview Word document.");
+    } finally { setArtifactBusyId(null); }
+  }
+
+  async function openSpreadsheetPreview(artifact: GeneratedArtifact): Promise<void> {
+    if (artifact.extension.toLowerCase() !== "xlsx" || artifactBusyId) return;
+    setArtifactBusyId(artifact.id);
+    try {
+      const result = await apiFetch<{
+        success: boolean; filename: string; artifact_id: string;
+        sheets: SpreadsheetPreviewSheet[]; truncated: boolean;
+      }>(`/ai/artifacts/${encodeURIComponent(artifact.id)}/spreadsheet-preview`);
+      if (!result.success || !Array.isArray(result.sheets)) {
+        throw new Error(language === "fr" ? "Aperçu Excel indisponible." : "Spreadsheet preview unavailable.");
+      }
+      setSpreadsheetSheetIndex(0);
+      setSpreadsheetPreview({id: artifact.id, filename: result.filename || artifact.filename,
+        sheets: result.sheets, truncated: result.truncated});
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message :
+        language === "fr" ? "Lecture du classeur impossible." : "Unable to read spreadsheet.");
+    } finally { setArtifactBusyId(null); }
+  }
+
   async function openArtifactPreview(artifact: GeneratedArtifact): Promise<void> {
-    if (artifact.extension.toLowerCase() !== "pdf" || !artifact.previewSupported || artifactBusyId) return;
+    if (artifact.extension.toLowerCase() !== "pdf" || artifactBusyId) return;
     setArtifactBusyId(artifact.id);
     try {
       const renewed = await refreshArtifactAccess(artifact);
-      if (!renewed.previewSupported) throw new Error(CHAT_TEXT[language].documentUnavailable);
       const previewUrl = safePrivateArtifactUrl(renewed.previewUrl);
-      if (!previewUrl || !renewed.previewAvailable) {
+      if (!previewUrl) {
         throw new Error(CHAT_TEXT[language].documentUnavailable);
       }
       if (Platform.OS === "web") {
@@ -6978,7 +7035,7 @@ export default function ChatPage() {
                     </Text>
                   </View>
 
-                  {artifact.extension.toLowerCase() === "pdf" && artifact.previewSupported ? (
+                  {artifact.extension.toLowerCase() === "pdf" ? (
                     <Pressable
                       onPress={() => void openArtifactPreview(artifact)}
                       disabled={Boolean(artifactBusyId)}
@@ -6991,6 +7048,26 @@ export default function ChatPage() {
                       ) : (
                         <Ionicons name="eye-outline" size={18} color={themedIconColor("#111111", isDark)} />
                       )}
+                    </Pressable>
+                  ) : null}
+                  {artifact.extension.toLowerCase() === "docx" ? (
+                    <Pressable onPress={() => void openWordPreview(artifact)}
+                      disabled={Boolean(artifactBusyId)}
+                      style={[styles.artifactDownloadButton, { opacity: artifactBusyId ? 0.6 : 1 }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${language === "fr" ? "Aperçu Word" : "Word preview"} ${artifact.filename}`}>
+                      {artifactBusyId === artifact.id ? <ActivityIndicator size="small" color={themedIconColor("#111111", isDark)}/> :
+                        <Ionicons name="eye-outline" size={18} color={themedIconColor("#111111", isDark)}/>}
+                    </Pressable>
+                  ) : null}
+                  {artifact.extension.toLowerCase() === "xlsx" ? (
+                    <Pressable onPress={() => void openSpreadsheetPreview(artifact)}
+                      disabled={Boolean(artifactBusyId)}
+                      style={[styles.artifactDownloadButton, { opacity: artifactBusyId ? 0.6 : 1 }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${language === "fr" ? "Aperçu Excel" : "Spreadsheet preview"} ${artifact.filename}`}>
+                      {artifactBusyId === artifact.id ? <ActivityIndicator size="small" color={themedIconColor("#111111", isDark)}/> :
+                        <Ionicons name="eye-outline" size={18} color={themedIconColor("#111111", isDark)}/>}
                     </Pressable>
                   ) : null}
                   {CODE_PREVIEW_EXTENSIONS.has(artifact.extension.toLowerCase()) ? (
@@ -7088,6 +7165,144 @@ export default function ChatPage() {
                 <HighlightedCode code={codePreview?.code || ""} />
               </ScrollView>
             </ScrollView>
+          </SafeAreaView>
+        </SafeAreaProvider>
+      </Modal>
+      <Modal visible={Boolean(wordPreview)} animationType="slide"
+        presentationStyle="fullScreen" onRequestClose={() => setWordPreview(null)}>
+        <SafeAreaProvider style={{flex:1, backgroundColor:theme==="dark" ? "#101012" : "#fff"}}>
+          <SafeAreaView edges={["top","bottom","left","right"]}
+            style={{flex:1, backgroundColor:theme==="dark" ? "#101012" : "#fff"}}>
+            <View style={{flexDirection:"row",alignItems:"center",padding:14,borderBottomWidth:1,
+              borderColor:theme==="dark" ? "#303036" : "#e5e7eb"}}>
+              <Pressable onPress={() => setWordPreview(null)} accessibilityRole="button"
+                accessibilityLabel={language==="fr" ? "Fermer" : "Close"} style={{padding:7}}>
+                <Ionicons name="close" size={24} color={theme==="dark" ? "#fff" : "#111"}/>
+              </Pressable>
+              <View style={{flex:1,marginLeft:10}}>
+                <Text numberOfLines={1} style={{fontSize:15,fontWeight:"700",color:theme==="dark" ? "#fff" : "#111"}}>
+                  {wordPreview?.filename}
+                </Text>
+                <Text style={{fontSize:11,color:theme==="dark" ? "#aaa" : "#667085"}}>
+                  DOCX · {language==="fr" ? "Aperçu privé en lecture seule" : "Private read-only preview"}
+                </Text>
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel={language==="fr" ? "Télécharger" : "Download"}
+                style={{padding:7}} onPress={() => {
+                  const artifact = generatedArtifacts.find((item) => item.id === wordPreview?.id);
+                  if (artifact) void downloadArtifact(artifact);
+                }}>
+                <Ionicons name="download-outline" size={21} color={theme==="dark" ? "#fff" : "#111"}/>
+              </Pressable>
+            </View>
+            <ScrollView style={{flex:1,backgroundColor:theme==="dark" ? "#18181b" : "#f0f2f5"}}
+              contentContainerStyle={{paddingHorizontal:12,paddingVertical:18}}>
+              <View style={{backgroundColor:"#fff",borderRadius:10,paddingHorizontal:21,
+                paddingVertical:30,minHeight:500,maxWidth:850,alignSelf:"stretch"}}>
+                {(wordPreview?.blocks || []).map((block,index) => {
+                  if (block.type === "table") return <ScrollView horizontal key={`table-${index}`}
+                    style={{marginVertical:11}}>
+                    <View style={{borderWidth:1,borderColor:"#d5dee5"}}>
+                      {(block.rows || []).map((row,ri)=><View key={ri} style={{flexDirection:"row"}}>
+                        {row.map((cell,ci)=><View key={ci} style={{width:180,padding:9,borderBottomWidth:1,
+                          borderRightWidth:1,borderColor:"#d5dee5",backgroundColor:ri===0?"#eaf2f7":"#fff"}}>
+                          <Text selectable style={{fontSize:12,color:"#263346",fontWeight:ri===0?"700":"400"}}>{cell}</Text>
+                        </View>)}
+                      </View>)}
+                    </View>
+                  </ScrollView>;
+                  const large = block.type === "title" || block.type === "heading";
+                  const fontSize = block.type === "title" ? 27 : block.type === "subtitle" ? 17 :
+                    block.type === "heading" ? ((block.level || 2) <= 2 ? 20 : 17) : 14;
+                  let listNumber = 1;
+                  if (block.type === "number") {
+                    for (let prev = index - 1; prev >= 0 && wordPreview?.blocks[prev].type === "number"; prev--) listNumber++;
+                  }
+                  const runs = (block.runs || []).filter(run => run.type === "text");
+                  const images = (block.runs || []).filter(run => run.type === "image" && run.src?.startsWith("data:image/"));
+                  return <View key={`word-${index}`} style={{marginTop:large ? 18 : 5,marginBottom:large ? 9 : 6}}>
+                    {runs.length ? <Text selectable style={{color:large ? "#153c5a" : "#283445",
+                      fontSize,lineHeight:Math.round(fontSize*1.55),fontWeight:large ? "700" : "400"}}>
+                      {block.type === "bullet" ? "•  " : block.type === "number" ? `${listNumber}.  ` : ""}
+                      {runs.map((run,ri)=><Text key={ri} style={{fontWeight:run.bold ? "700" : undefined,
+                        fontStyle:run.italic ? "italic" : undefined,
+                        textDecorationLine:run.underline ? "underline" : "none"}}>{run.text || ""}</Text>)}
+                    </Text> : null}
+                    {images.map((run,ri)=><Image key={`img-${ri}`} source={{uri:run.src!}}
+                      resizeMode="contain" accessibilityLabel={language==="fr" ? "Illustration du document" : "Document illustration"}
+                      style={{width:"100%",height:215,marginTop:8,marginBottom:8,borderRadius:6}}/>)}
+                  </View>;
+                })}
+              </View>
+              <Text style={{padding:12,fontSize:11,textAlign:"center",color:theme==="dark" ? "#aaa" : "#667085"}}>
+                {language==="fr" ? "Aperçu simplifié : pagination et certaines mises en page peuvent différer du fichier Word. Téléchargez le DOCX pour tout consulter." :
+                  "Simplified preview: pagination and some Word layouts may differ. Download the DOCX for full fidelity."}
+                {wordPreview?.truncated ? (language==="fr" ? " Aperçu tronqué." : " Preview truncated.") : ""}
+              </Text>
+            </ScrollView>
+          </SafeAreaView>
+        </SafeAreaProvider>
+      </Modal>
+      <Modal visible={Boolean(spreadsheetPreview)} animationType="slide"
+        presentationStyle="fullScreen" onRequestClose={() => setSpreadsheetPreview(null)}>
+        <SafeAreaProvider style={{flex:1, backgroundColor: theme === "dark" ? "#101012" : "#fff"}}>
+          <SafeAreaView edges={["top","bottom","left","right"]} style={{flex:1, backgroundColor: theme === "dark" ? "#101012" : "#fff"}}>
+            <View style={{flexDirection:"row", alignItems:"center", padding:14,
+              borderBottomWidth:1, borderColor: theme === "dark" ? "#303036" : "#e5e7eb"}}>
+              <Pressable onPress={() => setSpreadsheetPreview(null)} accessibilityRole="button"
+                accessibilityLabel={language === "fr" ? "Fermer" : "Close"} style={{padding:7}}>
+                <Ionicons name="close" size={24} color={theme === "dark" ? "#fff" : "#111"}/>
+              </Pressable>
+              <View style={{flex:1, marginLeft:10}}>
+                <Text numberOfLines={1} style={{fontSize:15,fontWeight:"700", color:theme === "dark" ? "#fff" : "#111"}}>
+                  {spreadsheetPreview?.filename}
+                </Text>
+                <Text style={{fontSize:11, color:theme === "dark" ? "#aaa" : "#667085"}}>
+                  XLSX · {language === "fr" ? "Aperçu privé en lecture seule" : "Private read-only preview"}
+                </Text>
+              </View>
+            </View>
+            <ScrollView horizontal style={{flexGrow:0, borderBottomWidth:1,
+              borderColor:theme === "dark" ? "#303036" : "#e5e7eb"}}
+              contentContainerStyle={{padding:9, gap:7}}>
+              {(spreadsheetPreview?.sheets || []).map((sheet, idx) => (
+                <Pressable key={`${idx}-${sheet.name}`} onPress={() => setSpreadsheetSheetIndex(idx)}
+                  style={{paddingHorizontal:13,paddingVertical:9,borderRadius:9,
+                    backgroundColor:spreadsheetSheetIndex===idx ? (theme==="dark" ? "#fff" : "#111") : (theme==="dark" ? "#24242a" : "#f3f4f6")}}>
+                  <Text style={{fontSize:12,fontWeight:"600",color:spreadsheetSheetIndex===idx ? (theme==="dark" ? "#111" : "#fff") : (theme==="dark" ? "#ddd" : "#333")}}>{sheet.name}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <ScrollView style={{flex:1}} nestedScrollEnabled>
+              <ScrollView horizontal nestedScrollEnabled contentContainerStyle={{padding:12}}>
+                <View style={{borderWidth:1,borderColor:theme==="dark" ? "#36363d" : "#d9dce1",borderRadius:10,overflow:"hidden"}}>
+                  {(() => {
+                    const sheet = spreadsheetPreview?.sheets[spreadsheetSheetIndex];
+                    if (!sheet) return null;
+                    const colCount = Math.min(16,Math.max(1,...sheet.rows.map((r)=>r.length)));
+                    const valueText = (value: string | number | boolean | null | undefined) => value == null ? "" : typeof value === "number" ? value.toLocaleString(language === "fr" ? "fr-FR" : "en-US") : String(value);
+                    const cell = (value: string, isHead:boolean, key:string) => <View key={key}
+                      style={{width:170,paddingVertical:10,paddingHorizontal:9,borderRightWidth:1,borderBottomWidth:1,
+                        borderColor:theme==="dark" ? "#36363d" : "#e5e7eb",backgroundColor:isHead ? (theme==="dark" ? "#232329" : "#edf2f7") : (theme==="dark" ? "#101012" : "#fff")}}>
+                        <Text selectable numberOfLines={5} style={{fontSize:12,lineHeight:18,fontWeight:isHead ? "700" : "400",color:theme==="dark" ? "#eee" : "#263248"}}>{value}</Text>
+                      </View>;
+                    return <>
+                      <View style={{flexDirection:"row"}}>
+                        {cell("#",true,"row-heading")}
+                        {Array.from({length:colCount},(_,i)=>cell(String.fromCharCode(65+i),true,`head-${i}`))}
+                      </View>
+                      {sheet.rows.map((row,index)=><View key={index} style={{flexDirection:"row"}}>
+                        {cell(String(index+1),true,`r-${index}`)}
+                        {Array.from({length:colCount},(_,i)=>cell(valueText(row[i]),index===0,`c-${index}-${i}`))}
+                      </View>)}
+                    </>;
+                  })()}
+                </View>
+              </ScrollView>
+            </ScrollView>
+            <Text style={{padding:12,fontSize:11,textAlign:"center",color:theme==="dark" ? "#aaa" : "#667085"}}>
+              {language === "fr" ? "Aperçu limité à 120 lignes, 16 colonnes et 10 feuilles. Téléchargez le classeur pour tout consulter." : "Preview limited to 120 rows, 16 columns and 10 sheets. Download for full content."}
+            </Text>
           </SafeAreaView>
         </SafeAreaProvider>
       </Modal>

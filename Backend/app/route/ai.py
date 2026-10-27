@@ -27,7 +27,7 @@ from ipaddress import ip_address
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, Header, HTTPException, Request, UploadFile
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
 from pydantic import BaseModel
 
@@ -1447,6 +1447,16 @@ def _artifact_public_payload(
     artifact: dict[str, Any],
 ) -> dict[str, Any]:
     """Réduit les métadonnées à ce qui doit être envoyé au frontend."""
+    # Les lignes du listing ne comportent pas de liens signes ni de drapeau
+    # preview_supported. Ne jamais convertir None en False, sinon les PDF
+    # perdent leur bouton Apercu apres un rechargement de l'historique.
+    declared_preview = artifact.get("preview_supported")
+    if isinstance(declared_preview, bool):
+        supported_preview = declared_preview
+    else:
+        ext = str(artifact.get("extension") or "").lower().lstrip(".")
+        mime = str(artifact.get("mime_type") or "").lower().split(";", 1)[0].strip()
+        supported_preview = ext == "pdf" and mime == "application/pdf"
     return {
         "id": artifact.get("id"),
         "artifact_id": artifact.get("id"),
@@ -1461,7 +1471,7 @@ def _artifact_public_payload(
         "download_url": artifact.get("download_url"),
         "url": artifact.get("download_url") or artifact.get("url"),
         "preview_url": artifact.get("preview_url"),
-        "preview_supported": bool(artifact.get("preview_supported")),
+        "preview_supported": supported_preview,
         "preview_available": bool(artifact.get("preview_available")),
         "created_at": artifact.get("created_at"),
     }
@@ -1623,6 +1633,197 @@ def get_user_artifact(
         "success": True,
         "artifact": _artifact_public_payload(artifact),
     }
+
+
+@router.get("/artifacts/{artifact_id}/spreadsheet-preview")
+def get_user_spreadsheet_preview(
+    artifact_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Aperçu JSON borné d'un XLSX privé, sans service externe ni formule exécutée.
+
+    Un document doit impérativement être résolu par (id, propriétaire) AVANT la
+    lecture de Storage. Les données complètes restent dans le téléchargement.
+    """
+    import io
+    import math
+    import zipfile
+    from datetime import date, datetime
+    from openpyxl import load_workbook
+
+    owner = _authenticate_chat_user(user_id=user_id, authorization=authorization)
+    artifact = ARTIFACT_REPOSITORY.get_artifact(artifact_id=artifact_id, user_id=owner)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Fichier généré introuvable.")
+    if str(artifact.get("extension") or "").lower().lstrip(".") != "xlsx":
+        raise HTTPException(status_code=415, detail="L'aperçu tabulaire ne concerne que les XLSX.")
+
+    maximum_bytes = 5 * 1024 * 1024
+    if int(artifact.get("size_bytes") or 0) > maximum_bytes:
+        raise HTTPException(status_code=413, detail="Classeur trop volumineux pour l'aperçu.")
+    path = str(artifact.get("storage_path") or "")
+    ARTIFACT_REPOSITORY._assert_owned_storage_path(
+        storage_path=path, user_id=owner, artifact_id=artifact_id)
+    try:
+        binary = supabase.storage.from_(ARTIFACT_REPOSITORY.BUCKET_NAME).download(path)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("ORIA_SPREADSHEET_PREVIEW storage_failed type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Aperçu temporairement indisponible.") from exc
+    if not isinstance(binary, (bytes, bytearray)):
+        raise HTTPException(status_code=502, detail="Réponse de stockage invalide.")
+    binary = bytes(binary)
+    if not binary or len(binary) > maximum_bytes:
+        raise HTTPException(status_code=413, detail="Classeur trop volumineux pour l'aperçu.")
+
+    # Une archive XLSX fortement compressée ne doit jamais provoquer une
+    # décompression illimitée. Aucun lien externe ni macro n'est exécuté.
+    try:
+        with zipfile.ZipFile(io.BytesIO(binary)) as archive:
+            members = archive.infolist()
+            if (len(members) > 250 or
+                    sum(item.file_size for item in members) > 30 * 1024 * 1024 or
+                    any(item.file_size > 15 * 1024 * 1024 for item in members)):
+                raise ValueError("Archive XLSX trop volumineuse")
+        book = load_workbook(io.BytesIO(binary), read_only=True, data_only=True, keep_links=False)
+        formula_book = load_workbook(io.BytesIO(binary), read_only=True, data_only=False, keep_links=False)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("ORIA_SPREADSHEET_PREVIEW invalid_workbook type=%s", type(exc).__name__)
+        raise HTTPException(status_code=422, detail="Classeur non lisible pour l'aperçu.") from exc
+
+    def safe_cell(value):
+        if value is None:
+            return None
+        if isinstance(value, (int, float, bool)):
+            if isinstance(value, float) and not math.isfinite(value):
+                return None
+            return value
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        return str(value)[:900]
+
+    # Un XLSX construit par openpyxl ne possède pas toujours de valeurs en
+    # cache pour ses formules. Évaluer UNIQUEMENT =A1, =Feuille!A1 et
+    # =SUM(A1:A10) pour ne pas afficher de chiffres vides dans l'aperçu.
+    # Aucune macro, formule dynamique, fonction réseau ou référence externe
+    # n'est exécutée. Les formules inconnues sont du texte inerte.
+    def resolve_cell(sheet_name: str, coord: str, depth: int = 0):
+        if depth > 4 or sheet_name not in book.sheetnames:
+            return None
+        cached = book[sheet_name][coord].value
+        if cached is not None:
+            return cached
+        formula = formula_book[sheet_name][coord].value
+        if not isinstance(formula, str) or not formula.startswith('='):
+            return formula
+        expression = formula[1:].strip()
+        sheet_part = r"(?:(?:'([^']{1,80})'|([A-Za-z0-9 _.\-]{1,80}))!)?"
+        ref = re.fullmatch(sheet_part + r"([A-Z]{1,3}[1-9][0-9]{0,4})", expression, re.I)
+        if ref:
+            return resolve_cell(ref.group(1) or ref.group(2) or sheet_name, ref.group(3).upper(), depth+1)
+        sum_ref = re.fullmatch(r"SUM\(" + sheet_part +
+              r"([A-Z]{1,3}[1-9][0-9]{0,4}):([A-Z]{1,3}[1-9][0-9]{0,4})\)", expression, re.I)
+        if sum_ref:
+            from openpyxl.utils.cell import range_boundaries
+            target_sheet = sum_ref.group(1) or sum_ref.group(2) or sheet_name
+            c1, r1, c2, r2 = range_boundaries(sum_ref.group(3).upper()+":"+sum_ref.group(4).upper())
+            if target_sheet not in book.sheetnames or c2-c1>15 or r2-r1>120 or c2<c1 or r2<r1:
+                return formula
+            acc = 0.0
+            from openpyxl.utils.cell import get_column_letter
+            for ri in range(r1,r2+1):
+                for ci in range(c1,c2+1):
+                    v=resolve_cell(target_sheet,f'{get_column_letter(ci)}{ri}',depth+1)
+                    if isinstance(v,(float,int)) and not isinstance(v,bool):
+                        acc += v
+            return int(acc) if acc.is_integer() else acc
+        return formula[:500]
+
+    preview_sheets = []
+    try:
+        for sheet in book.worksheets[:10]:
+            # Maximum 120 lignes et 16 colonnes, sans lignes blanches artificielles.
+            last_row = min(120, max(1, sheet.max_row or 1))
+            last_col = min(16, max(1, sheet.max_column or 1))
+            rows = []
+            from openpyxl.utils.cell import get_column_letter
+            displayed = sheet.iter_rows(max_row=last_row, max_col=last_col, values_only=True)
+            formulas = formula_book[sheet.title].iter_rows(max_row=last_row, max_col=last_col,
+                                                           values_only=True)
+            for row_number, (record, form_record) in enumerate(zip(displayed, formulas),1):
+                output = []
+                for col_number, (value, formula_value) in enumerate(zip(record,form_record),1):
+                    if (value is None and isinstance(formula_value,str) and
+                            formula_value.startswith('=')):
+                        value=resolve_cell(sheet.title, f'{get_column_letter(col_number)}{row_number}')
+                    output.append(safe_cell(value))
+                rows.append(output)
+            while rows and not any(v is not None and v != '' for v in rows[-1]):
+                rows.pop()
+            preview_sheets.append({
+                "name": sheet.title,
+                "rows": rows,
+                "truncated": (sheet.max_row or 0) > 120 or (sheet.max_column or 0) > 16,
+            })
+    finally:
+        book.close()
+        formula_book.close()
+    return JSONResponse(content={
+        "success": True, "artifact_id": artifact_id,
+        "filename": str(artifact.get("filename") or "document.xlsx"),
+        "sheets": preview_sheets,
+        "truncated": len(book.sheetnames) > 10,
+        "read_only": True,
+    }, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/artifacts/{artifact_id}/document-preview")
+def get_user_document_preview(
+    artifact_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """DOCX privé en lecture seule : blocs structurés et petites images intégrées.
+
+    Authentification et validation du propriétaire AVANT tout accès Storage.
+    Aucun service de conversion externe, URL publique ni HTML non fiable.
+    """
+    from app.services.artifact_preview_service import (
+        DocumentPreviewError, MAX_FILE_BYTES, preview_docx_bytes,
+    )
+
+    owner = _authenticate_chat_user(user_id=user_id, authorization=authorization)
+    artifact = ARTIFACT_REPOSITORY.get_artifact(artifact_id=artifact_id, user_id=owner)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Fichier généré introuvable.")
+    if str(artifact.get("extension") or "").lower().lstrip(".") != "docx":
+        raise HTTPException(status_code=415, detail="L'aperçu Word requiert un document DOCX.")
+    if int(artifact.get("size_bytes") or 0) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Document trop volumineux pour l'aperçu.")
+    path = str(artifact.get("storage_path") or "")
+    ARTIFACT_REPOSITORY._assert_owned_storage_path(
+        storage_path=path, user_id=owner, artifact_id=artifact_id,
+    )
+    try:
+        binary = supabase.storage.from_(ARTIFACT_REPOSITORY.BUCKET_NAME).download(path)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "ORIA_DOCUMENT_PREVIEW storage_failed type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Aperçu temporairement indisponible.") from exc
+    if not isinstance(binary, (bytes, bytearray)):
+        raise HTTPException(status_code=502, detail="Réponse de stockage invalide.")
+    try:
+        preview = preview_docx_bytes(bytes(binary))
+    except DocumentPreviewError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logging.getLogger(__name__).exception("ORIA_DOCUMENT_PREVIEW parser_failed")
+        raise HTTPException(status_code=422, detail="Document non lisible pour l'aperçu.") from exc
+    return JSONResponse(content={
+        "success": True, "artifact_id": artifact_id,
+        "filename": str(artifact.get("filename") or "document.docx"),
+        **preview,
+    }, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.delete("/artifacts/{artifact_id}")

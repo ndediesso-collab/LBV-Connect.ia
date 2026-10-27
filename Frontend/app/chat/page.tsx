@@ -180,6 +180,25 @@ type VoiceDraft = VoiceNote & {
 
 type CodePreviewData = { title: string; language: string; code: string };
 
+type SpreadsheetPreviewSheet = {
+  name: string;
+  rows: Array<Array<string | number | boolean | null>>;
+  truncated: boolean;
+};
+type SpreadsheetPreviewData = {
+  id: string;
+  filename: string;
+  sheets: SpreadsheetPreviewSheet[];
+  truncated: boolean;
+};
+
+type WordPreviewRun = { type: "text" | "image"; text?: string; src?: string;
+  bold?: boolean; italic?: boolean; underline?: boolean };
+type WordPreviewBlock = { type: "title" | "subtitle" | "heading" | "bullet" | "number" | "paragraph" | "table";
+  level?: number; runs?: WordPreviewRun[]; rows?: string[][] };
+type WordPreviewData = { id: string; filename: string; blocks: WordPreviewBlock[];
+  truncated: boolean; image_count: number };
+
 type DocumentPreviewData = {
   id: string;
   filename: string;
@@ -578,8 +597,8 @@ function normalizeGeneratedArtifact(
       : `fichier-${id}`;
 
   const extension =
-    typeof raw.extension === "string"
-      ? raw.extension.replace(/^\./, "").toLowerCase()
+    typeof raw.extension === "string" && raw.extension.trim()
+      ? raw.extension.trim().replace(/^\./, "").toLowerCase()
       : filename.includes(".")
         ? filename.split(".").pop()?.toLowerCase() || ""
         : "";
@@ -618,8 +637,11 @@ function normalizeGeneratedArtifact(
       : typeof raw.previewUrl === "string"
         ? raw.previewUrl
         : null;
-  const previewSupported =
-    raw.preview_supported === true || raw.previewSupported === true;
+  // La capacite d'afficher l'action est liee au FORMAT, pas aux URLs
+  // temporaires. GET /ai/artifacts sans include_urls peut transmettre
+  // preview_supported=false alors qu'un PDF est parfaitement lisible.
+  // La permission et l'URL signee sont controlees lors du clic.
+  const previewSupported = extension === "pdf";
   const previewAvailable =
     raw.preview_available === true || raw.previewAvailable === true;
 
@@ -2085,6 +2107,140 @@ function DocumentPreviewModal({ preview, onClose, onDownload, language }: {
         {language === "fr"
           ? "Si le lecteur PDF ne s’affiche pas, utilisez l’ouverture dans un nouvel onglet."
           : "If the PDF viewer does not load, open it in a new tab."}
+      </p>
+    </div>
+  );
+}
+
+function WordPreviewModal({ preview, onClose, onDownload, language }: {
+  preview: WordPreviewData; onClose: () => void; onDownload: () => void;
+  language: OriaLanguage;
+}) {
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [onClose]);
+  const rich = (runs: WordPreviewRun[] = []) => runs.map((run, index) =>
+    run.type === "image" && run.src?.startsWith("data:image/")
+      ? <img key={index} src={run.src} alt={language === "fr" ? "Illustration du document" : "Document illustration"}
+          className="my-4 max-h-[390px] max-w-full rounded-lg object-contain"/>
+      : <span key={index} style={{fontWeight: run.bold ? 700 : undefined,
+          fontStyle: run.italic ? "italic" : undefined,
+          textDecoration: run.underline ? "underline" : undefined}}>{run.text || ""}</span>);
+  return (
+    <div role="dialog" aria-modal="true" aria-label={preview.filename}
+      className="fixed inset-0 z-[90] flex flex-col bg-background text-foreground">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-surface px-4 py-3 sm:px-7">
+        <div className="flex min-w-0 items-center gap-3"><FileText size={20}/>
+          <div className="min-w-0"><p className="truncate text-sm font-semibold">{preview.filename}</p>
+            <p className="text-[11px] text-muted">DOCX · {language === "fr" ? "Aperçu privé en lecture seule" : "Private read-only preview"}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={onDownload} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs hover:bg-surface-secondary">
+            <Download size={15}/><span className="hidden sm:inline">{UI[language].download}</span>
+          </button>
+          <button type="button" onClick={onClose} aria-label={language === "fr" ? "Fermer" : "Close"}
+            className="rounded-xl p-2 hover:bg-surface-secondary"><X size={20}/></button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto bg-surface-secondary/40 p-3 sm:p-6">
+        <article className="mx-auto min-h-[80vh] w-full max-w-[820px] rounded-lg border border-border bg-white px-5 py-9 text-[#182333] shadow-sm sm:px-12 sm:py-12"
+          style={{fontFamily: "Georgia, 'Times New Roman', serif"}}>
+          {preview.blocks.map((block, index) => {
+            const content = rich(block.runs);
+            if (block.type === "table") return <div key={index} className="my-5 overflow-x-auto">
+              <table className="w-full border-collapse text-left text-[13px] leading-relaxed">
+                <tbody>{(block.rows || []).map((row, ri) => <tr key={ri}>
+                  {row.map((cell, ci) => <td key={ci} className={`border border-[#d2d8df] px-3 py-2 align-top ${ri === 0 ? "bg-[#ecf2f7] font-semibold" : ""}`}>
+                    {cell}</td>)}</tr>)}</tbody></table></div>;
+            if (block.type === "title") return <div key={index} className="mb-6 text-[29px] font-bold leading-tight">{content}</div>;
+            if (block.type === "subtitle") return <div key={index} className="mb-6 text-lg text-[#586a7b]">{content}</div>;
+            if (block.type === "heading") return <div key={index} className={`${(block.level || 2) <= 2 ? "mt-7 mb-3 text-xl" : "mt-5 mb-2 text-base"} font-bold leading-snug text-[#153c5a]`}>{content}</div>;
+            if (block.type === "bullet" || block.type === "number") return <div key={index} className="my-1 pl-6 text-[15px] leading-7">
+              <span className="-ml-5 mr-3 inline-block min-w-[12px]">{block.type === "bullet" ? "•" : `${(() => { let count = 1; for (let i = index - 1; i >= 0 && preview.blocks[i].type === "number"; i--) count++; return count; })()}.`}</span>{content}</div>;
+            return <div key={index} className="my-3 whitespace-pre-wrap break-words text-[15px] leading-7">{content}</div>;
+          })}
+        </article>
+      </div>
+      <p className="shrink-0 px-4 py-2 text-center text-[11px] text-muted">
+        {language === "fr" ? "Aperçu simplifié : pagination et certains éléments Word peuvent différer du fichier original. Téléchargez le DOCX pour la mise en page complète." :
+          "Simplified preview: pagination and some Word elements can differ from the original. Download DOCX for the full layout."}
+        {preview.truncated ? (language === "fr" ? " · Aperçu tronqué." : " · Preview truncated.") : ""}
+      </p>
+    </div>
+  );
+}
+
+function SpreadsheetPreviewModal({ preview, onClose, onDownload, language }: {
+  preview: SpreadsheetPreviewData;
+  onClose: () => void;
+  onDownload: () => void;
+  language: OriaLanguage;
+}) {
+  const [active, setActive] = useState(0);
+  const sheet = preview.sheets[active];
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [onClose]);
+  const columnCount = Math.min(16, Math.max(1, ...(sheet?.rows.map((row) => row.length) || [1])));
+  const columnLabel = (index: number) => {
+    let value = index + 1; let label = "";
+    while (value > 0) { label = String.fromCharCode(65 + ((value - 1) % 26)) + label; value = Math.floor((value - 1) / 26); }
+    return label;
+  };
+  const renderValue = (value: string | number | boolean | null | undefined) =>
+    value === null || value === undefined ? "" : typeof value === "number"
+      ? value.toLocaleString(language === "fr" ? "fr-FR" : "en-US") : String(value);
+  return (
+    <div role="dialog" aria-modal="true" aria-label={preview.filename}
+      className="fixed inset-0 z-[90] flex flex-col bg-background text-foreground">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-surface px-4 py-3 sm:px-7">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{preview.filename}</p>
+          <p className="text-[11px] text-muted">XLSX · {language === "fr" ? "Lecture privée — non modifiable" : "Private read-only preview"}</p>
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={onDownload} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs hover:bg-surface-secondary">
+            <Download size={15}/><span className="hidden sm:inline">{UI[language].download}</span>
+          </button>
+          <button type="button" onClick={onClose} aria-label={language === "fr" ? "Fermer" : "Close"}
+            className="rounded-xl p-2 hover:bg-surface-secondary"><X size={20}/></button>
+        </div>
+      </div>
+      <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-border bg-surface px-3 py-2" role="tablist">
+        {preview.sheets.map((item, index) => (
+          <button key={`${item.name}-${index}`} role="tab" aria-selected={active === index}
+            onClick={() => setActive(index)} type="button"
+            className={`shrink-0 rounded-lg px-3 py-2 text-xs font-medium ${active === index ? "bg-foreground text-background" : "bg-surface-secondary text-muted hover:text-foreground"}`}>
+            {item.name}
+          </button>
+        ))}
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto bg-surface-secondary/30 p-3 sm:p-5">
+        {sheet ? <div className="inline-block min-w-full overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
+          <table className="border-collapse text-left text-xs">
+            <thead><tr>
+              <th scope="col" className="sticky left-0 top-0 z-20 border-b border-r border-border bg-surface-secondary p-2 text-muted">#</th>
+              {Array.from({length: columnCount}, (_, index) => <th scope="col" key={index}
+                className="sticky top-0 z-10 min-w-[130px] border-b border-r border-border bg-surface-secondary px-3 py-2 font-medium text-muted">{columnLabel(index)}</th>)}
+            </tr></thead>
+            <tbody>{sheet.rows.map((row, rowIndex) => <tr key={rowIndex} className="even:bg-surface-secondary/35">
+              <th scope="row" className="sticky left-0 border-r border-b border-border bg-surface-secondary px-2 text-right text-[11px] text-muted">{rowIndex + 1}</th>
+              {Array.from({length: columnCount}, (_, colIndex) => <td key={colIndex}
+                title={renderValue(row[colIndex])}
+                className={`max-w-[330px] min-w-[130px] break-words border-b border-r border-border px-3 py-2 align-top leading-relaxed ${rowIndex === 0 ? "font-semibold" : ""}`}>
+                {renderValue(row[colIndex])}
+              </td>)}
+            </tr>)}</tbody>
+          </table>
+        </div> : null}
+      </div>
+      <p className="shrink-0 border-t border-border px-4 py-2 text-center text-[11px] text-muted">
+        {language === "fr" ? "Aperçu limité : 120 lignes, 16 colonnes et 10 feuilles. Téléchargez le fichier pour tout consulter, y compris les formules et graphiques." : "Limited preview: 120 rows, 16 columns and 10 sheets. Download for full content, formulas and charts."}
       </p>
     </div>
   );
@@ -3941,6 +4097,10 @@ export default function ChatPage() {
   // Ajouts Chat Web : lecteur source, images de recherche, notes vocales.
   const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
   const [documentPreview, setDocumentPreview] = useState<DocumentPreviewData | null>(null);
+  const [wordPreview, setWordPreview] = useState<WordPreviewData | null>(null);
+  const [wordPreviewBusyId, setWordPreviewBusyId] = useState<string | null>(null);
+  const [spreadsheetPreview, setSpreadsheetPreview] = useState<SpreadsheetPreviewData | null>(null);
+  const [spreadsheetPreviewBusyId, setSpreadsheetPreviewBusyId] = useState<string | null>(null);
   const [webImagesByMessage, setWebImagesByMessage] = useState<Record<string, WebIllustration[]>>({});
   const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraft | null>(null);
@@ -4718,16 +4878,11 @@ export default function ChatPage() {
   }
 
   async function openArtifactPreview(artifact: GeneratedArtifact): Promise<void> {
-    if (artifact.extension.toLowerCase() !== "pdf" || !artifact.previewSupported) return;
+    if (artifact.extension.toLowerCase() !== "pdf") return;
     try {
       const renewed = await refreshArtifactAccess(artifact);
-      if (!renewed.previewSupported) {
-        throw new Error(language === "fr"
-          ? "L'aperçu n'est pas pris en charge pour ce fichier."
-          : "Preview is not supported for this file.");
-      }
       const url = safePrivateArtifactUrl(renewed.previewUrl);
-      if (!url || !renewed.previewAvailable) {
+      if (!url) {
         throw new Error(language === "fr"
           ? "Aperçu temporairement indisponible. Le téléchargement reste possible."
           : "Preview temporarily unavailable. Download is still possible.");
@@ -4738,6 +4893,40 @@ export default function ChatPage() {
         ? requestError.message
         : language === "fr" ? "Impossible d'ouvrir l'aperçu." : "Unable to open preview.");
     }
+  }
+
+  async function openWordPreview(artifact: GeneratedArtifact): Promise<void> {
+    if (artifact.extension.toLowerCase() !== "docx" || wordPreviewBusyId) return;
+    setWordPreviewBusyId(artifact.id);
+    try {
+      const result = await apiFetch<{
+        success: boolean; filename: string; artifact_id: string;
+        blocks: WordPreviewBlock[]; truncated: boolean; image_count: number;
+      }>(`/ai/artifacts/${encodeURIComponent(artifact.id)}/document-preview`);
+      if (!result.success || !Array.isArray(result.blocks)) throw new Error("Aperçu Word indisponible.");
+      setWordPreview({ id: artifact.id, filename: result.filename || artifact.filename,
+        blocks: result.blocks, truncated: result.truncated, image_count: result.image_count });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message :
+        language === "fr" ? "Impossible de consulter ce document Word." : "Unable to preview this Word document.");
+    } finally { setWordPreviewBusyId(null); }
+  }
+
+  async function openSpreadsheetPreview(artifact: GeneratedArtifact): Promise<void> {
+    if (artifact.extension.toLowerCase() !== "xlsx" || spreadsheetPreviewBusyId) return;
+    setSpreadsheetPreviewBusyId(artifact.id);
+    try {
+      const response = await apiFetch<{
+        success: boolean; artifact_id: string; filename: string;
+        sheets: SpreadsheetPreviewSheet[]; truncated: boolean;
+      }>(`/ai/artifacts/${encodeURIComponent(artifact.id)}/spreadsheet-preview`);
+      if (!response.success || !Array.isArray(response.sheets)) throw new Error("Aperçu non disponible.");
+      setSpreadsheetPreview({ id: artifact.id, filename: response.filename || artifact.filename,
+        sheets: response.sheets, truncated: response.truncated });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message :
+        language === "fr" ? "Impossible de consulter le classeur." : "Unable to preview spreadsheet.");
+    } finally { setSpreadsheetPreviewBusyId(null); }
   }
 
   async function openArtifactSource(artifact: GeneratedArtifact) {
@@ -6456,6 +6645,18 @@ export default function ChatPage() {
         }}
         language={language}
       /> : null}
+      {wordPreview ? <WordPreviewModal preview={wordPreview}
+        onClose={() => setWordPreview(null)} language={language}
+        onDownload={() => {
+          const artifact = generatedArtifacts.find((item) => item.id === wordPreview.id);
+          if (artifact) void downloadArtifact(artifact);
+        }}/> : null}
+      {spreadsheetPreview ? <SpreadsheetPreviewModal preview={spreadsheetPreview}
+        onClose={() => setSpreadsheetPreview(null)} language={language}
+        onDownload={() => {
+          const artifact = generatedArtifacts.find((item) => item.id === spreadsheetPreview.id);
+          if (artifact) void downloadArtifact(artifact);
+        }}/>: null}
       {isMiniStudioOpen && (
         <OriaMiniStudio
           language={language}
@@ -7095,12 +7296,31 @@ export default function ChatPage() {
                                       </p>
                                     </div>
 
-                                    {artifact.extension.toLowerCase() === "pdf" && artifact.previewSupported ? (
+                                    {artifact.extension.toLowerCase() === "pdf" ? (
                                       <button type="button" onClick={() => void openArtifactPreview(artifact)}
                                         className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-xs font-medium transition hover:bg-surface-tertiary"
                                         title={language === "fr" ? "Consulter le PDF" : "Preview PDF"}
                                         aria-label={`${language === "fr" ? "Aperçu" : "Preview"} ${artifact.filename}`}>
                                         <Eye size={14}/><span className="hidden sm:inline">{language === "fr" ? "Aperçu" : "Preview"}</span>
+                                      </button>
+                                    ) : null}
+                                    {artifact.extension.toLowerCase() === "docx" ? (
+                                      <button type="button" disabled={wordPreviewBusyId !== null}
+                                        onClick={() => void openWordPreview(artifact)}
+                                        className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-xs font-medium hover:bg-surface-tertiary disabled:opacity-50"
+                                        title={language === "fr" ? "Consulter Word dans ORIA" : "Preview Word in ORIA"}
+                                        aria-label={`${language === "fr" ? "Aperçu" : "Preview"} ${artifact.filename}`}>
+                                        {wordPreviewBusyId === artifact.id ? <Loader2 size={14} className="animate-spin"/> : <Eye size={14}/>}
+                                        <span className="hidden sm:inline">{language === "fr" ? "Aperçu" : "Preview"}</span>
+                                      </button>
+                                    ) : null}
+                                    {artifact.extension.toLowerCase() === "xlsx" ? (
+                                      <button type="button" disabled={spreadsheetPreviewBusyId !== null}
+                                        onClick={() => void openSpreadsheetPreview(artifact)}
+                                        className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-xs font-medium hover:bg-surface-tertiary disabled:opacity-50"
+                                        aria-label={`${language === "fr" ? "Aperçu" : "Preview"} ${artifact.filename}`}>
+                                        {spreadsheetPreviewBusyId === artifact.id ? <Loader2 size={14} className="animate-spin"/> : <Eye size={14}/>}
+                                        <span className="hidden sm:inline">{language === "fr" ? "Aperçu" : "Preview"}</span>
                                       </button>
                                     ) : null}
                                     {CODE_PREVIEW_EXTENSIONS.has(artifact.extension.toLowerCase()) ? (
