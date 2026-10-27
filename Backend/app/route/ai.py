@@ -1,4 +1,5 @@
 from json import dumps
+import logging
 from decimal import Decimal, InvalidOperation
 
 import asyncio
@@ -1298,17 +1299,53 @@ def _document_artifact_selection(
     return document_types, legacy
 
 
+def _document_failure_diagnostic(stage: str, error: Exception) -> str:
+    """Journalise l'erreur réelle et fournit une raison sûre à l'utilisateur.
+
+    Les exceptions Supabase et celles des moteurs de conversion peuvent contenir
+    des données sensibles : ne jamais les recopier dans un message du Chat.
+    Une référence permet de retrouver la trace correspondante sur le serveur.
+    """
+    reference = uuid4().hex[:10]
+    logging.getLogger(__name__).error(
+        "ORIA_ARTIFACT_FAILURE ref=%s stage=%s exception=%s",
+        reference,
+        stage,
+        type(error).__name__,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    if stage == "storage":
+        cause = "Le fichier a été composé, mais son enregistrement privé a échoué."
+    elif type(error).__name__ == "ArtifactDependencyError" or isinstance(error, ImportError):
+        cause = "Un composant de conversion est absent sur le serveur."
+    elif type(error).__name__ == "UnsupportedArtifactTypeError":
+        cause = "Ce contenu n'est pas entièrement pris en charge par le convertisseur."
+    elif isinstance(error, ArtifactError):
+        cause = "Le moteur documentaire a refusé la source ou sa mise en page."
+    else:
+        cause = "Le moteur documentaire a rencontré une erreur interne."
+    return f"{cause} (Référence : {reference})."
+
+
 def _document_result_message(
     expected: int,
     created: int,
+    *,
+    failure_hint: str | None = None,
 ) -> str:
-    """Réponse serveur, jamais texte libre provenant du contenu documentaire."""
+    """Confirme uniquement les documents réellement sauvegardés.
+
+    Lors d'un échec, expose une raison sûre et une référence de journal, mais
+    jamais le JSON, les URLs privées ou une exception brute de Supabase.
+    """
     if created == expected:
         if created == 1:
             return "Ton fichier est prêt. Tu peux le consulter ou le télécharger."
         return "Tes fichiers sont prêts. Tu peux les consulter ou les télécharger."
     if created == 0:
-        return "La création du fichier a échoué." if expected == 1 else "La création des fichiers a échoué."
+        message = ("La création du fichier a échoué." if expected == 1
+                   else "La création des fichiers a échoué.")
+        return f"{message} {failure_hint}" if failure_hint else message
     return (f"{created} fichier(s) sur {expected} ont été créés. "
             "Consulte les erreurs pour les autres fichiers.")
 
@@ -3805,6 +3842,7 @@ async def chat(
 
     generated_artifacts: list[dict[str, Any]] = []
     artifact_errors: list[str] = []
+    document_failure_hint: str | None = None
     provider_payload = _as_mapping(openai_response) or {}
     web_images = _public_web_images(provider_payload.get("web_images"), enabled=web)
     if document_types:
@@ -3828,10 +3866,15 @@ async def chat(
                         model=model,
                     ))
                 except Exception as error:
-                    artifact_errors.append(f"{generated.filename} : {error}")
+                    document_failure_hint = _document_failure_diagnostic("storage", error)
+                    artifact_errors.append(document_failure_hint)
         except Exception as error:
-            artifact_errors.append(str(error))
-        response_text = _document_result_message(len(artifact_requests), len(generated_artifacts))
+            document_failure_hint = _document_failure_diagnostic("conversion", error)
+            artifact_errors.append(document_failure_hint)
+        response_text = _document_result_message(
+            len(artifact_requests), len(generated_artifacts),
+            failure_hint=document_failure_hint,
+        )
     else:
         # Le mécanisme de génération de code existant reste inchangé.
         provider_status = str(provider_payload.get("status") or "").lower()
@@ -6306,6 +6349,7 @@ async def chat_stream(
 
             generated_artifacts: list[dict[str, Any]] = []
             artifact_errors: list[str] = []
+            document_failure_hint: str | None = None
             if not document_types:
                 try:
                     artifact_requests = _code_artifact_requests_after_response(
@@ -6365,24 +6409,25 @@ async def chat_stream(
                             )
                             generated_artifacts.append(public)
                         except Exception as error:
-                            detail = f"{generated.filename} : {error}"
-                            artifact_errors.append(detail)
+                            document_failure_hint = _document_failure_diagnostic("storage", error)
+                            artifact_errors.append(document_failure_hint)
                             yield _sse("artifact_error", {
                                 "generation_id": generation_id,
                                 "attempt_id": attempt_id,
                                 "file_type": generated.extension,
-                                "detail": detail,
+                                "detail": document_failure_hint,
                             })
                 except Exception as error:
-                    detail = str(error)
-                    artifact_errors.append(detail)
+                    document_failure_hint = _document_failure_diagnostic("conversion", error)
+                    artifact_errors.append(document_failure_hint)
                     yield _sse("artifact_error", {
                         "generation_id": generation_id,
                         "attempt_id": attempt_id,
-                        "detail": detail,
+                        "detail": document_failure_hint,
                     })
                 full_response = _document_result_message(
-                    len(artifact_requests), len(generated_artifacts)
+                    len(artifact_requests), len(generated_artifacts),
+                    failure_hint=document_failure_hint,
                 )
                 yield _sse("delta", {
                     "content": full_response,
