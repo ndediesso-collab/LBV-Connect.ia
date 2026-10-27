@@ -34,6 +34,7 @@ import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type ReactN
 import LogoutButton from "@/components/layout/LogoutButton";
 import { createClient } from "@/lib/supabase/client";
 import type { ChatMessage, Conversation } from "@/types/lbv";
+import { OriaMathBlock, OriaMathInline } from "@/components/oria-math/OriaMathRenderer";
 
 // Moteur avance charge uniquement si une reponse contient un bloc visuel.
 // Le composant historique reste disponible comme solution de secours.
@@ -1293,376 +1294,40 @@ async function saveMessageRemote(
  * [lien](https://...)
  */
 
-const MATH_SYMBOLS: Record<string, string> = {
-  alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε",
-  zeta: "ζ", eta: "η", theta: "θ", iota: "ι", kappa: "κ",
-  lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", omicron: "ο",
-  pi: "π", rho: "ρ", sigma: "σ", tau: "τ", upsilon: "υ",
-  phi: "φ", chi: "χ", psi: "ψ", omega: "ω",
-  Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Xi: "Ξ",
-  Pi: "Π", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
-  infty: "∞", partial: "∂", nabla: "∇", ell: "ℓ",
-  cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓",
-  leq: "≤", geq: "≥", neq: "≠", approx: "≈", sim: "∼",
-  equiv: "≡", propto: "∝", to: "→", rightarrow: "→",
-  leftarrow: "←", leftrightarrow: "↔", mapsto: "↦",
-  implies: "⇒", Rightarrow: "⇒", iff: "⇔", Leftrightarrow: "⇔",
-  sum: "∑", prod: "∏", int: "∫", iint: "∬", iiint: "∭",
-  cup: "∪", cap: "∩", subset: "⊂", supset: "⊃",
-  subseteq: "⊆", supseteq: "⊇", in: "∈", notin: "∉",
-  forall: "∀", exists: "∃", angle: "∠", degree: "°",
-  perp: "⊥", parallel: "∥", therefore: "∴", because: "∵",
-};
-
-const MATH_WORD_COMMANDS: Record<string, string> = {
-  sin: "sin", cos: "cos", tan: "tan", cot: "cot",
-  arcsin: "arcsin", arccos: "arccos", arctan: "arctan",
-  sinh: "sinh", cosh: "cosh", tanh: "tanh",
-  ln: "ln", log: "log", exp: "exp", lim: "lim",
-  min: "min", max: "max", det: "det", gcd: "gcd",
-};
-
-type MathGroup = {
-  content: string;
-  nextIndex: number;
-};
-
-function normalizeMathSource(expression: string): string {
-  return expression
-    .replace(/\\dfrac/g, "\\frac")
-    .replace(/\\tfrac/g, "\\frac")
-    .replace(/\\displaystyle/g, "")
-    .replace(/\\left/g, "")
-    .replace(/\\right/g, "")
-    .replace(/\\begin\{(?:aligned|align\*?|gathered|cases|matrix|pmatrix|bmatrix|vmatrix)\}/g, "")
-    .replace(/\\end\{(?:aligned|align\*?|gathered|cases|matrix|pmatrix|bmatrix|vmatrix)\}/g, "")
-    .replace(/\\,/g, " ")
-    .replace(/\\;/g, " ")
-    .replace(/\\:/g, " ")
-    .replace(/\\!/g, "")
-    .replace(/\\quad/g, "  ")
-    .replace(/\\qquad/g, "   ")
-    .trim();
+// Les expressions ne sont plus aplaties en caracteres Unicode :
+// KaTeX conserve les structures LaTeX (matrices, indices, alignements...).
+function renderMathToken(expression: string, key: string, display = false): ReactNode {
+  return display
+    ? <OriaMathBlock key={key} latex={expression} />
+    : <OriaMathInline key={key} latex={expression} />;
 }
 
-function readMathGroup(source: string, startIndex: number): MathGroup | null {
-  if (source[startIndex] !== "{") return null;
-
-  let depth = 0;
-
-  for (let index = startIndex; index < source.length; index++) {
-    if (source[index] === "{") depth++;
-    if (source[index] === "}") depth--;
-
-    if (depth === 0) {
-      return {
-        content: source.slice(startIndex + 1, index),
-        nextIndex: index + 1,
-      };
+// Surtout ne pas inserer une formule display (<div>) a l'interieur d'un <p>.
+// Les paragraphes qui contiennent des delims display sont decoupes en vrais blocs.
+function renderParagraphWithDisplayMath(text: string, key: string): ReactNode {
+  const delimiter = /(\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$)/g;
+  const result: ReactNode[] = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+  let position = 0;
+  while ((match = delimiter.exec(text)) !== null) {
+    const preceding = text.slice(last, match.index);
+    if (preceding.trim()) {
+      result.push(<p key={`${key}-p-${position++}`} className="mb-4 last:mb-0">{renderInlineMarkdown(preceding)}</p>);
     }
+    const token = match[0];
+    const latex = token.slice(2, -2);
+    result.push(<OriaMathBlock key={`${key}-m-${position++}`} latex={latex} />);
+    last = match.index + token.length;
   }
-
-  return null;
-}
-
-function readOptionalMathArgument(
-  source: string,
-  startIndex: number,
-): MathGroup | null {
-  if (source[startIndex] === "{") {
-    return readMathGroup(source, startIndex);
+  if (last === 0) {
+    return <p key={key} className="mb-4 last:mb-0">{renderInlineMarkdown(text)}</p>;
   }
-
-  if (startIndex >= source.length) return null;
-
-  if (source[startIndex] === "\\") {
-    const commandMatch = source.slice(startIndex + 1).match(/^[A-Za-z]+/);
-    if (commandMatch) {
-      return {
-        content: `\\${commandMatch[0]}`,
-        nextIndex: startIndex + 1 + commandMatch[0].length,
-      };
-    }
+  const tail = text.slice(last);
+  if (tail.trim()) {
+    result.push(<p key={`${key}-tail`} className="mb-4 last:mb-0">{renderInlineMarkdown(tail)}</p>);
   }
-
-  return {
-    content: source[startIndex],
-    nextIndex: startIndex + 1,
-  };
-}
-
-function renderMathNodes(
-  rawSource: string,
-  keyPrefix: string,
-): ReactNode[] {
-  const source = normalizeMathSource(rawSource);
-  const nodes: ReactNode[] = [];
-  let index = 0;
-  let nodeIndex = 0;
-
-  const pushText = (value: string) => {
-    if (!value) return;
-    nodes.push(
-      <span key={`${keyPrefix}-text-${nodeIndex++}`}>
-        {value}
-      </span>,
-    );
-  };
-
-  while (index < source.length) {
-    const char = source[index];
-
-    if (char === "\\") {
-      // Double antislash LaTeX : retour à la ligne dans une formule multi-ligne.
-      if (source[index + 1] === "\\") {
-        nodes.push(<br key={`${keyPrefix}-br-${nodeIndex++}`} />);
-        index += 2;
-        continue;
-      }
-
-      const commandMatch = source.slice(index + 1).match(/^[A-Za-z]+/);
-
-      if (!commandMatch) {
-        pushText(source[index + 1] || "");
-        index += source[index + 1] ? 2 : 1;
-        continue;
-      }
-
-      const command = commandMatch[0];
-      index += 1 + command.length;
-
-      if (command === "frac") {
-        const numerator = readMathGroup(source, index);
-        if (!numerator) {
-          pushText("÷");
-          continue;
-        }
-
-        index = numerator.nextIndex;
-        const denominator = readMathGroup(source, index);
-        if (!denominator) {
-          pushText(`(${numerator.content}) ÷`);
-          continue;
-        }
-
-        index = denominator.nextIndex;
-        nodes.push(
-          <span
-            key={`${keyPrefix}-frac-${nodeIndex++}`}
-            className="mx-1 inline-flex min-w-[1.5em] flex-col items-center justify-center align-middle leading-none"
-          >
-            <span className="border-b border-current px-1 pb-0.5 text-center">
-              {renderMathNodes(numerator.content, `${keyPrefix}-num-${nodeIndex}`)}
-            </span>
-            <span className="px-1 pt-0.5 text-center">
-              {renderMathNodes(denominator.content, `${keyPrefix}-den-${nodeIndex}`)}
-            </span>
-          </span>,
-        );
-        continue;
-      }
-
-      if (command === "sqrt") {
-        let rootDegree: string | null = null;
-
-        if (source[index] === "[") {
-          const closing = source.indexOf("]", index + 1);
-          if (closing !== -1) {
-            rootDegree = source.slice(index + 1, closing);
-            index = closing + 1;
-          }
-        }
-
-        const radicand = readMathGroup(source, index);
-        if (!radicand) {
-          pushText("√");
-          continue;
-        }
-
-        index = radicand.nextIndex;
-        nodes.push(
-          <span
-            key={`${keyPrefix}-sqrt-${nodeIndex++}`}
-            className="mx-0.5 inline-flex items-start align-middle"
-          >
-            {rootDegree ? (
-              <sup className="mr-[-0.15em] mt-[-0.1em] text-[0.58em] leading-none">
-                {rootDegree}
-              </sup>
-            ) : null}
-            <span className="text-[1.08em] leading-none">√</span>
-            <span className="border-t border-current px-1 pt-0.5">
-              {renderMathNodes(radicand.content, `${keyPrefix}-rad-${nodeIndex}`)}
-            </span>
-          </span>,
-        );
-        continue;
-      }
-
-      if (["text", "mathrm", "mathbf", "operatorname"].includes(command)) {
-        const group = readMathGroup(source, index);
-        if (!group) {
-          pushText(command === "operatorname" ? "" : command);
-          continue;
-        }
-
-        index = group.nextIndex;
-        const content = group.content.replace(/\\ /g, " ");
-
-        nodes.push(
-          command === "mathbf" ? (
-            <strong key={`${keyPrefix}-textcmd-${nodeIndex++}`} className="font-semibold">
-              {content}
-            </strong>
-          ) : (
-            <span
-              key={`${keyPrefix}-textcmd-${nodeIndex++}`}
-              className={command === "operatorname" ? "font-medium not-italic" : "not-italic"}
-            >
-              {content}
-            </span>
-          ),
-        );
-        continue;
-      }
-
-      if (["vec", "overrightarrow"].includes(command)) {
-        const group = readMathGroup(source, index);
-        if (!group) {
-          pushText("→");
-          continue;
-        }
-
-        index = group.nextIndex;
-        nodes.push(
-          <span
-            key={`${keyPrefix}-vec-${nodeIndex++}`}
-            className="relative mx-0.5 inline-block px-0.5 pt-1"
-          >
-            <span className="absolute left-0 right-0 top-[-0.25em] text-center text-[0.7em] leading-none">
-              →
-            </span>
-            {renderMathNodes(group.content, `${keyPrefix}-veccontent-${nodeIndex}`)}
-          </span>,
-        );
-        continue;
-      }
-
-      if (MATH_SYMBOLS[command]) {
-        pushText(MATH_SYMBOLS[command]);
-        continue;
-      }
-
-      if (MATH_WORD_COMMANDS[command]) {
-        nodes.push(
-          <span
-            key={`${keyPrefix}-word-${nodeIndex++}`}
-            className="mx-0.5 font-medium not-italic"
-          >
-            {MATH_WORD_COMMANDS[command]}
-          </span>,
-        );
-        continue;
-      }
-
-      // Une commande inconnue est rendue sans antislash afin de ne pas
-      // exposer du LaTeX brut / langage machine à l'utilisateur.
-      pushText(command);
-      continue;
-    }
-
-    if (char === "^" || char === "_") {
-      const isSuperscript = char === "^";
-      const argument = readOptionalMathArgument(source, index + 1);
-
-      if (!argument) {
-        pushText(char);
-        index++;
-        continue;
-      }
-
-      index = argument.nextIndex;
-      const Tag = isSuperscript ? "sup" : "sub";
-
-      nodes.push(
-        <Tag
-          key={`${keyPrefix}-${isSuperscript ? "sup" : "sub"}-${nodeIndex++}`}
-          className={
-            isSuperscript
-              ? "ml-0.5 align-super text-[0.68em] leading-none"
-              : "ml-0.5 align-sub text-[0.68em] leading-none"
-          }
-        >
-          {renderMathNodes(argument.content, `${keyPrefix}-script-${nodeIndex}`)}
-        </Tag>,
-      );
-      continue;
-    }
-
-    if (char === "{") {
-      const group = readMathGroup(source, index);
-      if (group) {
-        nodes.push(
-          <span key={`${keyPrefix}-group-${nodeIndex++}`}>
-            {renderMathNodes(group.content, `${keyPrefix}-groupcontent-${nodeIndex}`)}
-          </span>,
-        );
-        index = group.nextIndex;
-        continue;
-      }
-    }
-
-    if (char === "&") {
-      pushText("   ");
-      index++;
-      continue;
-    }
-
-    let end = index + 1;
-    while (
-      end < source.length &&
-      !["\\", "^", "_", "{", "&"].includes(source[end])
-    ) {
-      end++;
-    }
-
-    pushText(source.slice(index, end));
-    index = end;
-  }
-
-  return nodes;
-}
-
-function renderMathToken(
-  expression: string,
-  key: string,
-  display = false,
-) {
-  const content = renderMathNodes(expression, `math-${key}`);
-
-  if (display) {
-    return (
-      <div
-        key={key}
-        className="my-4 w-full overflow-x-auto rounded-xl border border-border/70 bg-surface-secondary/55 px-4 py-3"
-        title="Formule mathématique"
-      >
-        <div className="min-w-max text-center font-serif text-[1.05rem] leading-8 tracking-[0.01em]">
-          {content}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <span
-      key={key}
-      className="mx-0.5 inline-flex max-w-full items-baseline rounded-md bg-surface-secondary/70 px-1.5 py-0.5 font-serif text-[1em] leading-relaxed"
-      title="Formule mathématique"
-    >
-      {content}
-    </span>
-  );
+  return <Fragment key={key}>{result}</Fragment>;
 }
 
 function renderInlineMarkdown(
@@ -1673,8 +1338,10 @@ function renderInlineMarkdown(
   let remaining = text;
   let index = 0;
 
+  // Le code inline reste du code ; seuls $...$ et \(...\) sont inline.
+  // Les blocs $$...$$ et \[...\] passent par le renderer de blocs.
   const tokenRegex =
-    /(\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|\$[^$]+\$|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
+    /(`[^`]+`|\\\([^\n]*?\\\)|\$(?![\s$])(?:\\.|[^$\\\n])+\$(?!\d)|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
 
   while (remaining.length > 0) {
     const match =
@@ -1710,28 +1377,13 @@ function renderInlineMarkdown(
      */
 
     if (
-      (token.startsWith("\\[") && token.endsWith("\\]")) ||
-      (token.startsWith("$$") && token.endsWith("$$")) ||
       (token.startsWith("\\(") && token.endsWith("\\)")) ||
       (token.startsWith("$") && token.endsWith("$"))
     ) {
-      const expression = token.startsWith("$$")
-        ? token.slice(2, -2)
-        : token.startsWith("$")
-          ? token.slice(1, -1)
-          : token.slice(2, -2);
-
-      const isDisplayMath =
-        token.startsWith("$$") ||
-        token.startsWith("\[");
-
-      parts.push(
-        renderMathToken(
-          expression,
-          String(index),
-          isDisplayMath,
-        ),
-      );
+      const expression = token.startsWith("$")
+        ? token.slice(1, -1)
+        : token.slice(2, -2);
+      parts.push(renderMathToken(expression, String(index), false));
     }
 
     /*
@@ -2701,6 +2353,9 @@ function MarkdownMessage({
   const consumedTableLines = new Set<number>();
 
   let inCodeBlock = false;
+  // Une formule multiline n'est rendue qu'apres son delimiteur de fermeture.
+  // Cela evite d'afficher des moities d'equation pendant le streaming.
+  let mathMode: { ending: string; parts: string[] } | null = null;
 
   let blockIndex = 0;
   let paragraphIndex = 0;
@@ -2722,16 +2377,7 @@ function MarkdownMessage({
     const text =
       paragraph.join(" ");
 
-    blocks.push(
-      <p
-        key={`paragraph-${blockIndex}`}
-        className="mb-4 last:mb-0"
-      >
-        {renderInlineMarkdown(
-          text,
-        )}
-      </p>,
-    );
+    blocks.push(renderParagraphWithDisplayMath(text, `paragraph-${blockIndex}`));
 
     blockIndex++;
     addWebImages(paragraphIndex++);
@@ -2817,6 +2463,16 @@ function MarkdownMessage({
       return;
     }
 
+    // Les fences mathematiques sont composees, jamais affichees en monospace.
+    if (["latex", "tex", "math", "katex"].includes(codeLanguage.toLowerCase())) {
+      blocks.push(<OriaMathBlock key={`latex-${blockIndex++}`} latex={codeLines.join("\n")} />);
+      codeLines = [];
+      codeLanguage = "";
+      codeTitle = "";
+      inCodeBlock = false;
+      return;
+    }
+
     const code = codeLines.join("\n");
     const title = codeFileName(codeLanguage, codeTitle);
     // Le rendu historique reste disponible en secours pour les anciens formats.
@@ -2863,6 +2519,21 @@ function MarkdownMessage({
       const trimmed =
         line.trim();
 
+      // Continuer une equation multi-ligne sans toucher aux fences de code.
+      if (mathMode) {
+        const closeAt = line.indexOf(mathMode.ending);
+        if (closeAt < 0) {
+          mathMode.parts.push(line);
+        } else {
+          mathMode.parts.push(line.slice(0, closeAt) + (mathMode.ending.startsWith("\\end{") ? mathMode.ending : ""));
+          blocks.push(<OriaMathBlock key={`math-${blockIndex++}`} latex={mathMode.parts.join("\n")} />);
+          const after = line.slice(closeAt + mathMode.ending.length).trim();
+          mathMode = null;
+          if (after) paragraph.push(after);
+        }
+        return;
+      }
+
       /*
        * BLOC DE CODE
        */
@@ -2890,6 +2561,31 @@ function MarkdownMessage({
 
       if (inCodeBlock) {
         codeLines.push(line);
+        return;
+      }
+
+      // Les grandes formules peuvent etre ecrites sous $$...$$, \[...\]
+      // ou directement dans un environnement LaTeX (\\begin{aligned}...).
+      // Elles ne doivent PAS passer par le parser Markdown des paragraphes.
+      const opening = trimmed.startsWith("$$") ? "$$" :
+        trimmed.startsWith("\\[") ? "\\[" : null;
+      const environment = !opening
+        ? trimmed.match(/^\\begin\{(aligned|alignedat|align\*?|alignat\*?|gathered|gather\*?|equation\*?|split|multline\*?|cases|dcases|rcases|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|array)\}/)
+        : null;
+      if (opening || environment) {
+        flushAllLists();
+        flushParagraph();
+        const ending = opening === "$$" ? "$$" : opening ? "\\]" : `\\end{${environment![1]}}`;
+        const source = opening ? trimmed.slice(opening.length) : trimmed;
+        const found = source.indexOf(ending);
+        if (found >= 0) {
+          const formula = (opening ? source.slice(0, found) : source.slice(0, found + ending.length));
+          blocks.push(<OriaMathBlock key={`math-${blockIndex++}`} latex={formula} />);
+          const after = source.slice(found + ending.length).trim();
+          if (after) paragraph.push(after);
+        } else {
+          mathMode = { ending, parts: [source] };
+        }
         return;
       }
 
@@ -3126,6 +2822,12 @@ function MarkdownMessage({
 
   if (inCodeBlock) {
     flushCodeBlock();
+  }
+  if (mathMode) {
+    // Le stream peut couper au milieu de \end{aligned} ou \].
+    // On affiche un etat neutre plutot qu'une formule corrompue.
+    blocks.push(<div key={`math-pending-${blockIndex++}`} role="status"
+      className="my-3 text-xs text-muted">Composition de la formule en cours…</div>);
   }
 
   flushAllLists();
