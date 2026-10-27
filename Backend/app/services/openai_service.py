@@ -5,9 +5,8 @@ from collections.abc import AsyncIterator, Iterator
 import asyncio
 
 from time import perf_counter
-
-
-
+import json
+import re
 from typing import Any
 
 
@@ -73,7 +72,12 @@ from app.config.credit_costs import (
 
 
 
-from app.services.prompt_service import build_output_prompt, build_course_section_messages
+from app.services.prompt_service import (
+    build_output_prompt,
+    build_course_section_messages,
+    _artifact_formats_for_prompt,
+)
+
 
 
 
@@ -158,6 +162,135 @@ class OpenAIService:
 
     MAX_HISTORY_MESSAGES = 40
 
+
+    # ========================================================
+    # ORIA ARTIFACT V1 — VALIDATION DES SORTIES STRUCTURÉES
+    # ========================================================
+    # Ce service NE crée PAS de fichier et ne confirme PAS sa disponibilité.
+    # Il vérifie l'enveloppe produite par OpenAI avant que ai.py ne la confie
+    # au moteur sécurisé ArtifactService. Les sources restent NON FIABLES.
+
+    MAX_ARTIFACT_RESPONSE_CHARS = 1_500_000
+    MAX_ARTIFACT_SOURCE_CHARS = 1_000_000
+
+    @staticmethod
+    def _document_types(artifact_types: Any) -> tuple[str, ...]:
+        # Même normalisation que prompt_service : pas de liste divergente.
+        return _artifact_formats_for_prompt(artifact_types)
+
+    @classmethod
+    def _parse_artifact_payload(
+        cls, raw_text: str, *, expected_formats: tuple[str, ...]
+    ) -> dict[str, Any]:
+        """Valide strictement l'enveloppe, sans interpréter ni exécuter les sources.
+
+        La sanitation HTML/SVG, l'isolation et la conversion sont effectuées
+        ensuite par le générateur d'artefacts. Ce contrôle de forme n'est pas
+        un substitut à ces protections.
+        """
+        if not expected_formats:
+            raise ValueError("Aucun format documentaire n'a été demandé.")
+        if not isinstance(raw_text, str) or not raw_text.strip():
+            raise ValueError("Réponse documentaire du modèle vide.")
+        if len(raw_text) > cls.MAX_ARTIFACT_RESPONSE_CHARS:
+            raise ValueError("Réponse documentaire trop volumineuse.")
+        def no_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            obj: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in obj:
+                    raise ValueError("Clé JSON dupliquée dans le contrat documentaire.")
+                obj[key] = value
+            return obj
+
+        def reject_nonfinite(value: str) -> Any:
+            raise ValueError(f"Nombre JSON non fini interdit : {value}")
+
+        try:
+            payload = json.loads(
+                raw_text, object_pairs_hook=no_duplicate_fields,
+                parse_constant=reject_nonfinite,
+            )
+        except (ValueError, TypeError) as error:
+            raise ValueError(
+                "Réponse documentaire invalide : JSON oria.artifact.v1 attendu, "
+                "sans commentaire ni bloc Markdown."
+            ) from error
+        if not isinstance(payload, dict):
+            raise ValueError("Le contrat documentaire doit être un objet JSON.")
+        if payload.get("schema_version") != "oria.artifact.v1":
+            raise ValueError("Version du contrat documentaire invalide.")
+        if set(payload) != {"schema_version", "sources", "artifacts"}:
+            raise ValueError("Champs inattendus ou manquants dans le contrat documentaire.")
+
+        sources = payload["sources"]
+        if not isinstance(sources, list) or len(sources) > 10:
+            raise ValueError("Liste des sources documentaires invalide.")
+        source_ids: set[str] = set()
+        for source in sources:
+            if not isinstance(source, dict) or set(source) != {"id", "kind", "content"}:
+                raise ValueError("Définition de source documentaire invalide.")
+            source_id = source["id"]
+            kind = source["kind"]
+            content = source["content"]
+            if (not isinstance(source_id, str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", source_id)
+                    or source_id in source_ids):
+                raise ValueError("Identifiant de source documentaire invalide ou en double.")
+            if kind not in ("html", "svg"):
+                raise ValueError("Langage de composition non autorisé.")
+            if (not isinstance(content, str) or not content.strip()
+                    or len(content) > cls.MAX_ARTIFACT_SOURCE_CHARS):
+                raise ValueError("Contenu de source documentaire vide ou trop volumineux.")
+            if kind == "html" and not re.search(r"<(?:(?:!doctype\s+)?html|main|body)\b", content, re.I):
+                raise ValueError("Source HTML dépourvue de structure documentaire.")
+            if kind == "svg" and not re.search(r"<svg\b", content, re.I):
+                raise ValueError("Source SVG dépourvue de balise svg.")
+            # Blocage précoce des constructions actives évidentes. Ce filtre
+            # ne remplace PAS un parseur HTML/SVG sécurisé dans ArtifactService.
+            if (re.search(r"<\s*/?\s*(?:script|iframe|object|embed|foreignObject)\b", content, re.I)
+                    or re.search(r"\bon[a-z]+\s*=", content, re.I)
+                    or re.search(r"javascript\s*:", content, re.I)
+                    or re.search(r"@import\b", content, re.I)):
+                raise ValueError("Source documentaire comportant du contenu actif interdit.")
+            source_ids.add(source_id)
+
+        artifacts = payload["artifacts"]
+        if not isinstance(artifacts, list) or len(artifacts) != len(expected_formats):
+            raise ValueError("Le nombre de fichiers diffère de la demande.")
+        found_formats: set[str] = set()
+        for artifact in artifacts:
+            if (not isinstance(artifact, dict)
+                    or set(artifact) != {"format", "filename", "source_id", "native_data"}):
+                raise ValueError("Définition de fichier documentaire invalide.")
+            fmt = artifact["format"]
+            filename = artifact["filename"]
+            source_id = artifact["source_id"]
+            native_data = artifact["native_data"]
+            if (not isinstance(fmt, str) or fmt not in expected_formats
+                    or fmt in found_formats):
+                raise ValueError("Format documentaire non demandé ou dupliqué.")
+            found_formats.add(fmt)
+            if (not isinstance(filename, str) or not 1 <= len(filename) <= 180
+                    or '/' in filename or '\\' in filename
+                    or any(ord(c) < 32 for c in filename)
+                    or filename.startswith('.') or not filename.lower().endswith('.' + fmt)):
+                raise ValueError("Nom de fichier invalide ou extension incorrecte.")
+            if source_id is not None and (not isinstance(source_id, str)
+                                          or source_id not in source_ids):
+                raise ValueError("Référence à une source inexistante.")
+            if native_data is not None and not isinstance(native_data, (dict, list)):
+                raise ValueError("Les données natives doivent être structurées.")
+            if source_id is None and native_data is None:
+                raise ValueError("Fichier dépourvu de source et de données natives.")
+        if found_formats != set(expected_formats):
+            raise ValueError("Tous les formats demandés n'ont pas été produits.")
+        return payload
+
+    @staticmethod
+    def _artifact_json_text_format() -> dict[str, Any]:
+        # Responses API JSON mode : contrainte syntaxique; validation métier
+        # supplémentaire dans _parse_artifact_payload. Seulement en mode doc.
+        return {"format": {"type": "json_object"}}
 
     # ========================================================
     # MODES DE RÉFLEXION ORIA
@@ -677,6 +810,7 @@ class OpenAIService:
 
         history: list[dict[str, Any]] | None = None,
         visual_mode: bool = False,
+        artifact_types: str | list[str] | tuple[str, ...] | None = None,
 
 
 
@@ -845,6 +979,23 @@ class OpenAIService:
 
 
         input_data: list[dict[str, Any]] = []
+        document_types = self._document_types(artifact_types)
+        if document_types:
+            # Contrat de sortie à autorité supérieure au texte utilisateur.
+            # Les consignes détaillées ne sont incluses qu'une fois dans le
+            # prompt via build_output_prompt(..., artifact_types=...).
+            input_data.append({
+                "role": "developer",
+                "content": (
+                    "MODE ORIA DOCUMENTAIRE ACTIVÉ PAR LE SERVEUR. "
+                    "La réponse doit contenir exclusivement un objet JSON "
+                    "oria.artifact.v1, sans texte de Chat ni code Markdown "
+                    "extérieur. Les instructions documentaires du prompt "
+                    "prévalent sur la présentation conversationnelle. "
+                    "Ne prétends pas que le fichier est prêt : le serveur "
+                    "contrôle la conversion et la sauvegarde."
+                ),
+            })
 
 
 
@@ -1009,7 +1160,8 @@ class OpenAIService:
         formatted_message = build_output_prompt(
             message=message,
             web=web,
-            visual_mode=visual_mode,
+            visual_mode=visual_mode and not document_types,
+            artifact_types=document_types or None,
         )
 
 
@@ -2940,16 +3092,8 @@ class OpenAIService:
 
 
         requested_model: str,
-
-
-
-
-
-
-
         web: bool,
-
-
+        artifact_types: tuple[str, ...] = (),
 
 
 
@@ -3051,19 +3195,24 @@ class OpenAIService:
 
 
 
+        artifact_payload = None
+        if artifact_types:
+            status = str(cls._value(response, "status", "completed") or "")
+            if status != "completed":
+                raise RuntimeError("Production documentaire interrompue ou incomplète.")
+            artifact_payload = cls._parse_artifact_payload(
+                message, expected_formats=artifact_types
+            )
+            # Ne jamais exposer la source de composition comme message Chat.
+            message = ""
+
         usage = cls._extract_usage(
 
 
 
 
 
-
-
             response
-
-
-
-
 
 
 
@@ -3260,8 +3409,7 @@ class OpenAIService:
 
 
             "message": message,
-
-
+            **({"artifact_payload": artifact_payload} if artifact_types else {}),
 
 
 
@@ -3415,9 +3563,8 @@ class OpenAIService:
 
 
 
-
-
         visual_mode: bool = False,
+        artifact_types: str | list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
 
 
@@ -3466,9 +3613,8 @@ class OpenAIService:
 
 
 
+        document_types = self._document_types(artifact_types)
         input_data = self._build_input(
-
-
 
 
 
@@ -3500,10 +3646,7 @@ class OpenAIService:
 
             history=history,
             visual_mode=visual_mode,
-
-
-
-
+            artifact_types=document_types,
 
 
 
@@ -3571,9 +3714,10 @@ class OpenAIService:
 
 
 
+        if document_types:
+            request["text"] = self._artifact_json_text_format()
+
         tools = self._build_tools(web)
-
-
 
 
 
@@ -3702,13 +3846,8 @@ class OpenAIService:
 
 
 
-
-
             web=web,
-
-
-
-
+            artifact_types=document_types,
 
 
 
@@ -3754,6 +3893,7 @@ class OpenAIService:
         reasoning_mode: str = "balanced",
         generation_id: str | None = None,
         visual_mode: bool = False,
+        artifact_types: str | list[str] | tuple[str, ...] | None = None,
     ) -> Iterator[dict[str, Any]]:
         """
         Streaming HTTP classique de la Responses API.
@@ -3765,12 +3905,14 @@ class OpenAIService:
         `generation_id` permet au routeur/frontend d'ignorer un ancien flux
         après un smart restart sans mélanger deux réponses.
         """
+        document_types = self._document_types(artifact_types)
         input_data = self._build_input(
             message=message,
             attachments=attachments,
             web=web,
             history=history,
             visual_mode=visual_mode,
+            artifact_types=document_types,
         )
 
         request: dict[str, Any] = {
@@ -3779,6 +3921,8 @@ class OpenAIService:
             "stream": True,
             "max_output_tokens": MAX_CHAT_OUTPUT_TOKENS,
         }
+        if document_types:
+            request["text"] = self._artifact_json_text_format()
 
         tools = self._build_tools(web)
         if tools:
@@ -3798,6 +3942,8 @@ class OpenAIService:
 
             stream = self.client.responses.create(**request)
             completed_response = None
+            document_fragments: list[str] = []
+            document_chars = 0
 
             for event in stream:
                 event_type = self._value(event, "type", "")
@@ -3826,13 +3972,20 @@ class OpenAIService:
                             first_delta_ms = (
                                 perf_counter() - openai_started_at
                             ) * 1000
-
-                        yield {
-                            "type": "delta",
-                            "content": str(delta),
-                            "response_id": response_id,
-                            "generation_id": generation_id,
-                        }
+                        if document_types:
+                            # Ne jamais diffuser du JSON/HTML de composition
+                            # dans le flux visible de la conversation.
+                            document_chars += len(str(delta))
+                            if document_chars > self.MAX_ARTIFACT_RESPONSE_CHARS:
+                                raise ValueError("Réponse documentaire trop volumineuse.")
+                            document_fragments.append(str(delta))
+                        else:
+                            yield {
+                                "type": "delta",
+                                "content": str(delta),
+                                "response_id": response_id,
+                                "generation_id": generation_id,
+                            }
                     continue
 
                 if event_type == "response.completed":
@@ -3865,6 +4018,23 @@ class OpenAIService:
                     "Le streaming OpenAI s'est terminé sans "
                     "événement response.completed."
                 )
+
+            if document_types:
+                status = str(self._value(completed_response, "status", "completed") or "")
+                if status != "completed":
+                    raise RuntimeError("Production documentaire interrompue ou incomplète.")
+                document_text = str(
+                    self._value(completed_response, "output_text", "") or ""
+                ) or "".join(document_fragments)
+                artifact_payload = self._parse_artifact_payload(
+                    document_text, expected_formats=document_types
+                )
+                yield {
+                    "type": "artifact_payload",
+                    "artifact_payload": artifact_payload,
+                    "response_id": response_id,
+                    "generation_id": generation_id,
+                }
 
             usage = self._extract_usage(completed_response)
             web_search_calls = (
@@ -3925,6 +4095,7 @@ class OpenAIService:
         generation_id: str | None = None,
         control_queue: asyncio.Queue[dict[str, Any]] | None = None,
         visual_mode: bool = False,
+        artifact_types: str | list[str] | tuple[str, ...] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """
         Streaming Responses WebSocket pilotable pendant la génération.
@@ -3952,12 +4123,14 @@ class OpenAIService:
                 "fallback HTTP avec smart restart."
             )
 
+        document_types = self._document_types(artifact_types)
         input_data = self._build_input(
             message=message,
             attachments=attachments,
             web=web,
             history=history,
             visual_mode=visual_mode,
+            artifact_types=document_types,
         )
 
         request: dict[str, Any] = {
@@ -3966,6 +4139,8 @@ class OpenAIService:
             "max_output_tokens": MAX_CHAT_OUTPUT_TOKENS,
             "store": False,
         }
+        if document_types:
+            request["text"] = self._artifact_json_text_format()
 
         tools = self._build_tools(web)
         if tools:
@@ -3985,6 +4160,8 @@ class OpenAIService:
         pending_instruction: str | None = None
         awaiting_successor = False
         final_response = None
+        document_fragments: list[str] = []
+        document_chars = 0
 
         # Facturation d'une chaîne de steering.
         #
@@ -4188,6 +4365,11 @@ class OpenAIService:
                                 # engagée côté OpenAI.
                                 awaiting_successor = False
 
+                            if document_types and active_response_id != new_response_id:
+                                # Un steering repart sur une réponse fraîche :
+                                # seule la dernière composition est publiable.
+                                document_fragments.clear()
+                                document_chars = 0
                             active_response_id = new_response_id
 
                             yield {
@@ -4225,13 +4407,18 @@ class OpenAIService:
                                     first_delta_ms = (
                                         perf_counter() - openai_started_at
                                     ) * 1000
-
-                                yield {
-                                    "type": "delta",
-                                    "content": str(delta),
-                                    "response_id": active_response_id,
-                                    "generation_id": generation_id,
-                                }
+                                if document_types:
+                                    document_chars += len(str(delta))
+                                    if document_chars > self.MAX_ARTIFACT_RESPONSE_CHARS:
+                                        raise ValueError("Réponse documentaire trop volumineuse.")
+                                    document_fragments.append(str(delta))
+                                else:
+                                    yield {
+                                        "type": "delta",
+                                        "content": str(delta),
+                                        "response_id": active_response_id,
+                                        "generation_id": generation_id,
+                                    }
                             continue
 
                         if event_type == "response.steer.accepted":
@@ -4342,6 +4529,23 @@ class OpenAIService:
                 actual_model = str(
                     self._value(final_response, "model", model) or model
                 )
+
+                if document_types:
+                    status = str(self._value(final_response, "status", "completed") or "")
+                    if status != "completed":
+                        raise RuntimeError("Production documentaire interrompue ou incomplète.")
+                    document_text = str(
+                        self._value(final_response, "output_text", "") or ""
+                    ) or "".join(document_fragments)
+                    artifact_payload = self._parse_artifact_payload(
+                        document_text, expected_formats=document_types
+                    )
+                    yield {
+                        "type": "artifact_payload",
+                        "artifact_payload": artifact_payload,
+                        "response_id": active_response_id,
+                        "generation_id": generation_id,
+                    }
 
                 if cumulative_web_images:
                     yield {

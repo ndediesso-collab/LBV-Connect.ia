@@ -62,8 +62,8 @@ import OriaMiniStudio from "@/components/oria-mini-studio/OriaMiniStudio";
  *   GET  /conversations/:id/messages
  *   POST /conversations/:id/messages
  *   GET  /media
- *   GET  /artifacts
- *   GET  /artifacts/:id
+ *   GET  /ai/artifacts
+ *   GET  /ai/artifacts/:id
  *   Studio externe : /ai/google-media/* (dans OriaMiniStudio.tsx)
  *   POST /ai/chat/control
  *   POST /ai/chat/stream
@@ -94,6 +94,7 @@ const ORIA_CHAT_STATUS_LABELS = {
   processing_attachments: { fr: "Traitement des pièces jointes…", en: "Processing attachments…" },
   processing: { fr: "Génération de la réponse…", en: "Generating response…" },
   restarting: { fr: "Ajustement de la réponse…", en: "Updating response…" },
+  creating_artifact: { fr: "Création du document…", en: "Creating document…" },
   media_generation: { fr: "Création du média…", en: "Generating media…" },
 } as const satisfies Record<string, Record<OriaLanguage, string>>;
 
@@ -381,6 +382,8 @@ const CHAT_TEXT = {
     download: "Télécharger",
     codePreview: "Lire le code",
     codeViewer: "Lecteur de code",
+    documentPreview: "Aperçu",
+    documentUnavailable: "Aperçu momentanément indisponible. Le téléchargement reste possible.",
     vocal: "Note vocale",
     microphone: "Enregistrer une note vocale",
     recordStop: "Arrêter l'enregistrement",
@@ -542,6 +545,8 @@ const CHAT_TEXT = {
     download: "Download",
     codePreview: "Read code",
     codeViewer: "Code viewer",
+    documentPreview: "Preview",
+    documentUnavailable: "Preview temporarily unavailable. Download remains available.",
     vocal: "Voice note",
     microphone: "Record a voice note",
     recordStop: "Stop recording",
@@ -802,6 +807,9 @@ type GeneratedArtifact = {
   sha256?: string | null;
   model?: string | null;
   downloadUrl?: string | null;
+  previewUrl?: string | null;
+  previewSupported?: boolean;
+  previewAvailable?: boolean;
   created_at?: string | null;
   messageId?: string | null;
 };
@@ -1152,9 +1160,25 @@ function normalizeGeneratedArtifact(
   const downloadUrl =
     typeof raw.download_url === "string"
       ? raw.download_url
-      : typeof raw.url === "string"
-        ? raw.url
+      : typeof raw.downloadUrl === "string"
+        ? raw.downloadUrl
+        : typeof raw.url === "string"
+          ? raw.url
+          : null;
+
+  const previewUrl =
+    typeof raw.preview_url === "string"
+      ? raw.preview_url
+      : typeof raw.previewUrl === "string"
+        ? raw.previewUrl
         : null;
+  // La liste GET /ai/artifacts sans include_urls ne fournit pas ce drapeau.
+  // Un PDF reste prévisualisable : l'accès est toujours revalidé au clic.
+  const declaredPreview = typeof raw.preview_supported === "boolean"
+    ? raw.preview_supported
+    : typeof raw.previewSupported === "boolean" ? raw.previewSupported : null;
+  const previewSupported = declaredPreview ?? extension === "pdf";
+  const previewAvailable = raw.preview_available === true || raw.previewAvailable === true;
 
   return {
     id,
@@ -1196,6 +1220,9 @@ function normalizeGeneratedArtifact(
         ? raw.model
         : null,
     downloadUrl,
+    previewUrl,
+    previewSupported,
+    previewAvailable,
     created_at:
       typeof raw.created_at === "string"
         ? raw.created_at
@@ -1229,9 +1256,13 @@ function mergeGeneratedArtifacts(
             ...previous,
             ...artifact,
             downloadUrl:
-              artifact.downloadUrl ||
-              previous.downloadUrl ||
-              null,
+              artifact.downloadUrl || previous.downloadUrl || null,
+            previewUrl:
+              artifact.previewUrl || previous.previewUrl || null,
+            previewSupported:
+              artifact.previewSupported || previous.previewSupported || false,
+            previewAvailable:
+              artifact.previewAvailable || previous.previewAvailable || false,
             messageId:
               artifact.messageId ||
               previous.messageId ||
@@ -1242,6 +1273,26 @@ function mergeGeneratedArtifacts(
   }
 
   return [...map.values()];
+}
+
+// Les URLs signées proviennent d'un accès authentifié ; elles expirent.
+// Refuser les schémas d'URL actifs ou les URLs avec identifiants incorporés.
+function safePrivateArtifactUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password &&
+      Boolean(url.hostname) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+// Ne jamais utiliser le nom non assaini dans le chemin local mobile.
+function safeLocalArtifactFilename(artifact: GeneratedArtifact): string {
+  const cleanId = artifact.id.replace(/[^A-Za-z0-9-]/g, "").slice(0, 42) || "file";
+  const cleanName = artifact.filename.replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").trim().slice(0, 95);
+  return `oria-${cleanId}-${cleanName || `document.${artifact.extension || "bin"}`}`;
 }
 
 function formatArtifactSize(
@@ -4166,6 +4217,7 @@ export default function ChatPage() {
   const [localVoiceDraft, setLocalVoiceDraft] = useState<LocalVoiceDraft | null>(null);
   const [voiceUploading, setVoiceUploading] = useState(false);
   const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
+  const [artifactBusyId, setArtifactBusyId] = useState<string | null>(null);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
   const audioBusyRef = useRef(false);
@@ -4192,7 +4244,7 @@ export default function ChatPage() {
     voiceDraft || localVoiceDraft || voiceUploading ||
     audioBusyRef.current || stoppingRecordingRef.current ||
     recorderState.isRecording || miniStudioOpen ||
-    coursesOpen || drawerVisible || codePreview ||
+    coursesOpen || drawerVisible || codePreview || artifactBusyId ||
     modificationPanelOpen
   );
 
@@ -4590,7 +4642,7 @@ export default function ChatPage() {
       const data = await apiFetch<{
         success?: boolean;
         artifacts?: Array<Record<string, unknown>>;
-      }>("/artifacts?limit=100");
+      }>("/ai/artifacts?limit=100");
 
       const restored =
         (data.artifacts ?? [])
@@ -4868,7 +4920,7 @@ export default function ChatPage() {
   async function previewCodeArtifact(artifact: GeneratedArtifact) {
     try {
       const response = await apiFetch<{ artifact?: Record<string, unknown> }>(
-        `/artifacts/${encodeURIComponent(artifact.id)}`);
+        `/ai/artifacts/${encodeURIComponent(artifact.id)}`);
       const refreshed = response.artifact ? normalizeGeneratedArtifact(response.artifact, artifact.messageId) : null;
       const url = refreshed?.downloadUrl || artifact.downloadUrl;
       if (!url) throw new Error("Lien de lecture introuvable.");
@@ -4923,71 +4975,126 @@ export default function ChatPage() {
     );
   }
 
-  async function openArtifact(
+  // Accès privé : ne jamais se fier à une URL mise en cache, qui peut expirer.
+  async function refreshArtifactAccess(artifact: GeneratedArtifact): Promise<GeneratedArtifact> {
+    const response = await apiFetch<{ artifact?: Record<string, unknown> }>(
+      `/ai/artifacts/${encodeURIComponent(artifact.id)}`,
+    );
+    const renewed = response.artifact
+      ? normalizeGeneratedArtifact(response.artifact, artifact.messageId)
+      : null;
+    if (!renewed) throw new Error(language === "fr" ? "Fichier introuvable." : "File not found.");
+    setGeneratedArtifacts((current) => mergeGeneratedArtifacts(current, [renewed]));
+    return renewed;
+  }
+
+  // Écriture dans l'espace privé de l'app : aucun lien public créé.
+  async function saveArtifactLocally(
     artifact: GeneratedArtifact,
-  ) {
+    signedUrl: string,
+  ): Promise<ExpoFile> {
+    const safeUrl = safePrivateArtifactUrl(signedUrl);
+    if (!safeUrl) throw new Error(language === "fr" ? "Lien privé invalide." : "Invalid private URL.");
+    if (Platform.OS === "web") {
+      throw new Error("Le téléchargement Web utilise directement le navigateur.");
+    }
+    const dest = new ExpoFile(Paths.document, safeLocalArtifactFilename(artifact));
+    // Téléchargement natif, sans charger jusqu'à 50 Mo sur le fil JS.
+    const file = await ExpoFile.downloadFileAsync(safeUrl, dest, { idempotent: true });
+    if (!file.exists || file.size <= 0 || file.size > 50 * 1024 * 1024 ||
+      (artifact.sizeBytes > 0 && file.size !== artifact.sizeBytes)) {
+      throw new Error(language === "fr" ? "Le fichier reçu est incomplet ou invalide." : "Downloaded file is incomplete or invalid.");
+    }
+    return file;
+  }
+
+  // Quick Look iOS / application installée Android (selon SDK Expo).
+  async function previewLocalArtifact(
+    file: ExpoFile,
+    artifact: GeneratedArtifact,
+    fallbackUrl?: string | null,
+  ): Promise<void> {
+    // Détection de méthode : certaines versions d'expo-file-system
+    // n'exposent pas encore File.preview / File.canPreview.
+    const previewFile = file as ExpoFile & {
+      canPreview?: (options?: { mimeType?: string }) => Promise<boolean>;
+      preview?: (options?: { title?: string; mimeType?: string }) => Promise<void>;
+    };
+    if (typeof previewFile.canPreview === "function" &&
+        typeof previewFile.preview === "function") {
+      const canPreview = await previewFile.canPreview({ mimeType: artifact.mimeType.split(";")[0] });
+      if (canPreview) {
+        await previewFile.preview({ title: artifact.filename, mimeType: artifact.mimeType.split(";")[0] });
+        return;
+      }
+    }
+    // Fallback explicite : ouvrir l'URL privée temporaire dans une application
+    // externe si le lecteur natif n'est pas disponible sur cet appareil.
+    const url = safePrivateArtifactUrl(fallbackUrl);
+    if (url && await Linking.canOpenURL(url)) {
+      await Linking.openURL(url);
+      return;
+    }
+    throw new Error(language === "fr"
+      ? "Fichier conservé dans ORIA, mais aucun lecteur compatible n'est disponible."
+      : "File saved in ORIA, but no compatible viewer is available.");
+  }
+
+  async function downloadArtifact(artifact: GeneratedArtifact): Promise<void> {
+    if (artifactBusyId) return;
+    setArtifactBusyId(artifact.id);
     try {
-      const response = await apiFetch<{
-        success?: boolean;
-        artifact?: Record<string, unknown>;
-      }>(
-        `/artifacts/${artifact.id}`,
-      );
-
-      const refreshed =
-        response.artifact
-          ? normalizeGeneratedArtifact(
-              response.artifact,
-              artifact.messageId,
-            )
-          : null;
-
-      const downloadUrl =
-        refreshed?.downloadUrl ||
-        artifact.downloadUrl;
-
-      if (!downloadUrl) {
-        throw new Error(
-          language === "en"
-            ? "No download URL was returned."
-            : "Aucune URL de téléchargement n'a été retournée.",
-        );
+      const renewed = await refreshArtifactAccess(artifact);
+      const url = safePrivateArtifactUrl(renewed.downloadUrl);
+      if (!url) throw new Error(language === "fr"
+        ? "Lien de téléchargement indisponible. Réessayez."
+        : "Download link unavailable. Please retry.");
+      if (Platform.OS === "web") {
+        await Linking.openURL(url);
+        return;
       }
-
-      if (refreshed) {
-        setGeneratedArtifacts(
-          (current) =>
-            mergeGeneratedArtifacts(
-              current,
-              [refreshed],
-            ),
-        );
-      }
-
-      const supported =
-        await Linking.canOpenURL(
-          downloadUrl,
-        );
-
-      if (!supported) {
-        throw new Error(
-          language === "en"
-            ? "This file cannot be opened on this device."
-            : "Ce fichier ne peut pas être ouvert sur cet appareil.",
-        );
-      }
-
-      await Linking.openURL(
-        downloadUrl,
+      const file = await saveArtifactLocally(renewed, url);
+      Alert.alert(
+        language === "fr" ? "Document enregistré" : "File saved",
+        language === "fr"
+          ? "Le fichier est enregistré dans les documents privés d'ORIA. Ouvre-le pour le consulter ou l'exporter vers une autre application."
+          : "Saved in ORIA's private documents. Open it to view or export it to another app.",
+        [
+          { text: "OK", style: "cancel" },
+          { text: language === "fr" ? "Ouvrir" : "Open", onPress: () => {
+            void previewLocalArtifact(file, renewed, renewed.previewUrl || renewed.downloadUrl)
+              .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+          } },
+        ],
       );
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : language === "en"
-            ? "Unable to open the generated file."
-            : "Impossible d'ouvrir le fichier généré.",
-      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : language === "fr"
+        ? "Téléchargement impossible." : "Download failed.");
+    } finally {
+      setArtifactBusyId(null);
+    }
+  }
+
+  async function openArtifactPreview(artifact: GeneratedArtifact): Promise<void> {
+    if (artifact.extension.toLowerCase() !== "pdf" || !artifact.previewSupported || artifactBusyId) return;
+    setArtifactBusyId(artifact.id);
+    try {
+      const renewed = await refreshArtifactAccess(artifact);
+      if (!renewed.previewSupported) throw new Error(CHAT_TEXT[language].documentUnavailable);
+      const previewUrl = safePrivateArtifactUrl(renewed.previewUrl);
+      if (!previewUrl || !renewed.previewAvailable) {
+        throw new Error(CHAT_TEXT[language].documentUnavailable);
+      }
+      if (Platform.OS === "web") {
+        await Linking.openURL(previewUrl);
+        return;
+      }
+      const file = await saveArtifactLocally(renewed, previewUrl);
+      await previewLocalArtifact(file, renewed, previewUrl);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : CHAT_TEXT[language].documentUnavailable);
+    } finally {
+      setArtifactBusyId(null);
     }
   }
 
@@ -6364,6 +6471,10 @@ export default function ChatPage() {
             }
           }
 
+          if (eventName === "artifact_error" && typeof eventData.detail === "string") {
+            setError(eventData.detail);
+          }
+
           if (eventName === "done") setChatStatusStep(null);
           if (eventName === "done" && Array.isArray(eventData.web_images)) {
             streamedWebImages = normalizeWebImages(eventData.web_images);
@@ -6867,32 +6978,43 @@ export default function ChatPage() {
                     </Text>
                   </View>
 
+                  {artifact.extension.toLowerCase() === "pdf" && artifact.previewSupported ? (
+                    <Pressable
+                      onPress={() => void openArtifactPreview(artifact)}
+                      disabled={Boolean(artifactBusyId)}
+                      style={[styles.artifactDownloadButton, { opacity: artifactBusyId ? 0.6 : 1 }]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${t.documentPreview} ${artifact.filename}`}
+                    >
+                      {artifactBusyId === artifact.id ? (
+                        <ActivityIndicator size="small" color={themedIconColor("#111111", isDark)} />
+                      ) : (
+                        <Ionicons name="eye-outline" size={18} color={themedIconColor("#111111", isDark)} />
+                      )}
+                    </Pressable>
+                  ) : null}
                   {CODE_PREVIEW_EXTENSIONS.has(artifact.extension.toLowerCase()) ? (
-                    <Pressable onPress={() => void previewCodeArtifact(artifact)}
+                    <Pressable
+                      onPress={() => void previewCodeArtifact(artifact)}
                       style={styles.artifactDownloadButton}
-                      accessibilityRole="button" accessibilityLabel={t.codePreview}>
-                      <Ionicons name="code-slash-outline" size={17}
-                        color={themedIconColor("#111111", isDark)} />
+                      accessibilityRole="button"
+                      accessibilityLabel={`${t.codePreview} ${artifact.filename}`}
+                    >
+                      <Ionicons name="code-slash-outline" size={18} color={themedIconColor("#111111", isDark)} />
                     </Pressable>
                   ) : null}
                   <Pressable
-                    onPress={() =>
-                      void openArtifact(
-                        artifact,
-                      )
-                    }
-                    style={styles.artifactDownloadButton}
+                    onPress={() => void downloadArtifact(artifact)}
+                    disabled={Boolean(artifactBusyId)}
+                    style={[styles.artifactDownloadButton, { opacity: artifactBusyId ? 0.6 : 1 }]}
                     accessibilityRole="button"
                     accessibilityLabel={`${t.download} ${artifact.filename}`}
                   >
-                    <Ionicons
-                      name="download-outline"
-                      size={16}
-                      color={themedIconColor(
-                        "#111111",
-                        isDark,
-                      )}
-                    />
+                    {artifactBusyId === artifact.id ? (
+                      <ActivityIndicator size="small" color={themedIconColor("#111111", isDark)} />
+                    ) : (
+                      <Ionicons name="download-outline" size={18} color={themedIconColor("#111111", isDark)} />
+                    )}
                   </Pressable>
                 </View>
               ),

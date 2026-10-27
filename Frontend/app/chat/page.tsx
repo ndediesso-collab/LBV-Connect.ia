@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Download,
   FileText,
+  Eye,
   Code2,
   Maximize2,
   Mic,
@@ -116,6 +117,9 @@ type GeneratedArtifact = {
   sha256?: string | null;
   model?: string | null;
   downloadUrl?: string | null;
+  previewUrl?: string | null;
+  previewSupported?: boolean;
+  previewAvailable?: boolean;
   created_at?: string | null;
 
   // Association locale pendant le streaming. Une fois le message sauvegardé,
@@ -175,6 +179,12 @@ type VoiceDraft = VoiceNote & {
 };
 
 type CodePreviewData = { title: string; language: string; code: string };
+
+type DocumentPreviewData = {
+  id: string;
+  filename: string;
+  url: string;
+};
 
 const CODE_PREVIEW_EXTENSIONS = new Set([
   "py", "js", "jsx", "ts", "tsx", "html", "css", "json", "sql",
@@ -262,6 +272,7 @@ const ORIA_CHAT_STATUS_LABELS = {
   processing_image: { fr: "Traitement de l'image…", en: "Processing image…" },
   processing_attachments: { fr: "Traitement des pièces jointes…", en: "Processing attachments…" },
   processing: { fr: "Génération de la réponse…", en: "Generating response…" },
+  creating_artifact: { fr: "Création du document…", en: "Creating document…" },
   restarting: { fr: "Ajustement de la réponse…", en: "Updating response…" },
 } as const satisfies Record<string, Record<OriaLanguage, string>>;
 
@@ -595,9 +606,22 @@ function normalizeGeneratedArtifact(
   const downloadUrl =
     typeof raw.download_url === "string"
       ? raw.download_url
-      : typeof raw.url === "string"
-        ? raw.url
+      : typeof raw.downloadUrl === "string"
+        ? raw.downloadUrl
+        : typeof raw.url === "string"
+          ? raw.url
+          : null;
+
+  const previewUrl =
+    typeof raw.preview_url === "string"
+      ? raw.preview_url
+      : typeof raw.previewUrl === "string"
+        ? raw.previewUrl
         : null;
+  const previewSupported =
+    raw.preview_supported === true || raw.previewSupported === true;
+  const previewAvailable =
+    raw.preview_available === true || raw.previewAvailable === true;
 
   return {
     id,
@@ -631,6 +655,9 @@ function normalizeGeneratedArtifact(
         ? raw.model
         : null,
     downloadUrl,
+    previewUrl,
+    previewSupported,
+    previewAvailable,
     created_at:
       typeof raw.created_at === "string"
         ? raw.created_at
@@ -662,6 +689,14 @@ function mergeGeneratedArtifacts(
               artifact.downloadUrl ||
               previous.downloadUrl ||
               null,
+            previewUrl:
+              artifact.previewUrl ||
+              previous.previewUrl ||
+              null,
+            previewSupported:
+              artifact.previewSupported || previous.previewSupported || false,
+            previewAvailable:
+              artifact.previewAvailable || previous.previewAvailable || false,
             messageId:
               artifact.messageId ||
               previous.messageId ||
@@ -672,6 +707,20 @@ function mergeGeneratedArtifacts(
   }
 
   return [...map.values()];
+}
+
+// Les URLs sont retournées par le backend après contrôle de propriété.
+// Elles restent temporaires : toute action renouvelle la signature.
+function safePrivateArtifactUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && !url.username && !url.password
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function formatArtifactSize(
@@ -1975,6 +2024,70 @@ function downloadSource(code: string, filename: string) {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function DocumentPreviewModal({ preview, onClose, onDownload, language }: {
+  preview: DocumentPreviewData;
+  onClose: () => void;
+  onDownload: () => void;
+  language: OriaLanguage;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label={preview.filename}
+      className="fixed inset-0 z-[90] flex flex-col bg-background text-foreground">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-surface px-4 py-3 sm:px-7">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-secondary">
+            <FileText size={19}/>
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{preview.filename}</p>
+            <p className="text-[11px] text-muted">PDF · {language === "fr" ? "Aperçu privé" : "Private preview"}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button type="button" onClick={onDownload}
+            className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs hover:bg-surface-secondary">
+            <Download size={15}/><span className="hidden sm:inline">{UI[language].download}</span>
+          </button>
+          <a href={preview.url} target="_blank" rel="noopener noreferrer"
+            title={language === "fr" ? "Ouvrir dans un nouvel onglet" : "Open in a new tab"}
+            aria-label={language === "fr" ? "Ouvrir le PDF dans un nouvel onglet" : "Open PDF in a new tab"}
+            className="rounded-xl p-2.5 transition hover:bg-surface-secondary">
+            <ExternalLink size={19}/>
+          </a>
+          <button type="button" onClick={onClose}
+            aria-label={language === "fr" ? "Fermer l’aperçu" : "Close preview"}
+            className="rounded-xl p-2.5 transition hover:bg-surface-secondary">
+            <X size={20}/>
+          </button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 bg-surface-secondary/35 p-2 sm:p-4">
+        <iframe
+          key={preview.id}
+          src={preview.url}
+          title={preview.filename}
+          className="h-full w-full rounded-lg border border-border bg-white"
+          sandbox="allow-same-origin allow-downloads"
+          referrerPolicy="no-referrer"
+        />
+      </div>
+      <p className="shrink-0 px-4 py-2 text-center text-[11px] text-muted">
+        {language === "fr"
+          ? "Si le lecteur PDF ne s’affiche pas, utilisez l’ouverture dans un nouvel onglet."
+          : "If the PDF viewer does not load, open it in a new tab."}
+      </p>
+    </div>
+  );
 }
 
 function CodePreviewModal({ preview, onClose, language }: {
@@ -3827,6 +3940,7 @@ export default function ChatPage() {
 
   // Ajouts Chat Web : lecteur source, images de recherche, notes vocales.
   const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
+  const [documentPreview, setDocumentPreview] = useState<DocumentPreviewData | null>(null);
   const [webImagesByMessage, setWebImagesByMessage] = useState<Record<string, WebIllustration[]>>({});
   const [voiceNotes, setVoiceNotes] = useState<VoiceNote[]>([]);
   const [voiceDraft, setVoiceDraft] = useState<VoiceDraft | null>(null);
@@ -4484,7 +4598,7 @@ export default function ChatPage() {
       const data = await apiFetch<{
         success?: boolean;
         artifacts?: Array<Record<string, unknown>>;
-      }>("/artifacts?limit=100");
+      }>("/ai/artifacts?limit=100");
 
       const restored =
         (data.artifacts ?? [])
@@ -4549,92 +4663,90 @@ export default function ChatPage() {
     );
   }
 
-  async function downloadArtifact(
+  // Récupère une URL signée fraîche à chaque action : les liens privés expirent.
+  async function refreshArtifactAccess(
     artifact: GeneratedArtifact,
-  ): Promise<void> {
+  ): Promise<GeneratedArtifact> {
+    const response = await apiFetch<{
+      artifact?: Record<string, unknown>;
+    }>(`/ai/artifacts/${encodeURIComponent(artifact.id)}`);
+    const renewed = response.artifact
+      ? normalizeGeneratedArtifact(response.artifact, artifact.messageId)
+      : null;
+    if (!renewed) {
+      throw new Error(language === "fr" ? "Fichier introuvable." : "File not found.");
+    }
+    setGeneratedArtifacts((current) => mergeGeneratedArtifacts(current, [renewed]));
+    return renewed;
+  }
+
+  async function downloadArtifact(artifact: GeneratedArtifact): Promise<void> {
     try {
-      const response = await apiFetch<{
-        success?: boolean;
-        artifact?: Record<string, unknown>;
-      }>(
-        `/artifacts/${artifact.id}`,
-      );
-
-      const refreshed =
-        response.artifact
-          ? normalizeGeneratedArtifact(
-              response.artifact,
-              artifact.messageId,
-            )
-          : null;
-
-      const downloadUrl =
-        refreshed?.downloadUrl ||
-        artifact.downloadUrl;
-
-      if (!downloadUrl) {
-        throw new Error(
-          language === "en"
-            ? "No download URL was returned."
-            : "Aucune URL de téléchargement n'a été retournée.",
-        );
+      const renewed = await refreshArtifactAccess(artifact);
+      const url = safePrivateArtifactUrl(renewed.downloadUrl);
+      if (!url) {
+        throw new Error(language === "fr"
+          ? "Lien de téléchargement indisponible. Réessayez."
+          : "Download link unavailable. Please retry.");
       }
-
-      setGeneratedArtifacts(
-        (current) =>
-          mergeGeneratedArtifacts(
-            current,
-            refreshed
-              ? [refreshed]
-              : [],
-          ),
-      );
-
-      const fileResponse =
-        await fetch(downloadUrl);
-
-      if (!fileResponse.ok) {
-        throw new Error(
-          "Téléchargement impossible.",
-        );
+      // Une URL Supabase signée avec ?download provoque une pièce jointe.
+      // L'ancre reste dans l'onglet courant afin d'éviter les bloqueurs de popup
+      // après l'appel asynchrone qui renouvelle la signature.
+      const signedUrl = new URL(url);
+      let href = url;
+      let blobUrl: string | null = null;
+      if (!signedUrl.searchParams.has("download")) {
+        // Compatibilité avec un ancien repository : force la sauvegarde via Blob.
+        // Échoue clairement si CORS l'interdit, sans naviguer hors du Chat.
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("Téléchargement impossible.");
+        blobUrl = URL.createObjectURL(await response.blob());
+        href = blobUrl;
       }
-
-      const blob =
-        await fileResponse.blob();
-
-      const objectUrl =
-        URL.createObjectURL(blob);
-
-      const anchor =
-        document.createElement("a");
-
-      anchor.href = objectUrl;
-      anchor.download =
-        artifact.filename ||
-        `fichier-${artifact.id}`;
-
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = renewed.filename || artifact.filename;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-
-      URL.revokeObjectURL(
-        objectUrl,
-      );
+      if (blobUrl) window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1500);
     } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Téléchargement impossible.",
-      );
+      setError(requestError instanceof Error
+        ? requestError.message
+        : language === "fr" ? "Téléchargement impossible." : "Download failed.");
+    }
+  }
+
+  async function openArtifactPreview(artifact: GeneratedArtifact): Promise<void> {
+    if (artifact.extension.toLowerCase() !== "pdf" || !artifact.previewSupported) return;
+    try {
+      const renewed = await refreshArtifactAccess(artifact);
+      if (!renewed.previewSupported) {
+        throw new Error(language === "fr"
+          ? "L'aperçu n'est pas pris en charge pour ce fichier."
+          : "Preview is not supported for this file.");
+      }
+      const url = safePrivateArtifactUrl(renewed.previewUrl);
+      if (!url || !renewed.previewAvailable) {
+        throw new Error(language === "fr"
+          ? "Aperçu temporairement indisponible. Le téléchargement reste possible."
+          : "Preview temporarily unavailable. Download is still possible.");
+      }
+      setDocumentPreview({ id: renewed.id, filename: renewed.filename, url });
+    } catch (requestError) {
+      setError(requestError instanceof Error
+        ? requestError.message
+        : language === "fr" ? "Impossible d'ouvrir l'aperçu." : "Unable to open preview.");
     }
   }
 
   async function openArtifactSource(artifact: GeneratedArtifact) {
     if (!CODE_PREVIEW_EXTENSIONS.has(artifact.extension.toLowerCase())) return;
     try {
-      const response = await apiFetch<{artifact?: Record<string, unknown>}>(`/artifacts/${artifact.id}`);
-      const renewed = response.artifact ? normalizeGeneratedArtifact(response.artifact) : null;
-      const url = renewed?.downloadUrl || artifact.downloadUrl;
+      const renewed = await refreshArtifactAccess(artifact);
+      // Le backend ne signe plus automatiquement l'URL de téléchargement
+      // pour lecture JS si la réponse peut être servie en attachment.
+      const url = safePrivateArtifactUrl(renewed.downloadUrl);
       if (!url) throw new Error("Fichier inaccessible.");
       const fileResponse = await fetch(url);
       if (!fileResponse.ok) throw new Error("Fichier inaccessible.");
@@ -6335,6 +6447,15 @@ export default function ChatPage() {
   return (
     <main className="min-h-dvh overflow-hidden bg-background text-foreground">
       {codePreview ? <CodePreviewModal preview={codePreview} onClose={() => setCodePreview(null)} language={language}/> : null}
+      {documentPreview ? <DocumentPreviewModal
+        preview={documentPreview}
+        onClose={() => setDocumentPreview(null)}
+        onDownload={() => {
+          const artifact = generatedArtifacts.find((item) => item.id === documentPreview.id);
+          if (artifact) void downloadArtifact(artifact);
+        }}
+        language={language}
+      /> : null}
       {isMiniStudioOpen && (
         <OriaMiniStudio
           language={language}
@@ -6974,6 +7095,14 @@ export default function ChatPage() {
                                       </p>
                                     </div>
 
+                                    {artifact.extension.toLowerCase() === "pdf" && artifact.previewSupported ? (
+                                      <button type="button" onClick={() => void openArtifactPreview(artifact)}
+                                        className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-xs font-medium transition hover:bg-surface-tertiary"
+                                        title={language === "fr" ? "Consulter le PDF" : "Preview PDF"}
+                                        aria-label={`${language === "fr" ? "Aperçu" : "Preview"} ${artifact.filename}`}>
+                                        <Eye size={14}/><span className="hidden sm:inline">{language === "fr" ? "Aperçu" : "Preview"}</span>
+                                      </button>
+                                    ) : null}
                                     {CODE_PREVIEW_EXTENSIONS.has(artifact.extension.toLowerCase()) ? (
                                       <button type="button" onClick={() => void openArtifactSource(artifact)}
                                         className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-xs font-medium hover:bg-surface-tertiary"

@@ -518,6 +518,7 @@ _ORIA_CHAT_STAGES: dict[str, str] = {
     "processing_image": "Traitement de l'image…",
     "processing_attachments": "Traitement des pièces jointes…",
     "processing": "Génération de la réponse…",
+    "creating_artifact": "Création du document…",
     "restarting": "Ajustement de la réponse…",
     "clear": "",
 }
@@ -1275,6 +1276,124 @@ def _artifact_content_from_response(
     return cleaned
 
 
+# ORIA Artifact V1 : le routage vers un contrat documentaire est explicite.
+# Les formats de code / ZIP gardent l'extraction historique du Chat.
+def _document_artifact_selection(
+    artifact_requests: list[dict[str, str | None]],
+) -> tuple[tuple[str, ...], list[dict[str, str | None]]]:
+    formats = [str(item.get("file_type") or "").lower().lstrip(".")
+               for item in artifact_requests]
+    document_types = OpenAIService._document_types(formats)
+    legacy = [item for item, fmt in zip(artifact_requests, formats)
+              if fmt not in document_types]
+    if document_types and legacy:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Les fichiers documentaires et les fichiers source/archives "
+                "nécessitent deux générations séparées pour garantir un "
+                "contenu fidèle et une facturation claire."
+            ),
+        )
+    return document_types, legacy
+
+
+def _document_result_message(
+    expected: int,
+    created: int,
+) -> str:
+    """Réponse serveur, jamais texte libre provenant du contenu documentaire."""
+    if created == expected:
+        if created == 1:
+            return "Ton fichier est prêt. Tu peux le consulter ou le télécharger."
+        return "Tes fichiers sont prêts. Tu peux les consulter ou les télécharger."
+    if created == 0:
+        return "La création du fichier a échoué." if expected == 1 else "La création des fichiers a échoué."
+    return (f"{created} fichier(s) sur {expected} ont été créés. "
+            "Consulte les erreurs pour les autres fichiers.")
+
+
+def _render_document_results(
+    *,
+    artifact_payload: dict[str, Any],
+    artifact_requests: list[dict[str, str | None]],
+    generation_id: str | None,
+    attempt_id: str | None,
+    reasoning_mode: str,
+    model: str,
+    openai_model: str,
+) -> list[Any]:
+    """Valide la correspondance exacte, puis compile tous les fichiers en mémoire.
+
+    Aucun fichier n'est enregistré tant que la compilation du lot est incomplète.
+    """
+    if not isinstance(artifact_payload, dict):
+        raise ArtifactError("Réponse documentaire structurée absente.")
+    expected_types = [str(r.get("file_type") or "").lower().lstrip(".")
+                      for r in artifact_requests]
+    specs = artifact_payload.get("artifacts")
+    if (not isinstance(specs, list) or len(specs) != len(expected_types)
+            or len(set(expected_types)) != len(expected_types)):
+        raise ArtifactError("Le nombre de documents produits ne correspond pas à la demande.")
+    if {s.get("format") for s in specs if isinstance(s, dict)} != set(expected_types):
+        raise ArtifactError("Le modèle n'a pas livré exactement les formats demandés.")
+
+    # Les noms explicitement demandés par le client priment sur les propositions
+    # du modèle. L'ancienne méthode de résolution sécurise les noms de fichiers.
+    normalized_specs = [dict(spec) for spec in specs]
+    requested_by_type = {str(r.get("file_type") or "").lower().lstrip("."): r
+                         for r in artifact_requests}
+    for spec in normalized_specs:
+        fmt = spec["format"]
+        desired = requested_by_type[fmt].get("filename")
+        if desired:
+            spec["filename"] = ARTIFACT_SERVICE._resolve_filename(
+                filename=desired, title=None, extension=fmt,
+            )
+    safe_payload = dict(artifact_payload)
+    safe_payload["artifacts"] = normalized_specs
+    results = ARTIFACT_SERVICE.create_from_payload(
+        safe_payload,
+        metadata={
+            "source": "oria-chat",
+            "generation_id": generation_id,
+            "attempt_id": attempt_id,
+            "reasoning_mode": reasoning_mode,
+            "oria_model": model,
+            "openai_model": openai_model,
+        },
+    )
+    if len(results) != len(expected_types) or {r.extension for r in results} != set(expected_types):
+        raise ArtifactError("Le compilateur n'a pas retourné tous les fichiers attendus.")
+    return results
+
+
+def _persist_document_result(
+    *,
+    generated: Any,
+    authenticated_user_id: str,
+    conversation_id: str | None,
+    source_message_id: str | None,
+    model: str,
+) -> dict[str, Any]:
+    saved = ARTIFACT_REPOSITORY.save_artifact(
+        user_id=authenticated_user_id,
+        artifact_id=generated.artifact_id,
+        filename=generated.filename,
+        extension=generated.extension,
+        mime_type=generated.mime_type,
+        category=generated.category,
+        file_bytes=generated.data,
+        size_bytes=generated.size_bytes,
+        sha256=generated.sha256,
+        conversation_id=conversation_id,
+        model=model,
+        source_message_id=source_message_id,
+        metadata=generated.metadata,
+    )
+    return _artifact_public_payload(saved)
+
+
 def _artifact_public_payload(
     artifact: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1292,6 +1411,9 @@ def _artifact_public_payload(
         "source_message_id": artifact.get("source_message_id"),
         "download_url": artifact.get("download_url"),
         "url": artifact.get("download_url") or artifact.get("url"),
+        "preview_url": artifact.get("preview_url"),
+        "preview_supported": bool(artifact.get("preview_supported")),
+        "preview_available": bool(artifact.get("preview_available")),
         "created_at": artifact.get("created_at"),
     }
 
@@ -2701,7 +2823,8 @@ def _extract_classic_chat_result(
     response: Any,
     model: str,
     web: bool,
-) -> tuple[str, int]:
+    document_types: tuple[str, ...] = (),
+) -> tuple[str, int, Decimal]:
     """
     Extrait le texte et le coût réel d'une réponse Chat classique.
 
@@ -2727,7 +2850,11 @@ def _extract_classic_chat_result(
         or ""
     )
 
-    if not message.strip():
+    if document_types:
+        # OpenAIService a déjà contrôlé le schéma complet.
+        if not isinstance(payload.get("artifact_payload"), dict):
+            raise RuntimeError("Réponse documentaire structurée manquante.")
+    elif not message.strip():
         raise RuntimeError(
             "Le service IA n'a retourné aucun contenu exploitable."
         )
@@ -3606,6 +3733,10 @@ async def chat(
         explicit_filename=artifact_filename,
     )
 
+    document_types, _legacy_artifact_requests = _document_artifact_selection(
+        artifact_requests
+    )
+
     reservation_id, _reserved_amount = _reserve_chat_credits(
         repository=repository,
         authenticated_user_id=authenticated_user_id,
@@ -3622,12 +3753,13 @@ async def chat(
     try:
         openai_response = openai_service.chat(
             model=MODEL_OPENAI_IDS[model],
-            message=_code_output_instruction(message, attachments),
+            message=(message if document_types else _code_output_instruction(message, attachments)),
             web=web,
             attachments=_attachments_for_openai(attachments),
             history=history,
             reasoning_mode=reasoning_mode,
             visual_mode=visual_mode,
+            artifact_types=document_types,
         )
     except Exception as error:
         try:
@@ -3649,6 +3781,7 @@ async def chat(
             response=openai_response,
             model=model,
             web=web,
+            document_types=document_types,
         )
     except RuntimeError as error:
         # L'appel fournisseur a déjà abouti. On ne libère pas aveuglément une
@@ -3672,40 +3805,57 @@ async def chat(
 
     generated_artifacts: list[dict[str, Any]] = []
     artifact_errors: list[str] = []
-    # Même si une réponse textuelle a été facturée, aucun fichier de code
-    # ne doit être exporté depuis une réponse explicitement incomplète.
     provider_payload = _as_mapping(openai_response) or {}
-    provider_status = str(provider_payload.get("status") or "").lower()
-    if provider_status and provider_status != "completed" and (
-        _is_code_task(message, attachments)
-    ):
-        artifact_errors.append(
-            f"Réponse IA non terminée ({provider_status}) : "
-            "aucun fichier de code ne sera créé."
-        )
-        artifact_requests = [request for request in artifact_requests
-                             if str(request.get("file_type") or "").lower()
-                             not in _CODE_SOURCE_EXTENSIONS | {"zip"}]
-    try:
-        artifact_requests = _code_artifact_requests_after_response(
-            message=message,
-            attachments=attachments,
-            response_text=response_text,
-            existing=artifact_requests,
-        ) if not (provider_status and provider_status != "completed" and
-                  _is_code_task(message, attachments)) else artifact_requests
-    except ValueError as error:
-        artifact_errors.append(str(error))
-    web_images = _public_web_images(
-        _as_mapping(openai_response).get("web_images")
-        if _as_mapping(openai_response) else None,
-        enabled=web,
-    )
-
-    for artifact_request in artifact_requests:
+    web_images = _public_web_images(provider_payload.get("web_images"), enabled=web)
+    if document_types:
         try:
-            generated_artifacts.append(
-                _create_and_persist_artifact(
+            prepared = _render_document_results(
+                artifact_payload=provider_payload.get("artifact_payload"),
+                artifact_requests=artifact_requests,
+                generation_id=None,
+                attempt_id=None,
+                reasoning_mode=reasoning_mode,
+                model=model,
+                openai_model=MODEL_OPENAI_IDS[model],
+            )
+            for generated in prepared:
+                try:
+                    generated_artifacts.append(_persist_document_result(
+                        generated=generated,
+                        authenticated_user_id=authenticated_user_id,
+                        conversation_id=conversation_id,
+                        source_message_id=source_message_id,
+                        model=model,
+                    ))
+                except Exception as error:
+                    artifact_errors.append(f"{generated.filename} : {error}")
+        except Exception as error:
+            artifact_errors.append(str(error))
+        response_text = _document_result_message(len(artifact_requests), len(generated_artifacts))
+    else:
+        # Le mécanisme de génération de code existant reste inchangé.
+        provider_status = str(provider_payload.get("status") or "").lower()
+        if provider_status and provider_status != "completed" and _is_code_task(message, attachments):
+            artifact_errors.append(
+                f"Réponse IA non terminée ({provider_status}) : "
+                "aucun fichier de code ne sera créé."
+            )
+            artifact_requests = [request for request in artifact_requests
+                                 if str(request.get("file_type") or "").lower()
+                                 not in _CODE_SOURCE_EXTENSIONS | {"zip"}]
+        try:
+            artifact_requests = _code_artifact_requests_after_response(
+                message=message,
+                attachments=attachments,
+                response_text=response_text,
+                existing=artifact_requests,
+            ) if not (provider_status and provider_status != "completed" and
+                      _is_code_task(message, attachments)) else artifact_requests
+        except ValueError as error:
+            artifact_errors.append(str(error))
+        for artifact_request in artifact_requests:
+            try:
+                generated_artifacts.append(_create_and_persist_artifact(
                     authenticated_user_id=authenticated_user_id,
                     artifact_request=artifact_request,
                     response_text=response_text,
@@ -3718,13 +3868,12 @@ async def chat(
                     reasoning_mode=reasoning_mode,
                     user_message=message,
                     user_attachments=attachments,
-                )
-            )
-        except Exception as error:
-            artifact_errors.append(str(error))
+                ))
+            except Exception as error:
+                artifact_errors.append(str(error))
 
     return ChatResponse(
-        success=True,
+        success=(bool(generated_artifacts) if document_types else True),
         model=model,
         action=result.action.value,
         message=response_text,
@@ -5502,6 +5651,10 @@ async def chat_stream(
         explicit_filename=artifact_filename,
     )
 
+    document_types, _legacy_artifact_requests = _document_artifact_selection(
+        artifact_requests
+    )
+
     prepare_ms = (perf_counter() - prepare_started_at) * 1000
 
     reserve_started_at = perf_counter()
@@ -5557,6 +5710,8 @@ async def chat_stream(
     async def event_stream():
         nonlocal artifact_requests
         full_response = ""
+        document_payload: dict[str, Any] | None = None
+        provider_call_started = False
         final_usage = None
         final_web_search_calls = None
         final_openai_timing: dict[str, Any] = {}
@@ -5570,7 +5725,8 @@ async def chat_stream(
         )
 
         current_reasoning_mode = reasoning_mode
-        original_message = _code_output_instruction(message, attachments)
+        original_message = (message if document_types else
+                            _code_output_instruction(message, attachments))
         modification_instructions: list[str] = []
 
         restart_count = 0
@@ -5634,6 +5790,7 @@ async def chat_stream(
                 final_web_images = []
 
                 if websocket_available:
+                    provider_call_started = True
                     stream_result = openai_service.chat_stream_websocket(
                         model=openai_model,
                         message=attempt_message,
@@ -5644,6 +5801,7 @@ async def chat_stream(
                         generation_id=attempt_id,
                         control_queue=generation_state.control_queue,
                         visual_mode=visual_mode,
+                        artifact_types=document_types,
                     )
 
                     try:
@@ -5660,6 +5818,8 @@ async def chat_stream(
                             ).strip()
 
                             if item_type == "delta":
+                                if document_types:
+                                    raise RuntimeError("Le fournisseur a renvoyé un fragment brut en mode documentaire.")
                                 delta = str(
                                     payload.get("content") or ""
                                 )
@@ -5694,6 +5854,10 @@ async def chat_stream(
                                     },
                                 )
                                 continue
+
+                            if item_type == "artifact_payload":
+                                document_payload = payload.get("artifact_payload")
+                                continue  # Données de création internes, jamais un SSE.
 
                             if item_type in {"web_images", "image_results"}:
                                 final_web_images = _public_web_images(
@@ -5791,6 +5955,7 @@ async def chat_stream(
                     # Le chat reste utilisable si le SDK WebSocket n'est pas
                     # encore installé, mais le bouton Modifier en cours de
                     # génération est désactivé par /chat/control.
+                    provider_call_started = True
                     stream_result = openai_service.chat_stream(
                         model=openai_model,
                         message=attempt_message,
@@ -5800,6 +5965,7 @@ async def chat_stream(
                         reasoning_mode=current_reasoning_mode,
                         generation_id=attempt_id,
                         visual_mode=visual_mode,
+                        artifact_types=document_types,
                     )
 
                     for item in stream_result:
@@ -5821,6 +5987,8 @@ async def chat_stream(
                                 final_web_search_calls = web_search_calls
 
                             if delta:
+                                if document_types:
+                                    raise RuntimeError("Fragment brut interdit en mode documentaire.")
                                 if first_delta_server_ms is None:
                                     first_delta_server_ms = (
                                         perf_counter() - route_started_at
@@ -5851,6 +6019,8 @@ async def chat_stream(
                         ).strip()
 
                         if item_type == "delta":
+                            if document_types:
+                                raise RuntimeError("Le fournisseur a renvoyé un fragment brut en mode documentaire.")
                             delta = str(
                                 payload.get("content") or ""
                             )
@@ -5885,6 +6055,10 @@ async def chat_stream(
                                 },
                             )
                             continue
+
+                        if item_type == "artifact_payload":
+                            document_payload = payload.get("artifact_payload")
+                            continue  # Données de création internes, jamais un SSE.
 
                         if item_type in {"web_images", "image_results"}:
                             final_web_images = _public_web_images(
@@ -5962,6 +6136,7 @@ async def chat_stream(
                     # bulle. Le frontend videra uniquement le contenu assistant,
                     # jamais le message utilisateur.
                     full_response = ""
+                    document_payload = None
                     first_delta_server_ms = None
 
                     generation_state.reasoning_mode = (
@@ -5997,13 +6172,14 @@ async def chat_stream(
             # --------------------------------------------------------
             # VALIDATION DE LA RÉPONSE FINALE
             # --------------------------------------------------------
-            if not full_response.strip():
+            if not (document_payload if document_types else full_response.strip()):
                 try:
-                    _release_chat_reservation(
-                        repository=repository,
-                        authenticated_user_id=authenticated_user_id,
-                        reservation_id=reservation_id,
-                    )
+                    if not document_types or not provider_call_started:
+                        _release_chat_reservation(
+                            repository=repository,
+                            authenticated_user_id=authenticated_user_id,
+                            reservation_id=reservation_id,
+                        )
                 except Exception:
                     pass
 
@@ -6018,7 +6194,8 @@ async def chat_stream(
                     "error",
                     {
                         "detail": (
-                            "Le service IA n'a retourné aucun contenu."
+                            ("La réponse documentaire structurée est absente."
+                             if document_types else "Le service IA n'a retourné aucun contenu.")
                         ),
                         "generation_id": generation_id,
                         "attempt_id": attempt_id,
@@ -6129,15 +6306,16 @@ async def chat_stream(
 
             generated_artifacts: list[dict[str, Any]] = []
             artifact_errors: list[str] = []
-            try:
-                artifact_requests = _code_artifact_requests_after_response(
-                    message=message,
-                    attachments=attachments,
-                    response_text=full_response,
-                    existing=artifact_requests,
-                )
-            except ValueError as error:
-                artifact_errors.append(str(error))
+            if not document_types:
+                try:
+                    artifact_requests = _code_artifact_requests_after_response(
+                        message=message,
+                        attachments=attachments,
+                        response_text=full_response,
+                        existing=artifact_requests,
+                    )
+                except ValueError as error:
+                    artifact_errors.append(str(error))
 
             if final_web_images:
                 yield _sse(
@@ -6149,61 +6327,132 @@ async def chat_stream(
                     },
                 )
 
-            for artifact_request in artifact_requests:
-                file_type = str(
-                    artifact_request.get("file_type") or ""
-                )
-
-                yield _sse(
-                    "artifact_processing",
-                    {
-                        "generation_id": generation_id,
-                        "attempt_id": attempt_id,
-                        "file_type": file_type,
-                        "filename": artifact_request.get("filename"),
-                    },
-                )
-
+            if document_types:
+                if status_active:
+                    yield _oria_chat_status(
+                        "creating_artifact",
+                        generation_id=generation_id,
+                        attempt_id=attempt_id,
+                    )
+                    status_step = "creating_artifact"
+                # La conversion a lieu après l'usage/settlement, pour ne jamais
+                # confirmer un fichier avant son stockage réel.
                 try:
-                    artifact_payload = _create_and_persist_artifact(
-                        authenticated_user_id=authenticated_user_id,
-                        artifact_request=artifact_request,
-                        response_text=full_response,
-                        conversation_id=conversation_id,
-                        source_message_id=source_message_id,
-                        model=model,
-                        openai_model=openai_model,
+                    for request_spec in artifact_requests:
+                        yield _sse("artifact_processing", {
+                            "generation_id": generation_id,
+                            "attempt_id": attempt_id,
+                            "file_type": request_spec.get("file_type"),
+                            "filename": request_spec.get("filename"),
+                        })
+                    prepared = _render_document_results(
+                        artifact_payload=document_payload,
+                        artifact_requests=artifact_requests,
                         generation_id=generation_id,
                         attempt_id=attempt_id,
                         reasoning_mode=current_reasoning_mode,
-                        user_message=message,
-                        user_attachments=attachments,
+                        model=model,
+                        openai_model=openai_model,
                     )
-
-                    generated_artifacts.append(artifact_payload)
-
-                    yield _sse(
-                        "artifact",
-                        {
-                            **artifact_payload,
-                            "generation_id": generation_id,
-                            "attempt_id": attempt_id,
-                        },
-                    )
-
+                    for generated in prepared:
+                        try:
+                            public = _persist_document_result(
+                                generated=generated,
+                                authenticated_user_id=authenticated_user_id,
+                                conversation_id=conversation_id,
+                                source_message_id=source_message_id,
+                                model=model,
+                            )
+                            generated_artifacts.append(public)
+                        except Exception as error:
+                            detail = f"{generated.filename} : {error}"
+                            artifact_errors.append(detail)
+                            yield _sse("artifact_error", {
+                                "generation_id": generation_id,
+                                "attempt_id": attempt_id,
+                                "file_type": generated.extension,
+                                "detail": detail,
+                            })
                 except Exception as error:
                     detail = str(error)
                     artifact_errors.append(detail)
+                    yield _sse("artifact_error", {
+                        "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                        "detail": detail,
+                    })
+                full_response = _document_result_message(
+                    len(artifact_requests), len(generated_artifacts)
+                )
+                yield _sse("delta", {
+                    "content": full_response,
+                    "generation_id": generation_id,
+                    "attempt_id": attempt_id,
+                })
+                # L'utilisateur voit d'abord le message, puis les cartes.
+                # Les artefacts ont déjà été générés et sauvegardés.
+                for public in generated_artifacts:
+                    yield _sse("artifact", {
+                        **public,
+                        "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                    })
+            else:
+                for artifact_request in artifact_requests:
+                    file_type = str(
+                        artifact_request.get("file_type") or ""
+                    )
 
                     yield _sse(
-                        "artifact_error",
+                        "artifact_processing",
                         {
                             "generation_id": generation_id,
                             "attempt_id": attempt_id,
                             "file_type": file_type,
-                            "detail": detail,
+                            "filename": artifact_request.get("filename"),
                         },
                     )
+
+                    try:
+                        artifact_payload = _create_and_persist_artifact(
+                            authenticated_user_id=authenticated_user_id,
+                            artifact_request=artifact_request,
+                            response_text=full_response,
+                            conversation_id=conversation_id,
+                            source_message_id=source_message_id,
+                            model=model,
+                            openai_model=openai_model,
+                            generation_id=generation_id,
+                            attempt_id=attempt_id,
+                            reasoning_mode=current_reasoning_mode,
+                            user_message=message,
+                            user_attachments=attachments,
+                        )
+
+                        generated_artifacts.append(artifact_payload)
+
+                        yield _sse(
+                            "artifact",
+                            {
+                                **artifact_payload,
+                                "generation_id": generation_id,
+                                "attempt_id": attempt_id,
+                            },
+                        )
+
+                    except Exception as error:
+                        detail = str(error)
+                        artifact_errors.append(detail)
+
+                        yield _sse(
+                            "artifact_error",
+                            {
+                                "generation_id": generation_id,
+                                "attempt_id": attempt_id,
+                                "file_type": file_type,
+                                "detail": detail,
+                            },
+                        )
 
             if status_active:
                 yield _oria_chat_status(
@@ -6215,7 +6464,8 @@ async def chat_stream(
             yield _sse(
                 "done",
                 {
-                    "success": True,
+                    "success": (bool(generated_artifacts) if document_types else True),
+                    "message": full_response,
                     "model": model,
                     "openai_model": openai_model,
                     "action": result.action.value,
@@ -6257,7 +6507,7 @@ async def chat_stream(
             # Le client a fermé le flux. Si aucun contenu n'a été produit,
             # rendre la réservation ; sinon ne pas rembourser aveuglément
             # une consommation fournisseur potentiellement engagée.
-            if not settled and not full_response.strip():
+            if not settled and not full_response.strip() and not (document_types and provider_call_started):
                 try:
                     _release_chat_reservation(
                         repository=repository,
@@ -6269,7 +6519,7 @@ async def chat_stream(
             raise
 
         except Exception as error:
-            if not settled and not full_response.strip():
+            if not settled and not full_response.strip() and not (document_types and provider_call_started):
                 try:
                     _release_chat_reservation(
                         repository=repository,

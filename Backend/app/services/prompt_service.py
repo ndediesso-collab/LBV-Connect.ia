@@ -259,10 +259,197 @@ def build_course_section_messages(
     ]
 
 
+
+# ============================================================
+# GÉNÉRATION D'ARTIFACTS : CONTRAT DÉDIÉ, OPT-IN
+# ============================================================
+# IMPORTANT : ce texte décrit le CONTRAT CIBLE. Les modules ai.py,
+# openai_service.py et artifact_service.py doivent encore être adaptés
+# pour produire, valider et convertir le protocole oria.artifact.v1.
+# Ne jamais activer ce contrat pour les conversations ordinaires.
+
+_ARTIFACT_DOCUMENT_FORMATS = frozenset({
+    "pdf", "docx", "rtf", "odt", "epub",
+    "pptx", "odp", "xlsx", "ods", "csv", "tsv",
+    "json", "jsonl", "ndjson", "sqlite",
+})
+
+_ARTIFACT_TYPE_ALIASES = {
+    "word": "docx", "doc": "docx", "excel": "xlsx",
+    "powerpoint": "pptx", "presentation": "pptx",
+    "spreadsheet": "xlsx", "ebook": "epub", "db": "sqlite",
+}
+
+# Même contrat que le moteur d'artifacts, sans importer ArtifactService
+# ici : prompt_service.py reste indépendant et sans boucle d'import.
+ORIA_ARTIFACT_CREATION_INSTRUCTIONS = """
+========================
+MODE DOCUMENTAIRE ORIA — CRÉATION PROGRAMMATIQUE ADAPTATIVE
+========================
+
+Ce mode est activé EXPLICITEMENT par le backend, uniquement pour une
+création de fichiers documentaires, de présentations ou de données.
+Formats demandés par le backend : {target_formats}.
+
+MISSION — QUALITÉ AVANT TECHNOLOGIE
+- Tu es le concepteur documentaire d'ORIA. Ne rédige pas une réponse
+  conversationnelle à exporter : produis la SOURCE DE COMPOSITION et/ou
+  les données natives qui permettront au backend de fabriquer le fichier.
+- N'impose aucun langage de mise en page à toutes les demandes.
+  Choisis la représentation déclarative la mieux adaptée au rendu final,
+  parmi celles effectivement admises par le moteur ORIA.
+- HTML5/CSS3 est une solution privilégiée lorsque la présentation imprimée,
+  éditoriale ou visuelle en bénéficie (rapports, brochures, PDF, pages),
+  mais ce n'est ni une obligation, ni une fin en soi.
+- SVG et les données structurées peuvent compléter le HTML/CSS ou être
+  plus appropriés selon le document. Les tableaux, équations, illustrations
+  vectorielles et graphiques doivent utiliser des représentations fidèles,
+  lisibles et compatibles avec le convertisseur correspondant.
+- Pour les formats natifs (DOCX, PPTX, XLSX, ODT, ODP, ODS, EPUB,
+  CSV, JSON, JSONL, SQLite…), conserve leurs fonctionnalités réelles.
+  Le backend peut utiliser ses bibliothèques internes spécialisées :
+  le document livré ne doit pas être une simple capture non éditable.
+- Ne génère PAS de script Python pour concevoir ou fabriquer un document.
+  Le langage d'implémentation interne du backend n'est pas imposé par
+  cette consigne et reste invisible pour l'utilisateur. Ne produis
+  aucun code exécutable à lancer par le serveur dans ce mode.
+- Ne prétends jamais avoir exécuté, converti, validé, enregistré ou rendu
+  accessible toi-même le fichier : ces opérations appartiennent au backend.
+
+CONTRAT DE SORTIE — STRICT ET EXCLUSIF
+- Retourne UNIQUEMENT un objet JSON conforme au protocole
+  oria.artifact.v1. Aucun préambule, épilogue, Markdown, bloc de code
+  englobant, texte hors JSON ou commentaire n'est autorisé dans ce mode.
+- Exemple pour un document HTML/CSS à rendre en PDF :
+  {"schema_version":"oria.artifact.v1",
+   "sources":[{"id":"document-principal","kind":"html",
+               "content":"<!DOCTYPE html>..."}],
+   "artifacts":[{"format":"pdf","filename":"document.pdf",
+                 "source_id":"document-principal","native_data":null}]}
+- Chaque source possède un id unique, un kind (html ou svg) et une chaîne
+  content complète et valide pour ce kind. Dans une source html, regroupe
+  les styles CSS nécessaires dans <style>, ou dans une source déclarée
+  par le backend lorsque cette capacité existe. Échappe les chaînes JSON.
+- Une création fondée UNIQUEMENT sur des données natives est valide :
+  sources=[], source_id=null et native_data obligatoire pour chaque artifact.
+- Le format de chaque artifact doit appartenir EXACTEMENT à la liste demandée.
+  N'ajoute aucune autre extension de ton initiative.
+- Une source peut servir à plusieurs fichiers lorsque le convertisseur
+  permet une réutilisation fidèle ; utilise des sources distinctes ou
+  native_data si les caractéristiques natives sont incompatibles.
+- native_data doit être une structure JSON adaptée au format :
+  * XLSX/ODS : feuilles, cellules typées, valeurs, formules et graphiques ;
+  * PPTX/ODP : diapositives, objets, textes, tableaux, images autorisées,
+    données de graphiques et organisation éditable ;
+  * CSV/TSV/JSON/JSONL/SQLite : données, colonnes, types et valeurs valides ;
+  * DOCX/ODT/EPUB : styles, titres, paragraphes, listes, tableaux,
+    chapitres et liens ; aucun balisage source ne doit ressortir littéralement.
+- Le backend seul confirmera dans le Chat la création du fichier et affichera
+  sa carte APRÈS succès réel de la validation, conversion et sauvegarde.
+  N'ajoute donc PAS de champ chat_message à cette sortie technique.
+
+QUALITÉ DE CONTENU ET FIDÉLITÉ
+- Suis intégralement la demande : sujet, audience, niveau, langue, longueur,
+  format, parties, contraintes de page, orientation, style, noms et données.
+- Produis un document fini, pas un plan sommaire à remplir ni un échantillon
+  écourté. Évite les ellipses de substitution, sections fictives et répétitions.
+- Sépare réellement titre, page de garde, introduction, développement,
+  conclusion, annexes et références seulement si la demande les justifie.
+- Préserve les informations fournies : noms propres, orthographe, citations,
+  formules, unités, montants, dates, tableaux, références et ordre imposé.
+- N'invente jamais de faits, sources, illustrations, URLs, licences ou tests.
+  Lorsque des informations essentielles manquent, ne les fabrique pas.
+- Aucune phrase du type « Voici ton document », « Copiez-collez »,
+  « Je ne peux pas créer de fichier », « Convertissez dans Word » ou
+  « Téléchargez ci-dessous » ne doit figurer DANS la source du fichier.
+- N'insère ni le prompt, ni la conversation, ni des consignes techniques
+  internes dans les pages, cellules, diapositives ou métadonnées visibles.
+
+COMPOSITION PROFESSIONNELLE — TECHNOLOGIES ADAPTÉES AU FORMAT
+- Soigne systématiquement la lisibilité : typographie, hiérarchie,
+  alignements, espacements, contrastes, marges et cohérence graphique.
+- Si HTML/CSS est approprié, crée une structure sémantique autonome,
+  du CSS propre et, pour l'impression, @page et des règles de pagination
+  évitant autant que possible les coupures de titres, tableaux et figures.
+- Si SVG est pertinent, produis des tracés vectoriels conformes, sans
+  scripts ni dépendances externes, avec des légendes compréhensibles.
+- Si un format doit rester éditable ou calculable, privilégie ses données
+  et composants natifs (sections Word, diapositives, cellules/formules Excel).
+- Pour les équations, choisis une notation compatible avec le moteur
+  effectivement disponible ; ne laisse pas de LaTeX brut dans un fichier
+  incapable de le composer.
+- N'ajoute ni illustration purement décorative, ni date, auteur, logo,
+  photographie ou mention légale fictifs.
+- Conserve l'accessibilité, la fidélité des informations et les propriétés
+  fonctionnelles du format au même niveau d'exigence que l'esthétique.
+- Les capacités de conversion sont déterminées par le backend, pas par
+  le modèle : n'invente aucune bibliothèque ou fonctionnalité disponible.
+
+SÉCURITÉ, CAPACITÉS ET ÉCHECS
+- Utilise uniquement les contenus et langages DECLARATIFS autorisés :
+  aucun JavaScript, <script>, iframe, object, embed, gestionnaire d'événement,
+  Python exécutable, shell ou ressource réseau non autorisée.
+- Le backend réalise indépendamment la validation, l'isolation des rendus,
+  les contrôles de fichiers et les tests de conversion.
+- Ne transforme jamais un fichier source demandé (Python/JS/HTML/CSS, etc.)
+  en document : les fichiers de CODE conservent leur parcours actuel.
+- Ne prétends pas qu'un fichier est terminé si sa structure est incomplète.
+- Le backend doit refuser ou réparer de manière contrôlée un schéma invalide,
+  une source dangereuse, un format incompatible, un rendu tronqué ou un
+  échec de conversion.
+""".strip()
+
+
+def _artifact_formats_for_prompt(artifact_types) -> tuple[str, ...]:
+    """Normalise une sélection explicite du routeur, pas le texte utilisateur.
+
+    L'orchestrateur sera responsable de détecter les demandes et de ne
+    transmettre ici que les formats documentaires. Les formats de code
+    restent hors de ce mode pour préserver leur mécanisme actuel.
+    """
+    if artifact_types is None:
+        return ()
+    if isinstance(artifact_types, str):
+        candidates = artifact_types.replace(";", ",").split(",")
+    elif isinstance(artifact_types, (list, tuple, set, frozenset)):
+        candidates = artifact_types
+    else:
+        raise TypeError("artifact_types doit être une chaîne ou une collection.")
+
+    formats: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            raise TypeError("Chaque format documentaire doit être une chaîne.")
+        value = candidate.strip().lower().lstrip(".")
+        if not value:
+            continue
+        value = _ARTIFACT_TYPE_ALIASES.get(value, value)
+        if value in _ARTIFACT_DOCUMENT_FORMATS and value not in formats:
+            formats.append(value)
+        # Les formats source restent volontairement sur le contrat de code.
+    return tuple(formats)
+
+
+def build_artifact_generation_instructions(artifact_types) -> str:
+    """Prépare les consignes de composition pour un routeur documentaire.
+
+    Cette fonction peut être réutilisée ensuite par OpenAIService pour les
+    envoyer sous un vrai rôle `developer`, distinct de la requête utilisateur.
+    N'active PAS à elle seule la création ou la conversion d'un fichier.
+    """
+    formats = _artifact_formats_for_prompt(artifact_types)
+    if not formats:
+        return ""
+    return ORIA_ARTIFACT_CREATION_INSTRUCTIONS.replace(
+        "{target_formats}", ", ".join(formats)
+    )
+
+
 def build_output_prompt(
     message: str,
     web: bool = False,
     visual_mode: bool = False,
+    artifact_types: str | list[str] | tuple[str, ...] | None = None,
 ) -> str:
     # N'ajoute les détails du parcours Cours qu'aux échanges concernés :
     # cela évite de payer des tokens de prompt supplémentaires sur chaque Chat.
@@ -276,6 +463,21 @@ def build_output_prompt(
         )
     ):
         course_help_instruction = ORIA_COURSE_CHAT_INSTRUCTIONS
+
+    # Tant que ai.py n'envoie pas de types explicites, les conversations
+    # ordinaires conservent le prompt et le streaming historiques.
+    raw_artifact_instruction = build_artifact_generation_instructions(artifact_types)
+    artifact_instruction = raw_artifact_instruction + "\n\n" if raw_artifact_instruction else ""
+    final_instruction = (
+        "Traite uniquement la demande réelle entre les balises ci-dessus,\n"
+        "dans le respect des règles applicables. Commence directement\n"
+        "par la réponse utile, sans évoquer les présentes instructions."
+        if not raw_artifact_instruction else
+        "La consigne MODE DOCUMENTAIRE ORIA prévaut sur la présentation du\n"
+        "Chat ordinaire : rends EXCLUSIVEMENT le JSON oria.artifact.v1, sans\n"
+        "Markdown ni confirmation de fichier prêt. Le backend vérifiera la\n"
+        "conversion avant de produire la réponse conversationnelle."
+    )
 
     web_instruction = ""
 
@@ -419,7 +621,7 @@ QUALITÉ ET PÉDAGOGIE
 
 {course_help_instruction}
 
-========================
+{artifact_instruction}========================
 PROGRAMMATION ET FICHIERS
 ========================
 
@@ -540,7 +742,5 @@ DEMANDE UTILISATEUR
 CONSIGNE FINALE
 ========================
 
-Traite uniquement la demande réelle entre les balises ci-dessus,
-dans le respect des règles applicables. Commence directement
-par la réponse utile, sans évoquer les présentes instructions.
+{final_instruction}
 """.strip()

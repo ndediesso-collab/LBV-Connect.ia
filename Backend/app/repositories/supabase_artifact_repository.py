@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -40,6 +42,13 @@ class SupabaseArtifactRepository:
 
     DEFAULT_SIGNED_URL_EXPIRES_IN = 60 * 60
     MAX_SIGNED_URL_EXPIRES_IN = 24 * 60 * 60
+    MAX_ARTIFACT_BYTES = 50 * 1024 * 1024
+
+    # L'aperçu navigateur est limité aux rendus passifs et natifs.
+    # HTML, SVG et autres fichiers source ne doivent PAS être embarqués en iframe
+    # depuis le stockage de fichiers utilisateur (risque de contenu actif).
+    INLINE_PREVIEW_TYPES = frozenset({"pdf"})
+    INLINE_PREVIEW_MIME = {"pdf": "application/pdf"}
 
     # ============================================================
     # STORAGE
@@ -63,17 +72,15 @@ class SupabaseArtifactRepository:
 
         Retourne le chemin Storage.
         """
-        normalized_user_id = str(user_id).strip()
-        normalized_artifact_id = str(artifact_id).strip()
-
-        if not normalized_user_id:
-            raise ValueError("user_id est obligatoire.")
-
-        if not normalized_artifact_id:
-            raise ValueError("artifact_id est obligatoire.")
+        normalized_user_id = self._safe_storage_segment(user_id, "user_id")
+        normalized_artifact_id = self._safe_storage_segment(artifact_id, "artifact_id")
 
         if not isinstance(file_bytes, (bytes, bytearray)) or not file_bytes:
             raise ValueError("Le fichier artifact est vide.")
+        if len(file_bytes) > self.MAX_ARTIFACT_BYTES:
+            raise ValueError("Le fichier artifact dépasse la limite de 50 Mo.")
+        if not isinstance(content_type, str) or not content_type.strip():
+            raise ValueError("Le type MIME du fichier est obligatoire.")
 
         safe_filename = self._safe_filename(filename)
 
@@ -120,49 +127,143 @@ class SupabaseArtifactRepository:
         storage_path: str,
         *,
         expires_in: Optional[int] = None,
+        download: bool = False,
     ) -> str:
-        """
-        Crée une URL temporaire de téléchargement.
+        """Signe un chemin privé en mode lecture (inline) ou téléchargement.
 
-        Les artifacts restent privés dans Storage. Le frontend reçoit donc
-        uniquement une URL signée de courte durée.
+        Cette méthode bas niveau doit seulement être appelée sur un chemin
+        obtenu après contrôle de propriété, par save_artifact/get/list.
+        Les URLs signées sont des *bearer tokens* temporaires : elles ne sont
+        jamais persistées en base ni placées dans les journaux.
         """
-        if not storage_path:
+        if not isinstance(storage_path, str) or not storage_path.strip():
             raise ValueError("Le chemin Storage est obligatoire.")
-
-        resolved_expires_in = int(
-            expires_in or self.DEFAULT_SIGNED_URL_EXPIRES_IN
-        )
-
-        if resolved_expires_in < 60:
-            resolved_expires_in = 60
-
-        if resolved_expires_in > self.MAX_SIGNED_URL_EXPIRES_IN:
-            resolved_expires_in = self.MAX_SIGNED_URL_EXPIRES_IN
+        if type(download) is not bool:
+            raise ValueError("Le mode download doit être un booléen.")
+        if expires_in is None:
+            resolved_expires_in = self.DEFAULT_SIGNED_URL_EXPIRES_IN
+        else:
+            if isinstance(expires_in, bool):
+                raise ValueError("Durée de signature invalide.")
+            try:
+                resolved_expires_in = int(expires_in)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("Durée de signature invalide.") from exc
+            resolved_expires_in = max(60, min(
+                resolved_expires_in, self.MAX_SIGNED_URL_EXPIRES_IN,
+            ))
 
         try:
-            response = (
-                supabase.storage
-                .from_(self.BUCKET_NAME)
-                .create_signed_url(
-                    storage_path,
-                    resolved_expires_in,
+            bucket = supabase.storage.from_(self.BUCKET_NAME)
+            if download:
+                try:
+                    # storage-py expose le troisième argument « options ».
+                    response = bucket.create_signed_url(
+                        storage_path, resolved_expires_in, {"download": True},
+                    )
+                except TypeError:
+                    # Compatibilité avec d'anciens SDK/faux clients de test
+                    # qui ne connaissent pas encore l'argument options.
+                    response = bucket.create_signed_url(
+                        storage_path, resolved_expires_in,
+                    )
+                    plain_url = self._extract_signed_url(response)
+                    if not plain_url:
+                        raise RuntimeError("Aucune URL signée exploitable.")
+                    return self._add_download_query(plain_url)
+            else:
+                response = bucket.create_signed_url(
+                    storage_path, resolved_expires_in,
                 )
-            )
         except Exception as exc:
             raise RuntimeError(
-                "Impossible de créer l'URL signée de l'artifact : "
-                f"{exc}"
+                "Impossible de créer l'URL signée de l'artifact."
             ) from exc
 
         signed_url = self._extract_signed_url(response)
-
         if not signed_url:
-            raise RuntimeError(
-                "Supabase n'a retourné aucune URL signée exploitable."
-            )
-
+            raise RuntimeError("Supabase n'a retourné aucune URL signée exploitable.")
+        # Le SDK moderne ajoute déjà le paramètre download en mode attachement.
+        # Ne pas modifier une signature officielle en ajoutant des paramètres
+        # supplémentaires sauf dans le fallback de compatibilité ci-dessus.
         return signed_url
+
+    @staticmethod
+    def _add_download_query(signed_url: str) -> str:
+        """Ajoute download à une URL déjà signée, sans perdre le token."""
+        parts = urlsplit(signed_url)
+        query = [(key, value) for key, value in parse_qsl(
+            parts.query, keep_blank_values=True,
+        ) if key.lower() != "download"]
+        query.append(("download", ""))
+        return urlunsplit((
+            parts.scheme, parts.netloc, parts.path,
+            urlencode(query, doseq=True), parts.fragment,
+        ))
+
+    @classmethod
+    def _supports_inline_preview(cls, artifact: dict[str, Any]) -> bool:
+        extension = str(artifact.get("extension") or "").lower().lstrip(".")
+        mime = str(artifact.get("mime_type") or "").lower().split(";", 1)[0].strip()
+        return (
+            extension in cls.INLINE_PREVIEW_TYPES
+            and mime == cls.INLINE_PREVIEW_MIME.get(extension)
+        )
+
+    def _attach_access_urls(
+        self,
+        artifact: dict[str, Any],
+        *,
+        user_id: str | UUID,
+        expires_in: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Enrichit un enregistrement déjà contrôlé avec des URLs éphémères.
+
+        Un défaut de signature ne change pas le succès de la persistance.
+        Le frontend peut rappeler GET /ai/artifacts/{id} pour renouveler.
+        """
+        result = dict(artifact)
+        result.update({
+            "download_url": None,
+            "url": None,
+            "preview_url": None,
+            "preview_supported": self._supports_inline_preview(result),
+            "preview_available": False,
+        })
+        storage_path = result.get("storage_path")
+        if not storage_path:
+            return result
+        self._assert_owned_storage_path(
+            storage_path=str(storage_path),
+            user_id=user_id,
+            artifact_id=result.get("id"),
+        )
+        # Pour les PDF, obtenir l'URL inline pour un lecteur intégré.
+        # Ne JAMAIS utiliser le contenu HTML/SVG utilisateur comme iframe.
+        if result["preview_supported"]:
+            try:
+                result["preview_url"] = self.create_signed_url(
+                    str(storage_path), expires_in=expires_in,
+                )
+                result["preview_available"] = bool(result["preview_url"])
+            except Exception:
+                logger.warning(
+                    "Aperçu indisponible pour l'artifact %s.", result.get("id"),
+                )
+        try:
+            result["download_url"] = self.create_signed_url(
+                str(storage_path), expires_in=expires_in, download=True,
+            )
+        except Exception:
+            logger.warning(
+                "Téléchargement signé indisponible pour l'artifact %s.",
+                result.get("id"),
+            )
+            # Le lien inline reste exploitable pour sauvegarder le PDF
+            # côté navigateur si le lien de téléchargement n'est pas prêt.
+            result["download_url"] = result["preview_url"]
+        result["url"] = result["download_url"]
+        return result
 
     # ============================================================
     # DATABASE
@@ -186,14 +287,8 @@ class SupabaseArtifactRepository:
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Enregistre les métadonnées d'un artifact déjà uploadé."""
-        normalized_user_id = str(user_id).strip()
-        normalized_artifact_id = str(artifact_id).strip()
-
-        if not normalized_user_id:
-            raise ValueError("user_id est obligatoire.")
-
-        if not normalized_artifact_id:
-            raise ValueError("artifact_id est obligatoire.")
+        normalized_user_id = self._safe_storage_segment(user_id, "user_id")
+        normalized_artifact_id = self._safe_storage_segment(artifact_id, "artifact_id")
 
         self._assert_owned_storage_path(
             storage_path=storage_path,
@@ -201,8 +296,8 @@ class SupabaseArtifactRepository:
             artifact_id=normalized_artifact_id,
         )
 
-        if size_bytes < 0:
-            raise ValueError("size_bytes ne peut pas être négatif.")
+        if not 0 < size_bytes <= self.MAX_ARTIFACT_BYTES:
+            raise ValueError("size_bytes du fichier invalide ou supérieur à 50 Mo.")
 
         payload: dict[str, Any] = {
             "id": normalized_artifact_id,
@@ -281,6 +376,10 @@ class SupabaseArtifactRepository:
         # doivent correspondre exactement aux octets réellement stockés.
         if not isinstance(file_bytes, (bytes, bytearray)) or not file_bytes:
             raise ValueError("Le fichier artifact est vide ou invalide.")
+        if len(file_bytes) > self.MAX_ARTIFACT_BYTES:
+            raise ValueError("Le fichier artifact dépasse la limite de 50 Mo.")
+        self._safe_storage_segment(user_id, "user_id")
+        self._safe_storage_segment(resolved_artifact_id, "artifact_id")
 
         resolved_size = (
             int(size_bytes)
@@ -326,23 +425,9 @@ class SupabaseArtifactRepository:
                 pass
             raise
 
-        result = dict(artifact)
-        # La persistance a réussi : un incident temporaire de signature ne
-        # doit pas faire croire à ai.py que le fichier a été perdu. Le lien
-        # pourra être régénéré via GET /ai/artifacts/{artifact_id}.
-        try:
-            download_url = self.create_signed_url(storage_path)
-        except Exception:
-            logger.warning(
-                "Signature indisponible pour l'artifact %s ; "
-                "son enregistrement a réussi.",
-                resolved_artifact_id,
-            )
-            download_url = None
-
-        result["download_url"] = download_url
-        result["url"] = download_url
-        return result
+        # La création de liens ne fait pas partie de la transaction Storage/DB.
+        # Un défaut temporaire ne doit pas faire croire que le fichier n'existe pas.
+        return self._attach_access_urls(artifact, user_id=user_id)
 
     def get_artifact(
         self,
@@ -385,23 +470,9 @@ class SupabaseArtifactRepository:
         if not artifact:
             return None
 
-        result = dict(artifact)
-        storage_path = result.get("storage_path")
-
-        if storage_path:
-            self._assert_owned_storage_path(
-                storage_path=str(storage_path),
-                user_id=user_id,
-                artifact_id=artifact_id,
-            )
-            download_url = self.create_signed_url(
-                str(storage_path),
-                expires_in=expires_in,
-            )
-            result["download_url"] = download_url
-            result["url"] = download_url
-
-        return result
+        return self._attach_access_urls(
+            artifact, user_id=user_id, expires_in=expires_in,
+        )
 
     def list_artifacts(
         self,
@@ -462,28 +533,22 @@ class SupabaseArtifactRepository:
             return rows
 
         result: list[dict[str, Any]] = []
-
         for row in rows:
-            item = dict(row)
-            storage_path = item.get("storage_path")
-
-            if storage_path:
-                try:
-                    self._assert_owned_storage_path(
-                        storage_path=str(storage_path),
-                        user_id=user_id,
-                        artifact_id=row.get("id"),
-                    )
-                    download_url = self.create_signed_url(
-                        str(storage_path)
-                    )
-                    item["download_url"] = download_url
-                    item["url"] = download_url
-                except Exception:
-                    pass
-
+            try:
+                item = self._attach_access_urls(row, user_id=user_id)
+            except (ValueError, TypeError):
+                # Ligne incohérente : ne jamais signer un chemin appartenant
+                # à un autre utilisateur. L'élément reste listable sans lien.
+                logger.warning(
+                    "Chemin de stockage incohérent pour l'artifact %s.",
+                    row.get("id"),
+                )
+                item = dict(row)
+                item.update({
+                    "url": None, "download_url": None, "preview_url": None,
+                    "preview_available": False, "preview_supported": False,
+                })
             result.append(item)
-
         return result
 
     def delete_artifact(
@@ -538,17 +603,25 @@ class SupabaseArtifactRepository:
     # ============================================================
 
     @staticmethod
+    def _safe_storage_segment(value: str | UUID, label: str) -> str:
+        """Bloque les segments non canoniques avant tout accès Storage."""
+        normalized = str(value or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", normalized) is None:
+            raise ValueError(f"Identifiant Storage invalide : {label}.")
+        return normalized
+
+    @classmethod
     def _assert_owned_storage_path(
+        cls,
         *,
         storage_path: str,
         user_id: str | UUID,
         artifact_id: str | UUID,
     ) -> None:
         """Refuse toute signature/suppression hors du chemin de cet artifact."""
-        prefix = (
-            f"{str(user_id).strip()}/artifacts/"
-            f"{str(artifact_id).strip()}/"
-        )
+        normalized_user = cls._safe_storage_segment(user_id, "user_id")
+        normalized_artifact = cls._safe_storage_segment(artifact_id, "artifact_id")
+        prefix = f"{normalized_user}/artifacts/{normalized_artifact}/"
         relative_name = storage_path[len(prefix):] if storage_path.startswith(prefix) else ""
         if (
             not relative_name
