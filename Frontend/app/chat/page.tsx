@@ -3499,11 +3499,11 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
             <label className="block text-xs font-medium">{tr("Titre du cours", "Course title")}
               <input type="text" maxLength={160} value={title} onChange={(event) => setTitle(event.target.value)}
                 placeholder={tr("Ex. Thermodynamique — transformations", "E.g. Thermodynamics — transformations")}
-                className="mt-1.5 w-full rounded-xl border border-border bg-background px-4 py-3 text-sm outline-none focus:border-border-strong"/>
+                className="mt-1.5 w-full rounded-xl border border-border bg-background px-4 py-3 text-[16px] outline-none focus:border-border-strong"/>
             </label>
             <label className="block text-xs font-medium">{tr("Format du document", "Document format")}
               <select value={format} onChange={(event) => setFormat(event.target.value as "pdf" | "docx")}
-                className="mt-1.5 block w-full rounded-xl border border-border bg-background px-4 py-3 text-sm">
+                className="mt-1.5 block w-full rounded-xl border border-border bg-background px-4 py-3 text-[16px]">
                 <option value="pdf">PDF</option><option value="docx">Word (.docx)</option>
               </select>
             </label>
@@ -6885,7 +6885,7 @@ export default function ChatPage() {
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 sm:px-8">
-          <div className="relative mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
+          <div className="relative mx-auto flex min-h-0 w-full flex-1 flex-col">
             {error && (
               <div className="mx-auto mt-4 w-full max-w-3xl rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm text-muted-strong">
                 {localizeFrontendError(error, language)}
@@ -7082,7 +7082,7 @@ export default function ChatPage() {
                                 <textarea autoFocus rows={4} value={editDraft}
                                   onChange={(event) => setEditDraft(event.target.value)}
                                   disabled={editBusy} maxLength={24000}
-                                  className="w-full resize-y rounded-xl border border-border bg-surface-secondary px-3 py-2 text-sm outline-none focus:border-muted-strong disabled:opacity-50" />
+                                  className="w-full resize-y rounded-xl border border-border bg-surface-secondary px-3 py-2 text-[16px] outline-none focus:border-muted-strong disabled:opacity-50" />
                                 {requiresOriginalFiles(editOriginalContent) ? (
                                   <div className="mt-2 space-y-2 text-[11px] text-muted">
                                     <p>{language === "fr"
@@ -7172,7 +7172,7 @@ export default function ChatPage() {
                                   disabled={
                                     isApplyingModification
                                   }
-                                  className="mt-3 w-full resize-none rounded-xl border border-border bg-surface-secondary px-3 py-2 text-sm leading-5 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
+                                  className="mt-3 w-full resize-none rounded-xl border border-border bg-surface-secondary px-3 py-2 text-[16px] leading-6 outline-none placeholder:text-muted focus:border-muted-strong disabled:opacity-60"
                                 />
 
                                 <div className="mt-3 flex items-center justify-between gap-3">
@@ -7396,12 +7396,18 @@ export default function ChatPage() {
                 </div>
                 </div>
                 {showJumpToBottom && (
-                  <button type="button" onClick={() => scrollToLatest("smooth")}
-                    aria-label={language === "fr" ? "Aller en bas de la conversation" : "Jump to latest message"}
-                    title={language === "fr" ? "Dernier message" : "Latest message"}
-                    className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface text-foreground shadow-lg backdrop-blur-sm transition hover:bg-surface-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
-                    <ArrowDown size={19} aria-hidden="true" />
-                  </button>
+                  // L'overlay suit la colonne de lecture, pas la scrollbar du viewport.
+                  // Ainsi la flèche garde une vraie zone respirante sur ordinateur.
+                  <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20">
+                    <div className="relative mx-auto w-full max-w-3xl">
+                      <button type="button" onClick={() => scrollToLatest("smooth")}
+                        aria-label={language === "fr" ? "Aller en bas de la conversation" : "Jump to latest message"}
+                        title={language === "fr" ? "Dernier message" : "Latest message"}
+                        className="pointer-events-auto absolute bottom-0 right-3 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface text-foreground shadow-lg backdrop-blur-sm transition hover:bg-surface-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent md:right-0 xl:-right-12">
+                        <ArrowDown size={19} aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
@@ -7742,7 +7748,7 @@ export default function ChatPage() {
                     ) : null}
                     {voiceDraft.transcription_status === "complete" && voiceDraft.billing_status === "settled" ? (
                       <>
-                        <textarea rows={3} className="mt-3 w-full resize-y rounded-xl border border-border bg-surface p-3 text-xs leading-5 outline-none focus:border-muted-strong"
+                        <textarea rows={3} className="mt-3 w-full resize-y rounded-xl border border-border bg-surface p-3 text-[16px] leading-6 outline-none focus:border-muted-strong"
                           value={voiceDraft.editedText} onChange={(event) => setVoiceDraft((current) => current ? {...current, editedText: event.target.value} : current)}
                           placeholder={language === "fr" ? "Corrigez le texte avant l'envoi…" : "Edit text before sending…"}/>
                         <div className="mt-2 flex flex-wrap gap-2">
@@ -7847,6 +7853,8 @@ export default function ChatPage() {
                   }}
                 />
 
+                {/* 16 px fixes iOS Safari's automatic input-focus zoom;
+                    keep pinch-to-zoom available for accessibility. */}
                 <textarea
                   rows={4}
                   value={message}
@@ -7873,7 +7881,7 @@ export default function ChatPage() {
                   disabled={
                     isThinking
                   }
-                  className="w-full resize-none bg-transparent px-5 pt-5 text-sm leading-6 outline-none placeholder:text-muted disabled:opacity-60"
+                  className="w-full resize-none bg-transparent px-5 pt-5 text-[16px] leading-6 outline-none placeholder:text-muted disabled:opacity-60"
                 />
 
                 <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-2">
