@@ -6655,18 +6655,6 @@ export default function ChatPage() {
         />
       )}
 
-      <button
-        type="button"
-        aria-label={UI[language].openMenu}
-        title={UI[language].openMenu}
-        className="fixed bottom-6 left-5 z-30 flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-surface shadow-lg transition hover:bg-surface-secondary"
-        onClick={() =>
-          setSidebarOpen(true)
-        }
-      >
-        <Menu size={19} />
-      </button>
-
       {/* ======================================================
           SIDEBAR
           ====================================================== */}
@@ -7426,6 +7414,34 @@ export default function ChatPage() {
               : "sticky bottom-0 z-30 w-full min-w-0 max-w-full bg-background/95 pb-[calc(12px+env(safe-area-inset-bottom))] pt-2 backdrop-blur-sm"}>
 
 
+            {/* Raccourcis hors du flux : le menu reste au-dessus des modèles
+                et la flèche ne décale jamais la puissance de réflexion. */}
+            <div className="pointer-events-none absolute inset-x-0 -top-12 z-40">
+              <div className="mx-auto flex w-full max-w-3xl items-center justify-between">
+                <button
+                  type="button"
+                  aria-label={UI[language].openMenu}
+                  title={UI[language].openMenu}
+                  className="pointer-events-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-surface shadow-lg transition hover:bg-surface-secondary"
+                  onClick={() => setSidebarOpen(true)}
+                >
+                  <Menu size={19} />
+                </button>
+
+                {showJumpToBottom && messages.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => scrollToLatest("smooth")}
+                    aria-label={language === "fr" ? "Aller en bas de la conversation" : "Jump to latest message"}
+                    title={language === "fr" ? "Dernier message" : "Latest message"}
+                    className="pointer-events-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-foreground shadow-sm transition hover:bg-surface-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                  >
+                    <ArrowDown size={18} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* ==================================================
                 MODÈLE + PUISSANCE DE RÉFLEXION
                 ================================================== */}
@@ -7661,17 +7677,6 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                  {showJumpToBottom && messages.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => scrollToLatest("smooth")}
-                      aria-label={language === "fr" ? "Aller en bas de la conversation" : "Jump to latest message"}
-                      title={language === "fr" ? "Dernier message" : "Latest message"}
-                      className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-surface text-foreground shadow-sm transition hover:bg-surface-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:h-10 sm:w-10"
-                    >
-                      <ArrowDown size={18} aria-hidden="true" />
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
