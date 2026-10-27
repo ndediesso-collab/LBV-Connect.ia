@@ -3796,24 +3796,34 @@ export default function ChatPage() {
   const editSubmittingRef = useRef(false);
   const activeConversationRef = useRef<string | null>(null);
 
-  // Flèche de retour en bas : aucun auto-scroll si l'utilisateur lit plus haut.
-  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  // ORIA Web : le document est l'unique surface de défilement.
+  // Pas de scrollbar interne qui crée une colonne étroite sur iPhone.
   const followBottomRef = useRef(true);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   function scrollToLatest(behavior: ScrollBehavior = "smooth") {
-    const area = chatScrollRef.current;
-    if (!area) return;
+    if (typeof window === "undefined") return;
     followBottomRef.current = true;
     setShowJumpToBottom(false);
-    area.scrollTo({ top: area.scrollHeight, behavior });
+    const page = document.scrollingElement || document.documentElement;
+    window.scrollTo({ top: page.scrollHeight, behavior });
   }
-  function onChatScroll() {
-    const area = chatScrollRef.current;
-    if (!area) return;
-    const away = area.scrollHeight - area.scrollTop - area.clientHeight;
-    followBottomRef.current = away <= 110;
-    setShowJumpToBottom(away > 160);
-  }
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPageScroll = () => {
+      const page = document.scrollingElement || document.documentElement;
+      const away = Math.max(0, page.scrollHeight - (window.scrollY + window.innerHeight));
+      followBottomRef.current = away <= 110;
+      setShowJumpToBottom(away > 160);
+    };
+    window.addEventListener("scroll", onPageScroll, { passive: true });
+    window.addEventListener("resize", onPageScroll);
+    const frame = window.requestAnimationFrame(onPageScroll);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", onPageScroll);
+      window.removeEventListener("resize", onPageScroll);
+    };
+  }, []);
 
 
   const [isThinking, setIsThinking] =
@@ -6604,7 +6614,7 @@ export default function ChatPage() {
    */
 
   return (
-    <main className="h-dvh overflow-hidden bg-background text-foreground">
+    <main className="min-h-dvh w-full min-w-0 overflow-x-clip bg-background text-foreground">
       {codePreview ? <CodePreviewModal preview={codePreview} onClose={() => setCodePreview(null)} language={language}/> : null}
       {documentPreview ? <DocumentPreviewModal
         preview={documentPreview}
@@ -6829,15 +6839,13 @@ export default function ChatPage() {
           WORKSPACE
           ====================================================== */}
 
-      <section className={activeCapability === "Cours"
-        ? "flex h-full min-h-0 flex-col overflow-y-auto"
-        : "flex h-full min-h-0 flex-col"}>
-        <header className="flex h-16 shrink-0 items-center justify-between px-5 sm:px-8">
-          <div className="flex items-center gap-3">
+      <section className="flex min-h-dvh min-w-0 flex-col">
+        <header className="sticky top-0 z-20 flex h-16 min-w-0 shrink-0 items-center justify-between gap-2 bg-background/95 px-4 backdrop-blur-sm sm:px-8">
+          <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
               aria-label={UI[language].openMenu}
-              className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-surface shadow-sm transition hover:bg-surface-secondary"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-surface shadow-sm transition hover:bg-surface-secondary"
               onClick={() =>
                 setSidebarOpen(true)
               }
@@ -6845,12 +6853,12 @@ export default function ChatPage() {
               <Menu size={19} />
             </button>
 
-            <div className="hidden sm:block">
-              <p className="text-xs text-muted">
+            <div className="min-w-0 max-w-[48vw] sm:max-w-[480px]">
+              <p className="hidden text-xs text-muted sm:block">
                 Workspace
               </p>
 
-              <p className="text-sm font-medium">
+              <p className="truncate text-sm font-medium">
                 {activeConversationId
                   ? conversations.find(
                       (
@@ -6898,8 +6906,8 @@ export default function ChatPage() {
           </div>
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 sm:px-8">
-          <div className="relative mx-auto flex min-h-0 w-full flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col px-3 pb-3 sm:px-8 sm:pb-4">
+          <div className="relative mx-auto flex min-w-0 w-full flex-1 flex-col">
             {error && (
               <div className="mx-auto mt-4 w-full max-w-3xl rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm text-muted-strong">
                 {localizeFrontendError(error, language)}
@@ -6950,11 +6958,10 @@ export default function ChatPage() {
 
             {messages.length >
               0 && (
-              <div className="relative min-h-0 flex-1">
-                <div ref={chatScrollRef} onScroll={onChatScroll}
-                  className="h-full min-h-0 overflow-y-auto overscroll-contain py-4 sm:py-8"
+              <div className="relative min-w-0 w-full flex-1">
+                <div className="min-w-0 w-full py-4 sm:py-8"
                   aria-label={language === "fr" ? "Historique des messages" : "Message history"}>
-                <div className="mx-auto flex w-full flex-col gap-9 px-1 sm:gap-11 sm:px-4 xl:px-7">
+                <div className="mx-auto flex w-full min-w-0 max-w-[1060px] flex-col gap-7 px-2 sm:gap-9 sm:px-5 lg:px-7">
                   {messages.filter(
                     (item) => !(
                       isThinking &&
@@ -6971,8 +6978,8 @@ export default function ChatPage() {
                         className={
                           item.role ===
                           "user"
-                            ? "flex w-full flex-col items-end"
-                            : "mx-auto flex w-full max-w-4xl flex-col items-start"
+                            ? "flex min-w-0 w-full flex-col items-end"
+                            : "flex min-w-0 w-full flex-col items-start"
                         }
                       >
                         <div
@@ -6981,8 +6988,8 @@ export default function ChatPage() {
                             "user"
                               ? editingMessageId === item.id
                               ? "hidden"
-                              : "max-w-[95%] rounded-3xl rounded-br-lg bg-accent px-4 py-3 text-[15px] leading-7 text-accent-foreground sm:max-w-[82%] sm:px-5 sm:py-3.5 sm:text-base xl:max-w-[900px]"
-                              : "w-full min-w-0 text-[15px] leading-7 text-foreground sm:text-base"
+                              : "min-w-0 max-w-[90%] break-words rounded-3xl rounded-br-lg bg-accent px-4 py-3 text-[15px] leading-7 text-accent-foreground sm:max-w-[82%] sm:px-5 sm:py-3.5 sm:text-base"
+                              : "w-full min-w-0 break-words text-[15px] leading-7 text-foreground sm:text-base"
                           }
                         >
                           {item.role ===
@@ -7409,22 +7416,26 @@ export default function ChatPage() {
                   )}
                 </div>
                 </div>
-                {showJumpToBottom && (
-                  // L'overlay suit la colonne de lecture, pas la scrollbar du viewport.
-                  // Ainsi la flèche garde une vraie zone respirante sur ordinateur.
-                  <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20">
-                    <div className="relative mx-auto w-full max-w-3xl">
-                      <button type="button" onClick={() => scrollToLatest("smooth")}
-                        aria-label={language === "fr" ? "Aller en bas de la conversation" : "Jump to latest message"}
-                        title={language === "fr" ? "Dernier message" : "Latest message"}
-                        className="pointer-events-auto absolute bottom-0 right-3 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface text-foreground shadow-lg backdrop-blur-sm transition hover:bg-surface-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent md:right-0 xl:-right-12">
-                        <ArrowDown size={19} aria-hidden="true" />
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
+
+            {/* Barre de commandes fixée naturellement au bas du viewport,
+                tandis que l'historique fait défiler la page du navigateur. */}
+            <div className={activeCapability === "Cours"
+              ? "relative w-full min-w-0"
+              : "sticky bottom-0 z-30 w-full min-w-0 bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-sm"}>
+              {showJumpToBottom && messages.length > 0 && activeCapability !== "Cours" && (
+                <div className="pointer-events-none absolute inset-x-0 -top-12 z-40">
+                  <div className="relative mx-auto w-full max-w-3xl">
+                    <button type="button" onClick={() => scrollToLatest("smooth")}
+                      aria-label={language === "fr" ? "Aller en bas de la conversation" : "Jump to latest message"}
+                      title={language === "fr" ? "Dernier message" : "Latest message"}
+                      className="pointer-events-auto absolute bottom-0 right-3 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface text-foreground shadow-lg transition hover:bg-surface-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:right-0">
+                      <ArrowDown size={19} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              )}
 
             {/* ==================================================
                 MODÈLE + PUISSANCE DE RÉFLEXION
@@ -7999,6 +8010,7 @@ export default function ChatPage() {
               </p>
             </div>
             ) : null}
+            </div>
           </div>
         </div>
       </section>
