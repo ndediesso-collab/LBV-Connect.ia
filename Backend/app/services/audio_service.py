@@ -119,9 +119,43 @@ class AudioService:
         return ttl
 
     @classmethod
+    def _duration_from_decoded_audio(cls, path: str) -> float:
+        """Mesure une piste audio sans se fier aux metadonnees WebM.
+
+        Un MediaRecorder navigateur peut produire un WebM sans duration dans
+        son conteneur. Decodage dans un flux null borne a MAX+1 secondes :
+        aucun fichier audio en sortie et une piste >5 min reste rejetee.
+        """
+        if not shutil.which("ffmpeg"):
+            raise AudioUnavailable(
+                "ffmpeg est requis pour verifier la duree d'un audio sans metadonnees."
+            )
+        probe = subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-v", "error",
+             "-i", path, "-map", "0:a:0", "-vn",
+             "-t", str(cls.MAX_DURATION_SECONDS + 1),
+             "-f", "null", "-", "-progress", "pipe:1", "-nostats"],
+            capture_output=True, timeout=45, check=False,
+        )
+        if probe.returncode != 0:
+            raise AudioInvalid("Impossible de decoder l'enregistrement audio.")
+        # FFmpeg publie le temps DECODE (microsecondes), meme lorsque
+        # format.duration n'existe pas (WebM/Opus provenant de MediaRecorder).
+        last_duration = None
+        for line in probe.stdout.decode("utf-8", errors="replace").splitlines():
+            if line.startswith("out_time_us="):
+                try:
+                    last_duration = int(line.split("=", 1)[1]) / 1_000_000
+                except ValueError:
+                    continue
+        if last_duration is None or not math.isfinite(last_duration):
+            raise AudioInvalid("Impossible de mesurer la duree audio decodee.")
+        return last_duration
+
+    @classmethod
     def _duration(cls, data: bytes, extension: str) -> float:
         if not shutil.which("ffprobe"):
-            raise AudioUnavailable("ffprobe est nécessaire au contrôle des durées audio.")
+            raise AudioUnavailable("ffprobe est necessaire au controle des durees audio.")
         path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=f".{extension}", delete=False) as f:
@@ -136,12 +170,26 @@ class AudioService:
                 raise AudioInvalid("Enregistrement corrompu ou format audio invalide.")
             info = json.loads(process.stdout)
             if not any(s.get("codec_type") == "audio" for s in info.get("streams", [])):
-                raise AudioInvalid("Aucune piste audio détectée.")
+                raise AudioInvalid("Aucune piste audio detectee.")
             if any(s.get("codec_type") == "video" for s in info.get("streams", [])):
-                raise AudioInvalid("Les messages vocaux ne doivent pas contenir de vidéo.")
-            duration = float(info.get("format", {}).get("duration") or 0)
-            if not math.isfinite(duration) or not cls.MIN_DURATION_SECONDS <= duration <= cls.MAX_DURATION_SECONDS:
-                raise AudioInvalid("Durée audio hors limites (maximum 5 minutes).")
+                raise AudioInvalid("Les messages vocaux ne doivent pas contenir de video.")
+
+            # WebM emis en flux par MediaRecorder : duration peut manquer,
+            # etre non numerique ou incorrecte. Ne JAMAIS utiliser la duree
+            # declaree par le navigateur pour la facturation/validation.
+            raw_duration = info.get("format", {}).get("duration")
+            try:
+                duration = float(raw_duration) if raw_duration is not None else 0.0
+            except (TypeError, ValueError):
+                duration = 0.0
+            if not math.isfinite(duration) or not (
+                cls.MIN_DURATION_SECONDS <= duration <= cls.MAX_DURATION_SECONDS
+            ):
+                duration = cls._duration_from_decoded_audio(path)
+            if not math.isfinite(duration) or not (
+                cls.MIN_DURATION_SECONDS <= duration <= cls.MAX_DURATION_SECONDS
+            ):
+                raise AudioInvalid("Duree audio hors limites (maximum 5 minutes).")
             return duration
         except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError) as error:
             raise AudioInvalid("Impossible de mesurer l'enregistrement audio.") from error
