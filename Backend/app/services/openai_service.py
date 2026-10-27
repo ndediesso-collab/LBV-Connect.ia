@@ -180,7 +180,8 @@ class OpenAIService:
 
     @classmethod
     def _parse_artifact_payload(
-        cls, raw_text: str, *, expected_formats: tuple[str, ...]
+        cls, raw_text: str, *, expected_formats: tuple[str, ...],
+        allow_fenced_json: bool = False,
     ) -> dict[str, Any]:
         """Valide strictement l'enveloppe, sans interpréter ni exécuter les sources.
 
@@ -194,6 +195,15 @@ class OpenAIService:
             raise ValueError("Réponse documentaire du modèle vide.")
         if len(raw_text) > cls.MAX_ARTIFACT_RESPONSE_CHARS:
             raise ValueError("Réponse documentaire trop volumineuse.")
+        if allow_fenced_json:
+            # Web Search cannot enforce JSON mode. Accept only one complete
+            # enclosing JSON fence, never arbitrary prose or JSON fragments.
+            match = re.fullmatch(
+                r"\s*```(?:json)?\s*\n([\s\S]*?)\n```\s*",
+                raw_text, flags=re.IGNORECASE,
+            )
+            if match:
+                raw_text = match.group(1)
         def no_duplicate_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             obj: dict[str, Any] = {}
             for key, value in pairs:
@@ -285,6 +295,39 @@ class OpenAIService:
         if found_formats != set(expected_formats):
             raise ValueError("Tous les formats demandés n'ont pas été produits.")
         return payload
+
+    @staticmethod
+    def _enforce_tool_format_compatibility(request: dict[str, Any]) -> None:
+        """Do not send hosted Web Search together with constrained JSON output.
+
+        A single guarded point, invoked at each provider boundary, protects
+        against a future caller accidentally reintroducing text.format.
+        The document contract is still checked locally after the response.
+        """
+        tools = request.get("tools") or []
+        has_web_search = any(
+            isinstance(tool, dict)
+            and str(tool.get("type") or "").startswith("web_search")
+            for tool in tools
+        )
+        if not has_web_search:
+            return
+        text_config = request.get("text")
+        if not isinstance(text_config, dict):
+            return
+        fmt = text_config.get("format")
+        if isinstance(fmt, dict) and fmt.get("type") in {"json_object", "json_schema"}:
+            # Only discard the incompatible constrained-output option.
+            # Never disable Web Search without the user's knowledge.
+            text_config = dict(text_config)
+            text_config.pop("format", None)
+            if text_config:
+                request["text"] = text_config
+            else:
+                request.pop("text", None)
+        final_type = ((request.get("text") or {}).get("format") or {}).get("type")
+        if final_type in {"json_object", "json_schema"}:
+            raise RuntimeError("Web Search ne peut pas coexister avec un mode JSON forcé.")
 
     @staticmethod
     def _artifact_json_text_format() -> dict[str, Any]:
@@ -994,6 +1037,18 @@ class OpenAIService:
                     "prévalent sur la présentation conversationnelle. "
                     "Ne prétends pas que le fichier est prêt : le serveur "
                     "contrôle la conversion et la sauvegarde."
+                    + (
+                        " RECHERCHE WEB ACTIVE : le format JSON forcé n'est "
+                        "pas compatible avec l'outil de recherche. Produis "
+                        "néanmoins un JSON valide et COMPLET : exactement "
+                        "l'objet oria.artifact.v1, avec toutes les chaînes "
+                        "correctement échappées, sans délimitation Markdown, "
+                        "citations ou commentaires ajoutés après l'objet. "
+                        "Insère les références Web vérifiées uniquement "
+                        "dans le contenu documentaire approprié ; n'invente "
+                        "pas de sources et ne mets aucune citation hors JSON."
+                        if web else ""
+                    )
                 ),
             })
 
@@ -3201,7 +3256,8 @@ class OpenAIService:
             if status != "completed":
                 raise RuntimeError("Production documentaire interrompue ou incomplète.")
             artifact_payload = cls._parse_artifact_payload(
-                message, expected_formats=artifact_types
+                message, expected_formats=artifact_types,
+                allow_fenced_json=web,
             )
             # Ne jamais exposer la source de composition comme message Chat.
             message = ""
@@ -3714,7 +3770,12 @@ class OpenAIService:
 
 
 
-        if document_types:
+        # Limitation OpenAI Responses : web_search et JSON mode ne peuvent pas
+        # être combinés dans une même requête. Conserver l'outil Web et exiger
+        # le JSON via les instructions developer lorsque web=True ; le résultat
+        # est ensuite validé strictement par _parse_artifact_payload().
+        # Sans recherche Web, garder le mode JSON habituel.
+        if document_types and not web:
             request["text"] = self._artifact_json_text_format()
 
         tools = self._build_tools(web)
@@ -3760,6 +3821,7 @@ class OpenAIService:
 
 
 
+            self._enforce_tool_format_compatibility(request)
             response = self.client.responses.create(
 
 
@@ -3921,7 +3983,12 @@ class OpenAIService:
             "stream": True,
             "max_output_tokens": MAX_CHAT_OUTPUT_TOKENS,
         }
-        if document_types:
+        # Limitation OpenAI Responses : web_search et JSON mode ne peuvent pas
+        # être combinés dans une même requête. Conserver l'outil Web et exiger
+        # le JSON via les instructions developer lorsque web=True ; le résultat
+        # est ensuite validé strictement par _parse_artifact_payload().
+        # Sans recherche Web, garder le mode JSON habituel.
+        if document_types and not web:
             request["text"] = self._artifact_json_text_format()
 
         tools = self._build_tools(web)
@@ -3940,6 +4007,7 @@ class OpenAIService:
             first_delta_ms: float | None = None
             response_id: str | None = None
 
+            self._enforce_tool_format_compatibility(request)
             stream = self.client.responses.create(**request)
             completed_response = None
             document_fragments: list[str] = []
@@ -4027,7 +4095,8 @@ class OpenAIService:
                     self._value(completed_response, "output_text", "") or ""
                 ) or "".join(document_fragments)
                 artifact_payload = self._parse_artifact_payload(
-                    document_text, expected_formats=document_types
+                    document_text, expected_formats=document_types,
+                    allow_fenced_json=web,
                 )
                 yield {
                     "type": "artifact_payload",
@@ -4139,7 +4208,12 @@ class OpenAIService:
             "max_output_tokens": MAX_CHAT_OUTPUT_TOKENS,
             "store": False,
         }
-        if document_types:
+        # Limitation OpenAI Responses : web_search et JSON mode ne peuvent pas
+        # être combinés dans une même requête. Conserver l'outil Web et exiger
+        # le JSON via les instructions developer lorsque web=True ; le résultat
+        # est ensuite validé strictement par _parse_artifact_payload().
+        # Sans recherche Web, garder le mode JSON habituel.
+        if document_types and not web:
             request["text"] = self._artifact_json_text_format()
 
         tools = self._build_tools(web)
@@ -4225,6 +4299,7 @@ class OpenAIService:
         request.pop("stream", None)
         request.pop("background", None)
 
+        self._enforce_tool_format_compatibility(request)
         connect = self.async_client.responses.connect
 
         async with connect() as connection:
@@ -4538,7 +4613,8 @@ class OpenAIService:
                         self._value(final_response, "output_text", "") or ""
                     ) or "".join(document_fragments)
                     artifact_payload = self._parse_artifact_payload(
-                        document_text, expected_formats=document_types
+                        document_text, expected_formats=document_types,
+                        allow_fenced_json=web,
                     )
                     yield {
                         "type": "artifact_payload",

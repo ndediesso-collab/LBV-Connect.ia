@@ -1321,7 +1321,19 @@ def _document_failure_diagnostic(stage: str, error: Exception) -> str:
     elif type(error).__name__ == "UnsupportedArtifactTypeError":
         cause = "Ce contenu n'est pas entièrement pris en charge par le convertisseur."
     elif isinstance(error, ArtifactError):
-        cause = "Le moteur documentaire a refusé la source ou sa mise en page."
+        detail = str(error).lower()
+        if any(word in detail for word in ("css", "balise html", "attribut html", "html non", "html ne")):
+            cause = "La source HTML/CSS contient un élément non pris en charge ou interdit."
+        elif "svg" in detail:
+            cause = "L'illustration SVG n'est pas conforme au moteur documentaire."
+        elif "image" in detail or "ressource externe" in detail:
+            cause = "Une image ou ressource externe n'a pas pu être intégrée au document."
+        elif "rendu html" in detail or "rendu svg" in detail:
+            cause = "Le rendu PDF a rencontré une erreur du moteur graphique sur le serveur."
+        elif "nom" in detail or "extension" in detail:
+            cause = "Le nom ou le format de fichier généré est invalide."
+        else:
+            cause = "Le moteur documentaire a refusé la source ou sa mise en page."
     else:
         cause = "Le moteur documentaire a rencontré une erreur interne."
     return f"{cause} (Référence : {reference})."
@@ -5719,8 +5731,13 @@ async def chat_stream(
     openai_attachments = _attachments_for_openai(attachments)
     openai_model = MODEL_OPENAI_IDS[model]
 
+    # Le chemin Web + document est volontairement isole du steering WS :
+    # Responses WS pourrait rejeter une option JSON heritee dans la requete
+    # Web Search. Le streaming HTTP conserve la recherche, les fichiers et
+    # la facturation. Les autres chats gardent le WebSocket pilotable.
     websocket_available = (
         openai_service.supports_responses_websocket()
+        and not (bool(document_types) and web)
     )
     transport = (
         "websocket"

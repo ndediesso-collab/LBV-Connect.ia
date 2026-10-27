@@ -371,6 +371,27 @@ COMPOSITION PROFESSIONNELLE — TECHNOLOGIES ADAPTÉES AU FORMAT
 - Si HTML/CSS est approprié, crée une structure sémantique autonome,
   du CSS propre et, pour l'impression, @page et des règles de pagination
   évitant autant que possible les coupures de titres, tableaux et figures.
+- Compatibilité du rendu HTML/CSS ORIA (importante pour réussir la conversion) :
+  utilise seulement des balises HTML statiques et sémantiques (html, head,
+  meta charset, title, style, body, main, section, article, header, footer,
+  div, h1 à h6, p, span, strong, em, listes, tableaux, figure, figcaption,
+  blockquote, br, hr, pre, code, img). Pour un PDF ou un DOCX,
+  un diagramme SVG inline est possible uniquement s'il est statique,
+  auto-contenu, en XML SVG valide, sans script, événement, URL, référence
+  externe, image distante ni élément foreignObject. Le serveur en vérifie
+  strictement la sécurité puis l'intègre comme illustration PNG locale.
+  Pour les autres formats, évite les figures SVG si elles ne peuvent pas
+  être conservées fidèlement. Une source SVG séparée reste possible lorsque
+  le format de sortie le permet. Ne produis pas canvas, script, iframe,
+  vidéo, formulaire, composant React ni balise link externe. Les images
+  dans HTML doivent être des data URI base64 PNG/JPEG/WebP/GIF valides et
+  petites, jamais des URL distantes, locales ou inventées.
+- Le CSS doit être autonome dans style ou dans les attributs style, sans
+  @import, @font-face, url(...), fichiers locaux, ressources réseau, animation
+  exécutable ou expression dynamique. Utilise des polices système de repli.
+  Ne demande pas au moteur des modules CSS/HTML qu'il ne sait pas interpréter.
+  Les liens HTTPS peuvent être des références cliquables, mais ne doivent
+  pas servir à charger des ressources pendant le rendu.
 - Si SVG est pertinent, produis des tracés vectoriels conformes, sans
   scripts ni dépendances externes, avec des légendes compréhensibles.
 - Si un format doit rester éditable ou calculable, privilégie ses données

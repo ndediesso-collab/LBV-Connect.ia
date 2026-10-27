@@ -1641,6 +1641,11 @@ class ArtifactService:
                     or not content.strip() or len(content) > self.MAX_CONTRACT_SOURCE_CHARS):
                 raise ArtifactError("Source documentaire vide, trop grande ou non supportee.")
             if kind == "html":
+                # Le modèle peut inclure des diagrammes SVG dans le HTML.
+                # Les normaliser en images locales et vérifier chaque SVG
+                # avant toute opération CairoSVG/WeasyPrint. Aucun chargement
+                # distant, code actif ou accès au disque n'est autorisé.
+                content = self._normalize_inline_svg_document(content)
                 self._check_contract_html(content)
             else:
                 self._check_contract_svg(content)
@@ -1693,6 +1698,101 @@ class ArtifactService:
         return generated
 
     @classmethod
+    def _normalize_inline_svg_document(cls, source: str) -> str:
+        """Accepte les diagrammes SVG inline *sûrs* dans les documents HTML.
+
+        La représentation du modèle n'est jamais exécutée : chaque élément
+        SVG est extrait sans modifier son XML (casse de viewBox comprise),
+        validé avec le parseur XML sécurisé, puis rasterisé localement en PNG
+        autonome. Les fichiers Word et PDF reçoivent ainsi le même diagramme.
+        Le SVG non conforme est rejeté : jamais de suppression silencieuse.
+        """
+        if not re.search(r"<\s*svg\b", source, re.I):
+            return source
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError as error:
+            raise ArtifactDependencyError(
+                "Illustrations SVG HTML : installer beautifulsoup4."
+            ) from error
+        soup = BeautifulSoup(source, "html.parser")
+        svg_nodes = soup.find_all("svg")
+        # Aucune prise en charge des SVG imbriqués. La substitution textuelle
+        # doit retrouver exactement le nombre d'éléments du DOM, sinon rejet.
+        if not 1 <= len(svg_nodes) <= 8:
+            raise ArtifactError("Nombre d'illustrations SVG HTML non autorisé.")
+        if any(node.find("svg") is not None for node in svg_nodes):
+            raise ArtifactError("SVG imbriqués non pris en charge.")
+
+        regex = re.compile(r"<svg\b[^>]*>[\s\S]*?</svg\s*>", re.I)
+        if len(regex.findall(source)) != len(svg_nodes):
+            raise ArtifactError("Illustration SVG HTML incomplète ou mal formée.")
+        try:
+            import cairosvg
+            from lxml import etree
+        except (ImportError, OSError) as error:
+            raise ArtifactDependencyError(
+                "Illustrations SVG HTML : CairoSVG et lxml sont requis."
+            ) from error
+        import base64
+        from math import sqrt
+
+        def replace(match: re.Match[str]) -> str:
+            svg = match.group(0)
+            cls._check_contract_svg(svg)
+            root = etree.fromstring(svg.encode("utf-8"), parser=etree.XMLParser(
+                resolve_entities=False, load_dtd=False, no_network=True,
+                huge_tree=False,
+            ))
+            box = root.get("viewBox")
+            if box:
+                values = [float(x) for x in re.split(r"[\s,]+", box.strip())]
+                width, height = values[2], values[3]
+            else:
+                def numeric_size(name: str, default: float) -> float:
+                    text = root.get(name) or ""
+                    m = re.fullmatch(r"(\d+(?:\.\d+)?)(?:px|pt|mm|cm)?", text.strip())
+                    return float(m.group(1)) if m else default
+                width, height = numeric_size("width", 400), numeric_size("height", 240)
+            if width <= 0 or height <= 0 or max(width / height, height / width) > 40:
+                raise ArtifactError("Proportions SVG HTML non autorisées.")
+            scale = min(1400 / width, 1400 / height,
+                        sqrt(1_500_000 / (width * height)))
+            out_width = max(1, round(width * scale))
+            out_height = max(1, round(height * scale))
+            try:
+                png = cairosvg.svg2png(
+                    bytestring=svg.encode("utf-8"),
+                    output_width=out_width, output_height=out_height,
+                )
+            except Exception as error:
+                raise ArtifactError(
+                    "Conversion de l'illustration SVG intégrée impossible."
+                ) from error
+            if (not isinstance(png, bytes) or not png.startswith(b"\x89PNG\r\n\x1a\n")
+                    or len(png) > cls.MAX_CONTRACT_IMAGE_BYTES):
+                raise ArtifactError("Illustration SVG convertie trop volumineuse.")
+            title = next((" ".join(node.itertext()).strip() for node in root
+                          if etree.QName(node).localname in {"title", "desc"}), "")
+            # Une légende alternative courte seulement, aucun attribut SVG
+            # ni contenu XML non fiable n'est injecté dans le DOM HTML final.
+            safe_alt = html_escape(title[:150] or "Illustration vectorielle", quote=True)
+            data = base64.b64encode(png).decode("ascii")
+            # Fixer la largeur d'affichage : sans contrainte CSS, WeasyPrint
+            # place le bitmap a sa taille intrinseque et peut le couper au
+            # bord de la page A4.
+            return (
+                f'<img alt="{safe_alt}" '
+                'style="display:block;max-width:100%;height:auto" '
+                f'src="data:image/png;base64,{data}">'
+            )
+
+        normalized, count = regex.subn(replace, source)
+        if count != len(svg_nodes) or len(normalized) > 9_000_000:
+            raise ArtifactError("Document HTML avec illustrations SVG trop volumineux.")
+        return normalized
+
+    @classmethod
     def _check_contract_html(cls, source: str) -> None:
         """Interdit HTML actif et ressources externes (double barriere fetcher)."""
         try:
@@ -1717,7 +1817,9 @@ class ArtifactService:
         }
         allowed_attrs = {"class", "id", "style", "lang", "dir", "title", "alt",
                          "src", "width", "height", "colspan", "rowspan", "scope",
-                         "data-type", "charset", "name", "content", "href"}
+                         "data-type", "charset", "name", "content", "href",
+                         "role", "aria-label", "aria-hidden", "aria-describedby",
+                         "aria-labelledby"}
         for tag in tags:
             if tag.name not in allowed:
                 raise ArtifactError(f"Balise HTML documentaire interdite : {tag.name}.")
@@ -1951,16 +2053,24 @@ class ArtifactService:
         self._check_contract_html(source)
         try:
             from weasyprint import HTML
-        except ImportError as error:
+        except (ImportError, OSError) as error:
+            # Une installation pip peut réussir alors que Pango/GLib/Cairo
+            # manque encore dans l'image système de Render/Windows.
             raise ArtifactDependencyError(
-                "Rendu PDF HTML/CSS : installer weasyprint et ses dependances systeme."
+                "Rendu PDF HTML/CSS indisponible : verifier WeasyPrint, Pango et GLib."
             ) from error
         try:
             return HTML(string=source, base_url=None,
                         url_fetcher=self._blocked_document_resource).write_pdf()
         except ArtifactError:
             raise
+        except OSError as error:
+            raise ArtifactDependencyError(
+                "Le rendu PDF ne trouve pas une bibliotheque systeme de typographie."
+            ) from error
         except Exception as error:
+            # L'exception d'origine demeure attachée au traceback, visible
+            # via ORIA_ARTIFACT_FAILURE/ref dans les logs, jamais dans le Chat.
             raise ArtifactError("Echec du rendu HTML/CSS vers PDF.") from error
 
     @classmethod
