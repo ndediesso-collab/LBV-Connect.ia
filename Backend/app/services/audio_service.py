@@ -303,6 +303,10 @@ class AudioService:
         reservation_id = str(uuid4())
         reservation_recorded = False
         api_finished = False
+        # Dès l'entrée dans l'appel fournisseur, toute erreur peut être
+        # ambiguë côté facturation API : ne jamais libérer puis réessayer
+        # automatiquement une transcription potentiellement exécutée.
+        provider_call_started = False
         try:
             # Journaliser la référence AVANT l'appel RPC. Si Supabase valide
             # la réservation mais que la réponse réseau est perdue, la
@@ -335,6 +339,7 @@ class AudioService:
                 path=claimed["storage_path"],
             )
             service = self._openai_service or OpenAIService()
+            provider_call_started = True
             result = service.transcribe_audio(
                 data=raw_audio,
                 filename=PurePosixPath(claimed["storage_path"]).name,
@@ -369,10 +374,25 @@ class AudioService:
             return self._public(final or self._owned(user_id, audio_id))
         except Exception:
             if api_finished:
-                # L'appel OpenAI a réussi : ne pas libérer les crédits et ne
-                # surtout pas permettre une deuxième transcription payante.
-                # Si la sauvegarde a échoué, l'état 'processing' est conservé
-                # pour un examen manuel plutôt que de risquer une double API.
+                # Réponse fournisseur valide : ne libérer ni répéter l'appel.
+                # Le résultat peut être en attente de sauvegarde ou de règlement.
+                raise
+            if provider_call_started:
+                # L'API a pu consommer l'audio même sans réponse exploitable
+                # (timeout réseau, réponse vide ou erreur après traitement).
+                # Garder la réservation et rendre le job non relançable :
+                # queue_retry exige « none » ou « released », jamais « reserved ».
+                # Le traitement financier nécessite alors un examen serveur.
+                try:
+                    self.repo.update(
+                        user_id=user_id, audio_id=audio_id,
+                        values={"transcription_status": "failed"},
+                        expected_status="processing",
+                    )
+                except Exception:
+                    # Si le stockage est lui aussi indisponible, l'état
+                    # « processing / reserved » reste également non relançable.
+                    pass
                 raise
             if reservation_recorded:
                 try:
