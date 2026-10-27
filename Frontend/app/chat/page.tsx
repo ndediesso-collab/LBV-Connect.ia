@@ -3776,6 +3776,10 @@ export default function ChatPage() {
   const imageInputRef =
     useRef<HTMLInputElement>(null);
 
+  // Web (et Safari iOS) : 1 ligne au repos, puis croissance limitée à 128 px.
+  // Contrairement à rows={4}, le clavier mobile ne masque pas le Chat.
+  const composerInputRef = useRef<HTMLTextAreaElement>(null);
+
   const [messages, setMessages] =
     useState<ChatMessage[]>([]);
 
@@ -3841,6 +3845,16 @@ export default function ChatPage() {
     activeCapability,
     setActiveCapability,
   ] = useState<string | null>(null);
+
+  useEffect(() => {
+    const input = composerInputRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    const naturalHeight = input.scrollHeight;
+    input.style.height = `${Math.min(Math.max(naturalHeight, 44), 128)}px`;
+    input.style.overflowY = naturalHeight > 128 ? "auto" : "hidden";
+  }, [message, activeCapability]);
+
   activeConversationRef.current = activeConversationId;
 
 
@@ -6938,9 +6952,9 @@ export default function ChatPage() {
               0 && (
               <div className="relative min-h-0 flex-1">
                 <div ref={chatScrollRef} onScroll={onChatScroll}
-                  className="h-full min-h-0 overflow-y-auto overscroll-contain py-8"
+                  className="h-full min-h-0 overflow-y-auto overscroll-contain py-4 sm:py-8"
                   aria-label={language === "fr" ? "Historique des messages" : "Message history"}>
-                <div className="mx-auto flex w-full max-w-3xl flex-col gap-7">
+                <div className="mx-auto flex w-full flex-col gap-9 px-1 sm:gap-11 sm:px-4 xl:px-7">
                   {messages.filter(
                     (item) => !(
                       isThinking &&
@@ -6957,8 +6971,8 @@ export default function ChatPage() {
                         className={
                           item.role ===
                           "user"
-                            ? "flex flex-col items-end"
-                            : "flex flex-col items-start"
+                            ? "flex w-full flex-col items-end"
+                            : "mx-auto flex w-full max-w-4xl flex-col items-start"
                         }
                       >
                         <div
@@ -6967,8 +6981,8 @@ export default function ChatPage() {
                             "user"
                               ? editingMessageId === item.id
                               ? "hidden"
-                              : "max-w-[85%] rounded-3xl rounded-br-lg bg-accent px-5 py-3.5 text-sm leading-6 text-accent-foreground"
-                              : "w-full text-foreground"
+                              : "max-w-[95%] rounded-3xl rounded-br-lg bg-accent px-4 py-3 text-[15px] leading-7 text-accent-foreground sm:max-w-[82%] sm:px-5 sm:py-3.5 sm:text-base xl:max-w-[900px]"
+                              : "w-full min-w-0 text-[15px] leading-7 text-foreground sm:text-base"
                           }
                         >
                           {item.role ===
@@ -7031,7 +7045,7 @@ export default function ChatPage() {
                         </div>
 
                         {item.role === "user" ? (
-                          <div className="mt-2 flex w-full max-w-sm flex-col items-end gap-2">
+                          <div className="mt-2 flex w-full max-w-[740px] flex-col items-end gap-2">
                             <div className="flex justify-end gap-1">
                               <MessageCopyButton
                                 language={language}
@@ -7856,7 +7870,8 @@ export default function ChatPage() {
                 {/* 16 px fixes iOS Safari's automatic input-focus zoom;
                     keep pinch-to-zoom available for accessibility. */}
                 <textarea
-                  rows={4}
+                  ref={composerInputRef}
+                  rows={1}
                   value={message}
                   onChange={(event) =>
                     setMessage(
@@ -7881,10 +7896,10 @@ export default function ChatPage() {
                   disabled={
                     isThinking
                   }
-                  className="w-full resize-none bg-transparent px-5 pt-5 text-[16px] leading-6 outline-none placeholder:text-muted disabled:opacity-60"
+                  className="block w-full min-h-[44px] max-h-[128px] resize-none overflow-y-auto bg-transparent px-4 pb-2 pt-3 text-[16px] leading-6 outline-none placeholder:text-muted disabled:opacity-60 sm:px-5"
                 />
 
-                <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-2">
+                <div className="flex items-center justify-between gap-1.5 px-2 pb-2.5 pt-1 sm:gap-3 sm:px-4 sm:pb-3 sm:pt-2">
                   <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
                     {capabilities.map(
                       ({
@@ -7971,7 +7986,7 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              <p className="mt-3 text-center text-[11px] text-muted">
+              <p className="mt-2 hidden text-center text-[11px] text-muted sm:block">
                 {language === "fr" ? (
                   <>
                     Jusqu&apos;à {MAX_ATTACHMENTS} {UI.fr.attachmentsHelp} Les collages très longs sont convertis automatiquement en fichier texte.
