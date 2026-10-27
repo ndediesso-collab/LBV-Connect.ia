@@ -119,7 +119,7 @@ export default function OriaVisualWebView({
   height = 550,
   rendererUrl,
 }: OriaVisualProps) {
-  const webRef = useRef<WebView>(null);
+  const webRef = useRef<WebView<unknown>>(null);
   const scheme = useColorScheme();
   const theme = scheme === 'dark' ? 'dark' : 'light';
   const endpoint = useMemo(() => safeRendererUrl(rendererUrl ?? DEFAULT_URL), [rendererUrl]);
@@ -207,7 +207,7 @@ export default function OriaVisualWebView({
         </View>
       ) : (
         <>
-          <WebView
+          <WebView<unknown>
             ref={webRef}
             key={`${endpoint}:${reloadIndex}`}
             source={{ uri: endpoint }}

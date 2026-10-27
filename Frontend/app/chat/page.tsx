@@ -2,6 +2,8 @@
 
 import {
   ArrowUp,
+  ArrowDown,
+  Pencil,
   BookOpen,
   Check,
   ChevronDown,
@@ -137,6 +139,49 @@ type MessagesResponse = {
   artifacts?: Array<Record<string, unknown>>;
   voice_notes?: Array<Record<string, unknown>>;
 };
+
+type OriaRevision = {
+  id: string;
+  revision_no: number;
+  user_content: string;
+  assistant_content: string | null;
+  status: string;
+};
+
+type OriaRevisionsResponse = {
+  success: boolean;
+  active_revision: number;
+  original_attachment_replay_supported: boolean;
+  original: { user_content: string; assistant_content: string | null };
+  revisions: OriaRevision[];
+};
+
+type OriaPrepareRevisionResponse = {
+  success: boolean;
+  revision: OriaRevision;
+  active_revision: number;
+};
+
+type OriaGenerateRevisionResponse = {
+  success: boolean;
+  active: boolean;
+  revision_id: string;
+  revision_no: number;
+  message: string;
+  artifact_ids?: string[];
+};
+
+// Les fichiers source joints n'étaient pas sauvegardés pour un nouvel usage
+// dans l'ancien protocole Chat. Ne pas deviner leur contenu.
+function requiresOriginalFiles(content: string): boolean {
+  return /\[Pièces jointes\s*:/i.test(content);
+}
+function editableUserText(content: string): string {
+  return getVisibleMessageContent(content)
+    .replace(/\n\n\[Pièces jointes\s*:[^\]]*\]/i, "")
+    .trim();
+}
+
 
 /**
  * Pièce jointe sélectionnée dans le composer.
@@ -3734,11 +3779,51 @@ export default function ChatPage() {
   const [messages, setMessages] =
     useState<ChatMessage[]>([]);
 
+  // ORIA Chat Edit 2B : édition après réponse, séparée du steering en cours.
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [editBaseRevision, setEditBaseRevision] = useState(0);
+  const [editOriginalContent, setEditOriginalContent] = useState("");
+  const [editFiles, setEditFiles] = useState<File[]>([]);
+  const [editOpening, setEditOpening] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [persistedMessageIds, setPersistedMessageIds] = useState<Record<string, string>>({});
+  const editSubmittingRef = useRef(false);
+  const activeConversationRef = useRef<string | null>(null);
+
+  // Flèche de retour en bas : aucun auto-scroll si l'utilisateur lit plus haut.
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const followBottomRef = useRef(true);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  function scrollToLatest(behavior: ScrollBehavior = "smooth") {
+    const area = chatScrollRef.current;
+    if (!area) return;
+    followBottomRef.current = true;
+    setShowJumpToBottom(false);
+    area.scrollTo({ top: area.scrollHeight, behavior });
+  }
+  function onChatScroll() {
+    const area = chatScrollRef.current;
+    if (!area) return;
+    const away = area.scrollHeight - area.scrollTop - area.clientHeight;
+    followBottomRef.current = away <= 110;
+    setShowJumpToBottom(away > 160);
+  }
+
+
   const [isThinking, setIsThinking] =
     useState(false);
 
   const [chatStatusStep, setChatStatusStep] =
     useState<OriaChatStatusStep | null>(null);
+
+  useEffect(() => {
+    if (!followBottomRef.current) return;
+    const frame = requestAnimationFrame(() => scrollToLatest("auto"));
+    return () => cancelAnimationFrame(frame);
+  }, [messages, chatStatusStep]);
+
 
   // Permet de masquer le message assistant vide, puis de le retirer en
   // cas d'échec, sans toucher aux réponses déjà reçues.
@@ -3756,6 +3841,8 @@ export default function ChatPage() {
     activeCapability,
     setActiveCapability,
   ] = useState<string | null>(null);
+  activeConversationRef.current = activeConversationId;
+
 
   const [wallet, setWallet] =
     useState<WalletData | null>(null);
@@ -4212,6 +4299,156 @@ export default function ChatPage() {
     };
   }, []);
 
+  /* ==========================================================
+   * ORIA CHAT EDIT 2B — MESSAGE TERMINÉ
+   * ========================================================== */
+
+  function closeCompletedEdit() {
+    if (editBusy) return;
+    setEditingMessageId(null);
+    setEditDraft("");
+    setEditFiles([]);
+    setEditError(null);
+  }
+
+  async function openCompletedEdit(item: ChatMessage) {
+    if (!activeConversationId || editBusy || editOpening || isThinking ||
+        editingMessageId !== null) return;
+    if (extractAudioIdFromMessage(item.content || "")) {
+      setError(language === "fr"
+        ? "L’édition des notes vocales terminées n’est pas encore disponible."
+        : "Editing completed voice notes is not supported yet.");
+      return;
+    }
+    const conversationId = activeConversationId;
+    // Les IDs des messages optimistes sont différents de ceux créés par Supabase.
+    // Le GET /revisions attend l'ID réel de la ligne persistée.
+    const serverId = persistedMessageIds[item.id] || item.id;
+    setEditOpening(true);
+    setEditError(null);
+    try {
+      const data = await apiFetch<OriaRevisionsResponse>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(serverId)}/revisions`,
+      );
+      if (activeConversationRef.current !== conversationId) return;
+      // Un POST ayant pu être facturé ne doit jamais être rejoué sous un
+      // nouvel ID lorsqu'il reste une révision non résolue sur le serveur.
+      const unresolved = data.revisions.find((rev) =>
+        rev.status === "queued" || rev.status === "generating" ||
+        (rev.status === "ready" && rev.revision_no > data.active_revision),
+      );
+      if (unresolved) {
+        throw new Error(language === "fr"
+          ? "Une modification précédente est encore en attente de confirmation. Vérifie son état côté serveur avant d'en envoyer une autre."
+          : "A previous edit is not resolved. Check its server status before submitting another.");
+      }
+      setEditBaseRevision(data.active_revision);
+      setEditOriginalContent(data.original.user_content || item.content);
+      setEditDraft(editableUserText(item.content));
+      setEditFiles([]);
+      setEditingMessageId(item.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Impossible d’ouvrir la modification.");
+    } finally {
+      setEditOpening(false);
+    }
+  }
+
+  async function applyCompletedEdit(item: ChatMessage) {
+    const conversationId = activeConversationId;
+    const serverId = persistedMessageIds[item.id] || item.id;
+    const content = editDraft.trim();
+    if (!conversationId || !content || editSubmittingRef.current || isThinking || editBusy) return;
+    if (content.length > 24000) {
+      setEditError(language === "fr" ? "Le message dépasse 24 000 caractères." : "Message exceeds 24,000 characters.");
+      return;
+    }
+    if (content === editableUserText(item.content)) return;
+    if (requiresOriginalFiles(editOriginalContent) && editFiles.length === 0) {
+      setEditError(language === "fr"
+        ? "Ce message utilisait des pièces jointes. Ajoute de nouveau les fichiers d’origine avant de régénérer."
+        : "This message used attachments. Reattach the original files before regenerating.");
+      return;
+    }
+    if (editFiles.length > MAX_ATTACHMENTS || editFiles.some((file) => !isAcceptedAttachment(file))) {
+      setEditError(language === "fr" ? "Maximum 3 fichiers aux formats acceptés." : "Maximum 3 supported files.");
+      return;
+    }
+    // Ne pas relancer automatiquement generate() : une précédente tentative
+    // peut avoir consommé des tokens alors que le réseau a échoué.
+    editSubmittingRef.current = true;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const prepared = await apiFetch<OriaPrepareRevisionResponse>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(serverId)}/revisions`,
+        { method: "POST", body: JSON.stringify({
+          content,
+          request_id: crypto.randomUUID(),
+          base_revision: editBaseRevision,
+        }) },
+      );
+      const form = new FormData();
+      form.append("conversation_id", conversationId);
+      form.append("message_id", serverId);
+      form.append("model", selectedModel);
+      form.append("web", String(activeCapability === "Recherche Web"));
+      form.append("visual_mode", "true");
+      form.append("reasoning_mode", reasoningMode);
+      editFiles.forEach((file) => form.append("files", file, file.name));
+
+      const generated = await apiFetch<OriaGenerateRevisionResponse>(
+        `/ai/chat/revisions/${encodeURIComponent(prepared.revision.id)}/generate`,
+        { method: "POST", body: form },
+      );
+      if (!generated.active) throw new Error(language === "fr"
+        ? "La version n’a pas été activée : vérifie son état côté serveur."
+        : "The revision was not activated: check server state.");
+
+      // Recharger l'historique projeté par le backend (IDs originaux conservés),
+      // plutôt que sauvegarder de nouveaux messages via l'ancien endpoint.
+      const data = await apiFetch<MessagesResponse>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages`,
+      );
+      if (activeConversationRef.current === conversationId) {
+        const remoteMessages = data.messages || [];
+        setMessages(remoteMessages);
+        const refreshedArtifacts = (data.artifacts || [])
+          .map((raw) => normalizeGeneratedArtifact(raw))
+          .filter((a): a is GeneratedArtifact => a !== null);
+        setGeneratedArtifacts((current) => mergeGeneratedArtifacts(
+          current.filter((a) => a.conversation_id !== conversationId), refreshedArtifacts,
+        ));
+        setVoiceNotes((current) => mergeVoiceNotes(current,
+          (data.voice_notes || []).map(normalizeVoiceNote).filter((n): n is VoiceNote => n !== null),
+        ));
+        if (currentUserId) {
+          const cached = readLocalCache(currentUserId);
+          writeLocalCache(currentUserId, {
+            conversations: cached?.conversations || conversations,
+            messages: { ...(cached?.messages || {}), [conversationId]: remoteMessages },
+            activeConversationId: conversationId,
+            selectedModel,
+            activeCapability,
+          });
+        }
+        setEditingMessageId(null);
+        setEditDraft("");
+        setEditFiles([]);
+        setEditError(null);
+        void loadWallet();
+        void loadTrials();
+      }
+    } catch (cause) {
+      // Ancienne question/réponse inchangée à l'écran jusqu'à la confirmation
+      // du serveur. Ne pas rejouer automatiquement une révision incertaine.
+      setEditError(cause instanceof Error ? cause.message : "La modification a échoué.");
+    } finally {
+      editSubmittingRef.current = false;
+      setEditBusy(false);
+    }
+  }
+
   /*
    * ==========================================================
    * NOUVELLE CONVERSATION
@@ -4246,6 +4483,11 @@ export default function ChatPage() {
     );
 
     setMessages([]);
+    setEditingMessageId(null);
+    setEditFiles([]);
+    setEditError(null);
+    followBottomRef.current = true;
+    setShowJumpToBottom(false);
     setMessage("");
     setAttachments([]);
     setActiveCapability(null);
@@ -4341,6 +4583,11 @@ export default function ChatPage() {
   async function selectConversation(
     conversationId: string,
   ) {
+    setEditingMessageId(null);
+    setEditFiles([]);
+    setEditError(null);
+    followBottomRef.current = true;
+    setShowJumpToBottom(false);
     setActiveConversationId(
       conversationId,
     );
@@ -4519,9 +4766,11 @@ export default function ChatPage() {
     }
 
     // Pendant le streaming, le message n'a pas encore ses marqueurs persistés.
+    // Les révisions 2B utilisent l'ID de la réponse d'origine comme
+    // source_message_id, sans marqueurs insérés dans assistant_content.
     return generatedArtifacts.filter(
       (artifact) =>
-        artifact.messageId === item.id,
+        artifact.messageId === item.id || artifact.source_message_id === item.id,
     );
   }
 
@@ -5229,6 +5478,8 @@ export default function ChatPage() {
   }
 
   async function handleSendMessage(options?: {content?: string; voice?: VoiceNote}) {
+    if (editBusy || editingMessageId !== null) return;
+    followBottomRef.current = true;
     const content =
       (options?.content ?? message).trim();
 
@@ -5513,6 +5764,9 @@ export default function ChatPage() {
         saveMessageRemote(
           userMessage,
         ).then(async (savedMessage) => {
+          if (savedMessage?.id) {
+            setPersistedMessageIds((current) => ({...current, [userMessageId]: savedMessage.id}));
+          }
           if (options?.voice && savedMessage?.id) {
             await apiFetch(`/ai/audio/${options.voice.audio_id}/attach-message`, {
               method: "POST", body: JSON.stringify({message_id: savedMessage.id}),
@@ -6336,7 +6590,7 @@ export default function ChatPage() {
    */
 
   return (
-    <main className="min-h-dvh overflow-hidden bg-background text-foreground">
+    <main className="h-dvh overflow-hidden bg-background text-foreground">
       {codePreview ? <CodePreviewModal preview={codePreview} onClose={() => setCodePreview(null)} language={language}/> : null}
       {documentPreview ? <DocumentPreviewModal
         preview={documentPreview}
@@ -6561,7 +6815,9 @@ export default function ChatPage() {
           WORKSPACE
           ====================================================== */}
 
-      <section className="flex min-h-dvh flex-col">
+      <section className={activeCapability === "Cours"
+        ? "flex h-full min-h-0 flex-col overflow-y-auto"
+        : "flex h-full min-h-0 flex-col"}>
         <header className="flex h-16 shrink-0 items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <button
@@ -6628,8 +6884,8 @@ export default function ChatPage() {
           </div>
         </header>
 
-        <div className="flex flex-1 flex-col px-4 pb-4 sm:px-8">
-          <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 sm:px-8">
+          <div className="relative mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
             {error && (
               <div className="mx-auto mt-4 w-full max-w-3xl rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm text-muted-strong">
                 {localizeFrontendError(error, language)}
@@ -6680,7 +6936,10 @@ export default function ChatPage() {
 
             {messages.length >
               0 && (
-              <div className="flex-1 overflow-y-auto py-8">
+              <div className="relative min-h-0 flex-1">
+                <div ref={chatScrollRef} onScroll={onChatScroll}
+                  className="h-full min-h-0 overflow-y-auto overscroll-contain py-8"
+                  aria-label={language === "fr" ? "Historique des messages" : "Message history"}>
                 <div className="mx-auto flex w-full max-w-3xl flex-col gap-7">
                   {messages.filter(
                     (item) => !(
@@ -6706,7 +6965,9 @@ export default function ChatPage() {
                           className={
                             item.role ===
                             "user"
-                              ? "max-w-[85%] rounded-3xl rounded-br-lg bg-accent px-5 py-3.5 text-sm leading-6 text-accent-foreground"
+                              ? editingMessageId === item.id
+                              ? "hidden"
+                              : "max-w-[85%] rounded-3xl rounded-br-lg bg-accent px-5 py-3.5 text-sm leading-6 text-accent-foreground"
                               : "w-full text-foreground"
                           }
                         >
@@ -6801,8 +7062,59 @@ export default function ChatPage() {
                                     ? "Modify"
                                     : "Modifier"}
                                 </button>
-                              ) : null}
+                              ) : (
+                                <button type="button"
+                                  disabled={editBusy || editOpening || isThinking ||
+                                    (editingMessageId !== null && editingMessageId !== item.id)}
+                                  onClick={() => void openCompletedEdit(item)}
+                                  aria-label={language === "fr" ? "Modifier ce message" : "Edit this message"}
+                                  title={language === "fr" ? "Modifier le message" : "Edit message"}
+                                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium text-muted transition hover:bg-surface-tertiary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-35">
+                                  {editOpening ? <Loader2 size={13} className="animate-spin"/> : <Pencil size={13} />}
+                                  {language === "fr" ? "Modifier" : "Edit"}
+                                </button>
+                              )}
                             </div>
+
+                            {editingMessageId === item.id && !isThinking ? (
+                              <div className="w-full rounded-2xl border border-border bg-surface p-3 text-foreground shadow-sm">
+                                <p className="mb-2 text-xs font-semibold">{language === "fr" ? "Modifier le message" : "Edit message"}</p>
+                                <textarea autoFocus rows={4} value={editDraft}
+                                  onChange={(event) => setEditDraft(event.target.value)}
+                                  disabled={editBusy} maxLength={24000}
+                                  className="w-full resize-y rounded-xl border border-border bg-surface-secondary px-3 py-2 text-sm outline-none focus:border-muted-strong disabled:opacity-50" />
+                                {requiresOriginalFiles(editOriginalContent) ? (
+                                  <div className="mt-2 space-y-2 text-[11px] text-muted">
+                                    <p>{language === "fr"
+                                      ? "Pour utiliser le document ou l’image d’origine, joins-le de nouveau. ORIA ne l’a pas conservé pour une nouvelle génération."
+                                      : "To reuse the original document or image, attach it again. ORIA did not retain it for another generation."}</p>
+                                    <input type="file" multiple disabled={editBusy}
+                                      accept={[...ACCEPTED_FILE_TYPES, ...ACCEPTED_IMAGE_TYPES].join(",")}
+                                      onChange={(event) => {
+                                        const chosen = Array.from(event.target.files || []).slice(0, MAX_ATTACHMENTS);
+                                        setEditFiles(chosen);
+                                        setEditError(null);
+                                      }} className="w-full max-w-full text-xs" />
+                                    {editFiles.length > 0 && <p>{editFiles.map((f) => f.name).join(", ")}</p>}
+                                  </div>
+                                ) : null}
+                                {editError && <p role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{editError}</p>}
+                                <div className="mt-3 flex justify-end gap-2">
+                                  <button type="button" disabled={editBusy} onClick={closeCompletedEdit}
+                                    className="rounded-xl border border-border px-3 py-2 text-xs font-medium disabled:opacity-50">
+                                    {language === "fr" ? "Annuler" : "Cancel"}
+                                  </button>
+                                  <button type="button" disabled={editBusy || !editDraft.trim() ||
+                                    editDraft.trim() === editableUserText(item.content)}
+                                    onClick={() => void applyCompletedEdit(item)}
+                                    className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground disabled:opacity-35">
+                                    {editBusy ? <Loader2 size={13} className="animate-spin"/> : <ArrowUp size={13}/>}
+                                    {editBusy ? (language === "fr" ? "Régénération…" : "Regenerating…") :
+                                      (language === "fr" ? "Envoyer" : "Send")}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
 
                             {isThinking &&
                             item.id ===
@@ -7082,6 +7394,15 @@ export default function ChatPage() {
                     </div>
                   )}
                 </div>
+                </div>
+                {showJumpToBottom && (
+                  <button type="button" onClick={() => scrollToLatest("smooth")}
+                    aria-label={language === "fr" ? "Aller en bas de la conversation" : "Jump to latest message"}
+                    title={language === "fr" ? "Dernier message" : "Latest message"}
+                    className="absolute bottom-4 right-4 z-20 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface text-foreground shadow-lg backdrop-blur-sm transition hover:bg-surface-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+                    <ArrowDown size={19} aria-hidden="true" />
+                  </button>
+                )}
               </div>
             )}
 
@@ -7631,7 +7952,7 @@ export default function ChatPage() {
                     disabled={
                       (!message.trim() &&
                         attachments.length === 0) ||
-                      isThinking
+                      isThinking || editBusy || editingMessageId !== null
                     }
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
                   >

@@ -4,6 +4,10 @@
     "ag-grid-community": "^36.2.0",
     "ag-grid-react": "^36.2.0",
     "echarts": "^6.1.0",
-    "echarts-for-react": "^3.0.6"
+    "echarts-for-react": "^3.0.6",
+    "katex": "^0.19.1"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.8"
   }
 }

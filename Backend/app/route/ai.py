@@ -74,6 +74,9 @@ from app.repositories.supabase_artifact_repository import (
 
 
 from app.services.openai_service import OpenAIService
+from app.services.oria_chat_revision_projection import (
+    active_revision_pairs, project_active_messages,
+)
 from app.services.conversation_memory_utils import (
     estimate_text_tokens,
     fetch_conversation_rows,
@@ -3514,6 +3517,8 @@ def _get_conversation_history(
 
     has_attachments: bool = False,
 
+    before_message_id: str | None = None,
+
 ) -> list[dict[str, str]]:
 
     """
@@ -3575,7 +3580,29 @@ def _get_conversation_history(
         conversation_id=conversation_id,
         user_id=authenticated_user_id,
         columns="id,role,content,created_at",
-    )[-pack_history_limit(pack_id):]
+    )
+
+    active_pairs = active_revision_pairs(
+        supabase, conversation_id=conversation_id, user_id=authenticated_user_id,
+    )
+    rows, projection_info = project_active_messages(rows, active_pairs)
+
+    # Chantier 3 : pour recalculer un ancien tour, exclure strictement
+    # ce message et tous les messages ulterieurs AVANT le choix du contexte.
+    # Jamais de repli vers l'historique entier si l'ancre a ete purgee.
+    if before_message_id is not None:
+        anchor_index = next(
+            (i for i, row in enumerate(rows)
+             if str(row.get("id")) == str(before_message_id)), None,
+        )
+        if anchor_index is None or rows[anchor_index].get("role") != "user":
+            raise HTTPException(
+                status_code=409,
+                detail="Message d'origine indisponible : impossible de reconstruire le contexte.",
+            )
+        rows = rows[:anchor_index]
+
+    rows = rows[-pack_history_limit(pack_id):]
 
     # Évite d'envoyer deux fois la dernière demande si le frontend l'a
     # sauvegardée avant /chat ; ne supprime pas plusieurs messages identiques.
@@ -3599,9 +3626,14 @@ def _get_conversation_history(
         if last_user:
             query = current_message + "\n" + last_user[-1][:500]
     retrieved_rows = _retrieve_relevant_old_messages(old_rows, query)
-    summary = _get_structured_conversation_memory(
-        conversation_id=conversation_id,
-        authenticated_user_id=authenticated_user_id,
+    # Une memoire resumee peut deja contenir les reponses posterieures a
+    # l'ancre ou l'ancienne version : ne jamais la reutiliser en edition.
+    summary = (
+        "" if before_message_id is not None or projection_info["has_active_revisions"]
+        else _get_structured_conversation_memory(
+            conversation_id=conversation_id,
+            authenticated_user_id=authenticated_user_id,
+        )
     )
     return _select_budgeted_history(
         recent_rows=recent_rows,
@@ -3630,6 +3662,7 @@ def _prepare_chat(
     user_id: str | None,
     authorization: str | None,
     conversation_id: str | None = None,
+    before_message_id: str | None = None,
 ):
     """
     Prépare et valide une requête Chat.
@@ -3767,6 +3800,7 @@ def _prepare_chat(
         current_message=message,
         pack_id=wallet.pack_id,
         has_attachments=bool(attachments),
+        before_message_id=before_message_id,
     )
 
     return (
@@ -4148,6 +4182,304 @@ async def chat(
         visual_mode=visual_mode,
     )
 
+
+# ============================================================
+# ORIA CHANTIER 3 / 2B : GENERATION D'UNE REVISION TERMINEE
+# Contrat JSON different du streaming existant, non modifie.
+# ============================================================
+
+
+def _edit_revision_rows(*, conversation_id: str, message_id: str,
+                        revision_id: str, owner: str) -> tuple[dict, dict]:
+    """Ne se fie jamais au contenu ni aux identifiants soumis par le client."""
+    conv = (supabase.table("conversations").select("id")
+            .eq("id", conversation_id).eq("user_id", owner).limit(1).execute().data or [])
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation introuvable.")
+    threads = (supabase.table("oria_chat_edit_threads").select("*")
+               .eq("conversation_id", conversation_id).eq("user_id", owner)
+               .eq("user_message_id", message_id).limit(1).execute().data or [])
+    if not threads:
+        raise HTTPException(status_code=404, detail="Message non prepare pour une revision.")
+    thread = threads[0]
+    revs = (supabase.table("oria_chat_edit_revisions").select("*")
+            .eq("id", revision_id).eq("thread_id", str(thread["id"]))
+            .eq("user_id", owner).limit(1).execute().data or [])
+    if not revs:
+        raise HTTPException(status_code=404, detail="Revision introuvable.")
+    return thread, revs[0]
+
+
+def _edit_revision_update(revision: dict, owner: str, *,
+                          expected_status: str, fields: dict) -> dict:
+    data = (supabase.table("oria_chat_edit_revisions").update(fields)
+            .eq("id", str(revision["id"]))
+            .eq("thread_id", str(revision["thread_id"]))
+            .eq("user_id", owner).eq("status", expected_status)
+            .execute().data or [])
+    if not data:
+        raise HTTPException(status_code=409,
+                            detail="Revision modifiee par une autre operation ; actualisez.")
+    return data[0]
+
+
+def _edit_activate(thread: dict, revision: dict, owner: str) -> None:
+    try:
+        result = supabase.rpc("oria_chat_activate_revision", {
+            "p_thread_id": str(thread["id"]),
+            "p_user_id": owner,
+            "p_revision_no": int(revision["revision_no"]),
+            "p_expected_active_revision": int(revision["base_revision_no"]),
+        }).execute()
+        confirmed = result.data
+        if confirmed not in (True, [True], [{"oria_chat_activate_revision": True}]):
+            # Confirmer explicitement un booleen vrai, sans supposer la reussite.
+            raise RuntimeError("Activation non confirmee")
+    except Exception as error:
+        logging.getLogger(__name__).error(
+            "ORIA_REVISION_ACTIVATION_FAILED revision=%s type=%s",
+            revision["id"], type(error).__name__, exc_info=True,
+        )
+        raise HTTPException(status_code=503, detail=(
+            "Reponse creee et facturee, mais version non activee. "
+            "Reessayez l'activation avec la MEME revision sans nouvelle generation."
+        )) from error
+
+
+@router.post("/chat/revisions/{revision_id}/generate")
+async def generate_chat_revision(
+    revision_id: str,
+    conversation_id: str = Form(...),
+    message_id: str = Form(...),
+    model: str = Form(...),
+    web: bool = Form(False),
+    visual_mode: bool = Form(False),
+    reasoning_mode: str = Form("balanced"),
+    artifact_type: str | None = Form(default=None),
+    artifact_filename: str | None = Form(default=None),
+    files: list[UploadFile] = File(default=[]),
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Nouvelle reponse pour une revision DEJA preparee dans routes.py.
+
+    Idempotence forte : aucun deuxieme appel fournisseur si la revision est
+    generating, ready, failed ou cancelled. Si ready mais non activee,
+    une repetition ne fait QUE retenter le basculement SQL atomique.
+    """
+    from uuid import UUID
+    try:
+        revision_id = str(UUID(revision_id))
+        message_id = str(UUID(message_id))
+        conversation_id = str(UUID(conversation_id))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Identifiant de revision invalide.") from error
+    owner = _authenticate_chat_user(user_id=user_id, authorization=authorization)
+    thread, revision = _edit_revision_rows(
+        conversation_id=conversation_id, message_id=message_id,
+        revision_id=revision_id, owner=owner,
+    )
+    active = int(thread.get("active_revision") or 0)
+    number = int(revision["revision_no"])
+    base = int(revision["base_revision_no"])
+    status = str(revision["status"])
+    if status == "ready":
+        if active != number:
+            if active != base:
+                raise HTTPException(status_code=409,
+                                    detail="La version active a change ; ne pas regenerer en doublon.")
+            _edit_activate(thread, revision, owner)
+        return {
+            "success": True, "replayed": True, "active": True,
+            "revision_id": revision_id, "revision_no": number,
+            "message": revision.get("assistant_content"),
+            "artifact_ids": revision.get("artifact_refs") or [],
+            "generation_started": False,
+        }
+    if status != "queued":
+        raise HTTPException(status_code=409, detail=(
+            "Revision deja en cours, terminee en erreur ou annulee. "
+            "Ne pas relancer une requete potentiellement facturee."
+        ))
+    if active != base:
+        raise HTTPException(status_code=409,
+                            detail="La version active a change ; actualisez avant de modifier.")
+    reasoning_mode = _normalize_reasoning_mode(reasoning_mode)
+    attachments = await _build_attachments(files)
+    request_text = str(revision["user_content"]).strip()
+    artifact_requests = _resolve_artifact_requests(
+        message=request_text, explicit_type=artifact_type,
+        explicit_filename=artifact_filename,
+    )
+    document_types, _ = _document_artifact_selection(artifact_requests)
+
+    # Valider le portefeuille, le modele et la branche contextuelle AVANT
+    # la prise exclusive du travail. Aucun debit a ce stade.
+    (confirmed_owner, repository, wallet, message, action, is_trial_model,
+     history) = _prepare_chat(
+         model=model, message=request_text, web=web,
+         attachments=attachments, user_id=user_id, authorization=authorization,
+         conversation_id=conversation_id, before_message_id=message_id,
+     )
+    if confirmed_owner != owner:
+        raise HTTPException(status_code=403, detail="Identite incoherente.")
+
+    generation_id = str(uuid4())
+    _edit_revision_update(revision, owner, expected_status="queued", fields={
+        "status": "generating", "generation_id": generation_id,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    # Si un process s'arrete apres cette etape, status=generating est un
+    # garde-fou : reconciliation necessaire, jamais auto-rejeu facture.
+    try:
+        reservation_id, _ = _reserve_chat_credits(
+            repository=repository, authenticated_user_id=owner,
+            action=action, model=model, message=message, history=history,
+            attachments=attachments, web=web,
+        )
+    except Exception:
+        _edit_revision_update(revision, owner, expected_status="generating", fields={
+            "status": "failed", "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        raise
+    try:
+        _edit_revision_update(revision, owner, expected_status="generating", fields={
+            "billing_reference": reservation_id,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        # Aucun fournisseur appele ; reservation rendue si possible.
+        _release_chat_reservation(repository=repository,
+                                  authenticated_user_id=owner,
+                                  reservation_id=reservation_id)
+        raise
+
+    try:
+        provider = OpenAIService().chat(
+            model=MODEL_OPENAI_IDS[model],
+            message=(message if document_types else _code_output_instruction(message, attachments)),
+            web=web, attachments=_attachments_for_openai(attachments),
+            history=history, reasoning_mode=reasoning_mode,
+            visual_mode=visual_mode, artifact_types=document_types,
+        )
+    except Exception as error:
+        try:
+            _release_chat_reservation(repository=repository,
+                                      authenticated_user_id=owner,
+                                      reservation_id=reservation_id)
+            _edit_revision_update(revision, owner, expected_status="generating", fields={
+                "status": "failed", "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            logging.getLogger(__name__).exception("ORIA_REVISION_RELEASE_RECONCILIATION %s", revision_id)
+        raise HTTPException(status_code=502,
+                            detail="La generation a echoue ; ancienne reponse conservee.") from error
+
+    # A PARTIR D'ICI l'appel fournisseur peut avoir ete facture : aucun
+    # release ni re-generation aveugles, meme si le settlement echoue.
+    try:
+        response_text, cost, real_api_xaf = _extract_classic_chat_result(
+            response=provider, model=model, web=web, document_types=document_types,
+        )
+        result, trials_remaining = _settle_chat_reservation(
+            repository=repository, wallet_before_reservation=wallet,
+            authenticated_user_id=owner, reservation_id=reservation_id,
+            action=action, cost=cost, api_cost_xaf=real_api_xaf,
+            is_trial_model=is_trial_model, model_id=model,
+        )
+    except Exception as error:
+        logging.getLogger(__name__).exception("ORIA_REVISION_BILLING_RECONCILIATION %s", revision_id)
+        raise HTTPException(status_code=503, detail=(
+            "Generation effectuee mais facturation non confirmee. "
+            "Revision verrouillee pour reconciliation ; ne pas relancer."
+        )) from error
+
+    generated_artifacts: list[dict[str, Any]] = []
+    artifact_errors: list[str] = []
+    payload = _as_mapping(provider) or {}
+    if document_types:
+        try:
+            prepared = _render_document_results(
+                artifact_payload=payload.get("artifact_payload"),
+                artifact_requests=artifact_requests,
+                generation_id=generation_id, attempt_id=None,
+                reasoning_mode=reasoning_mode, model=model,
+                openai_model=MODEL_OPENAI_IDS[model],
+            )
+            for generated in prepared:
+                generated_artifacts.append(_persist_document_result(
+                    generated=generated, authenticated_user_id=owner,
+                    conversation_id=conversation_id,
+                    source_message_id=str(thread["assistant_message_id"]),
+                    model=model,
+                ))
+        except Exception as error:
+            artifact_errors.append(_document_failure_diagnostic("conversion", error))
+        response_text = _document_result_message(
+            len(artifact_requests), len(generated_artifacts),
+            failure_hint=artifact_errors[0] if artifact_errors else None,
+        )
+        if len(generated_artifacts) != len(artifact_requests):
+            _edit_revision_update(revision, owner, expected_status="generating", fields={
+                "status": "failed", "artifact_refs": [x.get("id") for x in generated_artifacts],
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            raise HTTPException(status_code=502, detail=(
+                "Creation du document incomplete : ancienne reponse conservee. "
+                "L'appel IA a ete facture selon sa consommation reelle."
+            ))
+    else:
+        provider_status = str(payload.get("status") or "").lower()
+        if not (provider_status and provider_status != "completed" and
+                _is_code_task(message, attachments)):
+            try:
+                artifact_requests = _code_artifact_requests_after_response(
+                    message=message, attachments=attachments,
+                    response_text=response_text, existing=artifact_requests,
+                )
+            except ValueError as error:
+                artifact_errors.append(str(error))
+        for artifact_request in artifact_requests:
+            try:
+                generated_artifacts.append(_create_and_persist_artifact(
+                    authenticated_user_id=owner, artifact_request=artifact_request,
+                    response_text=response_text, conversation_id=conversation_id,
+                    source_message_id=str(thread["assistant_message_id"]),
+                    model=model, openai_model=MODEL_OPENAI_IDS[model],
+                    generation_id=generation_id, attempt_id=None,
+                    reasoning_mode=reasoning_mode, user_message=message,
+                    user_attachments=attachments,
+                ))
+            except Exception as error:
+                logging.getLogger(__name__).exception("ORIA_REVISION_ARTIFACT %s", revision_id)
+                artifact_errors.append("Un fichier demande n'a pas pu etre cree.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    finished = _edit_revision_update(revision, owner, expected_status="generating", fields={
+        "status": "ready", "assistant_content": response_text,
+        "artifact_refs": [str(item.get("id")) for item in generated_artifacts if item.get("id")],
+        "updated_at": now, "completed_at": now,
+    })
+    _edit_activate(thread, finished, owner)
+    return {
+        "success": True, "active": True, "replayed": False,
+        "revision_id": revision_id, "revision_no": number,
+        "message": response_text,
+        "cost": result.cost,
+        "previous_balance": result.previous_balance,
+        "credits_remaining": result.new_balance,
+        "consumed_percentage": result.consumed_percentage,
+        "remaining_percentage": result.remaining_percentage,
+        "requires_warning": result.requires_warning,
+        "requires_critical_warning": result.requires_critical_warning,
+        "trial": is_trial_model, "trials_remaining": trials_remaining,
+        "artifacts": generated_artifacts,
+        "artifact_errors": artifact_errors,
+        "web_images": _public_web_images(payload.get("web_images"), enabled=web),
+        "visual_mode": visual_mode,
+        "generation_started": True,
+    }
 
 # ============================================================
 # PRÉPARATION D'UNE CRÉATION MÉDIA

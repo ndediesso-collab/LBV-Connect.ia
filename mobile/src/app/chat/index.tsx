@@ -22,7 +22,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { Stack, useFocusEffect, useNavigation, useRouter } from "expo-router";
+import { Stack, useFocusEffect, usePreventRemove, useRouter } from "expo-router";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
@@ -42,9 +42,9 @@ import * as SecureStore from "expo-secure-store";
 import { File as ExpoFile, Paths } from "expo-file-system";
 import { fetch as expoFetch } from "expo/fetch";
 import { Ionicons } from "@expo/vector-icons";
-import { WebView } from "react-native-webview";
 import OriaVisualMobile from "@/components/oria-visual/OriaVisualMobile";
 import OriaMiniStudio from "@/components/oria-mini-studio/OriaMiniStudio";
+import OriaMathRenderer, { OriaMathInlineText } from "@/components/oria-math/OriaMathRenderer";
 
 /**
  * ORIA MOBILE — CHAT
@@ -739,6 +739,57 @@ function getModelDescription(
 
 type Role = "user" | "assistant";
 
+type OriaRevision = {
+  id: string;
+  revision_no: number;
+  user_content: string;
+  assistant_content: string | null;
+  status: string;
+};
+
+type OriaRevisionsResponse = {
+  success: boolean;
+  active_revision: number;
+  original: { user_content: string; assistant_content: string | null };
+  revisions: OriaRevision[];
+  original_attachment_replay_supported: boolean;
+};
+
+type OriaPrepareRevisionResponse = {
+  success: boolean;
+  revision: OriaRevision;
+  active_revision: number;
+};
+
+type OriaGenerateRevisionResponse = {
+  success: boolean;
+  active: boolean;
+  revision_id: string;
+  revision_no: number;
+  message: string;
+  artifacts?: Array<Record<string, unknown>>;
+};
+
+function oriaEditableUserText(value: string): string {
+  return getVisibleMessageContent(value)
+    .replace(/\n\n\[(?:Pièces jointes|Attachments)\s*:[^\]]*\]/i, "")
+    .trim();
+}
+function oriaMessageHasFiles(value: string): boolean {
+  return /\[(?:Pièces jointes|Attachments)\s*:/i.test(value);
+}
+
+// UUID requis par l'API de révision. Repli pour runtimes Expo sans randomUUID.
+function oriaRevisionRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const n = Math.floor(Math.random() * 16);
+    return (char === "x" ? n : (n & 3) | 8).toString(16);
+  });
+}
+
 type ChatMessage = {
   id: string;
   conversationId: string;
@@ -897,6 +948,8 @@ const MAX_ATTACHMENTS = 3;
 const LONG_PASTE_THRESHOLD = 6000;
 const USER_MESSAGE_COLLAPSE_CHARACTERS = 700;
 const USER_MESSAGE_COLLAPSE_LINES = 8;
+const COMPOSER_INPUT_MIN_HEIGHT = 44;
+const COMPOSER_INPUT_MAX_HEIGHT = 140;
 
 const ACCEPTED_FILE_TYPES = [
   "application/pdf",
@@ -1483,6 +1536,27 @@ async function apiStreamFetch(
   return response;
 }
 
+// Les fichiers du Chat mobile passent exclusivement par expo/fetch ;
+// ne pas envoyer des `{ uri, type, name }` incompatibles avec SDK 58.
+async function apiRevisionFormFetch<T>(path: string, form: FormData): Promise<T> {
+  const session = await getSessionOrThrow();
+  const response = await expoFetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "user-id": session.user.id,
+      authorization: `Bearer ${session.access_token}`,
+    },
+    body: form,
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? String(payload.detail) : "La régénération a échoué.";
+    throw new Error(response.status === 401 ? "Session expirée. Veuillez vous reconnecter." : detail);
+  }
+  return (await response.json()) as T;
+}
+
 type LocalChatCache = {
   conversations: Conversation[];
   messages: Record<string, ChatMessage[]>;
@@ -1695,442 +1769,19 @@ async function saveMessageRemote(
 type MathTextVariant = "body" | "h1" | "h2" | "h3" | "quote";
 
 const INLINE_MARKDOWN_TOKEN_REGEX =
-  /(\\\([^\n]*?\\\)|\$[^$\n]+\$|\b[A-Za-z](?:(?:_(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+)))+(?![A-Za-z0-9_])|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
+  /(\\\([^\n]*?\\\)|\$(?!\s)[^$\n]*?\S\$|\b[A-Za-z](?:(?:_(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+)))+(?![A-Za-z0-9_])|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/;
 
 const INLINE_MATH_TOKEN_REGEX =
-  /(\\\([^\n]*?\\\)|\$[^$\n]+\$|\b[A-Za-z](?:(?:_(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+)))+(?![A-Za-z0-9_]))/;
+  /(\\\([^\n]*?\\\)|\$(?!\s)[^$\n]*?\S\$|\b[A-Za-z](?:(?:_(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}\n]+\}|[A-Za-z0-9+\-=()]+)))+(?![A-Za-z0-9_]))/;
 
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function safeLinkUrl(value: string) {
-  const url = value.trim();
-  if (/^(https?:\/\/|mailto:)/i.test(url)) {
-    return url;
-  }
-
-  return "#";
-}
-
-function buildInlineMathHtml(text: string): string {
-  const parts: string[] = [];
-  let remaining = text;
-
-  while (remaining.length > 0) {
-    const match = remaining.match(INLINE_MARKDOWN_TOKEN_REGEX);
-
-    if (!match || match.index === undefined) {
-      parts.push(escapeHtml(remaining));
-      break;
-    }
-
-    if (match.index > 0) {
-      parts.push(escapeHtml(remaining.slice(0, match.index)));
-    }
-
-    const token = match[0];
-
-    if (token.startsWith("**") && token.endsWith("**")) {
-      parts.push(
-        `<strong>${buildInlineMathHtml(token.slice(2, -2))}</strong>`,
-      );
-    } else if (token.startsWith("`") && token.endsWith("`")) {
-      parts.push(`<code>${escapeHtml(token.slice(1, -1))}</code>`);
-    } else if (token.startsWith("\\(") && token.endsWith("\\)")) {
-      parts.push(`\\(${escapeHtml(token.slice(2, -2))}\\)`);
-    } else if (token.startsWith("$") && token.endsWith("$")) {
-      parts.push(`\\(${escapeHtml(token.slice(1, -1))}\\)`);
-    } else if (
-      /^[A-Za-z](?:(?:_(?:\{[^{}]+\}|[A-Za-z0-9+\-=()]+))|(?:\^(?:\{[^{}]+\}|[A-Za-z0-9+\-=()]+)))+$/.test(
-        token,
-      )
-    ) {
-      parts.push(`\\(${escapeHtml(token)}\\)`);
-    } else if (token.startsWith("[")) {
-      const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-
-      if (linkMatch) {
-        const [, label, url] = linkMatch;
-        const safeUrl = safeLinkUrl(url);
-        parts.push(
-          `<a href="${escapeHtml(safeUrl)}">${buildInlineMathHtml(label)}</a>`,
-        );
-      }
-    } else if (token.startsWith("*") && token.endsWith("*")) {
-      parts.push(`<em>${buildInlineMathHtml(token.slice(1, -1))}</em>`);
-    } else {
-      parts.push(escapeHtml(token));
-    }
-
-    remaining = remaining.slice(match.index + token.length);
-  }
-
-  return parts.join("");
-}
-
-function mathTypography(variant: MathTextVariant) {
-  switch (variant) {
-    case "h1":
-      return { fontSize: 25, lineHeight: 31, fontWeight: 700 };
-    case "h2":
-      return { fontSize: 21, lineHeight: 27, fontWeight: 700 };
-    case "h3":
-      return { fontSize: 17, lineHeight: 23, fontWeight: 700 };
-    case "quote":
-      return { fontSize: 14, lineHeight: 22, fontWeight: 400 };
-    default:
-      return { fontSize: 14, lineHeight: 22, fontWeight: 400 };
-  }
-}
-
-function buildMathJaxDocument({
-  content,
-  isDark,
-  variant,
-  displayMode,
-}: {
-  content: string;
-  isDark: boolean;
-  variant: MathTextVariant;
-  displayMode: boolean;
-}) {
-  const typography = mathTypography(variant);
-  const textColor =
-    variant === "quote"
-      ? isDark
-        ? "#b7b7be"
-        : "#686863"
-      : isDark
-        ? "#f3f3f5"
-        : "#1b1b19";
-  const linkColor = isDark ? "#d9d9df" : "#2d2d2a";
-  const codeBackground = isDark ? "#242429" : "#eeeeeb";
-  const codeColor = isDark ? "#f2f2f4" : "#222222";
-  const displayClass = displayMode ? "display" : "inline";
-
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
-  />
-  <style>
-    :root {
-      color-scheme: ${isDark ? "dark" : "light"};
-    }
-
-    html,
-    body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      background: transparent;
-      color: ${textColor};
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      font-size: ${typography.fontSize}px;
-      line-height: ${typography.lineHeight}px;
-      font-weight: ${typography.fontWeight};
-      -webkit-text-size-adjust: 100%;
-    }
-
-    body {
-      overflow-x: ${displayMode ? "auto" : "hidden"};
-      overflow-y: hidden;
-      -webkit-overflow-scrolling: touch;
-    }
-
-    #content {
-      box-sizing: border-box;
-      color: ${textColor};
-    }
-
-    #content.inline {
-      width: 100%;
-      min-height: ${typography.lineHeight}px;
-      overflow-wrap: anywhere;
-      word-break: normal;
-    }
-
-    #content.display {
-      width: max-content;
-      min-width: 100%;
-      padding: 10px 16px;
-      text-align: center;
-      white-space: nowrap;
-    }
-
-    strong {
-      font-weight: 700;
-    }
-
-    em {
-      font-style: italic;
-    }
-
-    code {
-      padding: 1px 4px;
-      border-radius: 5px;
-      background: ${codeBackground};
-      color: ${codeColor};
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.9em;
-    }
-
-    a {
-      color: ${linkColor};
-      text-decoration: underline;
-      text-decoration-thickness: 1px;
-      text-underline-offset: 2px;
-    }
-
-    mjx-container {
-      color: ${textColor} !important;
-    }
-
-    mjx-container:not([display="true"]) {
-      display: inline-block !important;
-      margin: 0 0.08em !important;
-      vertical-align: -0.08em;
-    }
-
-    mjx-container[display="true"] {
-      display: inline-block !important;
-      margin: 0 !important;
-      text-align: center !important;
-    }
-
-    mjx-container svg {
-      color: ${textColor} !important;
-      fill: currentColor !important;
-    }
-  </style>
-
-  <script>
-    function reportSize() {
-      try {
-        var content = document.getElementById("content");
-        if (!content || !window.ReactNativeWebView) return;
-
-        var rect = content.getBoundingClientRect();
-        var width = Math.ceil(Math.max(rect.width, content.scrollWidth, 1));
-        var height = Math.ceil(
-          Math.max(
-            rect.height,
-            content.scrollHeight,
-            document.body.scrollHeight,
-            document.documentElement.scrollHeight,
-            1
-          )
-        );
-
-        window.ReactNativeWebView.postMessage(
-          JSON.stringify({
-            type: "math-size",
-            width: width,
-            height: height
-          })
-        );
-      } catch (error) {
-        // La WebView garde simplement sa hauteur initiale si la mesure échoue.
-      }
-    }
-
-    window.MathJax = {
-      tex: {
-        processEscapes: true
-      },
-      svg: {
-        fontCache: "local"
-      },
-      startup: {
-        pageReady: function () {
-          return MathJax.startup.defaultPageReady().then(function () {
-            requestAnimationFrame(function () {
-              requestAnimationFrame(reportSize);
-            });
-
-            if (window.ResizeObserver) {
-              var observer = new ResizeObserver(reportSize);
-              observer.observe(document.getElementById("content"));
-            }
-          });
-        }
-      }
-    };
-
-    document.addEventListener("DOMContentLoaded", function () {
-      requestAnimationFrame(reportSize);
-    });
-  </script>
-
-  <script
-    defer
-    src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"
-    onerror="window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({type:'math-error'}))"
-  ></script>
-</head>
-<body>
-  <div id="content" class="${displayClass}">${content}</div>
-</body>
-</html>`;
-}
-
-function MathJaxWebView({
-  html,
-  displayMode,
-  fallback,
-}: {
-  html: string;
-  displayMode: boolean;
-  fallback: string;
-}) {
-  const styles = useThemedStyles();
-  const { width: windowWidth } = useWindowDimensions();
-  const [height, setHeight] = useState(displayMode ? 72 : 24);
-  const [failed, setFailed] = useState(false);
-
-  const handleMessage = useCallback((event: any) => {
-    try {
-      const payload = JSON.parse(event.nativeEvent.data);
-
-      if (payload?.type === "math-error") {
-        setFailed(true);
-        return;
-      }
-
-      if (payload?.type !== "math-size") return;
-
-      const measuredHeight = Number(payload.height);
-      if (!Number.isFinite(measuredHeight)) return;
-
-      const maxHeight = displayMode ? 640 : 1200;
-      const nextHeight = Math.min(
-        Math.max(Math.ceil(measuredHeight) + 2, displayMode ? 54 : 22),
-        maxHeight,
-      );
-
-      setHeight((current) =>
-        Math.abs(current - nextHeight) >= 2 ? nextHeight : current,
-      );
-    } catch {
-      // Message non reconnu : aucune action.
-    }
-  }, [displayMode]);
-
-  const handleNavigation = useCallback((request: any) => {
-    const url = String(request?.url ?? "");
-
-    if (
-      !url ||
-      url === "about:blank" ||
-      url.startsWith("data:") ||
-      url.startsWith("https://cdn.jsdelivr.net/")
-    ) {
-      return true;
-    }
-
-    if (/^(https?:\/\/|mailto:)/i.test(url)) {
-      Linking.openURL(url).catch(() => undefined);
-    }
-
-    return false;
-  }, []);
-
-  if (failed) {
-    return (
-      <Text style={styles.mathFallbackText}>
-        {fallback}
-      </Text>
-    );
-  }
-
-  return (
-    <WebView
-      originWhitelist={["*"]}
-      source={{ html }}
-      style={[
-        styles.mathWebView,
-        {
-          height,
-          maxWidth: Math.max(windowWidth - 36, 220),
-        },
-      ]}
-      containerStyle={styles.mathWebViewContainer}
-      javaScriptEnabled
-      scrollEnabled={displayMode}
-      nestedScrollEnabled={displayMode}
-      showsHorizontalScrollIndicator={false}
-      showsVerticalScrollIndicator={false}
-      bounces={false}
-      overScrollMode="never"
-      onMessage={handleMessage}
-      onShouldStartLoadWithRequest={handleNavigation}
-      onError={() => setFailed(true)}
-    />
-  );
-}
-
-function MathRichText({
-  text,
-  variant = "body",
-}: {
-  text: string;
-  variant?: MathTextVariant;
-}) {
+function MathRichText({ text, variant = "body" }: { text: string; variant?: MathTextVariant }) {
   const isDark = useIsDarkTheme();
-
-  const html = useMemo(
-    () =>
-      buildMathJaxDocument({
-        content: buildInlineMathHtml(text),
-        isDark,
-        variant,
-        displayMode: false,
-      }),
-    [isDark, text, variant],
-  );
-
-  return (
-    <MathJaxWebView
-      html={html}
-      displayMode={false}
-      fallback={text}
-    />
-  );
+  return <OriaMathInlineText text={text} variant={variant} isDark={isDark} />;
 }
 
 function MathExpression({ source }: { source: string }) {
-  const styles = useThemedStyles();
   const isDark = useIsDarkTheme();
-
-  const html = useMemo(
-    () =>
-      buildMathJaxDocument({
-        content: `\\[${escapeHtml(source.trim())}\\]`,
-        isDark,
-        variant: "body",
-        displayMode: true,
-      }),
-    [isDark, source],
-  );
-
-  return (
-    <View style={styles.mathBlock}>
-      <MathJaxWebView
-        html={html}
-        displayMode
-        fallback={source}
-      />
-    </View>
-  );
+  return <OriaMathRenderer latex={source} isDark={isDark} />;
 }
 
 function MessageCopyButton({
@@ -2507,6 +2158,7 @@ function MarkdownMessage({
   let math: string[] = [];
   let inCode = false;
   let inMath = false;
+  let bareMathEnvironmentEnd: string | null = null;
   let index = 0;
   const consumedVisualLines = new Set<number>();
 
@@ -2587,6 +2239,7 @@ function MarkdownMessage({
     index++;
     math = [];
     inMath = false;
+    bareMathEnvironmentEnd = null;
   };
 
   const flushCode = (complete = true) => {
@@ -2596,7 +2249,15 @@ function MarkdownMessage({
     // ORIA : seules les données JSON validées sont envoyées au moteur Web.
     // Les vrais fichiers de code gardent leur lecteur existant ; un JSON
     // incomplet, invalide ou trop long reste visible sous forme de code.
-    if (ORIA_VISUAL_FENCES.has(visualLanguage)) {
+    if (new Set(["math", "latex", "tex"]).has(visualLanguage)) {
+      if (complete) {
+        blocks.push(<MathExpression key={`math-code-${index}`} source={source} />);
+      } else {
+        blocks.push(<Text key={`math-pending-${index}`} style={oriaVisualStyles.smallLabel}>
+          {uiLanguage === "fr" ? "Composition de l’équation…" : "Typesetting equation…"}
+        </Text>);
+      }
+    } else if (ORIA_VISUAL_FENCES.has(visualLanguage)) {
       if (!complete) {
         blocks.push(
           <Text key={`visual-pending-${index}`} style={oriaVisualStyles.smallLabel}>
@@ -2687,8 +2348,26 @@ function MarkdownMessage({
       return;
     }
 
+    // Un environnement LaTeX autonome doit être traité comme une vraie formule,
+    // même lorsqu'un modèle n'ajoute pas les délimiteurs \[ ... \].
+    if (!inCode && !inMath) {
+      const bareEnv = trimmed.match(/^\\begin\{(align\*?|aligned|gather\*?|gathered|equation\*?|multline\*?|split|cases|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|array)\}/);
+      if (bareEnv) {
+        flushLists();
+        flushParagraph();
+        bareMathEnvironmentEnd = `\\end{${bareEnv[1]}}`;
+        math = [line];
+        inMath = true;
+        if (line.includes(bareMathEnvironmentEnd)) flushMath();
+        return;
+      }
+    }
+
     if (inMath) {
-      if (trimmed === "\\]" || trimmed === "$$") {
+      if (bareMathEnvironmentEnd) {
+        math.push(line);
+        if (line.includes(bareMathEnvironmentEnd)) flushMath();
+      } else if (trimmed === "\\]" || trimmed === "$$") {
         flushMath();
       } else {
         math.push(line);
@@ -3993,8 +3672,11 @@ const courseUi = StyleSheet.create({
 
 export default function ChatPage() {
   const router = useRouter();
-  const navigation = useNavigation();
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  // L'utilisateur peut lire l'historique sans que le streaming lui reprenne le scroll.
+  const isNearLatestRef = useRef(true);
+  const isUserScrollingRef = useRef(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   const [language, setLanguage] = useState<OriaLanguage>("fr");
   const [coursesOpen, setCoursesOpen] = useState(false);
@@ -4006,24 +3688,17 @@ export default function ChatPage() {
   );
   const t = CHAT_TEXT[language];
 
-  // Le Chat est la racine authentifiée d'ORIA : un geste natif "retour"
-  // ne doit jamais dépiler l'écran vers login / accueil. Les navigations
-  // normales (Crédits, Paramètres, déconnexion via replace) restent autorisées.
-  useEffect(() => {
-    const unsubscribe = navigation.addListener("beforeRemove", (event) => {
-      const actionType = event.data.action.type;
-
-      if (
-        actionType === "GO_BACK" ||
-        actionType === "POP" ||
-        actionType === "POP_TO_TOP"
-      ) {
-        event.preventDefault();
-      }
-    });
-
-    return unsubscribe;
-  }, [navigation]);
+  // Expo Router SDK 58 n'émet plus beforeRemove.
+  // Le Chat est la racine authentifiée : bloquer seulement les retours
+  // qui dépileraient cette page. Les remplacements/redirections explicites
+  // (notamment la déconnexion) restent autorisés via repeat().
+  usePreventRemove(true, ({ data, repeat }) => {
+    const actionType = data.action.type;
+    if (actionType === "GO_BACK" || actionType === "POP" || actionType === "POP_TO_TOP") {
+      return;
+    }
+    repeat();
+  });
 
   useFocusEffect(
     useCallback(() => {
@@ -4080,10 +3755,25 @@ export default function ChatPage() {
       instruction: string;
     } | null>(null);
 
+  // Rattacher l'ID optimiste du message à son véritable ID Supabase.
+  // Sans cela, l'édition immédiate après la réponse aboutit à un 404.
+  const persistedUserMessageIdsRef = useRef<Record<string, string>>({});
+  const [editingCompletedId, setEditingCompletedId] = useState<string | null>(null);
+  const [completedEditDraft, setCompletedEditDraft] = useState("");
+  const [completedEditOriginal, setCompletedEditOriginal] = useState("");
+  const [completedEditBaseRevision, setCompletedEditBaseRevision] = useState(0);
+  const [completedEditFiles, setCompletedEditFiles] = useState<ChatAttachment[]>([]);
+  const [completedEditOpening, setCompletedEditOpening] = useState(false);
+  const [completedEditBusy, setCompletedEditBusy] = useState(false);
+  const [completedEditError, setCompletedEditError] = useState<string | null>(null);
+  const completedEditSubmittingRef = useRef(false);
+
   const [message, setMessage] = useState("");
   const [composerExpanded, setComposerExpanded] = useState(false);
-  const [composerInputHeight, setComposerInputHeight] = useState(112);
-  const composerInputRef = useRef<TextInput>(null);
+  // La hauteur est mesurée par un <Text> indépendant : jamais par le TextInput redimensionné.
+  // Ainsi, la saisie ne provoque aucune boucle onContentSizeChange -> height -> onContentSizeChange.
+  const [composerInputHeight, setComposerInputHeight] = useState(COMPOSER_INPUT_MIN_HEIGHT);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -4259,6 +3949,7 @@ export default function ChatPage() {
   mobileReturnGuardRef.current = Boolean(
     !isInitialized || !activeConversationId ||
     isThinking || activeGenerationId || isApplyingModification ||
+    editingCompletedId !== null || completedEditBusy || completedEditOpening ||
     message.trim() || attachments.length ||
     voiceDraft || localVoiceDraft || voiceUploading ||
     audioBusyRef.current || stoppingRecordingRef.current ||
@@ -4444,44 +4135,45 @@ export default function ChatPage() {
     isInitialized,
   ]);
 
+  const handleListScroll = useCallback((contentHeight: number, viewportHeight: number, scrollY: number) => {
+    const distance = Math.max(0, contentHeight - viewportHeight - scrollY);
+    isNearLatestRef.current = distance <= 160;
+    const shouldShow = distance > 160;
+    setShowJumpToLatest((previous) => previous === shouldShow ? previous : shouldShow);
+  }, []);
+
   const scrollToBottom = useCallback((animated = true) => {
+    isUserScrollingRef.current = false;
+    isNearLatestRef.current = true;
+    setShowJumpToLatest(false);
     requestAnimationFrame(() => {
       listRef.current?.scrollToEnd({ animated });
     });
   }, []);
 
+  // Ne suivre les réponses entrantes que si l'utilisateur est déjà près du bas.
   useEffect(() => {
-    if (!messages.length || composerExpanded) return;
-
+    if (!messages.length || !isNearLatestRef.current) return;
     const frame = requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated: true });
+      listRef.current?.scrollToEnd({ animated: false });
     });
-
     return () => cancelAnimationFrame(frame);
-  }, [messages.length, isThinking, composerExpanded]);
+  }, [messages.length, isThinking]);
 
+  // Une autre conversation s'ouvre à son dernier message, sans héritage du scroll précédent.
   useEffect(() => {
-    const subscription = Keyboard.addListener("keyboardDidHide", () => {
-      if (
-        !message.trim() &&
-        attachments.length === 0 &&
-        !activeCapability &&
-        !modelMenuOpen &&
-        !reasoningMenuOpen
-      ) {
-        setComposerExpanded(false);
-        setComposerInputHeight(112);
-      }
-    });
+    isNearLatestRef.current = true;
+    isUserScrollingRef.current = false;
+    setShowJumpToLatest(false);
+  }, [activeConversationId]);
 
-    return () => subscription.remove();
-  }, [
-    message,
-    attachments.length,
-    activeCapability,
-    modelMenuOpen,
-    reasoningMenuOpen,
-  ]);
+  // À l'ouverture/fermeture du clavier, ne PAS redimensionner le composer.
+  // Écouter les événements DID évite les allers-retours pendant l'animation iOS.
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   async function loadWallet(
     trialState: Record<string, TrialInfo> = trials,
@@ -4988,9 +4680,8 @@ export default function ChatPage() {
       return byMarker;
     }
 
-    return generatedArtifacts.filter(
-      (artifact) =>
-        artifact.messageId === item.id,
+    return generatedArtifacts.filter((artifact) =>
+      artifact.messageId === item.id || artifact.source_message_id === item.id,
     );
   }
 
@@ -5223,7 +4914,7 @@ export default function ChatPage() {
     setMessage("");
     setAttachments([]);
     setComposerExpanded(false);
-    setComposerInputHeight(112);
+    setComposerInputHeight(COMPOSER_INPUT_MIN_HEIGHT);
     setActiveCapability(null);
     setError(null);
     closeDrawer();
@@ -5269,6 +4960,14 @@ export default function ChatPage() {
   }
 
   async function selectConversation(conversationId: string) {
+    if (completedEditSubmittingRef.current) {
+      // Une régénération peut être facturée ; elle poursuit côté serveur.
+      // La vue ne basculera pas silencieusement pendant l'attente.
+      return;
+    }
+    setEditingCompletedId(null);
+    setCompletedEditFiles([]);
+    setCompletedEditError(null);
     chatViewActionRef.current += 1;
     setShowReturnWelcome(false);
     setActiveConversationId(conversationId);
@@ -5978,13 +5677,16 @@ export default function ChatPage() {
     pendingModificationRef.current =
       null;
 
+    // Un nouveau message de l'utilisateur doit toujours apparaître en bas.
+    isNearLatestRef.current = true;
+    setShowJumpToLatest(false);
     setMessages((current) => [
       ...current,
       userMessage,
     ]);
     if (options?.contentOverride === undefined) setMessage("");
     setComposerExpanded(false);
-    setComposerInputHeight(112);
+    setComposerInputHeight(COMPOSER_INPUT_MIN_HEIGHT);
     setChatStatusStep("sending");
     setIsThinking(true);
     setError(null);
@@ -5996,6 +5698,9 @@ export default function ChatPage() {
         saveMessageRemote(
           userMessage,
         ).then(async (savedMessage) => {
+          if (savedMessage?.id) {
+            persistedUserMessageIdsRef.current[userMessage.id] = String(savedMessage.id);
+          }
           if (options?.voice && savedMessage?.id) {
             try {
               await apiFetch(`/ai/audio/${encodeURIComponent(options.voice.audio_id)}/attach-message`, {
@@ -6723,6 +6428,168 @@ export default function ChatPage() {
     }
   }
 
+  /* ============================================================
+   * ORIA — Modifier une demande APRÈS sa réponse (Backend 2B)
+   * Le mécanisme existant de modification en cours est inchangé.
+   * ============================================================ */
+  function cancelCompletedEdit() {
+    if (completedEditBusy || completedEditOpening) return;
+    setEditingCompletedId(null);
+    setCompletedEditDraft("");
+    setCompletedEditFiles([]);
+    setCompletedEditError(null);
+  }
+
+  async function openCompletedEdit(item: ChatMessage) {
+    if (!activeConversationId || isThinking || completedEditBusy ||
+        completedEditOpening || editingCompletedId !== null) return;
+    if (extractAudioIdFromMessage(item.content || "")) {
+      setError(language === "fr"
+        ? "La modification des notes vocales terminées n'est pas encore disponible."
+        : "Editing completed voice notes is not supported yet.");
+      return;
+    }
+    const conversationId = activeConversationId;
+    const action = chatViewActionRef.current;
+    const serverId = persistedUserMessageIdsRef.current[item.id] || item.id;
+    setCompletedEditOpening(true);
+    setCompletedEditError(null);
+    try {
+      const data = await apiFetch<OriaRevisionsResponse>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(serverId)}/revisions`,
+      );
+      if (chatViewActionRef.current !== action) return;
+      const pending = data.revisions.some((rev) =>
+        rev.status === "queued" || rev.status === "generating" ||
+        (rev.status === "ready" && rev.revision_no > data.active_revision));
+      if (pending) throw new Error(language === "fr"
+        ? "Une modification précédente n'est pas encore résolue. Vérifie son état avant une autre génération."
+        : "A previous edit is unresolved. Check its status before regenerating.");
+      setCompletedEditBaseRevision(data.active_revision);
+      setCompletedEditOriginal(data.original.user_content || item.content);
+      setCompletedEditDraft(oriaEditableUserText(item.content));
+      setCompletedEditFiles([]);
+      setEditingCompletedId(item.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Impossible d'ouvrir la modification.");
+    } finally {
+      setCompletedEditOpening(false);
+    }
+  }
+
+  async function pickCompletedEditFiles() {
+    if (completedEditFiles.length >= MAX_ATTACHMENTS || completedEditBusy) return;
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        multiple: true, copyToCacheDirectory: true, type: "*/*",
+      });
+      if (result.canceled) return;
+      const incoming: ChatAttachment[] = [];
+      for (const asset of result.assets.slice(0, MAX_ATTACHMENTS - completedEditFiles.length)) {
+        const mime = asset.mimeType || "application/octet-stream";
+        if (!ACCEPTED_FILE_TYPES.includes(mime) && !ACCEPTED_IMAGE_TYPES.includes(mime)) {
+          setCompletedEditError(t.unsupportedFile);
+          continue;
+        }
+        incoming.push({ id: uid(), uri: asset.uri, name: asset.name,
+          mimeType: mime, kind: mime.startsWith("image/") ? "image" : "file", size: asset.size });
+      }
+      setCompletedEditFiles((previous) => [...previous, ...incoming].slice(0, MAX_ATTACHMENTS));
+    } catch (cause) {
+      setCompletedEditError(cause instanceof Error ? cause.message : t.unsupportedFile);
+    }
+  }
+
+  async function applyCompletedEdit(item: ChatMessage) {
+    const conversationId = activeConversationId;
+    const serverId = persistedUserMessageIdsRef.current[item.id] || item.id;
+    const content = completedEditDraft.trim();
+    if (!conversationId || !content || isThinking || completedEditBusy || completedEditSubmittingRef.current) return;
+    if (content.length > 24000) {
+      setCompletedEditError(language === "fr" ? "Maximum 24 000 caractères." : "Maximum 24,000 characters.");
+      return;
+    }
+    if (content === oriaEditableUserText(item.content)) return;
+    if (oriaMessageHasFiles(completedEditOriginal) && completedEditFiles.length === 0) {
+      setCompletedEditError(language === "fr"
+        ? "Ce message utilisait des pièces jointes. Sélectionne à nouveau les fichiers d'origine."
+        : "This message used attachments. Reattach the original files.");
+      return;
+    }
+    const action = chatViewActionRef.current;
+    completedEditSubmittingRef.current = true;
+    setCompletedEditBusy(true);
+    setCompletedEditError(null);
+    try {
+      const prepared = await apiFetch<OriaPrepareRevisionResponse>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(serverId)}/revisions`,
+        { method: "POST", body: JSON.stringify({
+          content, base_revision: completedEditBaseRevision, request_id: oriaRevisionRequestId(),
+        }) },
+      );
+      const form = new FormData();
+      form.append("conversation_id", conversationId);
+      form.append("message_id", serverId);
+      form.append("model", selectedModel);
+      form.append("web", String(activeCapability === "Recherche Web"));
+      form.append("visual_mode", "true");
+      form.append("reasoning_mode", reasoningMode);
+      for (const attachment of completedEditFiles) {
+        // Même transport Expo File que l'envoi initial du Chat.
+        form.append("files", new ExpoFile(attachment.uri), attachment.name);
+      }
+      const generated = await apiRevisionFormFetch<OriaGenerateRevisionResponse>(
+        `/ai/chat/revisions/${encodeURIComponent(prepared.revision.id)}/generate`, form,
+      );
+      if (!generated.active) throw new Error(language === "fr"
+        ? "Version non activée ; vérifie son état côté serveur."
+        : "Revision not activated; check its server status.");
+      // Recharger la projection officielle au lieu d'ajouter des messages.
+      const data = await apiFetch<{
+        messages: ChatMessage[];
+        artifacts?: Array<Record<string, unknown>>;
+        voice_notes?: Array<Record<string, unknown>>;
+      }>(`/conversations/${encodeURIComponent(conversationId)}/messages`);
+      if (chatViewActionRef.current === action) {
+        const remote = data.messages || [];
+        setMessages(remote);
+        const freshArtifacts = (data.artifacts || [])
+          .map((raw) => normalizeGeneratedArtifact(raw))
+          .filter((artifact): artifact is GeneratedArtifact => artifact !== null);
+        setGeneratedArtifacts((current) => mergeGeneratedArtifacts(
+          current.filter((artifact) => artifact.conversation_id !== conversationId), freshArtifacts,
+        ));
+        setVoiceNotes((current) => mergeVoiceNotes(current,
+          (data.voice_notes || []).map(normalizeVoiceNote)
+            .filter((note): note is VoiceNote => note !== null),
+        ));
+        setEditingCompletedId(null);
+        setCompletedEditDraft("");
+        setCompletedEditFiles([]);
+        setCompletedEditError(null);
+        scrollToBottom(false);
+        if (currentUserId) {
+          const cached = await readLocalCache(currentUserId);
+          await writeLocalCache(currentUserId, {
+            conversations: cached?.conversations || conversations,
+            messages: { ...(cached?.messages || {}), [conversationId]: remote },
+            activeConversationId: conversationId,
+            selectedModel, reasoningMode, activeCapability,
+          });
+        }
+        const latestTrials = await loadTrials();
+        await loadWallet(latestTrials);
+      }
+    } catch (cause) {
+      // Ne jamais relancer automatiquement : l'appel fournisseur peut déjà
+      // avoir consommé des tokens si le réseau a perdu la confirmation.
+      setCompletedEditError(cause instanceof Error ? cause.message : "La modification a échoué.");
+    } finally {
+      completedEditSubmittingRef.current = false;
+      setCompletedEditBusy(false);
+    }
+  }
+
   function renderMessage({ item }: { item: ChatMessage }) {
     const voice = findVoiceForMessage(item);
     const webImages = item.role === "assistant" ? extractWebImages(item.content || "") : [];
@@ -6782,6 +6649,21 @@ export default function ChatPage() {
           <MessageCopyButton value={copyValue} language={language} />
 
           {item.role === "user" &&
+          !isThinking && !completedEditBusy && !completedEditOpening &&
+          editingCompletedId === null && !extractAudioIdFromMessage(item.content || "") ? (
+            <Pressable
+              onPress={() => void openCompletedEdit(item)}
+              style={styles.modifyMessageButton}
+              accessibilityRole="button"
+              accessibilityLabel={t.modify}
+            >
+              <Ionicons name="create-outline" size={14}
+                color={themedIconColor("#777771", isDark)} />
+              <Text style={styles.modifyMessageButtonText}>{t.modify}</Text>
+            </Pressable>
+          ) : null}
+
+          {item.role === "user" &&
           isThinking &&
           item.id === activeRequestMessageId ? (
             <Pressable
@@ -6819,6 +6701,83 @@ export default function ChatPage() {
             </Pressable>
           ) : null}
         </View>
+
+        {item.role === "user" && editingCompletedId === item.id && !isThinking ? (
+          <View style={styles.modificationCard}>
+            <Text style={styles.modificationTitle}>
+              {language === "fr" ? "Modifier la demande" : "Edit request"}
+            </Text>
+            <Text style={styles.modificationHelp}>
+              {language === "fr"
+                ? "Modifie directement ton message. ORIA remplacera la réponse affichée après génération."
+                : "Edit your message directly. ORIA will replace the visible answer after generation."}
+            </Text>
+            <TextInput
+              multiline autoFocus
+              value={completedEditDraft}
+              onChangeText={setCompletedEditDraft}
+              editable={!completedEditBusy}
+              style={styles.modificationInput}
+              placeholder={language === "fr" ? "Modifie ton message..." : "Edit your request..."}
+              placeholderTextColor={themedIconColor("#92928c", isDark)}
+              textAlignVertical="top"
+            />
+            {oriaMessageHasFiles(completedEditOriginal) ? (
+              <Text style={styles.modificationHint}>
+                {language === "fr"
+                  ? "Joins de nouveau les fichiers d'origine : ORIA ne peut pas les récupérer depuis l'ancien message."
+                  : "Reattach the original files; they cannot be replayed from the previous message."}
+              </Text>
+            ) : null}
+            {completedEditFiles.map((file) => (
+              <View key={file.id} style={styles.completedEditFileRow}>
+                <Ionicons name="document-attach-outline" size={15}
+                  color={themedIconColor("#777771", isDark)}/>
+                <Text style={styles.completedEditFileName} numberOfLines={1}>{file.name}</Text>
+                <Pressable disabled={completedEditBusy} onPress={() =>
+                  setCompletedEditFiles((current) => current.filter((selected) => selected.id !== file.id))}
+                  accessibilityRole="button" accessibilityLabel={t.cancel}>
+                  <Ionicons name="close-circle-outline" size={20}
+                    color={themedIconColor("#777771", isDark)}/>
+                </Pressable>
+              </View>
+            ))}
+            <Pressable onPress={() => void pickCompletedEditFiles()}
+              disabled={completedEditBusy || completedEditFiles.length >= MAX_ATTACHMENTS}
+              style={styles.completedEditAttachButton}
+              accessibilityRole="button"
+              accessibilityLabel={language === "fr" ? "Joindre un fichier" : "Attach a file"}>
+              <Ionicons name="attach-outline" size={16}
+                color={themedIconColor("#777771", isDark)}/>
+              <Text style={styles.completedEditAttachText}>
+                {language === "fr" ? "Ajouter un fichier ou une image" : "Add a file or image"}
+              </Text>
+            </Pressable>
+            {completedEditError ? (
+              <Text style={styles.completedEditError}>{completedEditError}</Text>
+            ) : null}
+            <View style={styles.modificationActions}>
+              <Pressable onPress={cancelCompletedEdit} disabled={completedEditBusy}
+                style={styles.modificationCancelButton} accessibilityRole="button">
+                <Text style={styles.modificationCancelText}>{t.cancel}</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => void applyCompletedEdit(item)}
+                disabled={completedEditBusy || !completedEditDraft.trim() ||
+                  completedEditDraft.trim() === oriaEditableUserText(item.content)}
+                style={[styles.modificationApplyButton,
+                  (completedEditBusy || !completedEditDraft.trim() ||
+                    completedEditDraft.trim() === oriaEditableUserText(item.content)) &&
+                    styles.modificationApplyButtonDisabled]}
+                accessibilityRole="button">
+                {completedEditBusy ? <ActivityIndicator size="small" color="#ffffff"/> : null}
+                <Text style={styles.modificationApplyText}>
+                  {completedEditBusy ? t.applying : language === "fr" ? "Enregistrer et régénérer" : "Save and regenerate"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
 
         {item.role === "user" &&
         isThinking &&
@@ -7132,7 +7091,7 @@ export default function ChatPage() {
             mesure les vraies zones système sur iOS ET Android (encoche,
             barre d'état et navigation), sans marge fixe ni double padding. */}
         <SafeAreaProvider style={mobileExtras.codeModal}>
-          <StatusBar barStyle="light-content" backgroundColor="#121318" />
+          <StatusBar barStyle="light-content" />
           <SafeAreaView
             style={mobileExtras.codeModal}
             edges={["top", "bottom", "left", "right"]}
@@ -7328,7 +7287,7 @@ export default function ChatPage() {
         <Stack.Screen options={{ gestureEnabled: false }} />
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         keyboardVerticalOffset={0}
       >
         <View style={styles.container} {...edgePanResponder.panHandlers}>
@@ -7457,6 +7416,7 @@ export default function ChatPage() {
               ) : null}
             </View>
           ) : (
+            <View style={styles.messageViewport}>
             <FlatList
               ref={listRef}
               style={styles.messageListContainer}
@@ -7481,35 +7441,57 @@ export default function ChatPage() {
                     {ORIA_CHAT_STATUS_LABELS[chatStatusStep][language]}
                   </Text>
                 </View>
-              ) : null}
+              ) : undefined}
               keyExtractor={(item) => item.id}
               renderItem={renderMessage}
               contentContainerStyle={styles.messageList}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              keyboardDismissMode={
-                composerExpanded
-                  ? "none"
-                  : Platform.OS === "ios"
-                    ? "interactive"
-                    : "on-drag"
-              }
+              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+              scrollEventThrottle={16}
+              onScrollBeginDrag={() => { isUserScrollingRef.current = true; }}
+              onMomentumScrollBegin={() => {
+                if (!isNearLatestRef.current) isUserScrollingRef.current = true;
+              }}
+              onScroll={({ nativeEvent }) => {
+                // Une arrivée de nouveaux tokens ne doit pas être prise pour un scroll manuel.
+                if (!isUserScrollingRef.current) return;
+                handleListScroll(nativeEvent.contentSize.height, nativeEvent.layoutMeasurement.height, nativeEvent.contentOffset.y);
+              }}
+              onScrollEndDrag={({ nativeEvent }) => {
+                handleListScroll(nativeEvent.contentSize.height, nativeEvent.layoutMeasurement.height, nativeEvent.contentOffset.y);
+                isUserScrollingRef.current = false;
+              }}
+              onMomentumScrollEnd={({ nativeEvent }) => {
+                handleListScroll(nativeEvent.contentSize.height, nativeEvent.layoutMeasurement.height, nativeEvent.contentOffset.y);
+                isUserScrollingRef.current = false;
+              }}
               onContentSizeChange={() => {
-                if (isThinking) {
-                  scrollToBottom(false);
+                if (isNearLatestRef.current) {
+                  listRef.current?.scrollToEnd({ animated: false });
                 }
               }}
             />
+            {showJumpToLatest && messages.length > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={language === "fr" ? "Aller au dernier message" : "Jump to latest message"}
+                accessibilityHint={language === "fr" ? "Descend en bas de la conversation" : "Scrolls to the newest messages"}
+                onPress={() => scrollToBottom(true)}
+                style={styles.jumpToLatestButton}
+              >
+                <Ionicons name="arrow-down" size={22} color={themedIconColor("#161616", isDark)} />
+              </Pressable>
+            ) : null}
+            </View>
           )}
 
           <View
             style={[
               styles.bottomArea,
               {
-                paddingBottom: Math.max(
-                  safeAreaBottom,
-                  Platform.OS === "ios" ? 8 : 10,
-                ),
+                // Inset constant même pendant l'animation clavier : pas d'oscillation.
+                paddingBottom: Math.max(safeAreaBottom, Platform.OS === "ios" ? 8 : 10),
               },
             ]}
           >
@@ -7884,8 +7866,25 @@ export default function ChatPage() {
                 </ScrollView>
               ) : null}
 
+              {composerExpanded ? (
+                <Text
+                  pointerEvents="none"
+                  accessible={false}
+                  style={styles.composerTextMeasure}
+                  onTextLayout={(event) => {
+                    const lineCount = event.nativeEvent.lines.length;
+                    if (lineCount < 1) return;
+                    const nextHeight = Math.max(
+                      COMPOSER_INPUT_MIN_HEIGHT,
+                      Math.min(COMPOSER_INPUT_MAX_HEIGHT, 18 + lineCount * 23),
+                    );
+                    setComposerInputHeight((previous) => previous === nextHeight ? previous : nextHeight);
+                  }}
+                >
+                  {message.length > 2000 ? message.slice(-2000) : (message || " ")}{"\u200b"}
+                </Text>
+              ) : null}
               <TextInput
-                ref={composerInputRef}
                 value={message}
                 onChangeText={(value) =>
                   void handleComposerTextChange(
@@ -7899,7 +7898,7 @@ export default function ChatPage() {
                 editable={!isThinking}
                 multiline
                 textAlignVertical={composerExpanded ? "top" : "center"}
-                scrollEnabled={composerExpanded && composerInputHeight >= 172}
+                scrollEnabled={composerExpanded && composerInputHeight >= COMPOSER_INPUT_MAX_HEIGHT}
                 style={[
                   styles.composerInput,
                   composerExpanded
@@ -7913,25 +7912,8 @@ export default function ChatPage() {
                   setComposerExpanded(true);
                   setModelMenuOpen(false);
                   setReasoningMenuOpen(false);
-                  setComposerInputHeight((current) => Math.max(112, current));
                 }}
                 onBlur={() => undefined}
-                onContentSizeChange={(event) => {
-                  if (!composerExpanded) return;
-
-                  const measuredHeight =
-                    Math.ceil(event.nativeEvent.contentSize.height) + 22;
-                  const nextHeight = Math.max(
-                    112,
-                    Math.min(176, measuredHeight),
-                  );
-
-                  setComposerInputHeight((current) =>
-                    Math.abs(current - nextHeight) >= 6
-                      ? nextHeight
-                      : current,
-                  );
-                }}
                 onSubmitEditing={(event) => {
                   if (Platform.OS === "ios") {
                     event.preventDefault();
@@ -8120,7 +8102,7 @@ export default function ChatPage() {
               )}
             </View>
 
-            {composerExpanded ? (
+            {composerExpanded && !keyboardVisible ? (
               <Text style={styles.disclaimer}>
                 {interpolate(t.attachmentDisclaimer, {
                   max: MAX_ATTACHMENTS,
@@ -8523,8 +8505,32 @@ const baseStyles = StyleSheet.create({
     lineHeight: 21,
     color: "#7b7b76",
   },
+  messageViewport: {
+    flex: 1,
+    position: "relative",
+    minHeight: 0,
+  },
   messageListContainer: {
     flex: 1,
+  },
+  jumpToLatestButton: {
+    position: "absolute",
+    bottom: 13,
+    right: 17,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: "#d6d6d2",
+    backgroundColor: "#ffffff",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 30,
+    elevation: 5,
+    shadowColor: "#000000",
+    shadowOpacity: 0.10,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
   },
   messageList: {
     paddingHorizontal: 14,
@@ -8673,6 +8679,41 @@ const baseStyles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 11,
     fontWeight: "700",
+  },
+  completedEditFileRow: {
+    marginTop: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingVertical: 5,
+    paddingHorizontal: 7,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: "#deded9",
+  },
+  completedEditFileName: {
+    flex: 1,
+    color: "#777771",
+    fontSize: 11,
+  },
+  completedEditAttachButton: {
+    alignSelf: "flex-start",
+    marginTop: 10,
+    minHeight: 32,
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "center",
+    paddingHorizontal: 7,
+  },
+  completedEditAttachText: {
+    color: "#777771",
+    fontSize: 11,
+  },
+  completedEditError: {
+    marginTop: 7,
+    color: "#b91c1c",
+    fontSize: 11,
+    lineHeight: 17,
   },
   modificationStatus: {
     marginTop: 4,
@@ -9289,7 +9330,11 @@ const baseStyles = StyleSheet.create({
     alignItems: "center",
   },
   composerExpanded: {
-    borderRadius: 26,
+    // Ne s'étend jamais sur toute la hauteur disponible.
+    alignSelf: "stretch",
+    flexGrow: 0,
+    flexShrink: 0,
+    borderRadius: 24,
     paddingTop: 3,
   },
   attachmentsRow: {
@@ -9356,12 +9401,27 @@ const baseStyles = StyleSheet.create({
     paddingBottom: 12,
   },
   composerInputExpanded: {
+    // Le champ n'influence jamais le calcul de sa propre hauteur.
+    flex: 0,
     width: "100%",
-    minHeight: 112,
-    maxHeight: 176,
+    minHeight: COMPOSER_INPUT_MIN_HEIGHT,
+    maxHeight: COMPOSER_INPUT_MAX_HEIGHT,
     paddingHorizontal: 17,
-    paddingTop: 14,
-    paddingBottom: 10,
+    paddingTop: 10,
+    paddingBottom: 8,
+  },
+  composerTextMeasure: {
+    // Mesure des lignes réelle, hors du flux et sans boucle de redimensionnement.
+    position: "absolute",
+    left: 17,
+    right: 17,
+    top: 8,
+    color: "transparent",
+    opacity: 0,
+    fontSize: 16,
+    lineHeight: 23,
+    fontWeight: "400",
+    zIndex: -1,
   },
   composerFooter: {
     minHeight: 58,
