@@ -7631,4 +7631,529 @@ async def google_status(
             "configured_models": data["configured_models"],
             "generations_enabled": _google_generations_active(),
             "note": "La liste seule ne garantit ni acces payant ni quotas."}
-   
+
+
+# ============================================================
+# OPENROUTER — MINI-STUDIO (ne remplace PAS le fournisseur Google)
+# ============================================================
+# Les prix OpenRouter sont indépendants de la grille Google.
+# Les plafonds USD explicites configurés par l'administrateur contrôlent
+# chaque devis. Sans plafonds, la génération reste fermée.
+import os as _or_os
+import re as _or_re
+from decimal import ROUND_CEILING as _OR_CEIL
+from pathlib import Path as _OrPath
+import tempfile as _or_tempfile
+
+from app.services.openrouter_media_service import (
+    OpenRouterMediaService as _ORService,
+    OpenRouterMediaError as _ORError,
+)
+
+_OR_MODEL_MAPPING = {
+    "gemini-3.1-flash-lite-image": "google/gemini-3.1-flash-lite-image",
+    "gemini-nano-banana-2.1": "google/gemini-3.1-flash-image",
+    "gemini-3-pro-image": "google/gemini-3-pro-image",
+}
+_OR_VIDEO_BY_PACK = {
+    "light_pack": "google/veo-3.1-lite",
+    "intermediate_pack": "google/veo-3.1-lite",
+    "pro_pack": "google/veo-3.1-fast",
+    "business_pack": "google/veo-3.1",
+}
+_OR_SHORT_ACTIONS = {
+    "light_pack": ("video_4s", "video_8s"),
+    "intermediate_pack": ("video_lite",),
+    "pro_pack": ("video_pro_fast", "video_pro_standard"),
+    "business_pack": ("video_business_fast", "video_business_standard"),
+}
+_OR_SAFE_MODES = {"image": ("text_to_image", "image_edit"),
+                  "video": ("text_to_video", "image_to_video")}
+_OR_TABLE = "oria_openrouter_media_jobs"
+
+
+def _or_limit(kind: str) -> Decimal:
+    raw = _or_os.getenv(f"ORIA_OPENROUTER_{kind.upper()}_MAX_USD", "0")
+    try:
+        value = Decimal(raw)
+        if not value.is_finite() or not Decimal("0") < value <= Decimal("50"):
+            return Decimal("0")
+        return value
+    except Exception:
+        return Decimal("0")
+
+
+def _or_credits(usd: Decimal) -> int:
+    cfg = _google_pricing_config()
+    # Même valeur économique du crédit ORIA, pas la grille tarifaire Google.
+    value = Decimal(str(cfg.ORIA_CREDIT_VALUE_XAF))
+    usd_xaf = Decimal(str(cfg.ACCOUNTING_USD_XAF))
+    if value <= 0 or usd_xaf <= 0 or usd < 0 or not usd.is_finite():
+        raise HTTPException(503, "Configuration du coût ORIA invalide.")
+    return max(1, int((usd * usd_xaf / value).to_integral_value(rounding=_OR_CEIL)))
+
+
+def _or_switch() -> bool:
+    return (_or_os.getenv("ORIA_OPENROUTER_PAID_CREATIONS_ENABLED", "0") == "1"
+            and _or_os.getenv("ORIA_OPENROUTER_STORAGE_REVIEWED", "0") == "1"
+            and bool(_or_os.getenv("OPENROUTER_API_KEY", "").strip())
+            and _or_limit("image") > 0 and _or_limit("video") > 0)
+
+
+def _or_service() -> _ORService:
+    if not _or_os.getenv("OPENROUTER_API_KEY", "").strip():
+        raise HTTPException(503, "Clé OpenRouter non configurée sur Render.")
+    return _ORService()
+
+
+def _or_catalog(service: _ORService, kind: str) -> list[dict[str, Any]]:
+    try:
+        return (service.list_image_models() if kind == "image"
+                else service.list_video_models())
+    except _ORError as e:
+        raise HTTPException(502, f"Catalogue {kind} OpenRouter indisponible.") from e
+
+
+def _or_video_model(pack_id: str, catalog: list[dict[str, Any]]) -> dict[str, Any] | None:
+    key = _OR_VIDEO_BY_PACK.get(pack_id)
+    return next((row for row in catalog if row.get("id") == key), None)
+
+
+def _or_allowed_images(pack_id: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cfg = _google_pricing_config()
+    direct = cfg.GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK.get(pack_id, ())
+    accepted = {_OR_MODEL_MAPPING[m] for m in direct if m in _OR_MODEL_MAPPING}
+    return [x for x in catalog if x.get("id") in accepted]
+
+
+def _or_image_choices(entry: dict[str, Any], key: str) -> list[str]:
+    params = entry.get("supported_parameters")
+    values = (params.get(key) or {}).get("values") if isinstance(params, dict) else None
+    return [x for x in values if isinstance(x, str)] if isinstance(values, list) else []
+
+
+def _or_reservation(kind: str) -> tuple[int, int, Decimal]:
+    # Estimation commerciale prudente : un plafond administrateur, pas une
+    # promesse de tarif fournisseur. Résultat final = usage.cost OpenRouter.
+    raw = _or_limit(kind)
+    if raw <= 0:
+        raise HTTPException(503, f"Plafond USD {kind} OpenRouter non configuré.")
+    # Le remboursement du surplus reste effectué via le settlement du repository.
+    return _or_credits(raw), _or_credits(raw * Decimal("1.20")), raw * Decimal("1.20")
+
+
+def _or_verify_config(kind: str, *, pack_id: str, action: CreditAction | None,
+                      model: str | None, resolution: str, mode: str,
+                      ref_count: int, duration: int | None = None) -> dict[str, Any]:
+    catalog = _or_catalog(_or_service(), kind)
+    if mode not in _OR_SAFE_MODES[kind]:
+        raise HTTPException(501, "Ce mode nécessite un moteur non disponible.")
+    if ref_count != (1 if mode.endswith("edit") or mode == "image_to_video" else 0):
+        raise HTTPException(400, "La référence ne correspond pas au mode choisi.")
+    if kind == "image":
+        rows = _or_allowed_images(pack_id, catalog)
+        chosen = next((x for x in rows if x.get("id") == model), None)
+        if chosen is None:
+            raise HTTPException(403, "Modèle OpenRouter non disponible dans ce pack.")
+        if resolution not in _or_image_choices(chosen, "resolution"):
+            raise HTTPException(400, "Résolution non acceptée par ce modèle OpenRouter.")
+        if action is not None:
+            _google_action_resolution(pack_id, action, resolution)
+        if ref_count and "input_references" not in (chosen.get("supported_parameters") or {}):
+            raise HTTPException(400, "Ce modèle ne prend pas en charge les retouches.")
+        return chosen
+    chosen = _or_video_model(pack_id, catalog)
+    if chosen is None:
+        raise HTTPException(403, "Modèle vidéo OpenRouter non disponible pour ce pack.")
+    if action is not None:
+        if action.value not in _OR_SHORT_ACTIONS.get(pack_id, ()):
+            raise HTTPException(403, "Action vidéo interdite ou non implémentée.")
+        maximum = credit_costs_config.VIDEO_ACTION_DURATION_SECONDS.get(action)
+        if maximum is None or duration is None or duration > maximum:
+            raise HTTPException(403, "Durée supérieure à la limite de l'offre ORIA.")
+    if duration is None or duration not in (chosen.get("supported_durations") or []):
+        raise HTTPException(400, "Cette durée n'est pas prise en charge par OpenRouter.")
+    if resolution not in (chosen.get("supported_resolutions") or []):
+        raise HTTPException(400, "Résolution vidéo refusée par le modèle.")
+    if ref_count:
+        frame_options = chosen.get("supported_frame_images") or []
+        frames = [v if isinstance(v, str) else v.get("frame_type")
+                  for v in frame_options if isinstance(v, (str, dict))]
+        if "first_frame" not in frames:
+            raise HTTPException(400, "Ce modèle ne peut pas animer une photo.")
+    return chosen
+
+
+def _or_job_get(user_id: str, request_id: str) -> dict[str, Any] | None:
+    result = supabase.table(_OR_TABLE).select("*").eq("user_id", user_id).eq(
+        "request_id", request_id).limit(1).execute()
+    return (result.data or [None])[0]
+
+
+def _or_job_insert(data: dict[str, Any]) -> None:
+    supabase.table(_OR_TABLE).insert(data).execute()
+
+
+def _or_job_update(user_id: str, request_id: str, fields: dict[str, Any],
+                   old_status: str | None = None) -> bool:
+    query = supabase.table(_OR_TABLE).update(fields).eq("user_id", user_id).eq(
+        "request_id", request_id)
+    if old_status is not None:
+        query = query.eq("status", old_status)
+    result = query.execute()
+    return bool(result.data)
+
+
+def _or_db_ready() -> None:
+    try:
+        supabase.table(_OR_TABLE).select("id").limit(1).execute()
+    except Exception as e:
+        raise HTTPException(503, "Table SQL des créations OpenRouter absente ou inaccessible.") from e
+
+
+def _or_request_id(value: str | None) -> str:
+    if not isinstance(value, str) or _or_re.fullmatch(r"[A-Za-z0-9_-]{16,128}", value) is None:
+        raise HTTPException(400, "Identifiant unique request_id requis pour toute création OpenRouter.")
+    return value
+
+
+def _or_actual(usage: Any, reserved_credits: int) -> tuple[int, Decimal, Decimal]:
+    if not isinstance(usage, dict) or type(usage.get("cost")) not in (float, int, str):
+        raise RuntimeError("Coût réel OpenRouter absent : rapprocher la réservation.")
+    try:
+        amount = Decimal(str(usage["cost"]))
+    except Exception as e:
+        raise RuntimeError("Coût fournisseur OpenRouter illisible.") from e
+    if not amount.is_finite() or amount <= 0:
+        raise RuntimeError("Coût OpenRouter nul/invalide : rapprocher sans débiter arbitrairement.")
+    credits = _or_credits(amount)
+    if credits > reserved_credits:
+        raise RuntimeError("Coût OpenRouter dépassant le devis accepté : réserve conservée.")
+    return credits, amount, amount * Decimal(str(credit_costs_config.ACCOUNTING_USD_XAF))
+
+
+def _or_public_job(item: dict[str, Any]) -> dict[str, Any]:
+    return {"success": True, "provider": "openrouter", "request_id": item["request_id"],
+            "status": item["status"], "type": item["media_type"],
+            "model": item["model"], "action": item["action"],
+            "cost": int(item.get("settled_credits") or 0),
+            "mime_type": item.get("mime_type") or ("image/png" if item["media_type"] == "image" else "video/mp4"),
+            "media_id": item.get("media_id"), "media_url": item.get("media_url"),
+            "url": item.get("media_url")}
+
+
+def _or_caps_for(wallet) -> dict[str, Any]:
+    cfg = _google_pricing_config()
+    rights = cfg.google_media_capabilities_for_pack(wallet.pack_id)
+    service = _or_service()
+    images = _or_allowed_images(wallet.pack_id, _or_catalog(service, "image"))
+    videos = _or_catalog(service, "video")
+    video = _or_video_model(wallet.pack_id, videos)
+    options = []
+    for item in images:
+        resolutions = [x for x in _or_image_choices(item, "resolution")
+                       if x in rights["image_resolutions"]]
+        if resolutions:
+            options.append({"model": item["id"], "resolutions": resolutions,
+                            "max_references_supported_now": 1 if "input_references" in
+                            (item.get("supported_parameters") or {}) else 0})
+    duration = [n for n in rights["video_duration_choices"]
+                if video and n in (video.get("supported_durations") or [])]
+    allowed_actions = [a for a in _OR_SHORT_ACTIONS.get(wallet.pack_id, ())
+                       if any(credit_costs_config.VIDEO_ACTION_DURATION_SECONDS.get(
+                           CreditAction(a)) == n for n in duration)]
+    active = _or_switch()
+    return {"success": True, "provider": "openrouter", "pack_id": wallet.pack_id,
+            "pack_active": True, "quote_available": bool(options or duration) and
+            _or_limit("image") > 0 and _or_limit("video") > 0,
+            "generation_available": active, "images": {
+                "models": options, "resolutions": list(rights["image_resolutions"]),
+                "allowed_modes": list(rights["image_modes"]),
+                "available_now_modes": list(_OR_SAFE_MODES["image"]) if active and options else [],
+                "max_reference_images_in_pack": rights["max_reference_images"],
+                "max_reference_images_per_call_now": 1, "max_images_per_call_now": 1},
+            "video": {"model": video["id"] if video else "",
+                "allowed_modes": list(rights["video_modes"]),
+                "available_now_modes": list(_OR_SAFE_MODES["video"]) if active and duration else [],
+                "duration_choices_seconds": duration,
+                "max_project_seconds": rights["max_video_project_seconds"],
+                "max_project_scenes": rights["max_video_scenes"],
+                "billable_resolutions": ["720p"] if video and "720p" in
+                     (video.get("supported_resolutions") or []) else [],
+                "provider_per_call_seconds": {"min": min(duration) if duration else 0,
+                                               "max": max(duration) if duration else 0},
+                "short_clip_actions_available_now": allowed_actions if active else [],
+                "long_projects_generation_available": False},
+            "notice": "Les devis OpenRouter reposent sur un plafond USD administrateur explicite, "
+                      "le coût final sur usage.cost, et la vidéo sur un job durable."}
+
+
+@router.get("/openrouter-media/capabilities")
+async def openrouter_media_capabilities(
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization)
+    return await asyncio.to_thread(_or_caps_for, wallet)
+
+
+@router.post("/openrouter-media/quote")
+async def openrouter_media_quote(
+    payload: GoogleMediaQuoteRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization)
+    kind = str(payload.media_type).lower().strip()
+    if kind not in ("image", "video") or payload.count != 1:
+        raise HTTPException(400, "Devis limité à une image ou un clip à la fois.")
+    mode = (payload.mode or ("image_edit" if payload.reference_count else "text_to_image")
+            if kind == "image" else payload.mode or
+            ("image_to_video" if payload.reference_count else "text_to_video"))
+    if kind == "image":
+        model = str(payload.model or "")
+        resolution = str(payload.resolution or "1K")
+        await asyncio.to_thread(_or_verify_config, kind, pack_id=wallet.pack_id,
+            action=None, model=model, resolution=resolution, mode=mode,
+            ref_count=payload.reference_count)
+    else:
+        if len(payload.scene_durations_seconds or []) != 1 or (
+            payload.scene_durations_seconds or [None])[0] != payload.final_duration_seconds:
+            raise HTTPException(400, "Devis vidéo réservé aux clips courts d'une seule scène.")
+        resolution = str(payload.resolution or "720p")
+        chosen = await asyncio.to_thread(_or_verify_config, kind, pack_id=wallet.pack_id,
+            action=None, model=None, resolution=resolution, mode=mode,
+            ref_count=payload.reference_count, duration=payload.final_duration_seconds)
+        model = chosen["id"]
+    estimated, reserved, _ = _or_reservation(kind)
+    return {"success": True, "provider": "openrouter", "media_type": kind,
+            "mode": mode, "pack_id": wallet.pack_id, "model": model,
+            "estimated_credits": estimated, "reservation_credits": reserved,
+            "credits_available": int(wallet.balance),
+            "credits_sufficient": int(wallet.balance) >= reserved,
+            "generation_available": _or_switch(), "quote_only": True,
+            "notice": "Maximum de réservation prudent, NON prix exact. "
+                      "Le coût OpenRouter réel sera lu dans usage.cost après la génération."}
+
+
+class OpenRouterImageGenerationRequest(GoogleImageGenerationRequest):
+    request_id: str
+
+
+class OpenRouterVideoGenerationRequest(GoogleVideoGenerationRequest):
+    request_id: str
+
+
+def _or_decode_preflight_reference(raw_b64: str | None, mime: str | None) -> bytes | None:
+    # Valider les uploads avant toute réservation Supabase.
+    if not raw_b64:
+        if mime:
+            raise HTTPException(400, "MIME de référence sans image.")
+        return None
+    with _or_tempfile.TemporaryDirectory(prefix="oria-or-ref-validate-") as td:
+        path = _google_validate_ref(raw_b64, mime, _OrPath(td) / "ref")
+        return _OrPath(path).read_bytes() if path else None
+
+
+def _or_start_record(uid: str, request_id: str, kind: str, action: CreditAction,
+                     model: str, prompt: str, reserved: int, mode: str) -> dict[str, Any] | None:
+    existing = _or_job_get(uid, request_id)
+    if existing:
+        return existing
+    try:
+        _or_job_insert({"user_id": uid, "request_id": request_id, "media_type": kind,
+            "action": action.value, "model": model, "mode": mode, "prompt": prompt,
+            "status": "created", "reservation_id": str(uuid4()),
+            "reserved_credits": reserved})
+    except Exception:
+        # Un conflit de request_id est traité comme une reprise, jamais un second débit.
+        existing = _or_job_get(uid, request_id)
+        if existing:
+            return existing
+        raise HTTPException(503, "Enregistrement durable de la création impossible.")
+    return None
+
+
+def _or_reserve(uid: str, repo, request_id: str, action: CreditAction,
+                reservation: int, reserved_usd: Decimal) -> None:
+    job = _or_job_get(uid, request_id)
+    if not job or job["status"] != "created":
+        raise HTTPException(409, "Création déjà engagée : consultez son statut.")
+    # Bloque les POST simultanés sur le même request_id.
+    if not _or_job_update(uid, request_id, {"status": "reserving"}, "created"):
+        raise HTTPException(409, "Création déjà engagée.")
+    try:
+        repo.reserve_credits(user_id=uid, amount=reservation, action=action,
+            reference_id=job["reservation_id"],
+            api_reservation_xaf=reserved_usd * Decimal(str(credit_costs_config.ACCOUNTING_USD_XAF)))
+    except Exception as exc:
+        # Il est possible qu'un conflit réseau soit survenu après réservation :
+        # conserver cet état, ne jamais relancer un reserve automatiquement.
+        _or_job_update(uid, request_id, {"status": "reconcile"})
+        raise _billing_reservation_failure(exc) from exc
+    if not _or_job_update(uid, request_id, {"status": "reserved"}, "reserving"):
+        raise HTTPException(503, "Réserve créée mais état DB non confirmé : rapprochement requis.")
+
+
+def _or_finish(uid: str, job: dict[str, Any], generated, kind: str) -> dict[str, Any]:
+    credits, cost_usd, cost_xaf = _or_actual(generated.usage, int(job["reserved_credits"]))
+    # Persister le media AVANT le settlement, pour ne jamais perdre un fichier payé.
+    service = MediaService()
+    if kind == "image":
+        saved = service.save_google_image(user_id=uid, generated=generated,
+            action=job["action"], prompt=job["prompt"], credits_cost=credits)
+    else:
+        saved = service.save_google_video(user_id=uid, generated=generated,
+            action=job["action"], prompt=job["prompt"], credits_cost=credits)
+    if not _or_job_update(uid, job["request_id"], {"status": "media_stored",
+        "usage_cost_usd": str(cost_usd), "settled_credits": credits,
+        "mime_type": generated.mime_type,
+        "media_id": saved.get("id"), "media_url": saved.get("media_url")}):
+        raise RuntimeError("Media stocké mais état de facturation non confirmé : réserve à rapprocher.")
+    # Exactement le même repository atomique que pour Google : aucun prix fixe.
+    settled = SupabaseCreditRepository(supabase).settle_credit_reservation(
+        user_id=uid, reference_id=job["reservation_id"],
+        actual_amount=credits, actual_api_cost_xaf=cost_xaf)
+    _or_job_update(uid, job["request_id"], {"status": "completed"}, "media_stored")
+    return _or_public_job(_or_job_get(uid, job["request_id"]))
+
+
+@router.post("/openrouter-media/image")
+async def openrouter_media_image(
+    payload: OpenRouterImageGenerationRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    if not _or_switch():
+        raise HTTPException(503, "OpenRouter payant désactivé (contrôles stockage/crédits requis).")
+    request_id = _or_request_id(payload.request_id)
+    uid, repo, wallet, action, prompt = _prepare_media(payload.action, payload.prompt,
+                                                        user_id, authorization)
+    if action not in IMAGE_ACTIONS or len(prompt) > 8000:
+        raise HTTPException(400, "Action image ou description invalide.")
+    mode = payload.mode or ("image_edit" if payload.reference_image_b64 else "text_to_image")
+    model = str(payload.model or "")
+    ref_count = 1 if payload.reference_image_b64 else 0
+    model_capabilities = await asyncio.to_thread(_or_verify_config, "image", pack_id=wallet.pack_id,
+        action=action, model=model, resolution=payload.resolution, mode=mode,
+        ref_count=ref_count)
+    if payload.aspect_ratio not in _or_image_choices(model_capabilities, "aspect_ratio"):
+        raise HTTPException(400, "Format image non accepté par OpenRouter.")
+    ref_bytes = _or_decode_preflight_reference(payload.reference_image_b64, payload.reference_mime_type)
+    reserved_est, reserve, reserved_usd = _or_reservation("image")
+    _google_require_consent(SimpleNamespace(reservation_credits=reserve),
+                            payload.accepted_max_credits, wallet.balance)
+    _or_db_ready()
+    existing = _or_start_record(uid, request_id, "image", action, model, prompt, reserve, mode)
+    if existing:
+        return _or_public_job(existing)
+    _or_reserve(uid, repo, request_id, action, reserve, reserved_usd)
+    try:
+        with _or_tempfile.TemporaryDirectory(prefix="oria-or-image-") as td:
+            if not _or_job_update(uid, request_id, {"status": "submitting"}, "reserved"):
+                raise RuntimeError("État de soumission image non confirmé.")
+            generated = await asyncio.to_thread(_or_service().create_image,
+                model=model, prompt=prompt, destination=_OrPath(td) / "out",
+                resolution=payload.resolution, aspect_ratio=payload.aspect_ratio,
+                reference_bytes=ref_bytes, reference_mime=payload.reference_mime_type or "image/png")
+            _or_job_update(uid, request_id, {"status": "generated"})
+            return await asyncio.to_thread(_or_finish, uid, _or_job_get(uid, request_id),
+                                           generated, "image")
+    except Exception:
+        _or_job_update(uid, request_id, {"status": "reconcile"})
+        return _or_public_job(_or_job_get(uid, request_id))
+
+
+@router.post("/openrouter-media/video")
+async def openrouter_media_video(
+    payload: OpenRouterVideoGenerationRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    if not _or_switch():
+        raise HTTPException(503, "OpenRouter vidéo désactivé (suivi durable requis).")
+    request_id = _or_request_id(payload.request_id)
+    uid, repo, wallet, action, prompt = _prepare_media(payload.action, payload.prompt,
+                                                        user_id, authorization)
+    if action not in VIDEO_ACTIONS or len(prompt) > 8000:
+        raise HTTPException(400, "Action vidéo ou description invalide.")
+    mode = payload.mode or ("image_to_video" if payload.reference_image_b64 else "text_to_video")
+    chosen = await asyncio.to_thread(_or_verify_config, "video", pack_id=wallet.pack_id,
+        action=action, model=None, resolution="720p", mode=mode,
+        ref_count=int(bool(payload.reference_image_b64)), duration=payload.requested_seconds)
+    if payload.aspect_ratio not in (chosen.get("supported_aspect_ratios") or []):
+        raise HTTPException(400, "Format vidéo indisponible pour ce modèle.")
+    model = str(chosen["id"])
+    ref_bytes = _or_decode_preflight_reference(payload.reference_image_b64, payload.reference_mime_type)
+    reserved_est, reserve, reserved_usd = _or_reservation("video")
+    _google_require_consent(SimpleNamespace(reservation_credits=reserve),
+                            payload.accepted_max_credits, wallet.balance)
+    _or_db_ready()
+    existing = _or_start_record(uid, request_id, "video", action, model, prompt, reserve, mode)
+    if existing:
+        return _or_public_job(existing)
+    _or_reserve(uid, repo, request_id, action, reserve, reserved_usd)
+    try:
+        with _or_tempfile.TemporaryDirectory(prefix="oria-or-video-ref-") as td:
+            if not _or_job_update(uid, request_id, {"status": "submitting"}, "reserved"):
+                raise RuntimeError("État de soumission vidéo non confirmé.")
+            job = await asyncio.to_thread(_or_service().submit_video,
+                model=model, prompt=prompt, duration=payload.requested_seconds,
+                resolution="720p", aspect_ratio=payload.aspect_ratio,
+                first_frame=ref_bytes, first_frame_mime=payload.reference_mime_type or "image/png")
+            if not _or_job_update(uid, request_id, {"status": "submitted", "job_id": job["job_id"]}, "submitting"):
+                raise RuntimeError("Job vidéo créé mais son enregistrement est incertain.")
+            return _or_public_job(_or_job_get(uid, request_id))
+    except Exception:
+        _or_job_update(uid, request_id, {"status": "reconcile"})
+        return _or_public_job(_or_job_get(uid, request_id))
+
+
+@router.get("/openrouter-media/jobs")
+async def openrouter_media_jobs(
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    uid = _authenticate_chat_user(user_id=user_id, authorization=authorization)
+    try:
+        response = supabase.table(_OR_TABLE).select("*").eq("user_id", uid).order(
+            "created_at", desc=True).limit(30).execute()
+    except Exception as e:
+        raise HTTPException(503, "Historique des tâches OpenRouter inaccessible.") from e
+    return {"success": True, "jobs": [_or_public_job(row) for row in (response.data or [])]}
+
+
+@router.get("/openrouter-media/jobs/{request_id}")
+async def openrouter_media_job_status(
+    request_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    uid = _authenticate_chat_user(user_id=user_id, authorization=authorization)
+    item = _or_job_get(uid, _or_request_id(request_id))
+    if not item:
+        raise HTTPException(404, "Création non trouvée.")
+    if item["media_type"] != "video" or item["status"] != "submitted" or not item.get("job_id"):
+        return _or_public_job(item)
+    try:
+        status = await asyncio.to_thread(_or_service().get_video_status, item["job_id"])
+    except Exception:
+        return _or_public_job(item)  # état fournisseur incertain, aucun POST supplémentaire
+    if status["status"] in {"failed", "cancelled", "expired"}:
+        # Ne pas libérer la réserve sans vérification de facturation fournisseur.
+        _or_job_update(uid, request_id, {"status": "reconcile"}, "submitted")
+        return _or_public_job(_or_job_get(uid, request_id))
+    if status["status"] != "completed":
+        return _or_public_job(item)
+    # Un seul poll concurrent peut clore et débiter la réservation.
+    if not _or_job_update(uid, request_id, {"status": "finalizing"}, "submitted"):
+        return _or_public_job(_or_job_get(uid, request_id))
+    try:
+        with _or_tempfile.TemporaryDirectory(prefix="oria-or-video-") as td:
+            generated = await asyncio.to_thread(_or_service().download_video,
+                job_id=item["job_id"], destination=_OrPath(td) / "result", model=item["model"])
+            return await asyncio.to_thread(_or_finish, uid, _or_job_get(uid, request_id),
+                                           generated, "video")
+    except Exception:
+        _or_job_update(uid, request_id, {"status": "reconcile"})
+        return _or_public_job(_or_job_get(uid, request_id))

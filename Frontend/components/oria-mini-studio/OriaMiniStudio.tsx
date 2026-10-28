@@ -20,7 +20,7 @@ type Wallet = { balance: number; pack_id: string | null; is_pack_active: boolean
 type ImageModel = { model: string; resolutions: string[]; max_references_supported_now: number };
 type Capabilities = {
   success: boolean;
-  provider: "google";
+  provider: "google" | "openrouter";
   pack_id: string;
   pack_active: boolean;
   generation_available: boolean;
@@ -85,6 +85,8 @@ type Generation = {
   media_url?: string | null;
   public_url?: string | null;
   data?: string | null;
+  request_id?: string;
+  status?: string;
 };
 
 type Props = {
@@ -94,6 +96,13 @@ type Props = {
 };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "https://lbv-connect-api.onrender.com";
+// Configuration publique de routage uniquement : aucun secret dans Next.js.
+// Activer openrouter seulement APRES mise en place des tables SQL, du backend
+// et de la grille maximale de réservation côté Render.
+const MEDIA_PROVIDER: "google" | "openrouter" =
+  process.env.NEXT_PUBLIC_ORIA_MEDIA_PROVIDER === "openrouter" ? "openrouter" : "google";
+const MEDIA_API = `/ai/${MEDIA_PROVIDER}-media`;
+
 const supabase = createClient();
 const IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
@@ -228,6 +237,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [lastResult, setLastResult] = useState<Media | null>(null);
   const [lastBlobUrl, setLastBlobUrl] = useState<string | null>(null);
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const allowCloseRef = useRef(true);
   const isFrench = language === "fr";
@@ -262,11 +272,18 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
       const current = walletResponse.wallet;
       setWallet(current);
       if (!current?.is_pack_active) { setError(tr("Un pack actif est nécessaire pour créer.", "An active plan is required to create.")); return; }
-      const remote = await api<Capabilities>("/ai/google-media/capabilities");
-      if (!remote.success || remote.provider !== "google" || remote.pack_id !== current.pack_id || !remote.pack_active) {
+      const remote = await api<Capabilities>(`${MEDIA_API}/capabilities`);
+      if (!remote.success || remote.provider !== MEDIA_PROVIDER || remote.pack_id !== current.pack_id || !remote.pack_active) {
         throw new Error("Les droits de création ne correspondent pas au pack actif.");
       }
       setCaps(remote);
+      if (MEDIA_PROVIDER === "openrouter") {
+        try {
+          const previous = await api<{ jobs: Generation[] }>(`${MEDIA_API}/jobs`);
+          const active = previous.jobs?.find(item => item.status !== "completed" && item.status !== "failed");
+          if (active?.request_id) setPendingRequestId(active.request_id);
+        } catch { /* La galerie reste accessible si la table de jobs est indisponible. */ }
+      }
       const firstModel = remote.images.models[0];
       if (firstModel) setImageModel(firstModel.model);
       if (remote.images.resolutions.length) setResolution(remote.images.resolutions[0]);
@@ -338,7 +355,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const optionsForModel = caps?.images.models.find(model => model.model === imageModel)?.resolutions || [];
 
   const canQuote = Boolean(
-    wallet?.is_pack_active && caps?.quote_available && !loading && !busy && !quoting &&
+    wallet?.is_pack_active && caps?.quote_available && !loading && !busy && !quoting && !pendingRequestId &&
     prompt.trim() && prompt.length <= 8000 && modeAvailableNow &&
     (!needsReference || reference) &&
     (activeKind === "image" ? imageModel && selectedImageOffer && optionsForModel.includes(resolution) && resolutionRank(resolution) <= resolutionRank(selectedImageOffer.maxResolution) : selectedVideoOffer),
@@ -356,7 +373,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         resolution: "720p", count: 1, final_duration_seconds: selectedVideoOffer.seconds,
         scene_durations_seconds: [selectedVideoOffer.seconds],
       };
-      const calculated = await api<Quote>("/ai/google-media/quote", { method: "POST", body: JSON.stringify(payload) });
+      const calculated = await api<Quote>(`${MEDIA_API}/quote`, { method: "POST", body: JSON.stringify(payload) });
       if (calculated.pack_id !== wallet?.pack_id || calculated.media_type !== activeKind) {
         throw new Error("Le devis ne correspond pas à la configuration actuelle.");
       }
@@ -373,7 +390,9 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     setBusy(true); setError(null); setNotice(null);
     try {
       const ref = needsReference && reference ? await fileToB64(reference) : undefined;
-      const shared = { action, prompt: prompt.trim(), accepted_max_credits: quote.reservation_credits };
+      const request_id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+      const shared = { action, prompt: prompt.trim(), accepted_max_credits: quote.reservation_credits,
+        ...(MEDIA_PROVIDER === "openrouter" ? { request_id } : {}) };
       const payload = activeKind === "image" ? {
         ...shared, mode: modeImage, model: imageModel, resolution, aspect_ratio: ratioImage,
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
@@ -381,10 +400,21 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         ...shared, mode: modeVideo, requested_seconds: selectedVideoOffer.seconds, aspect_ratio: ratioVideo,
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
       };
-      const result = await api<Generation>(`/ai/google-media/${activeKind}`, {
+      // Retenir l'identifiant AVANT le POST : si le réseau coupe, rechercher
+      // cette requête plutôt que payer une deuxième création.
+      if (MEDIA_PROVIDER === "openrouter") setPendingRequestId(request_id);
+      const result = await api<Generation>(`${MEDIA_API}/${activeKind}`, {
         method: "POST", body: JSON.stringify(payload),
       });
       if (!result.success) throw new Error("La génération n'a pas été confirmée.");
+      if (MEDIA_PROVIDER === "openrouter" && result.status && result.status !== "completed") {
+        setPendingRequestId(result.request_id || request_id);
+        setNotice(tr("Création enregistrée chez OpenRouter. Consultez son état, sans relancer une génération payante.",
+          "OpenRouter creation accepted. Check its status without submitting another paid request."));
+        setQuote(null); setAccepted(false);
+        return;
+      }
+      if (MEDIA_PROVIDER === "openrouter") setPendingRequestId(null);
       let url = String(result.media_url || result.url || result.public_url || "");
       let blobUrl: string | null = null;
       // Secours : si Supabase est indisponible, le backend peut renvoyer le fichier
@@ -447,7 +477,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
             <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-surface-tertiary"><Sparkles size={22}/></span>
             <div className="min-w-0">
               <h2 id="oria-studio-heading" className="truncate text-lg font-bold tracking-tight sm:text-2xl">Mini-Studio ORIA</h2>
-              <p className="text-xs text-muted">{tr("Images, retouches et vidéos — avec Google", "Images, editing and video — powered by Google")}</p>
+              <p className="text-xs text-muted">{tr(`Images, retouches et vidéos — ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video — ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`)}</p>
             </div>
           </div>
           <button type="button" disabled={busy} onClick={onClose} aria-label={tr("Fermer", "Close")}
@@ -477,6 +507,23 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
           {loading && <div role="status" className="mb-4 flex items-center gap-2 text-sm text-muted"><Loader2 className="animate-spin" size={17}/>{tr("Chargement des droits de création…", "Loading creation permissions…")}</div>}
           {error && <div role="alert" className="mb-4 rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600">{error}</div>}
           {notice && <div role="status" className="mb-4 rounded-xl border border-border bg-surface-secondary p-3 text-xs">{notice}</div>}
+           {MEDIA_PROVIDER === "openrouter" && pendingRequestId && <button type="button"
+             disabled={busy} onClick={async () => {
+               try {
+                 const job = await api<Generation>(`${MEDIA_API}/jobs/${encodeURIComponent(pendingRequestId)}`);
+                 if (job.status === "completed" && (job.media_url || job.url)) {
+                   setPendingRequestId(null);
+                   setLastResult({ id: job.media_id || pendingRequestId, media_type: job.type,
+                     url: String(job.media_url || job.url), model: job.model, action: job.action,
+                     prompt: prompt.trim(), mime_type: job.mime_type, created_at: new Date().toISOString(),
+                     credits_cost: job.cost });
+                   await loadGallery(); onWalletRefresh?.();
+                   setNotice(tr("Création terminée et enregistrée.", "Creation completed and saved."));
+                 } else setNotice(`${tr("Statut", "Status")} : ${job.status || "pending"}. ${tr("Ne relancez pas une génération.", "Do not submit another generation.")}`);
+               } catch (e) { setError(e instanceof Error ? e.message : "Statut indisponible."); }
+             }} className="mb-4 rounded-xl border border-border px-4 py-2 text-xs font-semibold">
+             {tr("Vérifier la création en attente", "Check pending creation")}
+           </button>}
           {caps && !caps.generation_available && screen !== "gallery" && (
             <div className="mb-5 flex items-start gap-2 rounded-xl border border-border bg-surface-secondary px-3 py-3 text-xs leading-5 text-muted-strong">
               <ShieldCheck size={17} className="mt-0.5 shrink-0"/>

@@ -37,7 +37,7 @@ type Wallet = { balance: number; pack_id: string | null; is_pack_active: boolean
 type ModelOption = { model: string; resolutions: string[]; max_references_supported_now: number };
 type Capabilities = {
   success: boolean;
-  provider: "google";
+  provider: "google" | "openrouter";
   pack_id: string;
   pack_active: boolean;
   quote_available: boolean;
@@ -99,11 +99,18 @@ type Generation = {
   public_url?: string | null;
   url?: string | null;
   data?: string | null;
+  request_id?: string;
+  status?: string;
 };
 type Photo = { uri: string; mimeType: "image/jpeg" | "image/png" | "image/webp"; size?: number };
 type Offer = { action: string; label: string; resolution?: string; seconds?: number };
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, "") || "https://lbv-connect-api.onrender.com";
+// Expo public config: jamais la clé API. Google reste actif par défaut.
+const MEDIA_PROVIDER: "google" | "openrouter" =
+  process.env.EXPO_PUBLIC_ORIA_MEDIA_PROVIDER === "openrouter" ? "openrouter" : "google";
+const MEDIA_API = `/ai/${MEDIA_PROVIDER}-media`;
+
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const IMAGE_RATIOS = ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"];
 const VIDEO_RATIOS = ["16:9", "9:16"];
@@ -225,6 +232,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
   const [gallery, setGallery] = useState<Media[]>([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [lastResult, setLastResult] = useState<Media | null>(null);
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
   const quoteVersion = useRef(0);
   const inFlight = useRef(false);
   const mounted = useRef(true);
@@ -256,7 +264,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
     : Boolean(offerVideo?.action && caps?.video.duration_choices_seconds.includes(offerVideo.seconds || 0));
   const canQuote = Boolean(wallet?.is_pack_active && caps?.quote_available && currentlyAllowed &&
     prompt.trim() && prompt.length <= 8000 && modelAndOfferReady && (!needsPhoto || photo) &&
-    !loading && !busy && !quoting);
+    !loading && !busy && !quoting && !pendingRequestId);
   const quoteReady = Boolean(quote?.success && quote?.pack_id === wallet?.pack_id && quote?.media_type === kind);
   const canGenerate = Boolean(canQuote && quoteReady && accepted && quote?.credits_sufficient &&
     quote?.generation_available && caps?.generation_available &&
@@ -283,12 +291,19 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
       if (!mounted.current) return;
       setWallet(current);
       if (!current?.is_pack_active) { setError(tr("Activez un pack ORIA pour créer.", "Activate an ORIA plan to create.")); return; }
-      const rights = await api<Capabilities>("/ai/google-media/capabilities");
-      if (!rights.success || rights.provider !== "google" || !rights.pack_active || rights.pack_id !== current.pack_id) {
+      const rights = await api<Capabilities>(`${MEDIA_API}/capabilities`);
+      if (!rights.success || rights.provider !== MEDIA_PROVIDER || !rights.pack_active || rights.pack_id !== current.pack_id) {
         throw new Error("Les droits du pack ne correspondent pas au portefeuille.");
       }
       if (!mounted.current) return;
       setCaps(rights);
+      if (MEDIA_PROVIDER === "openrouter") {
+        try {
+          const previous = await api<{ jobs: Generation[] }>(`${MEDIA_API}/jobs`);
+          const active = previous.jobs?.find(item => item.status !== "completed" && item.status !== "failed");
+          if (active?.request_id) setPendingRequestId(active.request_id);
+        } catch { /* La galerie reste accessible si la table de jobs est indisponible. */ }
+      }
       setImageModel(rights.images.models[0]?.model || "");
       setResolution(rights.images.models[0]?.resolutions[0] || "1K");
       setImageAction(IMAGE_OFFERS[current.pack_id || ""]?.[0]?.action || "");
@@ -356,7 +371,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
         resolution: "720p", count: 1, final_duration_seconds: offerVideo.seconds,
         scene_durations_seconds: [offerVideo.seconds],
       };
-      const result = await api<Quote>("/ai/google-media/quote", { method: "POST", body: JSON.stringify(payload) });
+      const result = await api<Quote>(`${MEDIA_API}/quote`, { method: "POST", body: JSON.stringify(payload) });
       if (!mounted.current || currentVersion !== quoteVersion.current) return;
       if (!result.success || result.pack_id !== wallet?.pack_id || result.media_type !== kind) {
         throw new Error("Le devis ne correspond pas à la sélection.");
@@ -379,9 +394,11 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
         if (!file.exists || !length || length > MAX_IMAGE_BYTES) throw new Error("La photo de référence n'est plus disponible.");
         photoB64 = await file.base64();
       }
+      const request_id = `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
       const shared = {
         action: kind === "image" ? offerImage.action : offerVideo.action,
         prompt: prompt.trim(), accepted_max_credits: quote.reservation_credits,
+        ...(MEDIA_PROVIDER === "openrouter" ? { request_id } : {}),
       };
       const payload = kind === "image" ? {
         ...shared, mode: imageMode, model: imageModel, resolution, aspect_ratio: imageRatio,
@@ -390,8 +407,18 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
         ...shared, mode: videoMode, requested_seconds: offerVideo.seconds, aspect_ratio: videoRatio,
         ...(photoB64 ? { reference_image_b64: photoB64, reference_mime_type: photo?.mimeType } : {}),
       };
-      const output = await api<Generation>(`/ai/google-media/${kind}`, { method: "POST", body: JSON.stringify(payload) });
+      // En cas de timeout, le request_id doit survivre pour vérifier le job.
+      if (MEDIA_PROVIDER === "openrouter") setPendingRequestId(request_id);
+      const output = await api<Generation>(`${MEDIA_API}/${kind}`, { method: "POST", body: JSON.stringify(payload) });
       if (!output.success) throw new Error("La génération n'a pas été confirmée.");
+      if (MEDIA_PROVIDER === "openrouter" && output.status && output.status !== "completed") {
+        setPendingRequestId(output.request_id || request_id);
+        setNotice(tr("Création en cours. Utilisez le suivi, sans nouvelle génération payante.",
+          "Creation pending. Check status without submitting another paid request."));
+        quoteVersion.current += 1; setQuote(null); setAccepted(false);
+        return;
+      }
+      if (MEDIA_PROVIDER === "openrouter") setPendingRequestId(null);
       // Ne jamais lancer automatiquement une seconde génération si la sauvegarde échoue.
       const url = String(output.media_url || output.url || output.public_url || "");
       if (!/^https:\/\//i.test(url)) {
@@ -442,13 +469,13 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen"
       statusBarTranslucent={Platform.OS === "android"} onRequestClose={requestClose}>
       <SafeAreaProvider style={{ flex: 1, backgroundColor: palette.bg }}>
-        <StatusBar barStyle={dark ? "light-content" : "dark-content"} backgroundColor={palette.bg} />
+        <StatusBar barStyle={dark ? "light-content" : "dark-content"} />
         <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={["top", "bottom", "left", "right"]}>
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
             <View style={[styles.topbar, { borderColor: palette.line }]}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.h1, textStyle]}>{tr("Mini-Studio ORIA", "ORIA Mini-Studio")}</Text>
-                <Text style={[styles.subtitle, mutedStyle]}>{tr("Images, retouches et vidéos · Google", "Images, editing and video · Google")}</Text>
+                <Text style={[styles.subtitle, mutedStyle]}>{tr(`Images, retouches et vidéos · ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video · ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`)}</Text>
               </View>
               <Pressable accessibilityRole="button" accessibilityLabel={tr("Fermer", "Close")}
                 disabled={busy} onPress={requestClose} style={[styles.close, chipStyle]}>
@@ -484,6 +511,21 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
               {loading ? <View style={styles.status}><ActivityIndicator color="#746be8"/><Text style={mutedStyle}>{tr("Chargement des droits…", "Loading permissions…")}</Text></View> : null}
               {error ? <View style={styles.error}><Text style={styles.errorText}>{error}</Text></View> : null}
               {notice ? <View style={[styles.info, { backgroundColor: palette.notice }]}><Text style={[styles.note, textStyle]}>{notice}</Text></View> : null}
+              {MEDIA_PROVIDER === "openrouter" && pendingRequestId ? (
+                <Pressable style={[styles.info, { backgroundColor: palette.notice }]} disabled={busy} onPress={async () => {
+                  try {
+                    const job = await api<Generation>(`${MEDIA_API}/jobs/${encodeURIComponent(pendingRequestId)}`);
+                    if (job.status === "completed" && (job.media_url || job.url)) {
+                      setLastResult({ id: job.media_id || pendingRequestId,
+                        type: job.type, model: job.model, prompt: prompt.trim(),
+                        url: String(job.media_url || job.url), credits_cost: job.cost,
+                        action: job.action, created_at: new Date().toISOString() });
+                      setPendingRequestId(null); void loadGallery(); onWalletRefresh?.();
+                      setNotice(tr("Création terminée et enregistrée.", "Creation completed and saved."));
+                    } else setNotice(`${tr("Statut", "Status")}: ${job.status || "pending"}. ${tr("Ne pas relancer.", "Do not resubmit.")}`);
+                  } catch (cause) { setError(cause instanceof Error ? cause.message : "Statut indisponible."); }
+                }}><Text style={[styles.note, textStyle]}>{tr("Vérifier la création en attente", "Check pending creation")}</Text></Pressable>
+              ) : null}
               {caps && !caps.generation_available && section !== "gallery" ? (
                 <View style={[styles.info, { backgroundColor: palette.notice }]}>
                   <Text style={[styles.note, textStyle]}>{tr("Les créations payantes sont encore désactivées côté backend pendant les contrôles de sécurité. Les devis restent consultables.",
