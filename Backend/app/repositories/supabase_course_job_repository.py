@@ -21,8 +21,9 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
+import re
 from typing import Any, Mapping
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 
 class CourseJobStoreError(RuntimeError):
@@ -59,7 +60,9 @@ class SupabaseCourseJobRepository:
     # `oria_course_queue_pause_for_credits`, jamais ici.
     MAX_CALL_INDEX = 119
     MAX_CHECKPOINT_BYTES = 1_000_000
-    MAX_OUTPUT_BYTES = 6_000_000
+    # Le job final ne stocke que des references privees, jamais le cours ou
+    # la transcription. Les sections pedagogiques restent dans les checkpoints.
+    MAX_OUTPUT_BYTES = 16_384
     MIN_LEASE_SECONDS = 60
     MAX_LEASE_SECONDS = 3600
 
@@ -216,7 +219,13 @@ class SupabaseCourseJobRepository:
                 raise CourseJobConflict("La rédaction nécessite un job en traitement.")
             if job.get("document_reservation_status") not in (None, "", "pending", "reserved"):
                 raise CourseJobConflict("État financier de rédaction incompatible.")
-        self._command(uid, cid, "mark_reserved", {"stage": stage})
+        # L'audio peut être réservé avant que le worker ne prenne son bail.
+        # La rédaction, elle, n'est autorisée qu'une fois le bail acquis.
+        # La RPC doit elle aussi vérifier le lease_token pour "document".
+        reservation_data = {"stage": stage}
+        if stage == "document":
+            reservation_data["lease_token"] = self._require_lease(uid, cid)
+        self._command(uid, cid, "mark_reserved", reservation_data)
 
     def begin_call(self, *, user_id: str, course_id: str, stage: str, index: int) -> None:
         uid, cid = self._ids(user_id, course_id)
@@ -229,8 +238,10 @@ class SupabaseCourseJobRepository:
                     index: int, result: dict[str, Any]) -> None:
         uid, cid = self._ids(user_id, course_id)
         saved = self._json_object(result, limit=self.MAX_CHECKPOINT_BYTES)
+        checked_stage = self._stage(stage)
+        self._validate_call_checkpoint(checked_stage, saved)
         self._command(uid, cid, "finish_call", {
-            "stage": self._stage(stage), "index": self._index(index),
+            "stage": checked_stage, "index": self._index(index),
             "result": saved, "lease_token": self._require_lease(uid, cid),
         })
 
@@ -241,6 +252,13 @@ class SupabaseCourseJobRepository:
             "p_user_id": uid, "p_course_id": cid,
             "p_stage": self._stage(stage), "p_call_index": self._index(index),
         }, allow_null=True)
+        if row is not None:
+            # La RPC doit imposer cette isolation en SQL ; recontrôle local si
+            # elle expose les identifiants, sans inventer de schéma de réponse.
+            for field, expected in (("user_id", uid), ("course_id", cid),
+                                    ("stage", stage), ("call_index", index)):
+                if field in row and row[field] != expected:
+                    raise CourseJobStoreError("Checkpoint de cours incohérent.")
         return row
 
     def set_settled(self, *, user_id: str, course_id: str, stage: str,
@@ -253,12 +271,87 @@ class SupabaseCourseJobRepository:
             "lease_token": self._require_lease(uid, cid),
         })
 
+    @classmethod
+    def _validate_call_checkpoint(cls, stage: str, result: dict[str, Any]) -> None:
+        """Valide la forme d'un checkpoint avant l'écriture durable.
+
+        Une section IA incomplète reste sauvegardable : ses tokens sont réels
+        et doivent être rapprochés, jamais oubliés ni relancés aveuglément.
+        """
+        if stage == "transcription":
+            text = result.get("text")
+            duration = result.get("duration_ms")
+            if (not isinstance(text, str) or not text.strip()
+                    or len(text) > 100_000
+                    or type(duration) is not int or duration <= 0):
+                raise ValueError("Checkpoint de transcription invalide.")
+            usage = result.get("usage")
+            if usage is not None and not isinstance(usage, dict):
+                raise ValueError("Usage audio de transcription invalide.")
+        elif stage == "document":
+            if (result.get("output_format") != "html_fragment"
+                    or not isinstance(result.get("html_fragment"), str)
+                    or type(result.get("complete")) is not bool
+                    or not isinstance(result.get("usage"), dict)
+                    or not isinstance(result.get("incomplete_reason"), str)):
+                raise ValueError("Checkpoint de rédaction Code-First invalide.")
+            # Ne pas rejeter une section incomplète : conserver la dépense
+            # du fournisseur et laisser CourseService demander rapprochement.
+            if result["complete"] and not result["html_fragment"].strip():
+                raise ValueError("Section marquée complète sans contenu HTML.")
+        else:
+            raise ValueError("Etape de checkpoint inconnue.")
+
+    @classmethod
+    def _validate_completed_output(cls, result: dict[str, Any],
+                                   *, course_id: str) -> None:
+        """Ne termine le cours qu'avec ses deux fichiers Code-First privés.
+
+        Refuse les anciennes sorties Markdown, les URLs signées, les chemins
+        Storage et les identifiants ne correspondant pas au cours demandé.
+        La présence physique du fichier reste vérifiée par l'ArtifactRepository
+        et par les contraintes / RPC SQL lors de finish_job.
+        """
+        if set(result) != {"course_id", "format", "output_format",
+                           "document_source_sha256", "artifact", "writing_credits"}:
+            raise ValueError("Structure du résultat final ORIA Cours invalide.")
+        if result["course_id"] != course_id:
+            raise ValueError("Le résultat ne correspond pas au cours traité.")
+        fmt = result["format"]
+        if fmt not in ("pdf", "docx") or result["output_format"] != "html_code_first":
+            raise ValueError("Seul un document Code-First PDF/DOCX peut être terminé.")
+        digest = result["document_source_sha256"]
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("Empreinte de composition documentaire invalide.")
+        if type(result["writing_credits"]) is not int or result["writing_credits"] <= 0:
+            raise ValueError("Crédits de rédaction réglés invalides.")
+        artifact = result["artifact"]
+        if not isinstance(artifact, dict) or set(artifact) != {"document", "transcription"}:
+            raise ValueError("Document et transcription privés obligatoires.")
+        for kind, extension, version in (
+            ("document", fmt, "oria-cours/document/v1"),
+            ("transcription", "txt", "oria-cours/transcription/v1"),
+        ):
+            item = artifact[kind]
+            if (not isinstance(item, dict)
+                    or set(item) != {"artifact_id", "filename", "extension", "mime_type"}):
+                raise ValueError("Référence de fichier privé non conforme.")
+            expected_id = str(uuid5(UUID(course_id), version))
+            if item["artifact_id"] != expected_id or item["extension"] != extension:
+                raise ValueError("Identifiant ou format du fichier privé incohérent.")
+            filename, mime = item["filename"], item["mime_type"]
+            if (not isinstance(filename, str) or not 1 <= len(filename) <= 140
+                    or not filename.lower().endswith("." + extension)
+                    or filename.startswith(".") or "/" in filename or "\\" in filename
+                    or any(ord(c) < 32 for c in filename)
+                    or not isinstance(mime, str) or not 1 <= len(mime) <= 128):
+                raise ValueError("Métadonnées de fichier privé invalides.")
+
     def finish(self, *, user_id: str, course_id: str,
                result: dict[str, Any]) -> None:
         uid, cid = self._ids(user_id, course_id)
         saved = self._json_object(result, limit=self.MAX_OUTPUT_BYTES)
-        if not isinstance(saved.get("artifact"), dict) or not saved["artifact"]:
-            raise ValueError("Un artifact privé réel est obligatoire avant completion.")
+        self._validate_completed_output(saved, course_id=cid)
         self._command(uid, cid, "finish_job", {
             "output": saved, "lease_token": self._require_lease(uid, cid),
         })

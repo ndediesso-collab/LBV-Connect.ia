@@ -1704,6 +1704,8 @@ async function writeLocalCache(
     };
 
     const key = cacheKey(userId);
+    // Compatibility: keep existing offline data until an idempotent server-side
+    // outbox is installed. SecureStore size needs a dedicated cache migration.
     const serialized = JSON.stringify(payload);
 
     if (Platform.OS === "web") {
@@ -1753,6 +1755,7 @@ async function saveMessageRemote(
   >(`/conversations/${message.conversationId}/messages`, {
     method: "POST",
     body: JSON.stringify({
+      id: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(message.id) ? message.id : undefined,
       role: message.role,
       content: message.content,
     }),
@@ -2752,16 +2755,20 @@ function PrivateVoicePlayback({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const signedAtRef = useRef(0);
 
   async function toggle() {
     if (status.playing) { player.pause(); return; }
     try {
       setLoading(true);
-      if (!loaded || status.didJustFinish) {
-        if (!loaded) {
-          // Chaque lecture privée redemande un lien signé à durée limitée.
+      const mustRenew = !loaded || !signedAtRef.current ||
+        Date.now() - signedAtRef.current >= 12 * 60 * 1000;
+      if (mustRenew || status.didJustFinish) {
+        if (mustRenew) {
+          // Avoid replaying an expired private Supabase URL after app suspension.
           const url = await onLoad(note.audio_id);
           player.replace({ uri: url });
+          signedAtRef.current = Date.now();
           setLoaded(true);
         } else {
           await player.seekTo(0);
@@ -4011,6 +4018,25 @@ export default function ChatPage() {
     return () => { disposed = true; subscription.remove(); };
   }, [currentUserId]);
 
+  // Web and the App Store build share one cloud history. Re-read it on resume,
+  // without resending any paid Chat request or touching a draft recording.
+  useEffect(() => {
+    if (!isInitialized || !currentUserId || isThinking || voiceDraft || localVoiceDraft || voiceUploading || recorderState.isRecording) return;
+    let running = false;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active" || running) return;
+      running = true;
+      void (async () => {
+        try {
+          await loadConversations(await readLocalCache(currentUserId));
+          if (activeConversationId) await selectConversation(activeConversationId);
+        } finally { running = false; }
+      })().catch((error) => console.warn("ORIA sync on resume unavailable", error));
+    });
+    return () => subscription.remove();
+  }, [isInitialized, currentUserId, activeConversationId, isThinking,
+      voiceDraft, localVoiceDraft, voiceUploading, recorderState.isRecording]);
+
   const remainingDays = wallet?.pack_expires_at
     ? Math.max(
         0,
@@ -4083,6 +4109,9 @@ export default function ChatPage() {
           loadPersistedMedia(),
           loadPersistedArtifacts(),
         ]);
+        if (cache?.activeConversationId && !cancelled) {
+          await selectConversation(cache.activeConversationId);
+        }
       } catch (requestError) {
         console.error("Erreur initialisation Chat :", requestError);
         setError(
@@ -4553,6 +4582,8 @@ export default function ChatPage() {
 
   async function loadPrivateVoiceUrl(audioId: string) {
     const result = await apiFetch<Record<string, unknown>>(`/ai/audio/${encodeURIComponent(audioId)}`);
+    const metadata = normalizeVoiceNote(result);
+    if (metadata) setVoiceNotes((current) => mergeVoiceNotes(current, [metadata]));
     const url = result.playback_url;
     if (typeof url !== "string" || !url.startsWith("https://")) {
       throw new Error("La lecture privée du vocal est indisponible.");
@@ -4603,6 +4634,19 @@ export default function ChatPage() {
       await apiFetch(`/ai/audio/${encodeURIComponent(draft.audio_id)}/send`, {
         method: "POST", body: JSON.stringify({ mode, edited_text: mode === "text" ? edited : null }),
       });
+      // Relancer l'IA pour un vocal déjà sauvegardé pourrait débiter deux fois.
+      // Sur un retry, ne synchroniser que son affichage depuis le cloud.
+      if (mode === "voice") {
+        const storedRaw = await apiFetch<Record<string, unknown>>(`/ai/audio/${encodeURIComponent(draft.audio_id)}`);
+        const stored = normalizeVoiceNote(storedRaw);
+        if (stored?.message_id) {
+          setVoiceNotes((current) => mergeVoiceNotes(current, [stored]));
+          if (currentUserId) await writeVoiceDraftId(currentUserId, null);
+          setVoiceDraft(null);
+          if (activeConversationId) await selectConversation(activeConversationId);
+          return;
+        }
+      }
       const note = { ...draft, delivery_mode: mode };
       if (mode === "voice") setVoiceNotes((current) => mergeVoiceNotes(current, [note]));
       const sent = await handleSendMessage({
@@ -4969,6 +5013,7 @@ export default function ChatPage() {
     setCompletedEditFiles([]);
     setCompletedEditError(null);
     chatViewActionRef.current += 1;
+    const readEpoch = chatViewActionRef.current;
     setShowReturnWelcome(false);
     setActiveConversationId(conversationId);
     closeDrawer();
@@ -4990,6 +5035,7 @@ export default function ChatPage() {
         `/conversations/${conversationId}/messages`,
       );
 
+      if (readEpoch !== chatViewActionRef.current) return;
       const remote = data.messages || [];
       const remoteVoiceNotes = (data.voice_notes ?? []).map(normalizeVoiceNote)
         .filter((note): note is VoiceNote => note !== null);
@@ -5017,7 +5063,16 @@ export default function ChatPage() {
           ),
       );
 
-      if (remote.length) {
+      // A local-only message must not be erased when the server has no copy.
+      // A future idempotent outbox will reconcile it without charging again.
+      const localOnly = currentUserId
+        ? (await readLocalCache(currentUserId))?.messages[conversationId] || [] : [];
+      if (remote.length === 0 && localOnly.length > 0) {
+        setError(language === "fr"
+          ? "Messages présents uniquement sur cet appareil : synchronisation cloud non confirmée."
+          : "Local-only messages: cloud sync has not been confirmed.");
+      }
+      if (remote.length > 0 || localOnly.length === 0) {
         setMessages(remote);
 
         if (currentUserId) {
@@ -5647,7 +5702,7 @@ export default function ChatPage() {
      * immédiatement, même avant le premier token d'Oria.
      */
     const generationId = uid();
-    const userMessageId = uid();
+    const userMessageId = options?.voice?.audio_id || uid();
 
     const userMessage: ChatMessage = {
       id: userMessageId,
@@ -5680,10 +5735,8 @@ export default function ChatPage() {
     // Un nouveau message de l'utilisateur doit toujours apparaître en bas.
     isNearLatestRef.current = true;
     setShowJumpToLatest(false);
-    setMessages((current) => [
-      ...current,
-      userMessage,
-    ]);
+    setMessages((current) => current.some((item) => item.id === userMessageId)
+      ? current : [...current, userMessage]);
     if (options?.contentOverride === undefined) setMessage("");
     setComposerExpanded(false);
     setComposerInputHeight(COMPOSER_INPUT_MIN_HEIGHT);
@@ -5723,6 +5776,12 @@ export default function ChatPage() {
             return null;
           },
         );
+
+      // Pour un vocal, attendre la persistance et l'association AVANT le Chat.
+      // Aucun appel IA payant n'est envoyé en cas d'échec de synchronisation.
+      if (options?.voice && !(await userMessageSavePromise)?.id) {
+        throw new Error("Vocal non sauvegardé sur le cloud : réessayez le même brouillon.");
+      }
 
       const formData = new FormData();
 
@@ -6324,10 +6383,11 @@ export default function ChatPage() {
 
       // La sauvegarde utilisateur n'est attendue qu'après le streaming :
       // elle n'ajoute donc plus de latence avant le premier mot.
-      await userMessageSavePromise;
+      const persistedUserMessage = await userMessageSavePromise;
+      let persistedAssistantMessage: ChatMessage | null = null;
 
       try {
-        await saveMessageRemote(assistantMessage);
+        persistedAssistantMessage = await saveMessageRemote(assistantMessage);
       } catch (saveError) {
         console.error(
           "Erreur sauvegarde réponse IA :",
@@ -6350,7 +6410,7 @@ export default function ChatPage() {
 
       const refreshedTrials = await loadTrials();
       await loadWallet(refreshedTrials);
-      return true;
+      return Boolean(persistedUserMessage?.id && persistedAssistantMessage?.id);
     } catch (requestError) {
       setChatStatusStep(null);
       const errorMessage =

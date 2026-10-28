@@ -1647,6 +1647,11 @@ class ArtifactService:
                 # distant, code actif ou accès au disque n'est autorisé.
                 content = self._normalize_inline_svg_document(content)
                 self._check_contract_html(content)
+                # Opt-in strict : les cours ne doivent jamais publier du
+                # Markdown/LaTeX brut dans leur document final. Les créations
+                # générales et les extraits de code demeurent inchangés.
+                if (metadata or {}).get("source") == "oria-course":
+                    self._check_course_document_html(content)
             else:
                 self._check_contract_svg(content)
             safe_sources[sid] = (kind, content)
@@ -1696,6 +1701,42 @@ class ArtifactService:
                 sha256=hashlib.sha256(data).hexdigest(), metadata=result_meta,
             ))
         return generated
+
+    @staticmethod
+    def _check_course_document_html(source: str) -> None:
+        """Préflight de rendu destiné uniquement à ORIA Cours.
+
+        La transcription reste la source de vérité : aucune correction
+        mathématique automatique n'est effectuée ici. Si une notation n'est
+        pas composée, le document est refusé AVANT l'export binaire.
+        """
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(source, "html.parser")
+        main = soup.find("main")
+        if main is None or main.find("h1") is None:
+            raise ArtifactError("ORIA Cours : structure HTML principale absente.")
+        sections = main.select("section.oria-course-section")
+        if not sections:
+            raise ArtifactError("ORIA Cours : aucune section pédagogique trouvée.")
+        # Ne pas inspecter la feuille de style (du code CSS, non visible).
+        visible = " ".join(main.stripped_strings)
+        if not visible.strip():
+            raise ArtifactError("ORIA Cours : document sans contenu visible.")
+        latex = re.compile(
+            r"\\(?:d?frac|sqrt|text|sum|prod|int|lim|overline|underline|"
+            r"alpha|beta|gamma|delta|theta|pi|sigma|lambda|cdot|times|"
+            r"left|right|begin|end|mathrm|operatorname|vec|partial)\b"
+            r"|\\[\[\]()\]|\$\$|\$[^\$\n]+\$"
+        )
+        if latex.search(visible):
+            raise ArtifactError("ORIA Cours : formule LaTeX non composée dans le document.")
+        if ("```" in visible or re.search(r"(?m)^\s*#{1,6}\s+", visible)
+                or re.search(r"\*\*[^*\n]+\*\*", visible)):
+            raise ArtifactError("ORIA Cours : balisage Markdown visible dans le document.")
+        for formula in main.select(".oria-course-equation"):
+            if not formula.get_text(" ", strip=True):
+                raise ArtifactError("ORIA Cours : bloc d'équation vide.")
 
     @classmethod
     def _normalize_inline_svg_document(cls, source: str) -> str:
@@ -2270,7 +2311,249 @@ class ArtifactService:
             return [{"type": "svg", "source": source}]
         return self._contract_html_blocks(source)
 
+    def _contract_docx_course_html(self, source: str) -> bytes:
+        """Conserve en Word la structure sémantique d'un cours Code-First.
+
+        - exposants/indices natifs Word, sans LaTeX visible ;
+        - paragraphes mathématiques Cambria Math, centrés et non coupés ;
+        - tableaux, listes et encadrés pédagogiques éditables ;
+        - respect de la hiérarchie et des séquences du cours.
+
+        Pas d'exécution de code, pas de MathJax ni de ressources externes.
+        Cette conversion ne prétend pas composer les intégrales complexes ou
+        les fractions imbriquées en OMML ; les notations non représentables
+        doivent être traitées explicitement en amont et jamais inventées.
+        """
+        try:
+            from bs4 import BeautifulSoup, NavigableString, Tag
+            from docx import Document
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.oxml import OxmlElement
+            from docx.oxml.ns import qn
+            from docx.shared import Cm, Pt, RGBColor
+        except ImportError as error:
+            raise ArtifactDependencyError(
+                "DOCX Cours : installer python-docx et beautifulsoup4."
+            ) from error
+
+        soup = BeautifulSoup(source, "html.parser")
+        main = soup.find("main") or soup.body
+        if main is None:
+            raise ArtifactError("Document Cours HTML sans contenu principal.")
+        document = Document()
+        section = document.sections[0]
+        section.page_height, section.page_width = Cm(29.7), Cm(21)
+        section.top_margin = Cm(1.9)
+        section.bottom_margin = Cm(2.0)
+        section.left_margin = Cm(1.9)
+        section.right_margin = Cm(1.9)
+
+        normal = document.styles["Normal"]
+        normal.font.name = "Aptos"
+        normal.font.size = Pt(10.5)
+        normal.font.color.rgb = RGBColor(27, 38, 56)
+        normal.paragraph_format.space_after = Pt(8)
+        normal.paragraph_format.line_spacing = 1.4
+        for level, size in ((1, 22), (2, 15), (3, 12), (4, 11)):
+            style = document.styles[f"Heading {level}"]
+            style.font.name = "Aptos Display"
+            style.font.size = Pt(size)
+            style.font.bold = True
+            style.font.color.rgb = RGBColor(30, 70, 117)
+            style.paragraph_format.keep_with_next = True
+            style.paragraph_format.space_before = Pt(17 if level == 2 else 11)
+            style.paragraph_format.space_after = Pt(7)
+
+        # Ces classes sont issues exclusivement du HTML statique autorisé.
+        lesson_box_classes = {
+            "oria-course-definition", "oria-course-example",
+            "oria-course-exercise", "oria-course-complement",
+            "oria-course-warning",
+        }
+        theme = {
+            "oria-course-definition": ("8BA5C6", "F5F8FC"),
+            "oria-course-example": ("8BA5C6", "F5F8FC"),
+            "oria-course-exercise": ("8BA5C6", "F5F8FC"),
+            "oria-course-complement": ("7E9B6E", "F4F8F0"),
+            "oria-course-warning": ("CE9853", "FBF7ED"),
+        }
+
+        def apply_box(paragraph: Any, category: str) -> None:
+            colors = theme.get(category)
+            if colors is None:
+                return
+            stroke, shade = colors
+            paragraph.paragraph_format.left_indent = Cm(0.25)
+            paragraph.paragraph_format.right_indent = Cm(0.12)
+            paragraph.paragraph_format.space_before = Pt(5)
+            paragraph.paragraph_format.space_after = Pt(5)
+            ppr = paragraph._p.get_or_add_pPr()
+            borders = ppr.find(qn("w:pBdr"))
+            if borders is None:
+                borders = OxmlElement("w:pBdr")
+                ppr.append(borders)
+            left = OxmlElement("w:left")
+            for attr, val in (("val", "single"), ("sz", "20"),
+                              ("space", "10"), ("color", stroke)):
+                left.set(qn("w:" + attr), val)
+            borders.append(left)
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:fill"), shade)
+            ppr.append(shd)
+
+        def inline(paragraph: Any, node: Any, *, bold: bool = False,
+                   italic: bool = False, underline: bool = False,
+                   superscript: bool = False, subscript: bool = False,
+                   math_font: bool = False) -> None:
+            if isinstance(node, NavigableString):
+                if not str(node):
+                    return
+                run = paragraph.add_run(str(node))
+                run.bold = bold
+                run.italic = italic
+                run.underline = underline
+                run.font.superscript = superscript
+                run.font.subscript = subscript
+                if math_font:
+                    run.font.name = "Cambria Math"
+                    run.font.size = Pt(12.5)
+                return
+            if not isinstance(node, Tag):
+                return
+            if node.name == "br":
+                paragraph.add_run().add_break()
+                return
+            next_bold = bold or node.name in {"strong", "b", "th"}
+            next_italic = italic or node.name in {"em", "i"}
+            next_under = underline or node.name == "u"
+            next_super = superscript or node.name == "sup"
+            next_sub = subscript or node.name == "sub"
+            # Word ne permet pas d'avoir à la fois super et indice sur un run.
+            if node.name == "sup":
+                next_sub = False
+            if node.name == "sub":
+                next_super = False
+            next_math = math_font or "oria-course-equation" in node.get("class", [])
+            for child in node.children:
+                inline(paragraph, child, bold=next_bold, italic=next_italic,
+                       underline=next_under, superscript=next_super,
+                       subscript=next_sub, math_font=next_math)
+
+        def append_text(paragraph: Any, node: Tag, *, math_font: bool = False) -> None:
+            for child in node.children:
+                inline(paragraph, child, math_font=math_font)
+
+        def walk(node: Any, *, box: str = "", equation: bool = False) -> None:
+            if not isinstance(node, Tag):
+                return
+            tag = node.name
+            classes = node.get("class", [])
+            current_box = next((v for v in classes if v in lesson_box_classes), box)
+            current_eq = equation or "oria-course-equation" in classes
+            if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+                paragraph = document.add_heading(level=min(int(tag[1]), 4))
+                if tag == "h1":
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    paragraph.paragraph_format.space_after = Pt(24)
+                append_text(paragraph, node)
+                return
+            if tag in {"p", "blockquote", "figcaption", "pre"}:
+                paragraph = document.add_paragraph()
+                if current_eq:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    paragraph.paragraph_format.keep_together = True
+                    paragraph.paragraph_format.space_before = Pt(10)
+                    paragraph.paragraph_format.space_after = Pt(12)
+                if current_box:
+                    apply_box(paragraph, current_box)
+                if tag == "blockquote":
+                    paragraph.paragraph_format.left_indent = Cm(0.5)
+                append_text(paragraph, node, math_font=current_eq)
+                return
+            if tag in {"ul", "ol"}:
+                for item in node.find_all("li", recursive=False):
+                    paragraph = document.add_paragraph(
+                        style="List Number" if tag == "ol" else "List Bullet"
+                    )
+                    if current_box:
+                        apply_box(paragraph, current_box)
+                    append_text(paragraph, item, math_font=current_eq)
+                return
+            if tag == "table":
+                table_rows = node.find_all("tr")
+                if not table_rows:
+                    return
+                numcols = max(len(row.find_all(["td", "th"], recursive=False))
+                              for row in table_rows)
+                if numcols <= 0:
+                    return
+                table = document.add_table(rows=len(table_rows), cols=numcols)
+                table.style = "Light Shading Accent 1"
+                table.autofit = True
+                for row_idx, html_row in enumerate(table_rows):
+                    for col_idx, cell in enumerate(html_row.find_all(["td", "th"], recursive=False)):
+                        para = table.cell(row_idx, col_idx).paragraphs[0]
+                        append_text(para, cell, math_font=current_eq)
+                        if cell.name == "th":
+                            for run in para.runs:
+                                run.bold = True
+                return
+            if tag == "img":
+                # Cours n'utilise pas d'images distantes. Une image data URI
+                # deja sécurisée peut néanmoins être conservée dans Word.
+                _, content = self._image_data_uri(node.get("src", ""))
+                document.add_picture(io.BytesIO(content), width=Cm(14))
+                return
+            if tag == "div" and current_eq:
+                # Équation directement dans un div, éventuellement entourée
+                # d'autres paragraphes : une seule composition, sans doublon.
+                children = [child for child in node.children if isinstance(child, Tag)]
+                if children and all(child.name in {"span", "strong", "em", "sup", "sub", "br"}
+                                    for child in children):
+                    para = document.add_paragraph()
+                    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    para.paragraph_format.keep_together = True
+                    append_text(para, node, math_font=True)
+                    return
+            children = list(node.children)
+            # Conteneurs composés uniquement de texte + balisage inline.
+            inline_tags = {"span", "strong", "em", "b", "i", "u", "sup", "sub", "br", "small"}
+            if children and all(isinstance(c, NavigableString)
+                                or (isinstance(c, Tag) and c.name in inline_tags)
+                                for c in children) and any(str(c).strip() for c in children):
+                paragraph = document.add_paragraph()
+                if current_eq:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    paragraph.paragraph_format.keep_together = True
+                if current_box:
+                    apply_box(paragraph, current_box)
+                append_text(paragraph, node, math_font=current_eq)
+                return
+            for child in children:
+                if isinstance(child, NavigableString):
+                    # Les espaces d'indentation ne sont pas un paragraphe.
+                    if child.strip():
+                        para = document.add_paragraph()
+                        if current_box:
+                            apply_box(para, current_box)
+                        inline(para, child, math_font=current_eq)
+                elif isinstance(child, Tag):
+                    walk(child, box=current_box, equation=current_eq)
+
+        for child in main.children:
+            walk(child)
+        if not document.paragraphs and not document.tables:
+            raise ArtifactError("ORIA Cours : fichier Word vide.")
+        buffer = io.BytesIO()
+        document.save(buffer)
+        return buffer.getvalue()
+
     def _contract_docx(self, kind: str | None, source: str | None, native: Any) -> bytes:
+        # ORIA Cours utilise un parcours HTML sémantique plus riche. La
+        # conversion historique des autres documents n'est pas modifiée.
+        if (kind == "html" and isinstance(source, str)
+                and 'class="oria-course-section"' in source):
+            return self._contract_docx_course_html(source)
         try:
             from docx import Document
             from docx.shared import Cm, Pt, RGBColor

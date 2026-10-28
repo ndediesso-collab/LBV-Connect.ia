@@ -1,12 +1,13 @@
 import React, {
   useCallback,
-  useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Image,
   Linking,
   Modal,
@@ -22,7 +23,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { VideoView, useVideoPlayer } from "expo-video";
-import * as FileSystem from "expo-file-system";
+import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
@@ -58,6 +59,8 @@ type CreationItem = {
   public_url?: string | null;
   media_url?: string | null;
   download_url?: string | null;
+  preview_url?: string | null;
+  preview_supported?: boolean;
   url?: string | null;
 
   mime_type?: string | null;
@@ -70,6 +73,121 @@ type CreationItem = {
   created_at?: string | null;
   updated_at?: string | null;
 };
+
+type ApiError = { detail?: string; message?: string };
+type ArtifactListResponse = ApiError & { artifacts?: CreationItem[] };
+type DocBlock = Record<string, unknown>;
+type DocPreview = ApiError & {
+  blocks?: DocBlock[];
+  paragraphs?: DocBlock[];
+  content?: { blocks?: DocBlock[] };
+  truncated?: boolean;
+};
+type SpreadsheetPreview = ApiError & {
+  sheets?: Array<{ name?: string; rows?: unknown[][]; truncated?: boolean }>;
+  truncated?: boolean;
+};
+type PreviewKind = "pdf" | "docx" | "xlsx" | "text" | "unsupported";
+type ArtifactPreview = {
+  item: CreationItem;
+  kind: PreviewKind;
+  loading: boolean;
+  error?: string;
+  text?: string;
+  document?: DocPreview;
+  spreadsheet?: SpreadsheetPreview;
+};
+
+const TEXT_PREVIEW_TYPES = new Set([
+  "txt", "md", "csv", "tsv", "json", "jsonl", "ndjson", "yaml", "yml",
+  "xml", "log", "py", "js", "ts", "tsx", "jsx", "html", "css", "sql", "toml", "ini", "sh",
+]);
+const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
+const MAX_TEXT_PREVIEW_CHARS = 90_000;
+const SYNC_INTERVAL_MS = 45_000;
+
+function artifactExtension(item: CreationItem): string {
+  return String(item.extension || item.filename?.split(".").pop() || "")
+    .trim().toLowerCase().replace(/^\./, "");
+}
+
+function isCourseArtifact(item: CreationItem): boolean {
+  return item.metadata?.source === "oria-course" ||
+    /^oria-cours-(?:transcription-)?[a-f0-9]{16}\.(?:pdf|docx|txt)$/i.test(item.filename || "");
+}
+
+function isCourseTranscript(item: CreationItem): boolean {
+  return item.metadata?.kind === "transcript" ||
+    /^oria-cours-transcription-[a-f0-9]{16}\.txt$/i.test(item.filename || "");
+}
+
+function getPreviewKind(item: CreationItem): PreviewKind {
+  const ext = artifactExtension(item);
+  if (ext === "pdf" || ext === "docx" || ext === "xlsx") return ext;
+  return TEXT_PREVIEW_TYPES.has(ext) ? "text" : "unsupported";
+}
+
+function safeRemoteUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  // URLs non HTTPS (javascript:, file:, data:, etc.) interdites.
+  if (!/^https:\/\/[^\s/]+/i.test(text)) return null;
+  return text;
+}
+
+function mergeCreationLists(regular: CreationItem[], artifacts: CreationItem[]): CreationItem[] {
+  const byId = new Map<string, CreationItem>();
+  for (const item of regular) {
+    if (item && typeof item.id === "string" && item.id.trim()) byId.set(item.id, item);
+  }
+  for (const item of artifacts) {
+    if (!item || typeof item.id !== "string" || !item.id.trim()) continue;
+    const previous = byId.get(item.id);
+    byId.set(item.id, {
+      ...previous, ...item, creation_type: "artifact",
+      metadata: item.metadata || previous?.metadata || null,
+    });
+  }
+  return [...byId.values()].sort((a,b) =>
+    (Date.parse(b.created_at || "") || 0) - (Date.parse(a.created_at || "") || 0));
+}
+
+function blockText(block: DocBlock): string {
+  if (typeof block.text === "string") return block.text;
+  if (Array.isArray(block.runs)) return block.runs.map((value: unknown) => {
+    if (typeof value === "string") return value;
+    if (value && typeof value === "object" && "text" in value) {
+      const part = (value as { text?: unknown }).text;
+      return typeof part === "string" ? part : "";
+    }
+    return "";
+  }).join("");
+  return "";
+}
+
+function DocPreviewText({ block, color }: { block: DocBlock; color: string }) {
+  if (!Array.isArray(block.runs)) return <Text style={{ color }}>{blockText(block)}</Text>;
+  return <Text style={{ color }}>{block.runs.map((value: unknown, index: number) => {
+    if (typeof value === "string") return <Text key={index}>{value}</Text>;
+    if (!value || typeof value !== "object") return null;
+    const run = value as Record<string, unknown>;
+    const text = typeof run.text === "string" ? run.text : "";
+    return <Text key={index} style={{
+      fontWeight: run.bold ? "700" : "400",
+      fontStyle: run.italic ? "italic" : "normal",
+      textDecorationLine: run.underline ? "underline" : "none",
+      fontSize: run.superscript || run.subscript ? 10 : 14,
+      lineHeight: run.superscript || run.subscript ? 17 : 23,
+    }}>{text}</Text>;
+  })}</Text>;
+}
+
+function cellText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "object" && "text" in value) return String((value as {text?: unknown}).text || "");
+  return "";
+}
 
 type CreationsResponse = {
   success?: boolean;
@@ -163,6 +281,16 @@ const UI = {
     byte: "o",
     kilobyte: "Ko",
     megabyte: "Mo",
+    preview: "Aperçu",
+    previewFailed: "Aperçu indisponible. Vous pouvez toujours télécharger le fichier.",
+    previewUnsupported: "Aperçu non disponible pour ce format. Vous pouvez télécharger le fichier.",
+    noPreviewContent: "Aucun contenu lisible dans l’aperçu.",
+    partialPreview: "Aperçu partiel : téléchargez le fichier pour voir tout le contenu.",
+    partialLibrary: "Certaines créations n’ont pas pu être chargées. Actualisez pour réessayer.",
+    course: "ORIA Cours",
+    transcript: "Transcription",
+    pdfNative: "Ouvrir le PDF dans le lecteur de l’appareil",
+    previewLoading: "Préparation de l’aperçu…",
   },
   en: {
     unknownDate: "Unknown date",
@@ -239,6 +367,16 @@ const UI = {
     byte: "B",
     kilobyte: "KB",
     megabyte: "MB",
+    preview: "Preview",
+    previewFailed: "Preview unavailable. You can still download the file.",
+    previewUnsupported: "Preview is not available for this format. You can download it.",
+    noPreviewContent: "No readable content in the preview.",
+    partialPreview: "Partial preview: download the file to see everything.",
+    partialLibrary: "Some creations could not be loaded. Refresh to retry.",
+    course: "ORIA Course",
+    transcript: "Transcript",
+    pdfNative: "Open PDF in the device viewer",
+    previewLoading: "Preparing preview…",
   },
 } as const;
 
@@ -522,33 +660,14 @@ function themedIconColor(
     : value;
 }
 
-function getCreationKind(
-  item: CreationItem,
-): CreationKind {
-  const explicit = String(
-    item.creation_type || "",
-  ).toLowerCase();
-
-  const type = String(
-    item.media_type ||
-      item.type ||
-      "",
-  ).toLowerCase();
-
-  if (
-    explicit === "artifact" ||
-    type === "file"
-  ) {
-    return "artifact";
-  }
-
-  if (
-    explicit === "video" ||
-    type === "video"
-  ) {
-    return "video";
-  }
-
+function getCreationKind(item: CreationItem): CreationKind {
+  const explicit = String(item.creation_type || "").toLowerCase();
+  const type = String(item.media_type || item.type || "").toLowerCase();
+  // Les médias peuvent eux aussi posséder une extension (.png, .mp4) :
+  // un type explicite doit primer sur cette propriété.
+  if (explicit === "video" || type === "video") return "video";
+  if (explicit === "image" || type === "image") return "image";
+  if (explicit === "artifact" || type === "file" || Boolean(item.extension)) return "artifact";
   return "image";
 }
 
@@ -828,6 +947,13 @@ export default function CreationsPage() {
       string | null
     >(null);
 
+  const [artifactPreview, setArtifactPreview] = useState<ArtifactPreview | null>(null);
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
+  const [openingPdf, setOpeningPdf] = useState(false);
+  const loadRequestId = useRef(0);
+  const previewRequestId = useRef(0);
+  const initialLibraryLoaded = useRef(false);
+
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -933,81 +1059,59 @@ export default function CreationsPage() {
       ],
     );
 
-  const loadCreations =
-    useCallback(
-      async (
-        showRefreshState = false,
-      ) => {
-        if (
-          showRefreshState
-        ) {
-          setRefreshing(
-            true,
-          );
-        } else {
-          setLoading(true);
-        }
+  const loadCreations = useCallback(async (showRefreshState = false, silent = false) => {
+    const requestId = ++loadRequestId.current;
+    if (showRefreshState) setRefreshing(true);
+    else if (!silent) setLoading(true);
+    if (!silent) { setError(null); setSyncWarning(null); }
+    try {
+      // /creations garde la liste des médias ; /artifacts garantit la présence
+      // des PDF, DOCX et TXT ORIA Cours même si la liste générale tarde à évoluer.
+      const parseResponse = async <T extends ApiError>(response: Response): Promise<T> => {
+        const payload = await response.json().catch(() => ({} as T)) as T;
+        if (!response.ok) throw new Error(payload.detail || payload.message || t.loadFailed);
+        return payload;
+      };
+      const [all, files] = await Promise.allSettled([
+        authenticatedFetch("/creations?limit=100").then(r => parseResponse<CreationsResponse>(r)),
+        authenticatedFetch("/artifacts?limit=100&offset=0").then(r => parseResponse<ArtifactListResponse>(r)),
+      ]);
+      if (all.status === "rejected" && files.status === "rejected") throw new Error(t.loadFailed);
+      if (loadRequestId.current !== requestId) return;
+      const regular = all.status === "fulfilled" && Array.isArray(all.value.creations) ? all.value.creations : [];
+      const artifacts = files.status === "fulfilled" && Array.isArray(files.value.artifacts) ? files.value.artifacts : [];
+      setCreations(mergeCreationLists(regular, artifacts));
+      setSyncWarning(all.status === "rejected" || files.status === "rejected" ? t.partialLibrary : null);
+      setError(null);
+    } catch (requestError) {
+      if (loadRequestId.current !== requestId) return;
+      if (!silent) setError(requestError instanceof Error ? requestError.message : t.loadError);
+    } finally {
+      if (loadRequestId.current === requestId) {
+        initialLibraryLoaded.current = true;
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
+  }, [authenticatedFetch, t.loadError, t.loadFailed, t.partialLibrary]);
 
-        setError(null);
-
-        try {
-          const response =
-            await authenticatedFetch(
-              "/creations?limit=100",
-            );
-
-          let payload:
-            CreationsResponse =
-            {};
-
-          try {
-            payload =
-              await response.json();
-          } catch {
-            payload = {};
-          }
-
-          if (!response.ok) {
-            throw new Error(
-              payload.detail ||
-                payload.message ||
-                t.loadFailed,
-            );
-          }
-
-          setCreations(
-            Array.isArray(
-              payload.creations,
-            )
-              ? payload.creations
-              : [],
-          );
-        } catch (
-          requestError
-        ) {
-          setError(
-            requestError instanceof
-              Error
-              ? requestError.message
-              : t.loadError,
-          );
-        } finally {
-          setLoading(false);
-          setRefreshing(
-            false,
-          );
-        }
-      },
-      [
-        authenticatedFetch,
-        t.loadError,
-        t.loadFailed,
-      ],
-    );
-
-  useEffect(() => {
-    void loadCreations();
-  }, [loadCreations]);
+  useFocusEffect(useCallback(() => {
+    // Synchronise à chaque retour sur la page, au retour au premier plan,
+    // et toutes les 45 secondes pendant qu’elle est ouverte.
+    void loadCreations(false, initialLibraryLoaded.current);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void loadCreations(false, true);
+    });
+    const interval = setInterval(() => {
+      if (AppState.currentState === "active") void loadCreations(false, true);
+    }, SYNC_INTERVAL_MS);
+    return () => {
+      subscription.remove();
+      clearInterval(interval);
+      ++loadRequestId.current;
+      ++previewRequestId.current;
+    };
+  }, [loadCreations]));
 
   const counts =
     useMemo(() => {
@@ -1046,279 +1150,141 @@ export default function CreationsPage() {
       );
     }, [creations, filter]);
 
-  const resolveArtifactUrl =
-    useCallback(
-      async (
-        item: CreationItem,
-      ) => {
-        const existing =
-          getArtifactUrl(
-            item,
-          );
+  const resolveArtifact = useCallback(async (item: CreationItem): Promise<CreationItem> => {
+    // Ne jamais réutiliser une URL signée provenant d’une ancienne session.
+    const response = await authenticatedFetch(`/artifacts/${encodeURIComponent(item.id)}`);
+    const payload = await response.json().catch(() => ({})) as { artifact?: CreationItem } & ApiError;
+    if (!response.ok || !payload.artifact?.id || payload.artifact.id !== item.id) {
+      throw new Error(payload.detail || payload.message || t.fileUnavailable);
+    }
+    const updated = { ...item, ...payload.artifact, creation_type: "artifact" as const };
+    setCreations(current => current.map(entry => entry.id === item.id ? updated : entry));
+    return updated;
+  }, [authenticatedFetch, t.fileUnavailable]);
 
-        if (existing) {
-          return existing;
-        }
+  const downloadToDevice = useCallback(async (item: CreationItem, url: string, share = true): Promise<File> => {
+    const trustedUrl = safeRemoteUrl(url);
+    if (!trustedUrl) throw new Error(t.fileUnavailable);
+    // Expo FileSystem moderne : downloadAsync de l’ancien namespace peut lever
+    // une exception au runtime sur SDK récents. Identifiants privés uniques.
+    const filename = safeFilename(item).replace(/[\\/:*?"<>|]+/g, "-").trim().slice(0, 100);
+    const file = new File(Paths.cache, `oria-${item.id}-${filename || "fichier"}`);
+    const result = await File.downloadFileAsync(trustedUrl, file, { idempotent: true });
+    if (!result.exists || result.size <= 0 || result.size > 50 * 1024 * 1024) {
+      throw new Error(t.downloadImpossible);
+    }
+    if (share) {
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(result.uri, {
+          mimeType: item.mime_type || undefined, dialogTitle: t.saveOrShare,
+        });
+      } else {
+        Alert.alert(t.downloadedTitle, t.downloadedMessage);
+      }
+    }
+    return result;
+  }, [t.downloadImpossible, t.downloadedMessage, t.downloadedTitle, t.fileUnavailable, t.saveOrShare]);
 
-        const response =
-          await authenticatedFetch(
-            `/artifacts/${encodeURIComponent(
-              item.id,
-            )}`,
-          );
+  const handleDownload = useCallback(async (item: CreationItem) => {
+    try {
+      const kind = getCreationKind(item);
+      const updated = kind === "artifact" ? await resolveArtifact(item) : item;
+      const url = kind === "artifact" ? getArtifactUrl(updated) : getMediaUrl(updated);
+      if (!url) throw new Error(t.fileUnavailable);
+      await downloadToDevice(updated, url);
+    } catch (error) {
+      Alert.alert(t.downloadTitle, error instanceof Error ? error.message : t.downloadFailed);
+    }
+  }, [downloadToDevice, resolveArtifact, t.downloadFailed, t.downloadTitle, t.fileUnavailable]);
 
-        let payload: {
-          artifact?: CreationItem;
-          detail?: string;
-          message?: string;
-        } = {};
+  const closeArtifactPreview = useCallback(() => {
+    ++previewRequestId.current;
+    setArtifactPreview(null);
+  }, []);
 
-        try {
-          payload =
-            await response.json();
-        } catch {
-          payload = {};
-        }
+  const handleOpen = useCallback(async (item: CreationItem) => {
+    if (getCreationKind(item) !== "artifact") {
+      setSelectedMedia(item);
+      return;
+    }
+    const kind = getPreviewKind(item);
+    const id = ++previewRequestId.current;
+    setArtifactPreview({ item, kind, loading: kind !== "unsupported" && kind !== "pdf" });
+    if (kind === "unsupported" || kind === "pdf") return;
+    try {
+      if (kind === "docx" || kind === "xlsx") {
+        const endpoint = kind === "docx" ? "document-preview" : "spreadsheet-preview";
+        const response = await authenticatedFetch(`/artifacts/${encodeURIComponent(item.id)}/${endpoint}`);
+        const data = await response.json().catch(() => ({})) as DocPreview & SpreadsheetPreview;
+        if (!response.ok) throw new Error(data.detail || data.message || t.previewFailed);
+        if (previewRequestId.current !== id) return;
+        setArtifactPreview({ item, kind, loading: false,
+          ...(kind === "docx" ? { document: data } : { spreadsheet: data }) });
+        return;
+      }
+      // Pour le TXT, télécharger temporairement dans le cache privé, vérifier
+      // la taille avant de décoder. Ne jamais passer par un visualiseur externe.
+      const updated = await resolveArtifact(item);
+      if (previewRequestId.current !== id) return;
+      if (updated.size_bytes && updated.size_bytes > MAX_TEXT_PREVIEW_BYTES) {
+        throw new Error(t.partialPreview);
+      }
+      const url = getArtifactUrl(updated);
+      if (!url) throw new Error(t.fileUnavailable);
+      const file = await downloadToDevice(updated, url, false);
+      if (file.size > MAX_TEXT_PREVIEW_BYTES) throw new Error(t.partialPreview);
+      const text = (await file.text()).slice(0, MAX_TEXT_PREVIEW_CHARS);
+      try { file.delete(); } catch { /* Cache éphémère, suppression au nettoyage système. */ }
+      if (previewRequestId.current !== id) return;
+      setArtifactPreview({ item: updated, kind, loading: false, text });
+    } catch (error) {
+      if (previewRequestId.current !== id) return;
+      setArtifactPreview({ item, kind, loading: false,
+        error: error instanceof Error ? error.message : t.previewFailed });
+    }
+  }, [authenticatedFetch, downloadToDevice, resolveArtifact, t.fileUnavailable, t.partialPreview, t.previewFailed]);
 
-        if (!response.ok) {
-          throw new Error(
-            payload.detail ||
-              payload.message ||
-              t.downloadFailed,
-          );
-        }
-
-        const refreshed =
-          payload.artifact;
-
-        const url = refreshed
-          ? getArtifactUrl(
-              refreshed,
-            )
-          : null;
-
-        if (!url) {
-          throw new Error(
-            t.fileUnavailable,
-          );
-        }
-
-        setCreations(
-          (current) =>
-            current.map(
-              (creation) =>
-                creation.id ===
-                item.id
-                  ? {
-                      ...creation,
-                      ...refreshed,
-                    }
-                  : creation,
-            ),
-        );
-
-        return url;
-      },
-      [
-        authenticatedFetch,
-        t.downloadFailed,
-        t.fileUnavailable,
-      ],
-    );
-
-  const downloadToDevice =
-    useCallback(
-      async (
-        item: CreationItem,
-        url: string,
-      ) => {
-        const baseDir =
-          FileSystem.Paths.cache;
-
-        if (!baseDir) {
-          throw new Error(
-            t.tempStorageUnavailable,
-          );
-        }
-
-        const filename =
-          safeFilename(item)
-            .replace(
-              /[\\/:*?"<>|]+/g,
-              "-",
-            )
-            .replace(
-              /\s+/g,
-              " ",
-            )
-            .trim() ||
-          `oria-${item.id}`;
-
-        const target =
-          `${baseDir}${filename}`;
-
-        const result =
-          await FileSystem.downloadAsync(
-            url,
-            target,
-          );
-
-        if (
-          result.status <
-            200 ||
-          result.status >= 300
-        ) {
-          throw new Error(
-            t.downloadImpossible,
-          );
-        }
-
-        if (
-          await Sharing.isAvailableAsync()
-        ) {
-          await Sharing.shareAsync(
-            result.uri,
-            {
-              mimeType:
-                item.mime_type ||
-                undefined,
-              dialogTitle:
-                t.saveOrShare,
-            },
-          );
-        } else {
-          Alert.alert(
-            t.downloadedTitle,
-            t.downloadedMessage,
-          );
-        }
-      },
-      [
-        t.downloadImpossible,
-        t.downloadedMessage,
-        t.downloadedTitle,
-        t.saveOrShare,
-        t.tempStorageUnavailable,
-      ],
-    );
-
-  const handleDownload =
-    useCallback(
-      async (
-        item: CreationItem,
-      ) => {
-        try {
-          const kind =
-            getCreationKind(
-              item,
-            );
-
-          const url =
-            kind ===
-            "artifact"
-              ? await resolveArtifactUrl(
-                  item,
-                )
-              : getMediaUrl(
-                  item,
-                );
-
-          if (!url) {
-            throw new Error(
-              t.fileUnavailable,
-            );
-          }
-
-          await downloadToDevice(
-            item,
-            url,
-          );
-        } catch (
-          requestError
-        ) {
-          Alert.alert(
-            t.downloadTitle,
-            requestError instanceof
-              Error
-              ? requestError.message
-              : t.downloadFailed,
-          );
-        }
-      },
-      [
-        downloadToDevice,
-        resolveArtifactUrl,
-        t.downloadFailed,
-        t.downloadTitle,
-        t.fileUnavailable,
-      ],
-    );
-
-  const handleOpen =
-    useCallback(
-      async (
-        item: CreationItem,
-      ) => {
-        const kind =
-          getCreationKind(
-            item,
-          );
-
-        if (
-          kind !==
-          "artifact"
-        ) {
-          setSelectedMedia(
-            item,
-          );
-          return;
-        }
-
-        try {
-          const url =
-            await resolveArtifactUrl(
-              item,
-            );
-
-          const supported =
-            await Linking.canOpenURL(
-              url,
-            );
-
-          if (supported) {
-            await Linking.openURL(
-              url,
-            );
-            return;
-          }
-
-          await downloadToDevice(
-            item,
-            url,
-          );
-        } catch (
-          requestError
-        ) {
-          setError(
-            requestError instanceof
-              Error
-              ? requestError.message
-              : t.fileUnavailable,
-          );
-        }
-      },
-      [
-        downloadToDevice,
-        resolveArtifactUrl,
-        t.fileUnavailable,
-      ],
-    );
+  const openPdfPreview = useCallback(async (item: CreationItem) => {
+    setOpeningPdf(true);
+    try {
+      const updated = await resolveArtifact(item);
+      const url = safeRemoteUrl(updated.preview_url || getArtifactUrl(updated));
+      if (!url) throw new Error(t.fileUnavailable);
+      if (Platform.OS === "web") {
+        await Linking.openURL(url);
+        return;
+      }
+      const file = await downloadToDevice(updated, url, false);
+      // SDK récents : iOS ouvre Quick Look, Android un lecteur PDF installé.
+      // Ne jamais envoyer le lien privé vers Google Docs Viewer ou un CDN.
+      const viewer = File as unknown as {
+        canPreview?: (file: File, options?: { mimeType?: string }) => Promise<boolean>;
+        preview?: (file: File, options?: { mimeType?: string; title?: string }) => Promise<void>;
+      };
+      if (typeof viewer.canPreview === "function" && typeof viewer.preview === "function"
+          && await viewer.canPreview(file, { mimeType: "application/pdf" })) {
+        await viewer.preview(file, { title: safeFilename(updated), mimeType: "application/pdf" });
+        return;
+      }
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(file.uri, { mimeType: "application/pdf", dialogTitle: t.preview });
+        return;
+      }
+      throw new Error(t.previewFailed);
+    } catch (error) {
+      Alert.alert(t.preview, error instanceof Error ? error.message : t.previewFailed);
+    } finally {
+      setOpeningPdf(false);
+    }
+  }, [downloadToDevice, resolveArtifact, t.fileUnavailable, t.preview, t.previewFailed]);
 
   const handleDelete =
     useCallback(
       async (
         item: CreationItem,
       ) => {
+        // Les fichiers pédagogiques achevés sont protégés côté PostgreSQL.
+        if (isCourseArtifact(item)) return;
         Alert.alert(
           t.deleteTitle,
           t.deleteQuestion,
@@ -1796,6 +1762,12 @@ export default function CreationsPage() {
               </ScrollView>
             )}
 
+          {!!syncWarning && !error && (
+            <View style={styles.syncWarningBox}>
+              <Ionicons name="information-circle-outline" size={18} color={isDark ? "#d1c8a1" : "#856719"} />
+              <Text style={styles.syncWarningText}>{syncWarning}</Text>
+            </View>
+          )}
           {!!error && (
             <View
               style={
@@ -2081,6 +2053,11 @@ export default function CreationsPage() {
                                 </Text>
                               </View>
 
+                              {isCourseArtifact(item) && (
+                                <View style={styles.metaPill}>
+                                  <Text style={styles.metaText}>{t.course}{isCourseTranscript(item) ? ` · ${t.transcript}` : ""}</Text>
+                                </View>
+                              )}
                               {!!size && (
                                 <View
                                   style={
@@ -2118,7 +2095,7 @@ export default function CreationsPage() {
                               }
                             >
                               <Ionicons
-                                name="open-outline"
+                                name="eye-outline"
                                 size={17}
                                 color={themedIconColor(
                                   "#55555d",
@@ -2150,7 +2127,7 @@ export default function CreationsPage() {
                               />
                             </Pressable>
 
-                            <Pressable
+                            {!isCourseArtifact(item) && <Pressable
                               onPress={() =>
                                 void handleDelete(
                                   item,
@@ -2189,7 +2166,7 @@ export default function CreationsPage() {
                                   )}
                                 />
                               )}
-                            </Pressable>
+                            </Pressable>}
                           </View>
                         </View>
                       );
@@ -2506,6 +2483,119 @@ export default function CreationsPage() {
               </View>
             )}
         </ScrollView>
+
+         <Modal
+           visible={!!artifactPreview}
+           animationType="slide"
+           onRequestClose={closeArtifactPreview}
+         >
+           <SafeAreaView style={styles.artifactModalSafe}>
+             <View style={styles.artifactModalHeader}>
+               <View style={{ flex: 1, paddingRight: 10 }}>
+                 <Text style={styles.artifactModalLabel}>{t.preview}{artifactPreview && isCourseArtifact(artifactPreview.item) ? ` · ${t.course}` : ""}</Text>
+                 <Text style={styles.artifactModalTitle} numberOfLines={2}>
+                   {artifactPreview ? safeFilename(artifactPreview.item) : ""}
+                 </Text>
+               </View>
+               {!!artifactPreview && (
+                 <Pressable style={styles.artifactModalAction} accessibilityLabel={t.download}
+                   onPress={() => void handleDownload(artifactPreview.item)}>
+                   <Ionicons name="download-outline" size={22} color={isDark ? "#f3f3f5" : "#2c2c32"} />
+                 </Pressable>
+               )}
+               <Pressable style={styles.artifactModalAction} accessibilityLabel={t.close}
+                 onPress={closeArtifactPreview}>
+                 <Ionicons name="close" size={24} color={isDark ? "#f3f3f5" : "#2c2c32"} />
+               </Pressable>
+             </View>
+             {artifactPreview?.loading ? (
+               <View style={styles.artifactModalCenter}>
+                 <ActivityIndicator size="large" color="#23232b" />
+                 <Text style={styles.artifactModalMessage}>{t.previewLoading}</Text>
+               </View>
+             ) : artifactPreview?.error ? (
+               <View style={styles.artifactModalCenter}>
+                 <Ionicons name="alert-circle-outline" size={30} color="#999" />
+                 <Text style={styles.artifactModalMessage}>{artifactPreview.error}</Text>
+               </View>
+             ) : artifactPreview?.kind === "pdf" ? (
+               <View style={styles.artifactModalCenter}>
+                 <Ionicons name="document-outline" size={64} color="#787880" />
+                 <Text style={styles.artifactModalMessage}>{t.pdfNative}</Text>
+                 <Pressable disabled={openingPdf} style={styles.artifactPrimaryButton}
+                   onPress={() => void openPdfPreview(artifactPreview.item)}>
+                   {openingPdf ? <ActivityIndicator color="#fff" /> :
+                     <Text style={styles.artifactPrimaryButtonText}>{t.preview}</Text>}
+                 </Pressable>
+               </View>
+             ) : artifactPreview?.kind === "text" ? (
+               <ScrollView style={styles.artifactScroll} contentContainerStyle={styles.artifactTextPage}>
+                 <Text selectable style={styles.artifactText}>{artifactPreview.text || t.noPreviewContent}</Text>
+                 {artifactPreview.text && artifactPreview.text.length >= MAX_TEXT_PREVIEW_CHARS ?
+                   <Text style={styles.artifactMuted}>{t.partialPreview}</Text> : null}
+               </ScrollView>
+             ) : artifactPreview?.kind === "docx" ? (
+               <ScrollView style={styles.artifactScroll} contentContainerStyle={styles.artifactDocumentPage}>
+                 {(() => {
+                   const doc = artifactPreview.document;
+                   const blocks = doc?.blocks || doc?.content?.blocks || doc?.paragraphs || [];
+                   return blocks.length ? blocks.map((block, index) => {
+                     const kind = String(block.type || block.kind || "paragraph").toLowerCase();
+                     if (kind.includes("table") && Array.isArray(block.rows)) return (
+                       <ScrollView horizontal key={index} style={{ marginVertical: 12 }}>
+                         <View>{block.rows.map((row: unknown, ri: number) => (
+                           <View key={ri} style={{ flexDirection: "row" }}>
+                             {(Array.isArray(row) ? row : []).slice(0, 24).map((cell, ci: number) => (
+                               <View key={ci} style={styles.artifactTableCell}>
+                                 <Text selectable style={styles.artifactTableText}>{cellText(cell)}</Text>
+                               </View>
+                             ))}
+                           </View>
+                         ))}</View>
+                       </ScrollView>
+                     );
+                     const heading = kind.includes("heading") || /^h[1-6]$/.test(kind) || kind === "title";
+                     return <View key={index} style={{ marginBottom: heading ? 16 : 10 }}>
+                       <Text selectable style={heading ? styles.artifactHeading : styles.artifactParagraph}>
+                         {kind.includes("bullet") || kind.includes("list") ? "•  " : ""}
+                         <DocPreviewText block={block} color={isDark ? "#f3f3f5" : "#2a2a31"} />
+                       </Text>
+                     </View>;
+                   }) : <Text style={styles.artifactMuted}>{t.noPreviewContent}</Text>;
+                 })()}
+                 {artifactPreview.document?.truncated ? <Text style={styles.artifactMuted}>{t.partialPreview}</Text> : null}
+               </ScrollView>
+             ) : artifactPreview?.kind === "xlsx" ? (
+               <ScrollView style={styles.artifactScroll} contentContainerStyle={styles.artifactDocumentPage}>
+                 {artifactPreview.spreadsheet?.sheets?.length ? artifactPreview.spreadsheet.sheets.map((sheet, i) => (
+                   <View key={i} style={{ marginBottom: 24 }}>
+                     <Text style={styles.artifactHeading}>{sheet.name || `Feuille ${i + 1}`}</Text>
+                     <ScrollView horizontal>
+                       <View>
+                         {(sheet.rows || []).slice(0, 100).map((row, ri) => (
+                           <View key={ri} style={{ flexDirection: "row" }}>
+                             {(Array.isArray(row) ? row : []).slice(0, 30).map((cell, ci) => (
+                               <View key={ci} style={styles.artifactTableCell}>
+                                 <Text selectable style={styles.artifactTableText}>{cellText(cell)}</Text>
+                               </View>
+                             ))}
+                           </View>
+                         ))}
+                       </View>
+                     </ScrollView>
+                     {sheet.truncated ? <Text style={styles.artifactMuted}>{t.partialPreview}</Text> : null}
+                   </View>
+                 )) : <Text style={styles.artifactMuted}>{t.noPreviewContent}</Text>}
+                 {artifactPreview.spreadsheet?.truncated ? <Text style={styles.artifactMuted}>{t.partialPreview}</Text> : null}
+               </ScrollView>
+             ) : (
+               <View style={styles.artifactModalCenter}>
+                 <Ionicons name="document-outline" size={44} color="#777" />
+                 <Text style={styles.artifactModalMessage}>{t.previewUnsupported}</Text>
+               </View>
+             )}
+           </SafeAreaView>
+         </Modal>
 
         <Modal
           visible={
@@ -3269,4 +3359,38 @@ const baseStyles = StyleSheet.create({
     fontSize: 11,
     lineHeight: 17,
   },
+  syncWarningBox: {
+    flexDirection: "row", alignItems: "center", gap: 9, padding: 12,
+    borderRadius: 12, backgroundColor: "#fff7dc", marginBottom: 12,
+  },
+  syncWarningText: { flex: 1, fontSize: 12, lineHeight: 18, color: "#72591b" },
+  artifactModalSafe: { flex: 1, backgroundColor: "#f6f6f4" },
+  artifactModalHeader: {
+    backgroundColor: "#fff", flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: "#ecece8",
+  },
+  artifactModalLabel: { color: "#777780", fontSize: 11, fontWeight: "600", marginBottom: 4 },
+  artifactModalTitle: { color: "#232329", fontSize: 15, fontWeight: "700" },
+  artifactModalAction: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
+  artifactModalCenter: { flex: 1, alignItems: "center", justifyContent: "center", padding: 26, gap: 16 },
+  artifactModalMessage: { color: "#707077", fontSize: 13, lineHeight: 21, textAlign: "center" },
+  artifactPrimaryButton: { backgroundColor: "#19191c", paddingHorizontal: 25, paddingVertical: 14, borderRadius: 12, marginTop: 6 },
+  artifactPrimaryButtonText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  artifactScroll: { flex: 1 },
+  artifactTextPage: { backgroundColor: "#fff", padding: 20, flexGrow: 1 },
+  artifactDocumentPage: {
+    backgroundColor: "#fff", marginHorizontal: 12, marginVertical: 12,
+    padding: 22, borderRadius: 14, minHeight: 300,
+  },
+  artifactText: { color: "#24242a", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12, lineHeight: 21 },
+  artifactParagraph: { color: "#292930", fontSize: 14, lineHeight: 23 },
+  artifactHeading: { color: "#202026", fontSize: 17, lineHeight: 26, fontWeight: "700", marginTop: 10, marginBottom: 10 },
+  artifactMuted: { color: "#777780", fontSize: 12, lineHeight: 19, marginTop: 12 },
+  artifactTableCell: {
+    minWidth: 110, maxWidth: 190, minHeight: 38,
+    borderWidth: 1, borderColor: "#e5e5e2", padding: 8,
+  },
+  artifactTableText: { color: "#3a3a41", fontSize: 11, lineHeight: 17 },
+
 });

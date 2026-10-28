@@ -7,6 +7,7 @@ import asyncio
 from time import perf_counter
 import json
 import re
+from html.parser import HTMLParser
 from typing import Any
 
 
@@ -4697,6 +4698,133 @@ class OpenAIService:
             "usage": result.get("usage"),
         }
 
+    # Validation précoce d'une section Code-First. La sanitation définitive
+    # et le rendu restent exclusivement confiés à ArtifactService.
+    @staticmethod
+    def _validate_course_html_fragment(source: str) -> str:
+        """Valide un fragment de cours avant son assemblage documentaire.
+
+        Rejette les balises non autorisées, les attributs actifs, les sections
+        incomplètes et les notations Markdown/LaTeX qui apparaîtraient telles
+        quelles à l'impression. Ne modifie jamais une formule silencieusement.
+        """
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("Section Code-First vide.")
+        if len(source) > 250_000:
+            raise ValueError("Section Code-First trop volumineuse.")
+        html = source.strip()
+        if html.startswith("```") or html.endswith("```"):
+            raise ValueError("Le fragment doit être du HTML sans bloc Markdown.")
+
+        allowed = frozenset({
+            "section", "h2", "h3", "h4", "p", "strong", "em",
+            "sup", "sub", "ul", "ol", "li", "table", "thead", "tbody",
+            "tr", "th", "td", "blockquote", "div", "span", "br",
+        })
+        semantic_classes = frozenset({
+            "oria-course-section", "oria-course-definition",
+            "oria-course-example", "oria-course-exercise",
+            "oria-course-equation", "oria-course-complement",
+            "oria-course-warning",
+        })
+
+        class SectionParser(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__(convert_charrefs=True)
+                self.stack: list[str] = []
+                self.roots = 0
+                self.nodes = 0
+                self.visible: list[str] = []
+
+            def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                if tag not in allowed:
+                    raise ValueError("Balise HTML non autorisée dans ORIA Cours.")
+                self.nodes += 1
+                if self.nodes > 6000:
+                    raise ValueError("Section Code-First trop complexe.")
+                if not self.stack:
+                    if self.roots or tag != "section":
+                        raise ValueError("Une seule racine section est requise.")
+                    self.roots += 1
+                elif tag == "section":
+                    raise ValueError("Sections HTML imbriquées interdites.")
+                if tag == "br":
+                    if attrs:
+                        raise ValueError("Attribut non autorisé sur br.")
+                    return
+                classes = []
+                for name, value in attrs:
+                    if name == "class" and isinstance(value, str):
+                        classes = value.split()
+                        if not classes or any(cls not in semantic_classes for cls in classes):
+                            raise ValueError("Classe HTML non autorisée.")
+                    elif name in {"colspan", "rowspan"} and tag in {"td", "th"}:
+                        if not isinstance(value, str) or not value.isdigit() or not 1 <= int(value) <= 20:
+                            raise ValueError("Dimension de cellule HTML invalide.")
+                    else:
+                        raise ValueError("Attribut HTML non autorisé dans ORIA Cours.")
+                if self.roots == 1 and not self.stack and classes != ["oria-course-section"]:
+                    raise ValueError("La racine doit avoir la classe oria-course-section.")
+                self.stack.append(tag)
+
+            def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                if tag != "br":
+                    raise ValueError("Balise autofermante non autorisée.")
+                self.handle_starttag(tag, attrs)
+
+            def handle_endtag(self, tag: str) -> None:
+                if not self.stack or self.stack[-1] != tag:
+                    raise ValueError("Balises HTML mal imbriquées ou non fermées.")
+                self.stack.pop()
+
+            def handle_data(self, data: str) -> None:
+                if not self.stack and data.strip():
+                    raise ValueError("Texte hors de la section HTML.")
+                if self.stack:
+                    self.visible.append(data)
+
+            def handle_comment(self, data: str) -> None:
+                raise ValueError("Commentaires HTML non autorisés.")
+
+            def handle_decl(self, decl: str) -> None:
+                raise ValueError("Document HTML complet non autorisé pour une section.")
+
+            def unknown_decl(self, data: str) -> None:
+                raise ValueError("Déclaration HTML interdite.")
+
+            def handle_pi(self, data: str) -> None:
+                raise ValueError("Instruction de traitement HTML interdite.")
+
+        parser = SectionParser()
+        try:
+            parser.feed(html)
+            parser.close()
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError("Fragment HTML de cours non analysable.") from exc
+        if parser.stack or parser.roots != 1:
+            raise ValueError("Section HTML incomplète.")
+        visible = " ".join(parser.visible)
+        if not visible.strip():
+            raise ValueError("Section sans contenu pédagogique visible.")
+
+        # Détecter les marqueurs que WeasyPrint et python-docx ne composeraient
+        # pas automatiquement. Seul le contenu textuel visible est inspecté ;
+        # les vraies balises de composition restent autorisées.
+        raw_math = re.compile(
+            r"\\(?:d?frac|sqrt|text|sum|prod|int|lim|overline|underline|"
+            r"alpha|beta|gamma|delta|theta|pi|sigma|lambda|cdot|times|"
+            r"left|right|begin|end|mathrm|operatorname|vec|partial)\b"
+            r"|\\[\[\]()]|(?<!\$)\$\$|\$[^\$\n]+\$"
+        )
+        if raw_math.search(visible):
+            raise ValueError("Formule LaTeX non composée dans le cours.")
+        if ("```" in visible or re.search(r"(?m)^\s*#{1,6}\s+", visible)
+                or re.search(r"\*\*[^*\n]+\*\*", visible)):
+            raise ValueError("Balisage Markdown brut dans le cours.")
+        return html
+
     def compose_course_section(
         self,
         *,
@@ -4706,6 +4834,7 @@ class OpenAIService:
         total_sections: int,
         previous_context: str = "",
         reasoning_mode: str = "balanced",
+        output_format: str = "markdown",
     ) -> dict[str, Any]:
         """Rédige UNE section pédagogique à partir d'une transcription.
 
@@ -4716,6 +4845,10 @@ class OpenAIService:
         fournit plusieurs sections puis assemble le PDF/DOCX ailleurs.
         L'usage token réel est renvoyé pour règlement par le service Cours.
         """
+        # Opt-in : l'orchestrateur Cours choisit explicitement html_fragment
+        # lors de la migration. L'ancien contrat Markdown reste disponible.
+        if output_format not in {"markdown", "html_fragment"}:
+            raise ValueError("Format de rédaction ORIA Cours non pris en charge.")
         if not isinstance(model, str) or model.strip().lower() != "gpt-6-luna":
             raise ValueError("ORIA Cours utilise exclusivement GPT-6 Luna.")
         course_model = "gpt-6-luna"
@@ -4741,6 +4874,7 @@ class OpenAIService:
                 section_index=section_index,
                 total_sections=total_sections,
                 previous_context=previous_context,
+                output_format=output_format,
             ),
         }
         self._apply_reasoning_to_request(
@@ -4758,18 +4892,37 @@ class OpenAIService:
         message = str(self._value(response, "output_text", "") or "").strip()
         details = self._value(response, "incomplete_details")
         reason = self._value(details, "reason") if details is not None else None
-        return {
+        complete = status == "completed" and bool(message)
+        html_fragment = ""
+        validation_error = None
+        if output_format == "html_fragment":
+            if complete:
+                try:
+                    html_fragment = self._validate_course_html_fragment(message)
+                except ValueError as exc:
+                    complete = False
+                    reason = "invalid_course_html_fragment"
+                    validation_error = str(exc)
+            # Le code de composition n'est pas un texte conversationnel.
+            message = ""
+        result = {
             "message": message,
             "usage": usage,
             "web_search_calls": 0,
             "model": course_model,
             "openai_model": str(self._value(response, "model", course_model) or course_model),
-            "complete": status == "completed" and bool(message),
+            "complete": complete,
             "status": status,
             "incomplete_reason": str(reason) if reason is not None else None,
             "section_index": section_index,
             "total_sections": total_sections,
         }
+        if output_format == "html_fragment":
+            result["output_format"] = "html_fragment"
+            result["html_fragment"] = html_fragment
+            if validation_error is not None:
+                result["validation_error"] = validation_error
+        return result
 
     @classmethod
     def _optional_transcription_usage(cls, transcript: Any) -> dict[str, Any] | None:

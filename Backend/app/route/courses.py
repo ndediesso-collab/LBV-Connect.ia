@@ -195,7 +195,7 @@ def _issue_quote_token(plan: CoursePlan) -> tuple[str, str]:
         "exp": int(expires.timestamp()),
     }
     data = _b64_encode(json.dumps(payload, separators=(",", ":"),
-                                  sort_keys=True).encode("utf-8"))
+                                sort_keys=True).encode("utf-8"))
     sig = _b64_encode(hmac.new(_quote_key(), data.encode("ascii"), hashlib.sha256).digest())
     return f"{data}.{sig}", expires.isoformat()
 
@@ -267,7 +267,7 @@ def _safe_public_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
     # le déficit du solde. Jamais de texte du cours / identifiant fournisseur.
     writing_reservation = (
         required if (status == "awaiting_credits"
-                     and type(required) is int and required > 0) else None
+                    and type(required) is int and required > 0) else None
     )
     return {
         "status": status,
@@ -285,8 +285,8 @@ def _safe_public_job(job: dict[str, Any] | None) -> dict[str, Any] | None:
             else "wait"
         ),
         "document_ready": bool(isinstance(job.get("output"), dict)
-                               and isinstance(job["output"].get("artifact"), dict)
-                               and job["output"]["artifact"].get("id")),
+                            and isinstance(job["output"].get("artifact"), dict)
+                            and job["output"]["artifact"].get("id")),
         "requires_manual_review": status == "reconciliation_required",
     }
 
@@ -493,7 +493,7 @@ def confirm_course(
         if isinstance(existing, dict) and existing.get("status") == "awaiting_credits":
             raise HTTPException(409, "Cours en attente de crédits ; recharge puis reprise sécurisée requise.")
         plan = deps.service.prepare_quote(user_id=uid, course_id=cid,
-                                           writing_model=token["model"])
+                                        writing_model=token["model"])
         if not hmac.compare_digest(_plan_hash(plan), token["plan_sha256"]):
             raise HTTPException(409, "Le devis a change ; demander un nouveau devis.")
         job = deps.service.confirm_and_reserve(plan=plan, approved=True)
@@ -560,7 +560,7 @@ def course_artifacts(
                     or metadata.get("kind") != kind):
                 raise HTTPException(409, "Fichier final prive non confirme.")
             items.append({"kind": kind, "id": ident, "filename": row["filename"],
-                          "extension": row["extension"], "size_bytes": row["size_bytes"]})
+                        "extension": row["extension"], "size_bytes": row["size_bytes"]})
         return {"course_id": cid, "ready": True, "artifacts": items,
                 "download_endpoint": "/ai/artifacts/{artifact_id}"}
     except HTTPException:

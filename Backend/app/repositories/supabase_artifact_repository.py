@@ -5,12 +5,20 @@ import logging
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any, Optional
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from app.core.supabase import supabase
 
 
 logger = logging.getLogger(__name__)
+
+
+class CourseArtifactStorageUncertain(RuntimeError):
+    """Stockage Cours non confirmé : rapprocher Storage/SQL, sans nouvel upload."""
+
+
+class CourseArtifactConflict(RuntimeError):
+    """Référence documentaire Cours existante mais différente ou incohérente."""
 
 
 class SupabaseArtifactRepository:
@@ -49,6 +57,197 @@ class SupabaseArtifactRepository:
     # depuis le stockage de fichiers utilisateur (risque de contenu actif).
     INLINE_PREVIEW_TYPES = frozenset({"pdf"})
     INLINE_PREVIEW_MIME = {"pdf": "application/pdf"}
+
+    # Les noms correspondent a OriaCourseArtifactRenderer (course_service.py).
+    # Les doubles identifiants (document et transcription) sont déterministes.
+    COURSE_ID_NAMESPACES = {
+        "document": "oria-cours/document/v1",
+        "transcript": "oria-cours/transcription/v1",
+    }
+
+    def __init__(self, client: Any = None) -> None:
+        """Client Supabase optionnel injecté, pour isoler les workers Cours.
+
+        Sans injection, l'instance historique conserve exactement le client
+        global du Chat et ses routes de création de fichiers ordinaires.
+        """
+        self.client = client if client is not None else supabase
+
+    @staticmethod
+    def _course_artifact_metadata(metadata: Any) -> bool:
+        return isinstance(metadata, dict) and metadata.get("source") == "oria-course"
+
+    @classmethod
+    def _validate_course_save(
+        cls, *, user_id: str | UUID, artifact_id: str | UUID,
+        filename: str, extension: str, mime_type: str,
+        category: str, metadata: dict[str, Any],
+        file_bytes: bytes, size_bytes: int | None, sha256: str,
+        conversation_id: str | None, source_message_id: str | None,
+    ) -> tuple[str, str, str, str]:
+        """Contrat metier local ; SQL reste autorite pour la transaction.
+
+        Source HTML et octets PDF/DOCX n'ont PAS le meme SHA256 :
+        source_sha256 dans metadata identifie la source du cours, alors que
+        sha256 identifie les octets physiques sauvegardes.
+        """
+        try:
+            uid = str(UUID(str(user_id)))
+            aid = str(UUID(str(artifact_id)))
+            course_id = str(UUID(str(metadata.get("course_id"))))
+        except (TypeError, AttributeError, ValueError) as exc:
+            raise ValueError("Identifiants ORIA Cours invalides.") from exc
+        kind = metadata.get("kind")
+        if kind not in cls.COURSE_ID_NAMESPACES:
+            raise ValueError("Nature du fichier ORIA Cours invalide.")
+        if aid != str(uuid5(UUID(course_id), cls.COURSE_ID_NAMESPACES[kind])):
+            raise ValueError("Identifiant deterministe du cours incoherent.")
+        ext = str(extension or "").lower().lstrip(".")
+        mt = str(mime_type or "").split(";", 1)[0].lower().strip()
+        if kind == "document":
+            if ext not in ("pdf", "docx") or category != "document":
+                raise ValueError("Document ORIA Cours attendu en PDF/DOCX.")
+            permitted_mimes = {
+                "pdf": "application/pdf",
+                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            }
+            if mt != permitted_mimes[ext]:
+                raise ValueError("MIME documentaire ORIA Cours incoherent.")
+        else:
+            if ext != "txt" or category != "text" or mt != "text/plain":
+                raise ValueError("Transcription ORIA Cours attendue en TXT.")
+        if not isinstance(metadata.get("source_sha256"), str) or re.fullmatch(
+            r"[0-9a-f]{64}", metadata["source_sha256"]
+        ) is None:
+            raise ValueError("Empreinte de source ORIA Cours invalide.")
+        if conversation_id is not None or source_message_id is not None:
+            raise ValueError("Les fichiers ORIA Cours restent independants du Chat.")
+        if not isinstance(file_bytes, (bytes, bytearray)) or not file_bytes:
+            raise ValueError("Fichier ORIA Cours vide.")
+        if len(file_bytes) > cls.MAX_ARTIFACT_BYTES:
+            raise ValueError("Fichier ORIA Cours trop volumineux.")
+        if size_bytes is not None and (type(size_bytes) is not int or size_bytes != len(file_bytes)):
+            raise ValueError("Taille du fichier ORIA Cours incoherente.")
+        if not isinstance(sha256, str) or sha256.lower() != hashlib.sha256(file_bytes).hexdigest():
+            raise ValueError("Empreinte du fichier ORIA Cours incoherente.")
+        expected_filename = cls._safe_filename(filename)
+        if not expected_filename.lower().endswith("." + ext):
+            raise ValueError("Nom de fichier ORIA Cours incoherent.")
+        return uid, aid, course_id, expected_filename
+
+    @classmethod
+    def _verify_course_existing(
+        cls, row: Any, *, user_id: str, artifact_id: str,
+        course_id: str, filename: str, extension: str,
+        mime_type: str, category: str, size_bytes: int,
+        sha256: str, metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Refuse toute reprise si les donnees preexistantes divergent."""
+        if not isinstance(row, dict):
+            raise CourseArtifactConflict("Ligne ORIA Cours invalide.")
+        existing_metadata = row.get("metadata")
+        if (
+            str(row.get("id")) != artifact_id
+            or str(row.get("user_id")) != user_id
+            or str(row.get("filename")) != filename
+            or str(row.get("extension")) != extension
+            or str(row.get("mime_type")) != mime_type
+            or str(row.get("category")) != category
+            or type(row.get("size_bytes")) is not int
+            or row["size_bytes"] != size_bytes
+            or str(row.get("sha256", "")).lower() != sha256.lower()
+            or not isinstance(existing_metadata, dict)
+            or existing_metadata.get("source") != "oria-course"
+            or existing_metadata.get("course_id") != course_id
+            or existing_metadata.get("kind") != metadata["kind"]
+            or existing_metadata.get("source_sha256") != metadata["source_sha256"]
+        ):
+            raise CourseArtifactConflict("Fichier ORIA Cours preexistant incoherent.")
+        cls._assert_owned_storage_path(
+            storage_path=row.get("storage_path"),
+            user_id=user_id, artifact_id=artifact_id,
+        )
+        expected_path = f"{user_id}/artifacts/{artifact_id}/{filename}"
+        if row.get("storage_path") != expected_path:
+            raise CourseArtifactConflict("Chemin prive ORIA Cours inattendu.")
+        # Les metadonnees verifiees ne prouvent pas que l'objet Storage existe
+        # encore : une suppression administrative hors repository reste possible.
+        return dict(row)
+
+    def _save_course_artifact(
+        self, *, user_id: str | UUID, artifact_id: str | UUID,
+        filename: str, extension: str, mime_type: str, category: str,
+        file_bytes: bytes, size_bytes: int | None, sha256: str,
+        metadata: dict[str, Any], conversation_id: str | None,
+        model: str | None, source_message_id: str | None,
+    ) -> dict[str, Any]:
+        """Stockage idempotent a cle fixe ; aucun effacement sur erreur incertaine.
+
+        Le stockage objet et PostgreSQL ne partagent pas de transaction.
+        L'objet peut exister meme si HTTP annonce un echec : on ne fait
+        ni upsert, ni suppression automatique, ni retry d'un upload incertain.
+        """
+        uid, aid, cid, clean_name = self._validate_course_save(
+            user_id=user_id, artifact_id=artifact_id, filename=filename,
+            extension=extension, mime_type=mime_type, category=category,
+            metadata=metadata, file_bytes=file_bytes, size_bytes=size_bytes,
+            sha256=sha256, conversation_id=conversation_id,
+            source_message_id=source_message_id,
+        )
+        ext = str(extension).lower().lstrip(".")
+        expected = dict(user_id=uid, artifact_id=aid, course_id=cid,
+                        filename=clean_name, extension=ext,
+                        mime_type=mime_type, category=category,
+                        size_bytes=len(file_bytes), sha256=sha256,
+                        metadata=metadata)
+        # Lecture AVANT upload : la reprise d'un commit valide n'ecrase rien.
+        try:
+            prior = self.get_artifact(user_id=uid, artifact_id=aid)
+        except Exception as exc:
+            raise CourseArtifactStorageUncertain(
+                "Verification SQL du document ORIA Cours indisponible."
+            ) from exc
+        if prior is not None:
+            return self._verify_course_existing(prior, **expected)
+
+        try:
+            self.upload_file(user_id=uid, artifact_id=aid,
+                             filename=clean_name, file_bytes=file_bytes,
+                             content_type=mime_type, upsert=False)
+        except Exception as exc:
+            # En cas de conflit Storage ou de timeout, ne pas ecraser l'objet.
+            # Une insertion DB concurrente peut etre devenue visible.
+            try:
+                prior = self.get_artifact(user_id=uid, artifact_id=aid)
+            except Exception:
+                prior = None
+            if prior is not None:
+                return self._verify_course_existing(prior, **expected)
+            raise CourseArtifactStorageUncertain(
+                "Upload ORIA Cours non confirme ; reconciliation Storage requise."
+            ) from exc
+
+        try:
+            row = self.create_artifact(
+                user_id=uid, artifact_id=aid, filename=clean_name,
+                extension=ext, mime_type=mime_type, category=category,
+                storage_path=f"{uid}/artifacts/{aid}/{clean_name}",
+                size_bytes=len(file_bytes), sha256=sha256,
+                conversation_id=None, model=model, source_message_id=None,
+                metadata=metadata,
+            )
+        except Exception as exc:
+            # Ne PAS supprimer le blob ici : l'insertion a pu etre commitee.
+            try:
+                prior = self.get_artifact(user_id=uid, artifact_id=aid)
+            except Exception:
+                prior = None
+            if prior is not None:
+                return self._verify_course_existing(prior, **expected)
+            raise CourseArtifactStorageUncertain(
+                "Insertion SQL ORIA Cours non confirmee ; reconciliation requise."
+            ) from exc
+        return self._verify_course_existing(row, **expected)
 
     # ============================================================
     # STORAGE
@@ -154,7 +353,7 @@ class SupabaseArtifactRepository:
             ))
 
         try:
-            bucket = supabase.storage.from_(self.BUCKET_NAME)
+            bucket = self.client.storage.from_(self.BUCKET_NAME)
             if download:
                 try:
                     # storage-py expose le troisième argument « options ».
@@ -323,7 +522,7 @@ class SupabaseArtifactRepository:
 
         try:
             response = (
-                supabase
+                self.client
                 .table(self.TABLE_NAME)
                 .insert(payload)
                 .execute()
@@ -371,6 +570,21 @@ class SupabaseArtifactRepository:
             if artifact_id is not None
             else str(uuid4())
         )
+
+        # ORIA Cours : parcours de persistance renforcé, opt-in.
+        # Le Chat et les autres créations gardent leur chemin historique.
+        if self._course_artifact_metadata(metadata):
+            if artifact_id is None:
+                raise ValueError("Identifiant deterministe ORIA Cours obligatoire.")
+            return self._save_course_artifact(
+                user_id=user_id, artifact_id=resolved_artifact_id,
+                filename=filename, extension=extension,
+                mime_type=mime_type, category=category,
+                file_bytes=file_bytes, size_bytes=size_bytes,
+                sha256=sha256, metadata=dict(metadata),
+                conversation_id=conversation_id, model=model,
+                source_message_id=source_message_id,
+            )
 
         # Contrôles avant tout upload : les métadonnées du fichier source
         # doivent correspondre exactement aux octets réellement stockés.
@@ -438,7 +652,7 @@ class SupabaseArtifactRepository:
         """Récupère un artifact appartenant à l'utilisateur."""
         try:
             response = (
-                supabase
+                self.client
                 .table(self.TABLE_NAME)
                 .select("*")
                 .eq("id", str(artifact_id))
@@ -494,7 +708,7 @@ class SupabaseArtifactRepository:
 
         try:
             query = (
-                supabase
+                self.client
                 .table(self.TABLE_NAME)
                 .select("*")
                 .eq("user_id", str(user_id))
@@ -571,6 +785,15 @@ class SupabaseArtifactRepository:
         if not artifact:
             return False
 
+        # Les fichiers facturés ORIA Cours servent de preuve durable du job.
+        # Empêcher une suppression partielle (Storage supprimé puis trigger SQL
+        # qui refuse DELETE) ; l'effacement RGPD exige un parcours serveur
+        # explicite et coordonné avec le job et la transcription.
+        if self._course_artifact_metadata(artifact.get("metadata")):
+            raise PermissionError(
+                "Suppression ORIA Cours réservée à une procédure serveur dédiée."
+            )
+
         storage_path = artifact.get("storage_path")
 
         if storage_path:
@@ -583,7 +806,7 @@ class SupabaseArtifactRepository:
 
         try:
             (
-                supabase
+                self.client
                 .table(self.TABLE_NAME)
                 .delete()
                 .eq("id", str(artifact_id))
@@ -758,7 +981,7 @@ class SupabaseArtifactRepository:
             "upsert": upsert,
         }
 
-        storage = supabase.storage.from_(self.BUCKET_NAME)
+        storage = self.client.storage.from_(self.BUCKET_NAME)
 
         return storage.upload(
             path,
@@ -770,7 +993,7 @@ class SupabaseArtifactRepository:
         self,
         storage_path: str,
     ) -> Any:
-        storage = supabase.storage.from_(self.BUCKET_NAME)
+        storage = self.client.storage.from_(self.BUCKET_NAME)
         return storage.remove([storage_path])
 
 

@@ -15,17 +15,24 @@ ATTENTION : le worker et les RPC Supabase doivent egalement etre adaptes
 pour accepter une reservation de document apres la transcription. NE PAS
 activer ce service isole avec l'ancien controle des deux reservations.
 
-Le traitement ne genere pas encore le PDF/DOCX lui-meme. Le texte assemble,
-la transcription et le format choisi sont transmis a un renderiseur injecte.
+Code-First : chaque section du cours est redigee directement en HTML statique.
+Un assembleur compose une source HTML unique, puis un renderiseur explicite
+utilise le moteur ArtifactService d'ORIA (PDF/DOCX) et persiste separement la
+transcription. Le worker doit injecter OriaCourseArtifactRenderer (ou un
+renderiseur strictement compatible) ; aucun ancien export Markdown ne peut etre
+utilise silencieusement. Adapter les RPC et le worker AVANT activation.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from hashlib import sha256
+from html import escape as html_escape
+from html.parser import HTMLParser
 import json
 import math
 import os
+import re
 from typing import Any, Callable, Mapping, Protocol, Sequence
 from uuid import UUID, uuid5
 
@@ -83,6 +90,9 @@ INPUT_TOKENS_QUOTE_PER_SECTION = 18_000
 # Plafond commun au devis ET à l'appel OpenAI de chaque section Cours.
 # Ne pas utiliser le plafond du Chat général (32 000 tokens).
 OUTPUT_TOKENS_QUOTE_PER_SECTION = COURSE_MAX_OUTPUT_TOKENS
+# Le moteur documentaire existant refuse toute source > 1 million de caracteres.
+MAX_COURSE_DOCUMENT_HTML_CHARS = 1_000_000
+MAX_COURSE_DOCUMENT_ELEMENTS = 6000
 
 
 class CourseJobStore(Protocol):
@@ -111,12 +121,135 @@ class CourseJobStore(Protocol):
 
 
 class CourseDocumentRenderer(Protocol):
-    """A implementer dans la couche artifact (PDF/DOCX prives)."""
+    """Rendu Code-First explicite ; un ancien render_course(markdown=...) est refuse."""
 
-    def render_course(
+    def render_course_code_first(
         self, *, user_id: str, course_id: str, title: str,
-        document_format: str, markdown: str, transcript: str,
+        document_format: str, html_source: str, transcript: str,
     ) -> Mapping[str, Any]: ...
+
+
+class OriaCourseArtifactRenderer:
+    """Adaptateur au moteur de fichiers ORIA, sans moteur documentaire concurrent.
+
+    L'appelant injecte ArtifactService et supabase_artifact_repository deja
+    utilises par ai.py. Les UUID de fichiers sont stables par cours afin de
+    rendre les reprises detectables. Le stockage doit appliquer une contrainte
+    d'unicite sur l'identifiant ; sans transaction couvrant Storage et SQL,
+    un echec reseau incertain exige une reconciliation, jamais un nouvel UUID.
+    Le worker doit conserver un lease exclusif sur (user_id, course_id).
+    """
+
+    def __init__(self, *, artifact_service: Any, artifact_repository: Any) -> None:
+        self.artifacts = artifact_service
+        self.repository = artifact_repository
+
+    @staticmethod
+    def _public_reference(record: Mapping[str, Any], expected_id: str) -> dict[str, Any]:
+        record_id = str(record.get("id") or record.get("artifact_id") or "")
+        if record_id != expected_id:
+            raise CourseNeedsReconciliation("Reference de fichier enregistre incoherente.")
+        return {
+            "artifact_id": record_id,
+            "filename": record.get("filename"),
+            "extension": record.get("extension"),
+            "mime_type": record.get("mime_type"),
+        }
+
+    def _existing(self, *, user_id: str, artifact_id: str,
+                  course_id: str, kind: str, source_hash: str) -> dict[str, Any] | None:
+        # La recherche est TOUJOURS bornee au proprietaire authentifie.
+        record = self.repository.get_artifact(artifact_id=artifact_id, user_id=user_id)
+        if record is None:
+            return None
+        meta = record.get("metadata") if isinstance(record, dict) else None
+        if (not isinstance(meta, dict)
+                or meta.get("source") != "oria-course"
+                or meta.get("course_id") != course_id
+                or meta.get("kind") != kind
+                or meta.get("source_sha256") != source_hash):
+            raise CourseNeedsReconciliation("Fichier preexistant a rapprocher avant reprise.")
+        return self._public_reference(record, artifact_id)
+
+    def _persist(self, *, user_id: str, course_id: str,
+                 generated: Any, artifact_id: str, kind: str,
+                 source_hash: str, model: str) -> dict[str, Any]:
+        saved = self.repository.save_artifact(
+            user_id=user_id, artifact_id=artifact_id,
+            filename=generated.filename, extension=generated.extension,
+            mime_type=generated.mime_type, category=generated.category,
+            file_bytes=generated.data, size_bytes=generated.size_bytes,
+            sha256=generated.sha256, conversation_id=None, model=model,
+            source_message_id=None,
+            metadata={**generated.metadata, "source": "oria-course",
+                      "course_id": course_id, "kind": kind,
+                      "source_sha256": source_hash},
+        )
+        if not isinstance(saved, dict):
+            raise CourseNeedsReconciliation("Confirmation de sauvegarde documentaire invalide.")
+        return self._public_reference(saved, artifact_id)
+
+    def render_course_code_first(
+        self, *, user_id: str, course_id: str, title: str,
+        document_format: str, html_source: str, transcript: str,
+    ) -> Mapping[str, Any]:
+        uid, cid = _uid(user_id), _uid(course_id)
+        fmt = normalize_course_document_format(document_format)
+        if fmt not in {"pdf", "docx"}:
+            raise CourseInvalid("Format ORIA Cours non pris en charge par le renderiseur.")
+        if not isinstance(html_source, str) or not html_source.strip():
+            raise CourseInvalid("Source documentaire Code-First vide.")
+        if not isinstance(transcript, str) or not transcript.strip():
+            raise CourseInvalid("Transcription originale absente.")
+        if len(html_source) > MAX_COURSE_DOCUMENT_HTML_CHARS:
+            raise CourseUnavailable("Source du cours trop longue pour un seul document.")
+
+        doc_id = str(uuid5(UUID(cid), "oria-cours/document/v1"))
+        txt_id = str(uuid5(UUID(cid), "oria-cours/transcription/v1"))
+        doc_hash = sha256(html_source.encode("utf-8")).hexdigest()
+        txt_hash = sha256(transcript.encode("utf-8")).hexdigest()
+        document = self._existing(user_id=uid, artifact_id=doc_id,
+                                  course_id=cid, kind="document", source_hash=doc_hash)
+        transcription = self._existing(user_id=uid, artifact_id=txt_id,
+                                       course_id=cid, kind="transcript", source_hash=txt_hash)
+
+        # Une compilation seulement lorsque le document n'est pas deja persiste.
+        # source_id designe le meme HTML statique que pour les creations ORIA.
+        if document is None:
+            payload = {
+                "schema_version": "oria.artifact.v1",
+                "sources": [{"id": "cours", "kind": "html", "content": html_source}],
+                "artifacts": [{
+                    "format": fmt,
+                    "filename": f"oria-cours-{UUID(cid).hex[:16]}.{fmt}",
+                    "source_id": "cours", "native_data": None,
+                }],
+            }
+            generated = self.artifacts.create_from_payload(payload, metadata={
+                "source": "oria-course", "course_id": cid, "kind": "document",
+                "source_sha256": doc_hash,
+            })
+            if len(generated) != 1 or generated[0].extension != fmt:
+                raise CourseUnavailable("Compilation du document ORIA Cours incomplete.")
+            document = self._persist(user_id=uid, course_id=cid,
+                                     generated=generated[0], artifact_id=doc_id,
+                                     kind="document", source_hash=doc_hash,
+                                     model="gpt-6-luna")
+
+        if transcription is None:
+            generated_txt = self.artifacts.create(
+                file_type="txt", content=transcript,
+                filename=f"oria-cours-transcription-{UUID(cid).hex[:16]}.txt",
+                metadata={"source": "oria-course", "course_id": cid,
+                          "kind": "transcript", "source_sha256": txt_hash},
+            )
+            transcription = self._persist(user_id=uid, course_id=cid,
+                                          generated=generated_txt, artifact_id=txt_id,
+                                          kind="transcript", source_hash=txt_hash,
+                                          model="gpt-4o-mini-transcribe")
+        # Ne pas persister d'URL signee ephemere dans la sortie du job SQL.
+        # /ai/artifacts/{artifact_id} emettra une URL neuve a chaque consultation.
+        return {"document": document, "transcription": transcription}
 
 
 @dataclass(frozen=True)
@@ -250,6 +383,92 @@ def _split_sections(transcripts: Sequence[str]) -> list[str]:
     if current:
         sections.append(current)
     return sections
+
+
+class _CourseContextText(HTMLParser):
+    """Extrait le texte lisible des sections precedentes sans le HTML brut."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.text: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        if data.strip():
+            self.text.append(data.strip())
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in {"h2", "h3", "h4", "p", "li", "tr", "br"}:
+            self.text.append("\n")
+
+
+def _course_previous_context(results: Sequence[dict[str, Any]]) -> str:
+    """Le contexte est une aide de continuite, jamais une nouvelle source."""
+    excerpts: list[str] = []
+    for item in results[-4:]:
+        parser = _CourseContextText()
+        parser.feed(str(item.get("html_fragment") or ""))
+        parser.close()
+        visible = " ".join(" ".join(parser.text).split())
+        if visible:
+            excerpts.append(visible[-2000:])
+    return "\n\n".join(excerpts)[-SECTION_CONTEXT_CHARS:]
+
+
+def _assemble_course_html(*, title: str, fragments: Sequence[str]) -> str:
+    """Assemble les sources deja validees, sans nouvelle generation IA.
+
+    @page et les styles s'appliquent au PDF WeasyPrint ; le moteur DOCX
+    importe lui-meme les blocs HTML et conserve sa typographie native.
+    Les limites correspondent aux controles de ArtifactService.
+    """
+    if not isinstance(title, str) or not title.strip():
+        raise CourseInvalid("Titre de cours manquant.")
+    if not fragments or any(not isinstance(f, str) or not f.strip() for f in fragments):
+        raise CourseInvalid("Une ou plusieurs sections Code-First manquent.")
+    css = """
+@page { size: A4; margin: 19mm 18mm 20mm; }
+body { font-family: 'DejaVu Sans', 'Liberation Sans', Arial, sans-serif;
+       font-size: 10.5pt; line-height: 1.52; color: #1b2638; }
+main { max-width: 100%; }
+h1 { font-size: 23pt; color: #152e57; line-height: 1.18;
+     margin: 0 0 10mm; padding-bottom: 3mm; border-bottom: 2px solid #285c9c; }
+h2 { font-size: 15pt; color: #204778; margin: 8mm 0 3mm; }
+h3 { font-size: 12pt; color: #204778; margin: 6mm 0 2mm; }
+h4 { font-size: 10.8pt; color: #284263; margin: 4mm 0 2mm; }
+h1,h2,h3,h4 { break-after: avoid; page-break-after: avoid; }
+p,li { orphans: 3; widows: 3; }
+p { margin: 0 0 3mm; }
+ul,ol { margin: 1mm 0 4mm; padding-left: 7mm; }
+li { margin-bottom: 1.2mm; }
+table { width: 100%; border-collapse: collapse; margin: 3mm 0 5mm;
+        font-size: 9.2pt; break-inside: avoid; }
+th,td { border: 1px solid #d0d8e3; padding: 2mm 2.5mm;
+        text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+th { color: #182b49; background: #e9eff7; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+blockquote { margin: 3mm 0; padding-left: 4mm; border-left: 3px solid #a2b5d0; }
+.oria-course-section { margin-bottom: 6mm; }
+.oria-course-definition,.oria-course-example,.oria-course-exercise,
+.oria-course-complement,.oria-course-warning { padding: 3mm 4mm;
+    margin: 3mm 0 4mm; border-left: 3px solid #8ba5c6; background: #f5f8fc; }
+.oria-course-complement { border-color: #7e9b6e; background: #f4f8f0; }
+.oria-course-warning { border-color: #ce9853; background: #fbf7ed; }
+.oria-course-equation { font-family: 'DejaVu Sans', 'Liberation Sans', serif;
+    font-size: 11pt; line-height: 1.7; text-align: center;
+    margin: 3mm 0; overflow-wrap: anywhere; }
+""".strip()
+    body = "\n".join(fragments)
+    source = (
+        '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
+        '<title>ORIA Cours</title><style>' + css + '</style></head>'
+        '<body><main><h1>' + html_escape(title.strip(), quote=True) + '</h1>\n'
+        + body + '\n</main></body></html>'
+    )
+    if len(source) > MAX_COURSE_DOCUMENT_HTML_CHARS:
+        raise CourseUnavailable("Cours trop volumineux pour un document unique.")
+    if len(re.findall(r"<\s*[a-zA-Z][a-zA-Z0-9]*\b", source)) > MAX_COURSE_DOCUMENT_ELEMENTS:
+        raise CourseUnavailable("Cours trop complexe pour le moteur documentaire.")
+    return source
 
 
 class CourseService:
@@ -572,6 +791,15 @@ class CourseService:
             raise CourseUnavailable("Transcription non terminee ou non reglee.")
         if state.get("status") == "completed" and isinstance(state.get("output"), dict):
             return dict(state["output"])
+        # Aucun debit IA si le worker utilise encore l'ancien renderer Markdown,
+        # ou si OpenAIService n'a pas ete mis a jour pour html_fragment.
+        if self.renderer is None or not callable(
+            getattr(self.renderer, "render_course_code_first", None)
+        ):
+            raise CourseUnavailable("Renderiseur Code-First ORIA Cours non configure.")
+        validate_html = getattr(self.ai, "_validate_course_html_fragment", None)
+        if not callable(validate_html):
+            raise CourseUnavailable("OpenAIService Code-First ORIA Cours non deploye.")
         transcripts = []
         for i in range(plan.segment_count):
             saved = self.jobs.get_call(user_id=uid, course_id=cid,
@@ -614,26 +842,46 @@ class CourseService:
                     raise CourseUnavailable(
                         "Budget de redaction autorise atteint : nouvelle approbation requise."
                     )
-            context = "\n\n".join(item.get("message", "")[-2000:] for item in results[-4:])
-            context = context[-SECTION_CONTEXT_CHARS:]
+            context = _course_previous_context(results)
             def perform(part: str = chunk, i: int = index, ctx: str = context) -> dict[str, Any]:
                 answer = self.ai.compose_course_section(
                     model=plan.provider_model, transcript=part, section_index=i + 1,
                     total_sections=len(parts), previous_context=ctx,
+                    output_format="html_fragment",
                 )
                 if not isinstance(answer, dict) or not isinstance(answer.get("usage"), dict):
                     raise CourseInvalid("Usage de redaction absent.")
-                # Une reponse incomplete a des tokens facturables : les
-                # conserver et bloquer la publication jusqu'a reconciliation.
-                return {"message": str(answer.get("message") or ""),
-                        "usage": answer["usage"], "complete": bool(answer.get("complete"))}
+                # Checkpoint du RESULTAT et de l'USAGE, meme si la sortie est
+                # incomplete : aucune relance aveugle d'un appel deja facture.
+                return {
+                    "output_format": str(answer.get("output_format") or ""),
+                    "html_fragment": str(answer.get("html_fragment") or ""),
+                    "usage": answer["usage"],
+                    "complete": bool(answer.get("complete")),
+                    "incomplete_reason": str(answer.get("incomplete_reason") or ""),
+                }
             saved = self._step_result(uid=uid, cid=cid, stage="document",
                                       index=index, invoke=perform)
             results.append(saved)
-            if not saved.get("complete") or not saved.get("message", "").strip():
+            if (saved.get("output_format") != "html_fragment"
+                    or not saved.get("complete")
+                    or not str(saved.get("html_fragment") or "").strip()):
                 self.jobs.flag_reconciliation(user_id=uid, course_id=cid,
-                                              detail=f"Section {index+1} incomplete")
-                raise CourseNeedsReconciliation("Section incomplete : usage a reconcilier.")
+                                              detail=f"Section Code-First {index+1} absente ou incomplete")
+                raise CourseNeedsReconciliation("Section Code-First incomplete : rapprochement necessaire.")
+            try:
+                validate_html(saved["html_fragment"])
+            except ValueError as exc:
+                self.jobs.flag_reconciliation(user_id=uid, course_id=cid,
+                                              detail=f"Section Code-First {index+1} invalide")
+                raise CourseNeedsReconciliation("Section documentaire invalide : rapprochement necessaire.") from exc
+        # Verifier le document entier AVANT le reglement definitif des credits.
+        # Si le document depasse les limites de compilation, aucun fichier
+        # tronque n'est produit et l'usage deja consomme reste rapproche.
+        html_source = _assemble_course_html(
+            title=plan.title,
+            fragments=[item["html_fragment"] for item in results],
+        )
         actual = CourseBillingService.calculate_document_actual(
             pack_id=plan.pack_id, writing_model=plan.writing_model,
             usages=[part["usage"] for part in results],
@@ -653,23 +901,36 @@ class CourseService:
             self.jobs.set_settled(user_id=uid, course_id=cid,
                                   stage="document", credits=actual.credits,
                                   api_cost_xaf=str(actual.total_cost_xaf))
-        markdown = f"# {plan.title}\n\n" + "\n\n".join(
-            f"## Partie {i + 1}\n\n{part['message']}"
-            for i, part in enumerate(results)
-        )
+        # Aucun Markdown intermediaire : composition deja faite et validee.
         transcript = "\n\n".join(transcripts)
-        artifact: Mapping[str, Any] | None = None
-        if self.renderer is not None:
-            artifact = self.renderer.render_course(
+        try:
+            artifact = self.renderer.render_course_code_first(
                 user_id=uid, course_id=cid, title=plan.title,
                 document_format=plan.document_format,
-                markdown=markdown, transcript=transcript,
+                html_source=html_source, transcript=transcript,
             )
-        completed = {"course_id": cid, "format": plan.document_format,
-                     "markdown": markdown, "transcript": transcript,
-                     "artifact": dict(artifact) if artifact is not None else None,
-                     "writing_credits": actual.credits}
-        # Sans renderer, le cours reste preparé ; l'artefact n'est pas pret.
-        if artifact is not None:
-            self.jobs.finish(user_id=uid, course_id=cid, result=completed)
+        except Exception as exc:
+            # Si un stockage repond de maniere incertaine, les artefacts ont
+            # peut-etre deja ete sauves. Les IDs stables permettent l'enquete.
+            self.jobs.flag_reconciliation(user_id=uid, course_id=cid,
+                                          detail="Compilation ou sauvegarde Code-First non confirmee")
+            raise CourseNeedsReconciliation(
+                "Document non confirme : verification du stockage necessaire."
+            ) from exc
+        if not isinstance(artifact, Mapping):
+            raise CourseNeedsReconciliation("Reponse du renderiseur documentaire invalide.")
+        for key in ("document", "transcription"):
+            entry = artifact.get(key)
+            if not isinstance(entry, Mapping) or not entry.get("artifact_id"):
+                self.jobs.flag_reconciliation(user_id=uid, course_id=cid,
+                                              detail=f"Fichier {key} non confirme")
+                raise CourseNeedsReconciliation("Livraison documentaire incomplete.")
+        completed = {
+            "course_id": cid, "format": plan.document_format,
+            "output_format": "html_code_first",
+            "document_source_sha256": sha256(html_source.encode("utf-8")).hexdigest(),
+            "artifact": dict(artifact),
+            "writing_credits": actual.credits,
+        }
+        self.jobs.finish(user_id=uid, course_id=cid, result=completed)
         return completed

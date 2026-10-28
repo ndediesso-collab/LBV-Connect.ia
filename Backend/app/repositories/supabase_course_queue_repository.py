@@ -1,7 +1,9 @@
 """File durable ORIA Cours, pilotee exclusivement par les RPC PostgreSQL.
 
 Destination: Backend/app/repositories/supabase_course_queue_repository.py
-SQL associe: ORIA_18_COURSE_QUEUE_STAGING.sql (base de test d'abord).
+Les RPC de la file doivent deja exister dans Supabase (schema public).
+Les migrations de base existantes ne doivent jamais etre rejouees en production.
+Verifier la signature et les autorisations reelles des RPC avant activation.
 
 Ne lance PAS les appels OpenAI: un consommateur distinct utilisera
 ``claim_next`` puis ``CourseWorker.run`` et ``acknowledge_success``.
@@ -76,7 +78,7 @@ class SupabaseCourseQueueRepository:
     def _unpack(result: Any, *, allow_null: bool = False) -> dict[str, Any] | None:
         error = result.get("error") if isinstance(result, dict) else getattr(result, "error", None)
         if error:
-            raise CourseQueueError("RPC de queue non confirmee.")
+            SupabaseCourseQueueRepository._raise_rpc_error(error)
         data = result.get("data") if isinstance(result, dict) else getattr(result, "data", None)
         if isinstance(data, list):
             if len(data) != 1:
@@ -90,18 +92,34 @@ class SupabaseCourseQueueRepository:
             raise CourseQueueError("Structure du resultat SQL invalide.")
         return data
 
+    @staticmethod
+    def _raise_rpc_error(error: Any) -> None:
+        """Classe les codes SQL sans exposer la reponse brute du serveur.
+
+        Selon la version supabase-py, une erreur SQL peut etre levee ou
+        retournee dans ``response.error`` (str, dict, objet SDK). Les deux
+        chemins doivent imposer les memes protections de reprise.
+        """
+        # On ne logue jamais l'erreur brute : une exception peut contenir des
+        # donnees prives ou des parametres SQL.
+        value = str(error).lower()
+        if "oria_course_queue_lease" in value:
+            raise CourseQueueLeaseError("Bail de la file perdu ou expire.")
+        if "oria_course_queue_review" in value:
+            raise CourseQueueNeedsReview("Traitement bloque pour revue manuelle.")
+        if "oria_course_queue_conflict" in value:
+            raise CourseQueueConflict("Transition de file incompatible.")
+        raise CourseQueueError("Operation de file durable non confirmee.")
+
     def _rpc(self, name: str, params: dict[str, Any], *, allow_null: bool = False) -> dict[str, Any] | None:
         try:
             response = self.client.rpc(name, params).execute()
         except Exception as exc:
-            message = str(exc).lower()
-            if "oria_course_queue_lease" in message:
-                raise CourseQueueLeaseError("Bail de la queue expire ou perdu.") from exc
-            if "oria_course_queue_review" in message:
-                raise CourseQueueNeedsReview("Traitement bloque pour rapprochement.") from exc
-            if "oria_course_queue_conflict" in message:
-                raise CourseQueueConflict("Etat de la queue incompatible.") from exc
-            raise CourseQueueError("Operation de file durable indisponible.") from exc
+            try:
+                self._raise_rpc_error(exc)
+            except CourseQueueError as typed:
+                raise typed from exc
+            raise CourseQueueError("Operation de file durable non confirmee.") from exc
         return self._unpack(response, allow_null=allow_null)
 
     @staticmethod
@@ -116,10 +134,24 @@ class SupabaseCourseQueueRepository:
             raise CourseQueueLeaseError("Identite du bail SQL non confirmee.")
         return row
 
+    @staticmethod
+    def _expect_no_lease(row: dict[str, Any], *, operation: str) -> None:
+        """Une livraison finale ou en pause ne doit conserver aucun bail queue."""
+        if row.get("lease_token") is not None or row.get("lease_expires_at") is not None:
+            raise CourseQueueLeaseError(f"Bail de file non libere apres {operation}.")
+
+    @staticmethod
+    def _expect_first_delivery(row: dict[str, Any]) -> None:
+        """On ne retente jamais aveuglement une livraison potentiellement facturee."""
+        attempts = row.get("delivery_attempts")
+        if type(attempts) is not int or attempts != 1:
+            raise CourseQueueNeedsReview("Tentative de livraison non initiale : revue necessaire.")
+
     def enqueue_once(self, user_id: str, course_id: str) -> dict[str, Any]:
         """Dispatcher compatible avec ``configure_course_dispatcher``.
 
-        PostgreSQL verifie la propriete, les deux reservations, et unicite.
+        PostgreSQL doit verifier la propriete, la reservation AUDIO initiale
+        et l'unicite. La reservation Luna se fait ensuite, apres transcription.
         Aucune facture, aucun worker, aucun retry dans cette methode.
         """
         uid = self._uuid(user_id, "user_id")
@@ -127,8 +159,14 @@ class SupabaseCourseQueueRepository:
         row = self._rpc(self.RPC_ENQUEUE, {"p_user_id": uid, "p_course_id": cid})
         assert row is not None
         self._expect_owner(row, user_id=uid, course_id=cid)
-        if row.get("status") not in {"queued", "running", "completed"}:
+        status = row.get("status")
+        if status not in {"queued", "running", "completed"}:
+            # awaiting_credits et review ne doivent jamais etre requeues ici.
             raise CourseQueueNeedsReview("Cours non dispatchable sans revue humaine.")
+        if status in {"queued", "completed"}:
+            self._expect_no_lease(row, operation="dispatch")
+        elif not row.get("lease_token") or not row.get("lease_expires_at"):
+            raise CourseQueueLeaseError("Livraison running sans bail confirme.")
         return row
 
     def get_entry(self, *, user_id: str, course_id: str) -> dict[str, Any] | None:
@@ -156,6 +194,7 @@ class SupabaseCourseQueueRepository:
         self._expect_token(row, token=token)
         if row.get("status") != "running" or not row.get("lease_expires_at"):
             raise CourseQueueError("Le bail reclame n'a pas ete confirme.")
+        self._expect_first_delivery(row)
         return row
 
     def heartbeat(self, *, user_id: str, course_id: str, lease_token: str,
@@ -171,10 +210,15 @@ class SupabaseCourseQueueRepository:
         self._expect_token(row, token=token)
         if row.get("status") != "running" or not row.get("lease_expires_at"):
             raise CourseQueueLeaseError("Renouvellement du bail non confirme.")
+        self._expect_first_delivery(row)
         return row
 
     def acknowledge_success(self, *, user_id: str, course_id: str, lease_token: str) -> dict[str, Any]:
-        """L'ACK SQL verifie que le job Cours est deja completed avec artifact."""
+        """Confirme un job deja completed, avec PDF/DOCX ET transcription.
+
+        La RPC SQL (et les triggers Code-First) restent l'autorite sur la
+        presence effective des deux fichiers; ce repository ne les forge pas.
+        """
         uid, cid = self._uuid(user_id, "user_id"), self._uuid(course_id, "course_id")
         token = self._uuid(lease_token, "lease_token")
         row = self._rpc(self.RPC_ACK, {
@@ -184,13 +228,14 @@ class SupabaseCourseQueueRepository:
         self._expect_owner(row, user_id=uid, course_id=cid)
         if row.get("status") != "completed":
             raise CourseQueueError("ACK non confirme.")
+        self._expect_no_lease(row, operation="ACK")
         return row
 
     def pause_for_credits(self, *, user_id: str, course_id: str,
                           lease_token: str) -> dict[str, Any]:
         """Suspend durablement une livraison APRES transcription deja reglee.
 
-        RPC SQL A CREER lors de la prochaine migration (pas dans ce fichier) :
+        RPC SQL identifiee lors du diagnostic Supabase :
         ``oria_course_queue_pause_for_credits(uuid, uuid, uuid)``.
 
         La RPC, en UNE transaction sous verrous queue+job, doit verifier :
@@ -218,14 +263,12 @@ class SupabaseCourseQueueRepository:
         assert row is not None
         self._expect_owner(row, user_id=uid, course_id=cid)
         if (row.get("status") != "awaiting_credits"
-                or row.get("job_status") != "awaiting_credits"
-                or row.get("lease_token") is not None
-                or row.get("lease_expires_at") is not None
-                or type(row.get("delivery_attempts")) is not int
-                or row["delivery_attempts"] != 1):
+                or row.get("job_status") != "awaiting_credits"):
             raise CourseQueueError(
                 "Pause de credits non confirmee pour la file et le job."
             )
+        self._expect_no_lease(row, operation="pause credits")
+        self._expect_first_delivery(row)
         return row
 
     def flag_for_review(self, *, user_id: str, course_id: str,
@@ -248,6 +291,7 @@ class SupabaseCourseQueueRepository:
         self._expect_owner(row, user_id=uid, course_id=cid)
         if row.get("status") != "review":
             raise CourseQueueError("Mise en revue non confirmee.")
+        self._expect_no_lease(row, operation="revue")
         return row
 
     def reconcile_stalled(self, *, limit: int = 50) -> int:

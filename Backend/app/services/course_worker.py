@@ -14,8 +14,9 @@ Dépendances injectées :
   - job_store_factory() : nouveau SupabaseCourseJobRepository, service_role ;
   - service_factory(guarded_job_store) : CourseService configuré avec ce store,
     ses repositories et son client fournisseur ;
-  - CourseArtifactRenderer : adaptateur direct vers ArtifactService et
-    SupabaseArtifactRepository, injecté si CourseService.renderer est absent ;
+  - CourseArtifactRenderer : adaptateur leger vers le meme moteur Code-First
+    que ORIA Creations (oria.artifact.v1 et create_from_payload), injecte
+    seulement si CourseService.renderer est absent ;
   - heartbeat_client_factory() : NOUVEAU client Supabase réservé au thread de
     heartbeat (jamais le même client que le worker principal).
 
@@ -31,11 +32,10 @@ Le coût fournisseur XAF reste suivi en métadonnées, jamais plafonné par pack
 from __future__ import annotations
 
 from dataclasses import dataclass
-from hashlib import sha256
 import os
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Mapping
-from uuid import UUID, uuid5
+from uuid import UUID
 
 
 class CourseWorkerError(RuntimeError):
@@ -81,17 +81,16 @@ class CourseArtifactPersistenceError(CourseWorkerError):
 
 
 class CourseArtifactRenderer:
-    """Adaptateur métier, sans nouveau moteur PDF/DOCX.
+    """Pont leger vers le renderiseur Code-First de CourseService.
 
-    Réutilise ``ArtifactService.create`` et
-    ``SupabaseArtifactRepository.save_artifact``. Les identifiants d'artifact
-    sont déterministes par cours et type pour rendre un redémarrage sans
-    doublons. Le document pédagogique et la transcription sont DEUX objets
-    privés distincts. Le résultat ne contient jamais les textes ou URLs
-    signées persistées (les URLs expirent ; la route artifacts les recrée).
+    Il n'existe qu'un seul moteur documentaire : ArtifactService.
+    OriaCourseArtifactRenderer gere la validation oria.artifact.v1,
+    la compilation PDF/DOCX, la transcription TXT privee et les cles
+    deterministes. Aucun texte Markdown n'est converti ici.
 
-    L'adaptateur ne prend en charge que des contenus déjà produits et facturés
-    par CourseService : il n'appelle pas OpenAI et ne débite aucun crédit.
+    Chargement tardif pour conserver les imports du worker independants de
+    ceux des modules de facturation et des repositories Supabase pendant
+    les tests isoles et le demarrage du serveur.
     """
 
     def __init__(self, *, artifact_service: Any = None,
@@ -104,142 +103,30 @@ class CourseArtifactRenderer:
                 supabase_artifact_repository,
             )
             artifact_repository = supabase_artifact_repository
-        if not callable(getattr(artifact_service, "create", None)):
-            raise ValueError("ArtifactService avec create() requis.")
+
+        if not all(callable(getattr(artifact_service, name, None))
+                   for name in ("create", "create_from_payload")):
+            raise ValueError("Moteur ORIA Code-First indisponible.")
         if not all(callable(getattr(artifact_repository, name, None))
                    for name in ("get_artifact", "save_artifact")):
-            raise ValueError("Repository artifacts avec lecture/écriture requis.")
-        self.artifacts = artifact_service
-        self.repository = artifact_repository
+            raise ValueError("Repository de stockage prive non configure.")
 
-    @staticmethod
-    def _artifact_key(course_id: str, kind: str, extension: str) -> str:
-        return str(uuid5(UUID(course_id),
-                         f"oria-cours/artifact/{kind}/{extension}/v1"))
-
-    @staticmethod
-    def _public_artifact(row: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            "id": str(row["id"]),
-            "filename": str(row["filename"]),
-            "extension": str(row["extension"]),
-            "mime_type": str(row["mime_type"]),
-            "size_bytes": int(row["size_bytes"]),
-            "sha256": str(row["sha256"]),
-        }
-
-    @staticmethod
-    def _validate_saved(row: Any, *, user_id: str, course_id: str,
-                        artifact_id: str, kind: str, extension: str,
-                        source_sha256: str) -> dict[str, Any]:
-        if not isinstance(row, dict):
-            raise CourseArtifactPersistenceError("Métadonnées d'artifact absentes.")
-        metadata = row.get("metadata")
-        if (str(row.get("id")) != artifact_id
-                or str(row.get("user_id")) != user_id
-                or str(row.get("extension")) != extension
-                or not row.get("storage_path")
-                or not isinstance(metadata, dict)
-                or metadata.get("source") != "oria-course"
-                or metadata.get("course_id") != course_id
-                or metadata.get("kind") != kind
-                or metadata.get("source_sha256") != source_sha256):
-            raise CourseArtifactPersistenceError(
-                "Artifact enregistré incohérent : contrôle manuel nécessaire."
-            )
-        if (not isinstance(row.get("sha256"), str)
-                or len(row["sha256"]) != 64
-                or not isinstance(row.get("size_bytes"), int)
-                or row["size_bytes"] <= 0):
-            raise CourseArtifactPersistenceError("Artifact enregistré incomplet.")
-        return CourseArtifactRenderer._public_artifact(row)
-
-    def _save_once(self, *, user_id: str, course_id: str, kind: str,
-                   extension: str, title: str, content: str,
-                   filename: str) -> dict[str, Any]:
-        artifact_id = self._artifact_key(course_id, kind, extension)
-        digest = sha256(content.encode("utf-8")).hexdigest()
-        metadata = {
-            "source": "oria-course",
-            "course_id": course_id,
-            "kind": kind,
-            "source_sha256": digest,
-        }
-        existing = self.repository.get_artifact(
-            user_id=user_id, artifact_id=artifact_id,
-        )
-        if existing is not None:
-            return self._validate_saved(
-                existing, user_id=user_id, course_id=course_id,
-                artifact_id=artifact_id, kind=kind,
-                extension=extension, source_sha256=digest,
-            )
-
-        generated = self.artifacts.create(
-            file_type=extension, content=content, filename=filename,
-            title=title, metadata=metadata, allow_text_fallback=False,
-        )
-        if (generated.extension != extension
-                or not isinstance(generated.data, bytes)
-                or not generated.data):
-            raise CourseArtifactPersistenceError("Fichier généré invalide.")
-        try:
-            saved = self.repository.save_artifact(
-                user_id=user_id, artifact_id=artifact_id,
-                filename=generated.filename,
-                extension=generated.extension,
-                mime_type=generated.mime_type,
-                category=generated.category,
-                file_bytes=generated.data,
-                size_bytes=generated.size_bytes,
-                sha256=generated.sha256,
-                metadata=generated.metadata,
-            )
-        except Exception as exc:
-            # Une insertion SQL peut avoir réussi tandis que le transport HTTP
-            # annonçait un échec. Retrouver la clé stable évite un nouvel upload.
-            try:
-                saved = self.repository.get_artifact(
-                    user_id=user_id, artifact_id=artifact_id,
-                )
-            except Exception:
-                saved = None
-            if saved is None:
-                raise CourseArtifactPersistenceError(
-                    "Stockage privé du cours non confirmé."
-                ) from exc
-        return self._validate_saved(
-            saved, user_id=user_id, course_id=course_id,
-            artifact_id=artifact_id, kind=kind,
-            extension=extension, source_sha256=digest,
+        from app.services.course_service import OriaCourseArtifactRenderer
+        self._renderer = OriaCourseArtifactRenderer(
+            artifact_service=artifact_service,
+            artifact_repository=artifact_repository,
         )
 
-    def render_course(self, *, user_id: str, course_id: str, title: str,
-                      document_format: str, markdown: str,
-                      transcript: str) -> dict[str, Any]:
-        uid, cid = _uuid(user_id, "user_id"), _uuid(course_id, "course_id")
-        if document_format not in ("pdf", "docx"):
-            raise ValueError("Format ORIA Cours limité à PDF ou DOCX.")
-        if not isinstance(markdown, str) or not markdown.strip():
-            raise ValueError("Cours pédagogique vide.")
-        if not isinstance(transcript, str) or not transcript.strip():
-            raise ValueError("Transcription du cours vide.")
-        title = str(title or "Cours ORIA").strip()[:160] or "Cours ORIA"
-        # Sauvegarder d'abord l'original : s'il existe déjà après un crash,
-        # une reprise contrôlée le retrouve sans le réimporter.
-        raw = self._save_once(
-            user_id=uid, course_id=cid, kind="transcript",
-            extension="txt", title=f"Transcription - {title}",
-            content=transcript,
-            filename=f"Transcription - {title}.txt",
+    def render_course_code_first(
+        self, *, user_id: str, course_id: str, title: str,
+        document_format: str, html_source: str, transcript: str,
+    ) -> Mapping[str, Any]:
+        """Transmet une source HTML validee et conserve les deux artefacts."""
+        return self._renderer.render_course_code_first(
+            user_id=user_id, course_id=course_id, title=title,
+            document_format=document_format, html_source=html_source,
+            transcript=transcript,
         )
-        document = self._save_once(
-            user_id=uid, course_id=cid, kind="document",
-            extension=document_format, title=title, content=markdown,
-            filename=f"Cours - {title}.{document_format}",
-        )
-        document["transcript_artifact"] = raw
-        return document
 
 
 def _owned_job(job: Any, user_id: str, course_id: str) -> dict[str, Any]:
@@ -251,12 +138,43 @@ def _owned_job(job: Any, user_id: str, course_id: str) -> dict[str, Any]:
 
 
 def _output_result(job: dict[str, Any], course_id: str, *, replay: bool) -> CourseWorkerResult:
+    """Expose uniquement les references privees, jamais le texte du cours.
+
+    Le contrat Code-First conserve une reference PDF/DOCX et une reference
+    distincte TXT. Une ancienne sortie Markdown ne doit pas etre annoncee
+    comme une generation Code-First terminee.
+    """
     output = job.get("output")
-    artifact = output.get("artifact") if isinstance(output, dict) else None
-    if not isinstance(artifact, dict) or not artifact.get("id"):
-        raise CourseWorkerNeedsReconciliation("Document privé final non confirmé.")
-    # Ne renvoyer ni la transcription, ni les coûts fournisseur, ni le plan.
-    return CourseWorkerResult(course_id, "completed", dict(artifact), replay)
+    if not isinstance(output, dict) or output.get("output_format") != "html_code_first":
+        raise CourseWorkerNeedsReconciliation("Sortie du cours incompatible avec le Code-First.")
+    artifact = output.get("artifact")
+    if not isinstance(artifact, dict):
+        raise CourseWorkerNeedsReconciliation("Fichiers prives finaux non confirmes.")
+    expected_doc_format = str(output.get("format") or "").lower()
+    if expected_doc_format not in {"pdf", "docx"}:
+        raise CourseWorkerNeedsReconciliation("Format final du cours invalide.")
+    clean: dict[str, dict[str, str]] = {}
+    for kind, ext in (("document", expected_doc_format), ("transcription", "txt")):
+        item = artifact.get(kind)
+        if not isinstance(item, dict):
+            raise CourseWorkerNeedsReconciliation("Fichier final manquant : " + kind)
+        try:
+            artifact_id = _uuid(item.get("artifact_id"), "artifact_id")
+        except ValueError as exc:
+            raise CourseWorkerNeedsReconciliation("Identifiant de fichier final invalide.") from exc
+        if item.get("extension") != ext:
+            raise CourseWorkerNeedsReconciliation("Extension de fichier final incoherente.")
+        # Le fichier est accessible via son ID dans le depot prive ; le worker
+        # ne retourne ni chemin Storage, ni URL signee, ni transcription.
+        clean[kind] = {
+            "artifact_id": artifact_id,
+            "filename": str(item.get("filename") or ""),
+            "extension": ext,
+            "mime_type": str(item.get("mime_type") or ""),
+        }
+        if not clean[kind]["filename"] or not clean[kind]["mime_type"]:
+            raise CourseWorkerNeedsReconciliation("Metadonnees de fichier final incompletes.")
+    return CourseWorkerResult(course_id, "completed", clean, replay)
 
 
 class _LeaseHeartbeat:
@@ -452,7 +370,7 @@ class CourseWorker:
     def run(self, *, user_id: str, course_id: str) -> CourseWorkerResult:
         """Une seule exécution, sans attente artificielle ni réessai fournisseur.
 
-        Retourne uniquement l'identifiant du document final, pas les textes.
+        Retourne les identifiants du PDF/DOCX et du TXT, jamais les textes.
         Les checkpoints 'finished' et les règlements déjà effectués sont
         réutilisés par CourseService selon son contrat d'idempotence.
         """
@@ -490,8 +408,14 @@ class CourseWorker:
                 raise CourseWorkerNotReady(
                     "Export PDF/DOCX privé indisponible."
                 ) from exc
-        if not callable(getattr(service.renderer, "render_course", None)):
-            raise CourseWorkerNotReady("Renderer sans méthode render_course().")
+        if not callable(getattr(service.renderer, "render_course_code_first", None)):
+            raise CourseWorkerNotReady("Renderer sans méthode render_course_code_first().")
+        # Verifier les dependances Code-First AVANT le premier appel fournisseur.
+        ai = getattr(service, "ai", None)
+        if not callable(getattr(ai, "compose_course_section", None)) or not callable(
+            getattr(ai, "_validate_course_html_fragment", None)
+        ):
+            raise CourseWorkerNotReady("OpenAIService Code-First ORIA Cours absent.")
 
         lease_acquired = False
         heartbeat_started = False

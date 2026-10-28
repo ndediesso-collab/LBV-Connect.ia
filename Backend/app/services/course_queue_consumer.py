@@ -11,6 +11,9 @@ Un appel deja commence peut rester facturable: pas de retry implicite.
 Activation volontaire, seulement apres tests financiers reels en STAGING:
   ORIA_COURSE_CONSUMER_ENABLED=1 (independant du plafond API par pack).
 Les reservations de credits ont une expiration independante des baux.
+La sortie Code-First exige deux références privées déterministes : document
+PDF/DOCX et transcription TXT. Le stockage utilise un client service_role
+frais injecté par la factory du worker, jamais le client global du Chat.
 """
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ import os
 from threading import Event, Lock, Thread
 from time import monotonic
 from typing import Any, Callable
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from app.services.course_worker import CourseWorkerAwaitingCredits
 
@@ -160,6 +163,59 @@ class _QueueCheckedJobStore:
         self._delegate.begin_call(**kwargs)
 
 
+# Références identiques à OriaCourseArtifactRenderer et à la garde SQL
+# oria_course_code_first_guard_v1 ; aucun ID issu du modèle n'est accepté.
+_COURSE_ARTIFACT_NAMESPACES = {
+    "document": "oria-cours/document/v1",
+    "transcription": "oria-cours/transcription/v1",
+}
+_COURSE_MIME_TYPES = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "txt": "text/plain",
+}
+
+
+def _check_completed_course_artifacts(result: Any, *, course_id: str) -> None:
+    """Refuse l'ancien résultat Markdown ou une livraison Code-First partielle.
+
+    CourseWorker valide déjà le checkpoint SQL et ne renvoie que des
+    métadonnées privées. Ce garde supplémentaire protège l'ACK de file si
+    un worker substitué, ancien ou mal configuré retourne un autre contrat.
+    """
+    if getattr(result, "status", None) != "completed":
+        raise CourseQueueConsumerError("Traitement du cours non terminé.")
+    if str(getattr(result, "course_id", "")) != course_id:
+        raise CourseQueueConsumerError("Cours de livraison incohérent.")
+    artifact = getattr(result, "artifact", None)
+    if not isinstance(artifact, dict) or set(artifact) != {
+        "document", "transcription"
+    }:
+        raise CourseQueueConsumerError("Documents Code-First incomplets.")
+
+    doc_ext = artifact.get("document", {}).get("extension") if isinstance(
+        artifact.get("document"), dict
+    ) else None
+    if doc_ext not in ("pdf", "docx"):
+        raise CourseQueueConsumerError("Format de cours final non pris en charge.")
+    for kind, expected_ext in (("document", doc_ext), ("transcription", "txt")):
+        item = artifact[kind]
+        if not isinstance(item, dict) or item.get("extension") != expected_ext:
+            raise CourseQueueConsumerError("Référence de fichier final invalide.")
+        try:
+            artifact_id = _uuid(item.get("artifact_id"), "artifact_id")
+        except CourseQueueConsumerError as exc:
+            raise CourseQueueConsumerError("Identifiant d'artifact invalide.") from exc
+        expected_id = str(uuid5(UUID(course_id), _COURSE_ARTIFACT_NAMESPACES[kind]))
+        if artifact_id != expected_id:
+            raise CourseQueueConsumerError("Référence d'artifact étrangère au cours.")
+        if not isinstance(item.get("filename"), str) or not item["filename"].strip():
+            raise CourseQueueConsumerError("Nom de fichier absent.")
+        mime = item.get("mime_type")
+        if not isinstance(mime, str) or mime.split(";", 1)[0].strip().lower() != _COURSE_MIME_TYPES[expected_ext]:
+            raise CourseQueueConsumerError("Type MIME incohérent.")
+
+
 class CourseQueueConsumer:
     """Traite une livraison a la fois, sans relancer les cours interrompus.
 
@@ -245,10 +301,9 @@ class CourseQueueConsumer:
             worker = self.worker_factory(heartbeat.ensure_healthy)
             heartbeat.ensure_healthy()
             result = worker.run(user_id=uid, course_id=cid)
-            if (getattr(result, "status", None) != "completed"
-                    or not isinstance(getattr(result, "artifact", None), dict)
-                    or not result.artifact.get("id")):
-                raise CourseQueueConsumerError("Worker sans document final confirme.")
+            # Plus de artifact.id (ancien format) : Code-First livre
+            # {'document': {...}, 'transcription': {...}}.
+            _check_completed_course_artifacts(result, course_id=cid)
             completed_by_worker = True
             heartbeat.ensure_healthy()
             try:
@@ -256,7 +311,7 @@ class CourseQueueConsumer:
                     user_id=uid, course_id=cid, lease_token=token,
                 )
             except Exception:
-                logger.exception("ACK de cours termine incertain course_id=%s", cid)
+                logger.error("ACK de cours termine incertain course_id=%s", cid)
                 return CourseQueueConsumerOutcome("pending_ack", cid)
             return CourseQueueConsumerOutcome("completed", cid)
         except CourseWorkerAwaitingCredits:
@@ -288,12 +343,12 @@ class CourseQueueConsumer:
                 # Ne jamais faire un second RPC de pause/ACK/review a l'aveugle.
                 # Une queue encore 'running' sera rapprochee a expiration ;
                 # une queue deja 'awaiting_credits' restera en attente.
-                logger.exception(
+                logger.error(
                     "Pause credits ORIA Cours non confirmee course_id=%s", cid
                 )
                 return CourseQueueConsumerOutcome("pending_credit_pause", cid)
         except Exception:
-            logger.exception("Traitement ORIA Cours interrompu course_id=%s", cid)
+            logger.error("Traitement ORIA Cours interrompu course_id=%s", cid)
             if completed_by_worker:
                 # Le job est deja completed: SQL refuse le passage en review.
                 # La maintenance validera la sortie apres expiration du bail.
@@ -306,7 +361,7 @@ class CourseQueueConsumer:
             except Exception:
                 # Le bail peut deja etre expire. reconcile_stalled() assurera
                 # la revue et interdira tout deuxieme traitement fournisseur.
-                logger.exception("Revue SQL indisponible course_id=%s", cid)
+                logger.error("Revue SQL indisponible course_id=%s", cid)
                 return CourseQueueConsumerOutcome("pending_review", cid)
             return CourseQueueConsumerOutcome("review", cid)
         finally:
@@ -328,7 +383,7 @@ class CourseQueueConsumer:
                 try:
                     self.reconcile_stalled(limit=50)
                 except Exception:
-                    logger.exception("Maintenance de file indisponible")
+                    logger.error("Maintenance de file indisponible")
                     if stop.wait(self.poll_interval_seconds):
                         break
                     continue
@@ -339,7 +394,7 @@ class CourseQueueConsumer:
                     logger.info("ORIA Cours queue: status=%s course_id=%s",
                                 outcome.status, outcome.course_id)
             except Exception:
-                logger.exception("Consommation de file indisponible")
+                logger.error("Consommation de file indisponible")
             if stop.wait(self.poll_interval_seconds):
                 break
 
@@ -358,7 +413,9 @@ def build_course_queue_consumer(*, client_factory: Callable[[], Any]) -> CourseQ
     from app.repositories.supabase_credit_repository import SupabaseCreditRepository
     from app.services.course_service import CourseService
     from app.services.openai_service import OpenAIService
-    from app.services.course_worker import CourseWorker
+    from app.services.course_worker import CourseWorker, CourseArtifactRenderer
+    from app.services.artifact_service import ArtifactService
+    from app.repositories.supabase_artifact_repository import SupabaseArtifactRepository
 
     def queue_factory() -> Any:
         return SupabaseCourseQueueRepository(client_factory())
@@ -376,13 +433,24 @@ def build_course_queue_consumer(*, client_factory: Callable[[], Any]) -> CourseQ
                 job_store=jobs,
                 credit_repository=SupabaseCreditRepository(client),
                 openai_service=OpenAIService(),
-                renderer=None,  # CourseWorker injecte CourseArtifactRenderer existant.
+                renderer=None,  # Le worker injecte le renderer Code-First service_role.
+            )
+
+        def document_renderer_factory() -> Any:
+            # Le client global du Chat n'a pas nécessairement les droits du
+            # worker. Un client service_role dédié est obligatoire pour les
+            # garde-fous SQL des fichiers ORIA Cours et les opérations Storage.
+            artifact_repository = SupabaseArtifactRepository(client=client_factory())
+            return CourseArtifactRenderer(
+                artifact_service=ArtifactService(),
+                artifact_repository=artifact_repository,
             )
 
         return CourseWorker(
             job_store_factory=job_factory,
             service_factory=service_factory,
             heartbeat_client_factory=client_factory,
+            document_renderer_factory=document_renderer_factory,
         )
 
     return CourseQueueConsumer(queue_factory=queue_factory, worker_factory=worker_factory)
