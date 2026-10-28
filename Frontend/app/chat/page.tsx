@@ -1308,7 +1308,6 @@ async function saveMessageRemote(
       {
         method: "POST",
         body: JSON.stringify({
-          id: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(message.id) ? message.id : undefined,
           role: message.role,
           content: message.content,
         }),
@@ -2029,7 +2028,6 @@ function VoiceMessageBubble({ note, language, onLoad }: {
   note: VoiceNote; language: OriaLanguage; onLoad: (id: string) => Promise<string>;
 }) {
   const [url, setUrl] = useState<string | null>(note.playback_url || null);
-  const signedAtRef = useRef(note.playback_url ? Date.now() : 0);
   const pendingPlaybackRef = useRef(false);
   useEffect(() => {
     if (url && pendingPlaybackRef.current && audioRef.current) {
@@ -2044,14 +2042,10 @@ function VoiceMessageBubble({ note, language, onLoad }: {
   const [progress, setProgress] = useState(0);
   async function toggle() {
     if (playing) { audioRef.current?.pause(); return; }
-    // URLs issued by Supabase live 15 min; renew proactively before reuse.
-    const mustRenew = !url || !signedAtRef.current ||
-      Date.now() - signedAtRef.current >= 12 * 60 * 1000;
-    if (mustRenew) {
+    if (!url) {
       setLoading(true); setError(false);
       try {
         const next = await onLoad(note.audio_id);
-        signedAtRef.current = Date.now();
         pendingPlaybackRef.current = true;
         setUrl(next);
       } catch { setError(true); } finally { setLoading(false); }
@@ -4610,12 +4604,9 @@ export default function ChatPage() {
    * ==========================================================
    */
 
-  const conversationReadEpochRef = useRef(0);
-
   async function selectConversation(
     conversationId: string,
   ) {
-    const readEpoch = ++conversationReadEpochRef.current;
     setEditingMessageId(null);
     setEditFiles([]);
     setEditError(null);
@@ -4658,7 +4649,6 @@ export default function ChatPage() {
           `/conversations/${conversationId}/messages`,
         );
 
-      if (readEpoch !== conversationReadEpochRef.current) return;
       const remoteMessages =
         data.messages || [];
 
@@ -4689,20 +4679,9 @@ export default function ChatPage() {
           ),
       );
 
-      // Une réponse vide ne prouve pas que les messages affichés localement
-      // ont déjà été persistés. Conserver cette copie en attendant la
-      // réconciliation idempotente, sans la présenter comme synchronisée.
-      if (remoteMessages.length === 0 && currentUserId) {
-        const localOnly = readLocalCache(currentUserId)?.messages[conversationId] || [];
-        if (localOnly.length > 0) {
-          setError(language === "fr"
-            ? "Des messages restent uniquement sur cet appareil. Leur synchronisation n'est pas confirmée : conserve les données locales."
-            : "Some messages are only on this device. Cloud sync is not confirmed; keep the local copy.");
-        } else {
-          setMessages([]);
-        }
-      }
-      if (remoteMessages.length > 0) {
+      if (
+        remoteMessages.length > 0
+      ) {
         setMessages(
           remoteMessages,
         );
@@ -4746,29 +4725,6 @@ export default function ChatPage() {
       );
     }
   }
-
-  // Synchronisation de lecture à la reprise d'un navigateur déjà ouvert.
-  // Les réponses ne sont jamais régénérées ici : uniquement des GET authentifiés.
-  useEffect(() => {
-    if (!isInitialized || !currentUserId || isThinking || recording || voiceDraft || editingMessageId) return;
-    let busy = false;
-    const refresh = async () => {
-      if (busy || document.visibilityState !== "visible") return;
-      busy = true;
-      try {
-        await loadConversations(readLocalCache(currentUserId));
-        if (activeConversationId) await selectConversation(activeConversationId);
-      } catch { /* Les requêtes de lecture exposent déjà leur état d'erreur. */ }
-      finally { busy = false; }
-    };
-    const onVisibility = () => { if (document.visibilityState === "visible") void refresh(); };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [isInitialized, currentUserId, activeConversationId, isThinking, recording, voiceDraft, editingMessageId]);
 
   async function loadPersistedArtifacts(): Promise<void> {
     try {
@@ -4970,8 +4926,6 @@ export default function ChatPage() {
 
   async function loadPrivateVoiceUrl(audioId: string): Promise<string> {
     const response = await apiFetch<VoiceNote>(`/ai/audio/${encodeURIComponent(audioId)}`);
-    const normalized = normalizeVoiceNote(response as unknown as Record<string, unknown>);
-    if (normalized) setVoiceNotes((current) => mergeVoiceNotes(current, [normalized]));
     if (!response.playback_url) throw new Error("Lien vocal indisponible.");
     return response.playback_url;
   }
@@ -5173,27 +5127,11 @@ export default function ChatPage() {
       await apiFetch(`/ai/audio/${draft.audio_id}/send`, {
         method: "POST", body: JSON.stringify({mode, edited_text: mode === "text" ? edited : null}),
       });
-      // Un premier envoi peut avoir été facturé puis perdre son accusé de
-      // réception. Si le vocal est déjà lié au message, restaurer l'historique
-      // au lieu d'envoyer une deuxième demande payante au modèle.
-      if (mode === "voice") {
-        const stored = await apiFetch<VoiceNote>(`/ai/audio/${encodeURIComponent(draft.audio_id)}`);
-        if (stored.message_id) {
-          setVoiceNotes((current) => mergeVoiceNotes(current, [stored]));
-          if (activeConversationId) await selectConversation(activeConversationId);
-          if (currentUserId) window.sessionStorage.removeItem(`oria_audio_draft_v1_${currentUserId}`);
-          setVoiceDraft(null);
-          return;
-        }
-      }
       const note = { ...draft, delivery_mode: mode };
       if (mode === "voice") setVoiceNotes((current) => mergeVoiceNotes(current, [note]));
       // L'IA lit le transcript ; le message utilisateur reste un vocal si mode=voice.
-      const confirmed = await handleSendMessage({content: mode === "text" ? edited : (draft.transcription || edited),
+      await handleSendMessage({content: mode === "text" ? edited : (draft.transcription || edited),
         voice: mode === "voice" ? note : undefined});
-      if (confirmed !== true) throw new Error(language === "fr"
-        ? "Envoi non confirmé sur le serveur : le brouillon vocal est conservé. Vérifie la conversation avant un nouvel envoi facturable."
-        : "Server delivery not confirmed: voice draft retained. Check your conversation before another billable send.");
       if (draft.localUrl.startsWith("blob:")) URL.revokeObjectURL(draft.localUrl);
       if (currentUserId) window.sessionStorage.removeItem(`oria_audio_draft_v1_${currentUserId}`);
       setVoiceDraft(null);
@@ -5755,7 +5693,7 @@ export default function ChatPage() {
       crypto.randomUUID();
 
     const userMessageId =
-      options?.voice?.audio_id || crypto.randomUUID();
+      crypto.randomUUID();
 
     const userMessage:
       ChatMessage = {
@@ -5787,8 +5725,10 @@ export default function ChatPage() {
       null;
 
     setMessages(
-      (current) => current.some((item) => item.id === userMessageId)
-        ? current : [...current, userMessage],
+      (current) => [
+        ...current,
+        userMessage,
+      ],
     );
 
     if (currentUserId) {
@@ -5874,13 +5814,6 @@ export default function ChatPage() {
             return null;
           },
         );
-
-      // Un vocal NE doit jamais démarrer un tour IA facturable tant que
-      // son message et le rattachement serveur n'ont pas été confirmés.
-      // Un retry de ce même vocal réutilise son audio_id comme message.id.
-      if (options?.voice && !(await userMessageSavePromise)?.id) {
-        throw new Error("Le vocal est conservé, mais sa sauvegarde cloud n'est pas confirmée. Réessayez sans relancer une nouvelle note.");
-      }
 
       /*
        * ======================================================
@@ -6491,11 +6424,10 @@ export default function ChatPage() {
 
       // On ne l'attend qu'ici, après la génération : aucun impact sur
       // le temps avant le premier token.
-      const persistedUserMessage = await userMessageSavePromise;
-      let persistedAssistantMessage: ChatMessage | null = null;
+      await userMessageSavePromise;
 
       try {
-        persistedAssistantMessage = await saveMessageRemote(
+        await saveMessageRemote(
           assistantMessage,
         );
       } catch (saveError) {
@@ -6553,7 +6485,6 @@ export default function ChatPage() {
       await loadWallet(
         refreshedTrials,
       );
-      return Boolean(persistedUserMessage?.id && persistedAssistantMessage?.id);
     } catch (requestError) {
       setChatStatusStep(null);
       const errorMessage =
@@ -6615,7 +6546,6 @@ export default function ChatPage() {
           },
         );
       }
-      return false;
     } finally {
       setChatStatusStep(null);
       activeStreamingAssistantIdRef.current = null;

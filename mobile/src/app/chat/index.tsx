@@ -897,6 +897,7 @@ type VoiceNote = {
   message_id?: string | null;
   conversation_id?: string | null;
   duration_ms?: number | null;
+  mime_type?: string | null;
   transcription_status: string;
   billing_status: string;
   transcription?: string | null;
@@ -1155,6 +1156,7 @@ function normalizeVoiceNote(raw: Record<string, unknown>): VoiceNote | null {
     message_id: typeof raw.message_id === "string" ? raw.message_id : null,
     conversation_id: typeof raw.conversation_id === "string" ? raw.conversation_id : null,
     duration_ms: typeof raw.duration_ms === "number" ? raw.duration_ms : null,
+    mime_type: typeof raw.mime_type === "string" ? raw.mime_type : null,
     transcription_status: String(raw.transcription_status || "queued"),
     billing_status: String(raw.billing_status || "none"),
     transcription: typeof raw.transcription === "string" ? raw.transcription : null,
@@ -1455,6 +1457,16 @@ async function getSessionOrThrow() {
 
   if (!session?.user?.id || !session.access_token) {
     throw new Error("Utilisateur non authentifié.");
+  }
+
+  // Refresh before the access token expires. Supabase remains the authority;
+  // never bypass authentication or silently replay a billable generation.
+  if (session.expires_at && session.expires_at <= Math.floor(Date.now() / 1000) + 60) {
+    const refreshed = await supabase.auth.refreshSession();
+    if (refreshed.error || !refreshed.data.session?.access_token) {
+      throw new Error("Session expirée. Veuillez vous reconnecter.");
+    }
+    return refreshed.data.session;
   }
 
   return session;
@@ -2744,67 +2756,155 @@ function WebIllustratedMessage({
 }
 
 function PrivateVoicePlayback({
-  note, language, onLoad,
+  note, language, onLoad, transcript,
 }: {
   note: VoiceNote;
   language: OriaLanguage;
   onLoad: (id: string) => Promise<string>;
+  transcript?: string | null;
 }) {
   const player = useAudioPlayer(null);
   const status = useAudioPlayerStatus(player);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [pendingStart, setPendingStart] = useState(false);
+  const [showTranscript, setShowTranscript] = useState(false);
   const signedAtRef = useRef(0);
+  const privateDownloadedUriRef = useRef<string | null>(null);
+  const text = (transcript || note.transcription || "").trim();
 
-  async function toggle() {
-    if (status.playing) { player.pause(); return; }
-    try {
-      setLoading(true);
-      const mustRenew = !loaded || !signedAtRef.current ||
-        Date.now() - signedAtRef.current >= 12 * 60 * 1000;
-      if (mustRenew || status.didJustFinish) {
-        if (mustRenew) {
-          // Avoid replaying an expired private Supabase URL after app suspension.
-          const url = await onLoad(note.audio_id);
-          player.replace({ uri: url });
-          signedAtRef.current = Date.now();
-          setLoaded(true);
-        } else {
-          await player.seekTo(0);
-        }
-      }
-      player.play();
-      setError(false);
-    } catch {
+  // Do not leave private voice copies permanently in the phone cache.
+  // Never delete the original recorder draft (only files we downloaded).
+  useEffect(() => () => {
+    const uri = privateDownloadedUriRef.current;
+    if (Platform.OS !== "web" && uri?.includes("oria-voice-")) {
+      try {
+        const cached = new ExpoFile(uri);
+        if (cached.exists) cached.delete();
+      } catch { /* the OS may already have evicted the cache entry */ }
+    }
+  }, []);
+
+  // Expo loads a newly-replaced remote source asynchronously. Never play it
+  // before the native player reports isLoaded, especially on iOS.
+  useEffect(() => {
+    if (!pendingStart) return;
+    if (status.error) {
+      setPendingStart(false);
+      setLoading(false);
       setError(true);
       setLoaded(false);
-    } finally {
+      setErrorDetail(String(status.error).slice(0, 250));
+      return;
+    }
+    if (status.isLoaded) {
+      setPendingStart(false);
+      setLoading(false);
+      setError(false);
+      player.play();
+    }
+  }, [pendingStart, status.error, status.isLoaded, player]);
+
+  async function toggle() {
+    if (status.playing) {
+      player.pause();
+      return;
+    }
+    if (loading) return;
+    try {
+      setLoading(true);
+      setError(false);
+      setErrorDetail(null);
+      // Recording changes the global iOS audio session. Restore playback
+      // explicitly before playing; do not route short voice notes to earpiece.
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldRouteThroughEarpiece: false,
+      });
+      const mustRenew = !loaded || !signedAtRef.current || Boolean(status.error) ||
+        // A signed link expires; a downloaded local copy does not.
+        (Platform.OS === "web" && Date.now() - signedAtRef.current >= 12 * 60 * 1000);
+      if (mustRenew) {
+        const url = await onLoad(note.audio_id);
+        if (Platform.OS !== "web" && url.startsWith("file:") && url.includes("oria-voice-")) {
+          privateDownloadedUriRef.current = url;
+        }
+        if (!/^https:\/\//i.test(url) && !url.startsWith("file:")) {
+          throw new Error("Source audio non autorisée.");
+        }
+        // Set the pending flag before replacing the source; isLoaded may be
+        // emitted synchronously on some versions of expo-audio.
+        setPendingStart(true);
+        signedAtRef.current = Date.now();
+        setLoaded(true);
+        player.replace({ uri: url });
+        return;
+      }
+      if (status.didJustFinish || status.currentTime >= Math.max(0, status.duration - 0.2)) {
+        await player.seekTo(0);
+      }
+      if (status.isLoaded) {
+        player.play();
+        setLoading(false);
+      } else {
+        setPendingStart(true);
+      }
+    } catch (cause) {
+      setError(true);
+      setErrorDetail(cause instanceof Error ? cause.message.slice(0, 250) : "Erreur audio inconnue.");
+      setLoaded(false);
+      setPendingStart(false);
       setLoading(false);
     }
   }
+
   const duration = status.duration > 0 ? Math.ceil(status.duration * 1000) : note.duration_ms;
   return (
-    <View style={mobileExtras.voiceBubble}>
-      <Pressable style={mobileExtras.voicePlay} onPress={() => void toggle()}
-        disabled={loading} accessibilityRole="button"
-        accessibilityLabel={status.playing ? "Pause" : "Play"}>
-        {loading ? <ActivityIndicator size="small" color="#ffffff" /> :
-          <Ionicons name={status.playing ? "pause" : "play"} size={18} color="#ffffff" />}
-      </Pressable>
-      <View style={{ flex: 1 }}>
-        <View style={mobileExtras.waveBars}>
-          {Array.from({ length: 28 }, (_, i) => (
-            <View key={i} style={[mobileExtras.waveBar, {
-              height: 5 + ((i * 17 + 9) % 17), opacity: status.playing ? 1 : .65,
-            }]} />
-          ))}
+    <View style={mobileExtras.voiceCardOuter}>
+      <View style={mobileExtras.voiceBubble}>
+        <Pressable style={mobileExtras.voicePlay} onPress={() => void toggle()}
+          disabled={loading} accessibilityRole="button"
+          accessibilityLabel={status.playing ? "Pause" : "Play"}>
+          {loading ? <ActivityIndicator size="small" color="#ffffff" /> :
+            <Ionicons name={status.playing ? "pause" : "play"} size={20} color="#ffffff" />}
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <View style={mobileExtras.waveBars}>
+            {Array.from({ length: 28 }, (_, i) => (
+              <View key={i} style={[mobileExtras.waveBar, {
+                height: 6 + ((i * 17 + 9) % 18), opacity: status.playing ? 1 : .65,
+              }]} />
+            ))}
+          </View>
+          <View style={mobileExtras.voiceMetaRow}>
+            <Text style={mobileExtras.voiceMeta}>{language === "fr" ? "Note vocale" : "Voice note"}</Text>
+            <Text style={mobileExtras.voiceMeta}>{prettyAudioDuration(duration)}</Text>
+          </View>
         </View>
-        <Text style={mobileExtras.voiceMeta}>
-          {language === "fr" ? "Vocal" : "Voice"} · {prettyAudioDuration(duration)}
-          {error ? (language === "fr" ? " · Lecture impossible" : " · Playback failed") : ""}
-        </Text>
       </View>
+      {error || status.error ? (
+        <Text style={mobileExtras.voicePlaybackError}>
+          {language === "fr"
+            ? `Lecture impossible. ${errorDetail || (status.error ? String(status.error) : "Vérifiez votre session et réessayez.")}`
+            : `Playback failed. ${errorDetail || (status.error ? String(status.error) : "Check your session and retry.")}`}
+        </Text>
+      ) : null}
+      {text ? (
+        <>
+          <Pressable onPress={() => setShowTranscript((current) => !current)}
+            accessibilityRole="button" style={mobileExtras.voiceTranscriptButton}>
+            <Ionicons name={showTranscript ? "chevron-up" : "chevron-down"}
+              size={15} color="#f3f3f3" />
+            <Text style={mobileExtras.voiceTranscriptLabel}>
+              {language === "fr" ? "Voir la transcription" : "View transcript"}
+            </Text>
+          </Pressable>
+          {showTranscript ? <Text selectable style={mobileExtras.voiceTranscriptText}>{text}</Text> : null}
+        </>
+      ) : null}
     </View>
   );
 }
@@ -2828,13 +2928,22 @@ const mobileExtras = StyleSheet.create({
   webImageCaption: { fontSize: 12, lineHeight: 17, color: "#555", paddingHorizontal: 11, paddingTop: 8 },
   webImageLink: { flexDirection: "row", gap: 5, alignItems: "center", padding: 11 },
   webImageLinkText: { fontSize: 12, fontWeight: "600", color: "#555" },
-  voiceBubble: { minHeight: 64, maxWidth: 310, padding: 11, borderRadius: 18,
-    backgroundColor: "#ecece9", flexDirection: "row", alignItems: "center", gap: 11 },
-  voicePlay: { width: 39, height: 39, borderRadius: 20,
+  voiceCardOuter: { maxWidth: 325, borderRadius: 20, backgroundColor: "#161616",
+    padding: 11, alignSelf: "flex-end" },
+  voiceBubble: { minHeight: 72, width: "100%", padding: 12, borderRadius: 16,
+    backgroundColor: "#ffffff", flexDirection: "row", alignItems: "center", gap: 12 },
+  voicePlay: { width: 44, height: 44, borderRadius: 22,
     backgroundColor: "#222222", alignItems: "center", justifyContent: "center" },
-  voiceMeta: { color: "#777", fontSize: 11, marginTop: 5 },
-  waveBars: { height: 25, flexDirection: "row", alignItems: "center", gap: 2 },
+  voiceMetaRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 5 },
+  voiceMeta: { color: "#777", fontSize: 11 },
+  waveBars: { height: 28, flexDirection: "row", alignItems: "center", gap: 2 },
   waveBar: { width: 3, borderRadius: 2, backgroundColor: "#5e6664" },
+  voiceTranscriptButton: { flexDirection: "row", alignItems: "center", gap: 6,
+    paddingTop: 12, paddingBottom: 6, paddingHorizontal: 3 },
+  voiceTranscriptLabel: { color: "#eeeeee", fontSize: 12 },
+  voiceTranscriptText: { color: "#eeeeee", lineHeight: 22, fontSize: 13,
+    paddingTop: 8, paddingBottom: 10, paddingHorizontal: 4 },
+  voicePlaybackError: { color: "#ffc4c4", fontSize: 11, paddingTop: 8 },
   draftCard: { borderWidth: 1, borderColor: "#d7d7d2", backgroundColor: "#f7f7f5",
     borderRadius: 17, padding: 12, gap: 9, marginBottom: 10 },
   draftTitle: { fontSize: 13, color: "#252525", fontWeight: "700" },
@@ -4581,6 +4690,43 @@ export default function ChatPage() {
   }
 
   async function loadPrivateVoiceUrl(audioId: string) {
+    // For native Expo, request a *playable M4A* from the authenticated backend.
+    // Older web uploads are often WebM/Opus: Safari/iOS native playback cannot
+    // reliably decode them even if a Supabase signed URL is valid.
+    if (Platform.OS !== "web") {
+      const session = await getSessionOrThrow();
+      const path = `/ai/audio/${encodeURIComponent(audioId)}/playback-compatible`;
+      const response = await expoFetch(`${API_URL}${path}`, {
+        method: "GET",
+        headers: {
+          "user-id": session.user.id,
+          authorization: `Bearer ${session.access_token}`,
+        },
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as {detail?: string} | null;
+        const detail = typeof payload?.detail === "string" ? payload.detail : "";
+        if (response.status === 401) throw new Error("Session expirée. Reconnectez-vous à ORIA.");
+        if (response.status === 404 && !detail) {
+          throw new Error("Route audio compatible non installée sur le backend. Déployez le fichier ai.py corrigé.");
+        }
+        throw new Error(`Lecture vocale (HTTP ${response.status}) : ${detail || "service indisponible"}`);
+      }
+      const declaredSize = Number(response.headers.get("content-length") || 0);
+      const MAX_PLAYBACK_BYTES = 20 * 1024 * 1024;
+      if (declaredSize > MAX_PLAYBACK_BYTES) throw new Error("Vocal trop volumineux pour l'écoute.");
+      const bytes = await response.bytes();
+      if (!bytes.byteLength || bytes.byteLength > MAX_PLAYBACK_BYTES) {
+        throw new Error("Le serveur a envoyé un fichier audio vide ou trop volumineux.");
+      }
+      // An authenticated response is stored only in Expo's private cache.
+      // A fresh temporary filename avoids conflicting with an active player.
+      const safeId = audioId.replace(/[^a-fA-F0-9-]/g, "").slice(0, 64);
+      const target = new ExpoFile(Paths.cache, `oria-voice-${safeId}-${Date.now()}.m4a`);
+      await target.write(bytes);
+      if (!target.exists || target.size <= 0) throw new Error("Écriture du vocal impossible sur l'appareil.");
+      return target.uri;
+    }
     const result = await apiFetch<Record<string, unknown>>(`/ai/audio/${encodeURIComponent(audioId)}`);
     const metadata = normalizeVoiceNote(result);
     if (metadata) setVoiceNotes((current) => mergeVoiceNotes(current, [metadata]));
@@ -6689,7 +6835,8 @@ export default function ChatPage() {
             />
           ) : voice ? (
             <PrivateVoicePlayback key={voice.audio_id} note={voice} language={language}
-              onLoad={loadPrivateVoiceUrl} />
+              onLoad={loadPrivateVoiceUrl}
+              transcript={voice.transcription || getVisibleMessageContent(item.content)} />
           ) : (
             <CollapsibleUserMessage
               content={getVisibleMessageContent(item.content)}

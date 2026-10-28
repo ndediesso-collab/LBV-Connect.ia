@@ -177,6 +177,24 @@ function DocText({ block }: { block: DocBlock }) {
   })}</>;
 }
 
+// Un ancien PDF peut ne pas recevoir preview_url (MIME historique erroné),
+// tout en restant téléchargeable. Un Blob PDF local contourne le mode
+// Content-Disposition: attachment du lien privé de téléchargement.
+async function pdfBlobPreviewFromSignedDownload(url: string): Promise<string> {
+  const response = await fetch(url, { cache: "no-store", referrerPolicy: "no-referrer" });
+  if (!response.ok) throw new Error("Impossible de récupérer le PDF privé.");
+  const MAX_PDF_PREVIEW_BYTES = 50 * 1024 * 1024;
+  const reportedSize = Number(response.headers.get("content-length") || "0");
+  if (reportedSize > MAX_PDF_PREVIEW_BYTES) throw new Error("PDF trop volumineux pour l’aperçu intégré.");
+  const bytes = await response.arrayBuffer();
+  if (!bytes.byteLength || bytes.byteLength > MAX_PDF_PREVIEW_BYTES) {
+    throw new Error("PDF absent ou trop volumineux pour l’aperçu intégré.");
+  }
+  const signature = new TextDecoder("ascii").decode(bytes.slice(0, 5));
+  if (signature !== "%PDF-") throw new Error("Le fichier enregistré n’est pas un PDF valide.");
+  return URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+}
+
 async function readSmallText(url: string): Promise<string> {
   const response = await fetch(url, { cache: "no-store", referrerPolicy: "no-referrer" });
   if (!response.ok) throw new Error("Lecture du fichier indisponible.");
@@ -218,7 +236,7 @@ type CreationsResponse = {
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
   process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "") ||
-  "";
+  "https://lbv-connect-api.onrender.com";
 
 const ORIA_LANGUAGE_STORAGE_KEY = "oria_language";
 
@@ -462,6 +480,7 @@ export default function CreationsPage() {
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactPreview | null>(null);
   const [syncWarning, setSyncWarning] = useState<string | null>(null);
   const previewRequestRef = useRef(0);
+  const pdfBlobUrlRef = useRef<string | null>(null);
   const loadRequestRef = useRef(0);
   const [deletingId, setDeletingId] =
     useState<string | null>(null);
@@ -493,14 +512,17 @@ export default function CreationsPage() {
   }, []);
 
   const getSession = useCallback(async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session?.user?.id || !session.access_token) {
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !session?.user?.id || !session.access_token) {
       throw new Error(UI[language].sessionExpired);
     }
-
+    if (session.expires_at && session.expires_at <= Math.floor(Date.now() / 1000) + 90) {
+      const refreshed = await supabase.auth.refreshSession();
+      if (refreshed.error || !refreshed.data.session?.access_token) {
+        throw new Error(UI[language].sessionExpired);
+      }
+      return refreshed.data.session;
+    }
     return session;
   }, [language, supabase]);
 
@@ -541,6 +563,14 @@ export default function CreationsPage() {
     [getSession, language],
   );
 
+  // Both the AI router and the legacy main router expose private artifacts.
+  // Only GET 404/405 may trigger fallback. Never replay writes or billing calls.
+  const fetchArtifactGet = useCallback(async (suffix: string) => {
+    const primary = await authenticatedFetch(`/ai/artifacts${suffix}`);
+    if (primary.ok || ![404, 405].includes(primary.status)) return primary;
+    return authenticatedFetch(`/artifacts${suffix}`);
+  }, [authenticatedFetch]);
+
   const loadCreations = useCallback(
     async (showRefreshState = false, silent = false) => {
       const requestId = ++loadRequestRef.current;
@@ -557,7 +587,7 @@ export default function CreationsPage() {
         };
         const [allResult, fileResult] = await Promise.allSettled([
           authenticatedFetch("/creations?limit=100").then((response) => parseResponse<CreationsResponse>(response)),
-          authenticatedFetch("/artifacts?limit=100&offset=0").then((response) => parseResponse<ArtifactListResponse>(response)),
+          fetchArtifactGet("?limit=100&offset=0").then((response) => parseResponse<ArtifactListResponse>(response)),
         ]);
         if (allResult.status === "rejected" && fileResult.status === "rejected") {
           throw new Error(UI[language].loadFailed);
@@ -578,7 +608,7 @@ export default function CreationsPage() {
         if (requestId === loadRequestRef.current) { setLoading(false); setRefreshing(false); }
       }
     },
-    [authenticatedFetch, language],
+    [authenticatedFetch, fetchArtifactGet, language],
   );
 
   useEffect(() => {
@@ -629,7 +659,7 @@ export default function CreationsPage() {
   const resolveArtifact = useCallback(async (item: CreationItem): Promise<CreationItem> => {
     // Les URLs signées sont éphémères. On renouvelle toujours via une API
     // authentifiée avant toute ouverture ou téléchargement.
-    const response = await authenticatedFetch(`/artifacts/${encodeURIComponent(item.id)}`);
+    const response = await fetchArtifactGet(`/${encodeURIComponent(item.id)}`);
     const payload: { artifact?: CreationItem } & ApiError = await response.json().catch(() => ({}));
     if (!response.ok || !payload.artifact?.id || payload.artifact.id !== item.id) {
       throw new Error(payload.detail || payload.message || UI[language].fileUnavailable);
@@ -637,11 +667,20 @@ export default function CreationsPage() {
     const refreshed: CreationItem = { ...item, ...payload.artifact, creation_type: "artifact" };
     setCreations((current) => current.map((creation) => creation.id === item.id ? refreshed : creation));
     return refreshed;
-  }, [authenticatedFetch, language]);
+  }, [fetchArtifactGet, language]);
 
   const closeArtifactPreview = useCallback(() => {
     ++previewRequestRef.current;
+    if (pdfBlobUrlRef.current) {
+      URL.revokeObjectURL(pdfBlobUrlRef.current);
+      pdfBlobUrlRef.current = null;
+    }
     setSelectedArtifact(null);
+  }, []);
+
+  useEffect(() => () => {
+    if (pdfBlobUrlRef.current) URL.revokeObjectURL(pdfBlobUrlRef.current);
+    pdfBlobUrlRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -726,8 +765,8 @@ export default function CreationsPage() {
     try {
       if (kind === "docx" || kind === "xlsx") {
         const endpoint = kind === "docx" ? "document-preview" : "spreadsheet-preview";
-        const response = await authenticatedFetch(
-          `/artifacts/${encodeURIComponent(item.id)}/${endpoint}`,
+        const response = await fetchArtifactGet(
+          `/${encodeURIComponent(item.id)}/${endpoint}`,
         );
         const data: (DocumentPreview & SpreadsheetPreview) = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.detail || data.message || UI[language].previewFailed);
@@ -741,9 +780,34 @@ export default function CreationsPage() {
       const refreshed = await resolveArtifact(item);
       if (requestId !== previewRequestRef.current) return;
       if (kind === "pdf") {
-        const signed = safeRemoteUrl(refreshed.preview_url);
-        if (!signed) throw new Error(UI[language].previewFailed);
-        setSelectedArtifact({ item: refreshed, kind, loading: false, pdfUrl: signed });
+        // Prefer a genuine inline signed URL. Older documents may only have
+        // a signed download URL; download once to an in-memory PDF Blob.
+        const signedPreview = safeRemoteUrl(refreshed.preview_url);
+        const signedDownload = safeRemoteUrl(getArtifactUrl(refreshed));
+        let previewUrl: string | null = null;
+        let blobUrl: string | null = null;
+        // PDF metadata may indicate "attachment"; use a local Blob if CORS
+        // allows reading the signed resource, rather than embedding an attachment URL.
+        for (const candidate of [signedPreview, signedDownload]) {
+          if (!candidate) continue;
+          try {
+            blobUrl = await pdfBlobPreviewFromSignedDownload(candidate);
+            previewUrl = blobUrl;
+            break;
+          } catch {
+            // Some Storage deployments permit browser navigation but not CORS fetch.
+            // We can still open the private signed URL in a separate tab.
+          }
+        }
+        if (!previewUrl) previewUrl = signedPreview || signedDownload;
+        if (!previewUrl) throw new Error(UI[language].previewFailed);
+        if (requestId !== previewRequestRef.current) {
+          if (blobUrl) URL.revokeObjectURL(blobUrl);
+          return;
+        }
+        if (pdfBlobUrlRef.current) URL.revokeObjectURL(pdfBlobUrlRef.current);
+        pdfBlobUrlRef.current = blobUrl;
+        setSelectedArtifact({ item: refreshed, kind, loading: false, pdfUrl: previewUrl });
         return;
       }
       if ((refreshed.size_bytes || 0) > MAX_INLINE_TEXT_BYTES) {
@@ -761,7 +825,7 @@ export default function CreationsPage() {
         error: requestError instanceof Error ? requestError.message : UI[language].previewFailed,
       });
     }
-  }, [authenticatedFetch, language, resolveArtifact]);
+  }, [fetchArtifactGet, language, resolveArtifact]);
 
   const handleDelete = useCallback(
     async (item: CreationItem) => {
