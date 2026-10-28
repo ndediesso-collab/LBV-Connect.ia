@@ -5943,6 +5943,79 @@ async def get_voice_note(
     return {"success": True, **result}
 
 
+def _compatible_voice_audio_bytes(*, user_id: str, audio_id: str) -> bytes:
+    """Return bounded, native-playable M4A for an owned voice note.
+
+    WebM/Opus stored by the web client is not generally playable by iOS.
+    This conversion is independent of OpenAI and of transcription billing.
+    """
+    import os
+    import shutil
+    import subprocess
+    import tempfile
+
+    service = _audio_service()
+    row = service.repo.get(user_id=user_id, audio_id=audio_id)
+    if not row:
+        from app.services.audio_service import AudioNotFound
+        raise AudioNotFound("Note vocale introuvable.")
+    raw = service.repo.download(user_id=user_id, audio_id=audio_id,
+                                path=row["storage_path"])
+    if str(row.get("mime_type") or "").lower() in {"audio/mp4", "audio/m4a", "audio/x-m4a"}:
+        return raw
+    if not shutil.which("ffmpeg"):
+        from app.services.audio_service import AudioUnavailable
+        raise AudioUnavailable("ffmpeg doit être installé pour écouter ce vocal sur iPhone.")
+    with tempfile.TemporaryDirectory(prefix="oria-play-") as folder:
+        incoming = os.path.join(folder, "source.audio")
+        outgoing = os.path.join(folder, "voice.m4a")
+        with open(incoming, "wb") as handle:
+            handle.write(raw)
+        try:
+            process = subprocess.run(
+                ["ffmpeg", "-nostdin", "-hide_banner", "-v", "error", "-y",
+                 "-i", incoming, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "44100",
+                 "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", outgoing],
+                capture_output=True, timeout=75, check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            from app.services.audio_service import AudioUnavailable
+            raise AudioUnavailable("Conversion vocale temporairement indisponible.") from exc
+        if process.returncode != 0 or not os.path.isfile(outgoing):
+            from app.services.audio_service import AudioInvalid
+            raise AudioInvalid("Le format de ce vocal ne peut pas être décodé.")
+        size = os.path.getsize(outgoing)
+        if not 0 < size <= 20 * 1024 * 1024:
+            from app.services.audio_service import AudioInvalid
+            raise AudioInvalid("Fichier vocal converti vide ou trop volumineux.")
+        with open(outgoing, "rb") as handle:
+            return handle.read()
+
+
+@router.get("/audio/{audio_id}/playback-compatible")
+async def get_voice_compatible_playback(
+    audio_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Private M4A download for Expo; verified by Supabase access token.
+
+    Never returns a permanent public URL and never calls the AI provider.
+    """
+    from fastapi.responses import Response
+    uid = _authenticated_audio_user(user_id, authorization)
+    try:
+        content = await asyncio.to_thread(_compatible_voice_audio_bytes,
+                                          user_id=uid, audio_id=audio_id)
+    except Exception as error:
+        raise _audio_error(error) from error
+    return Response(content=content, media_type="audio/mp4", headers={
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": 'inline; filename="oria-voice.m4a"',
+    })
+
+
 @router.post("/audio/{audio_id}/send")
 async def choose_voice_delivery(
     audio_id: str, payload: AudioDeliveryRequest,
