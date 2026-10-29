@@ -111,21 +111,55 @@ class OpenRouterMediaService:
 
     @staticmethod
     def _safe_provider_reason(exc: urllib.error.HTTPError) -> str | None:
-        # Parse only a small, allowlisted error code; do not return arbitrary text or prompts.
+        """Extract stable, non-sensitive OpenRouter error classifications.
+
+        Never include upstream raw text, echoed prompts, request bodies or keys.
+        The metadata is required to distinguish OpenRouter/platform limits from
+        provider-specific throttling, without recording customer information.
+        """
         try:
             raw = exc.read(8192)
             obj = json.loads(raw)
             error = obj.get("error") if isinstance(obj, dict) else None
-            code = error.get("code") if isinstance(error, dict) else None
-            message = error.get("message") if isinstance(error, dict) else None
+            if not isinstance(error, dict):
+                return None
+            metadata = error.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            def safe_token(value: Any, limit: int = 40) -> str | None:
+                if not isinstance(value, str):
+                    return None
+                value = value.strip().lower()
+                # Strictly classify machine tokens only, never natural language.
+                return value if re.fullmatch(r"[a-z0-9_.-]{1,%d}" % limit, value) else None
+
+            parts = []
+            for key, label in (
+                ("error_type", "type"),
+                ("limit_source", "source"),
+                ("provider_name", "fournisseur"),
+                ("provider_code", "code_fournisseur"),
+                ("reason", "raison"),
+            ):
+                token = safe_token(metadata.get(key))
+                if token:
+                    parts.append(f"{label}={token}")
+
+            if parts:
+                return ", ".join(parts)[:150]
+
+            # Some older OpenRouter replies do not expose metadata.
+            code = error.get("code")
+            message = error.get("message")
             normalized = " ".join(str(x).lower() for x in (code, message) if x is not None)
             for needle, label in (
-                ("resource_exhausted", "resource_exhausted"),
-                ("rate_limit", "rate_limit"),
-                ("rate limit", "rate_limit"),
-                ("quota", "quota"),
-                ("capacity", "capacity"),
-                ("temporarily unavailable", "temporarily_unavailable"),
+                ("resource_exhausted", "type=resource_exhausted"),
+                ("rate_limit", "type=rate_limit"),
+                ("rate limit", "type=rate_limit"),
+                ("quota", "type=quota"),
+                ("capacity", "type=capacity"),
+                ("temporarily unavailable", "type=temporarily_unavailable"),
             ):
                 if needle in normalized:
                     return label
@@ -172,9 +206,11 @@ class OpenRouterMediaService:
             reason = self._safe_provider_reason(exc) if exc.code == 429 else None
             message = mapping.get(exc.code, "Erreur du fournisseur OpenRouter.")
             if exc.code == 429:
-                message = ("OpenRouter a refusé cette requête (HTTP 429 : débit, quota ou capacité). "
-                           "L'existence de crédits USD ne supprime pas cette limite. "
-                           f"Nouvelle tentative conseillée dans {retry_after or 120} secondes.")
+                detail = f" Diagnostic fournisseur : {reason}." if reason else ""
+                message = ("OpenRouter a refusé la vidéo (HTTP 429 : limite de débit ou capacité)."
+                           f"{detail} "
+                           f"Nouvelle tentative conseillée après {retry_after or 120} secondes. "
+                           "Ce délai n'assure pas que le modèle sera disponible.")
             raise OpenRouterMediaError(message, status_code=exc.code,
                                        retry_after_seconds=retry_after,
                                        provider_reason=reason) from exc

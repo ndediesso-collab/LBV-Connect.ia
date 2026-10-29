@@ -7,6 +7,7 @@ import {
   AlertCircle, ShieldCheck, Clapperboard,
 } from "lucide-react";
 import Link from "next/link";
+import OriaVideoProjectsWeb from "./OriaVideoProjects_Web";
 import { createClient } from "@/lib/supabase/client";
 
 type Language = "fr" | "en";
@@ -695,7 +696,10 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                       : tr("Audio indisponible sur le modèle de ce pack.", "Audio unavailable for this plan's model.")}</p>
                   </div>
                 )}
-                {screen === "video" && caps && <div className="rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-5 text-muted-strong">
+                {screen === "video" && caps && MEDIA_PROVIDER === "openrouter" && wallet?.pack_id && (
+                  <OriaVideoProjectsWeb language={language} packId={wallet.pack_id} caps={caps.video} onWalletRefresh={onWalletRefresh}/>
+                )}
+                {screen === "video" && caps && MEDIA_PROVIDER !== "openrouter" && <div className="rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-5 text-muted-strong">
                   <p className="font-semibold text-foreground">{tr("Projets vidéo avancés", "Advanced video projects")}</p>
                   <p className="mt-1">{tr(`Ton pack prévoit des projets jusqu'à ${caps.video.max_project_seconds} s (${caps.video.max_project_scenes} scène(s) maximum), mais seuls les clips courts peuvent être générés actuellement.`, `Your plan allows projects up to ${caps.video.max_project_seconds}s (${caps.video.max_project_scenes} scenes max), but only short clips can currently be generated.`)}</p>
                   <div className="mt-2 flex flex-wrap gap-2">{caps.video.allowed_modes.filter(m => !caps.video.available_now_modes.includes(m)).map(m => (

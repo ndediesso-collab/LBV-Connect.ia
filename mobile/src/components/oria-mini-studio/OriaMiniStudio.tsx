@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { File as ExpoFile } from "expo-file-system";
 import { supabase } from "@/lib/supabase/client";
+import OriaVideoProjectsExpo from "./OriaVideoProjects_expo";
 
 /**
  * ORIA MINI-STUDIO — REACT NATIVE / EXPO
@@ -606,7 +607,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                     </View>
                     {caps ? <Text style={[styles.note, mutedStyle]}>{kind === "image"
                       ? `${tr("Votre pack : jusqu'à", "Your plan: up to")} ${caps.images.max_reference_images_in_pack} ${tr("photos théoriques. Une seule photo par appel actuellement.", "reference photos in theory. One photo per call currently.")}`
-                      : `${tr("Projet prévu jusqu'à", "Project limit")} ${caps.video.max_project_seconds} s · ${tr("clips courts seuls actifs actuellement", "only short clips implemented for now")}`}</Text> : null}
+                      : `${tr("Mini-film jusqu'à", "Mini-film up to")} ${caps.video.max_project_seconds} s · ${tr("studio multi-scènes ci-dessous selon le pack", "multi-scene studio below according to plan")}`}</Text> : null}
                     <Text style={[styles.fieldLabel, mutedStyle]}>{tr("Description", "Description")}</Text>
                     <TextInput multiline value={prompt} onChangeText={(value: string) => { invalidateQuote(); setPrompt(value); }}
                       editable={!busy} placeholder={kind === "image" ? tr("Décris l'image ou la retouche…", "Describe the image or edit…") : tr("Décris la scène à animer…", "Describe the scene…")}
@@ -678,6 +679,10 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                           ? tr("Audio : voix et sons synchronisés ; devis séparé.", "Audio: synchronized voices and sound; separate quote.")
                           : tr("Ce modèle ne prend pas en charge l'audio.", "This model doesn't support audio.")}</Text>
                       </View>
+                    ) : null}
+                    {kind === "video" && MEDIA_PROVIDER === "openrouter" && caps && wallet?.pack_id ? (
+                      <OriaVideoProjectsExpo language={language} packId={wallet.pack_id} caps={caps.video}
+                        onWalletRefresh={onWalletRefresh}/>
                     ) : null}
                     <Text style={[styles.fieldLabel, mutedStyle]}>{tr("Format", "Aspect ratio")}</Text>
                     <View style={styles.flexWrap}>{(kind === "image" ? IMAGE_RATIOS : VIDEO_RATIOS).map((ratio) => (

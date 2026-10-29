@@ -2442,7 +2442,7 @@ def get_google_media_capabilities(
             },
             "short_clip_actions_available_now": list(direct_video_actions.get(wallet.pack_id, ()))
                 if enabled else [],
-            "long_projects_generation_available": False,
+            "long_projects_generation_available": False,  # Le multi-scenes V7 passe uniquement par OpenRouter.
         },
         "notice": (
             "Droits du pack et fonctionnalites disponibles aujourd'hui distingues. "
@@ -8040,7 +8040,10 @@ def _or_caps_for(wallet) -> dict[str, Any]:
             "video": {"model": video["id"] if video else "",
                 "models": [{"model": m["id"],
                             "durations": m.get("supported_durations") or [],
-                            "supports_audio": m.get("generate_audio") is True}
+                            "supports_audio": m.get("generate_audio") is True,
+                            "supports_first_frame": any(
+                                (f if isinstance(f,str) else f.get("frame_type")) == "first_frame"
+                                for f in (m.get("supported_frame_images") or []) if isinstance(f,(str,dict)))}
                            for m in available_video_models],
                 "allowed_modes": list(rights["video_modes"]),
                 "available_now_modes": list(_OR_SAFE_MODES["video"]) if active and duration else [],
@@ -8052,7 +8055,7 @@ def _or_caps_for(wallet) -> dict[str, Any]:
                 "provider_per_call_seconds": {"min": min(duration) if duration else 0,
                                                "max": max(duration) if duration else 0},
                 "short_clip_actions_available_now": allowed_actions if active else [],
-                "long_projects_generation_available": False,
+                "long_projects_generation_available": active and "multi_scene" in rights["video_modes"] and rights["max_video_scenes"] >= 2,
                 "supports_audio": bool(video and video.get("generate_audio") is True)},
             "notice": "Les devis OpenRouter reposent sur un plafond USD administrateur explicite, "
                       "le coût final sur usage.cost, et la vidéo sur un job durable."}
@@ -8375,3 +8378,18 @@ async def openrouter_media_job_status(
     except Exception:
         _or_job_update(uid, request_id, {"status": "reconcile"})
         return _or_public_job(_or_job_get(uid, request_id))
+
+# ============================================================
+# ORIA V7 — Projets vidéos multi-scènes (autorité packs et paiement existants)
+# ============================================================
+from app.services.oria_mini_film_v7 import install as _oria_install_mini_film_v7
+_oria_install_mini_film_v7(
+    router, db=supabase, authenticate=_authenticate_chat_user,
+    wallet_for_quote=_google_wallet_for_quote,
+    rights_for_pack=_google_pricing_config().google_media_capabilities_for_pack,
+    short_actions=_OR_SHORT_ACTIONS, config=credit_costs_config,
+    verify_video=_or_verify_config, video_models_for_pack=_or_video_models_for_pack,
+    catalog_for_video=_or_catalog, video_service=_or_service,
+    get_job=_or_job_get, get_job_status=openrouter_media_job_status,
+    media_service=MediaService, video_reservation=_or_video_reservation,
+)
