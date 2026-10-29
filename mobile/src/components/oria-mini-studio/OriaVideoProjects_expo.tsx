@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, AppState, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { supabase } from "@/lib/supabase/client";
 
 type Scene = { id:string; position:number; prompt:string; action:string; duration_seconds:number; request_id?:string|null;
@@ -35,6 +35,30 @@ export default function OriaVideoProjectsExpo({language,packId,caps,onWalletRefr
   const [budget,setBudget]=useState<{total_estimated_credits:number;maximum_total_reservation_credits:number;credits_sufficient_for_all:boolean}|null>(null);
   const [projects,setProjects]=useState<{id:string;title:string;status:string}[]>([]);
   const [project,setProject]=useState<Project|null>(null);const [busy,setBusy]=useState(false);const [error,setError]=useState("");const [notice,setNotice]=useState("");
+  const walletRef = useRef(onWalletRefresh);
+  useEffect(() => { walletRef.current = onWalletRefresh; }, [onWalletRefresh]);
+  const activeProjectId = project?.id;
+  const needsStatusTracking = !!project && (project.status === "rendering" ||
+    project.scenes.some(s => ["processing", "claimed"].includes(s.status) && !!s.request_id));
+  // Check existing jobs only, never start another paid generation.
+  useEffect(() => {
+    if (!activeProjectId || !needsStatusTracking) return;
+    let stopped = false;
+    let inFlight = false;
+    const timer = setInterval(() => {
+      if (stopped || inFlight || AppState.currentState !== "active") return;
+      inFlight = true;
+      void call<Project>(`/projects/${activeProjectId}/sync`, { method: "POST" })
+        .then(latest => {
+          if (stopped) return;
+          setProject(current => current?.id === activeProjectId ? latest : current);
+          walletRef.current?.();
+        })
+        .catch(() => { /* Manual synchronisation remains available. */ })
+        .finally(() => { inFlight = false; });
+    }, 30000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [activeProjectId, needsStatusTracking]);
   const isSupported=caps.allowed_modes.includes("multi_scene")&&caps.max_project_scenes>=2;
   const selected=(caps.models||[]).find(m=>m.model===model);
   const durations=(options[packId]||[]).filter(o=>selected?.durations.includes(o.duration));
@@ -85,6 +109,8 @@ export default function OriaVideoProjectsExpo({language,packId,caps,onWalletRefr
     setNotice(reply.status==="refunded"?(reply.error_message||"Crédits restitués."):"Création transmise, vérifie le statut.");
   })}
   async function render(){if(!project)return;await wrapped(async()=>{
+    const check=await call<{ready:boolean;reasons:string[];status:string}>(`/projects/${project.id}/render-check`);
+    if(!check.ready){setProject(await call<Project>(`/projects/${project.id}`));throw Error(check.reasons.join(" ")||"Montage indisponible.");}
     await call(`/projects/${project.id}/render`,{method:"POST",body:JSON.stringify({keep_scene_audio:true,rights_confirmed:false})});
     setProject({...project,status:"rendering"});setNotice("Montage lancé. Reviens consulter le projet pour le MP4.");
   })}
@@ -123,6 +149,8 @@ export default function OriaVideoProjectsExpo({language,packId,caps,onWalletRefr
       </View>:<View style={{gap:8}}>
         <Text style={{fontWeight:"700"}}>{project.title} · {project.status}</Text>
         <Button label={tr("Synchroniser les scènes","Sync scenes")} onPress={()=>void sync()}/>
+        {needsStatusTracking?<Text style={small}>{tr("Suivi automatique toutes les 30 secondes. Une baisse du solde peut être une réservation. Ne relance pas la scène.", "Status checked every 30 seconds. Reduced balance can be a reservation. Do not resubmit.")}</Text>:null}
+        {project.scenes.some(s=>s.status==="reconcile")?<Text style={{fontSize:12,color:"#b42318"}}>{tr("Vérification de facturation ou fournisseur nécessaire. Ne relance pas cette scène.", "Provider or billing review required. Do not retry this scene.")}</Text>:null}
         {project.scenes.map(s=><View key={s.id} style={border}><Text style={small}>Scène {s.position} · {s.duration_seconds}s · {s.status}</Text>
           <TextInput key={s.id+":"+s.status} defaultValue={s.prompt} multiline editable={!s.request_id||s.status==="refunded"||s.status==="failed"}
             style={[border,{minHeight:76,marginTop:7}]} onEndEditing={e=>{if(e.nativeEvent.text!==s.prompt)void changeScene(s,e.nativeEvent.text)}}/>
@@ -133,7 +161,7 @@ export default function OriaVideoProjectsExpo({language,packId,caps,onWalletRefr
         {project.scenes.every(s=>s.status==="completed"&&!!s.media_url) && project.status!=="completed" ? <>
           <Text style={small}>{tr("Le montage conserve les voix et bruitages de chaque clip. Pour ajouter une musique externe ou une voix off, utilise la version Web.",
             "The edit keeps each clip's sounds. For external music or voiceover use the Web version.")}</Text>
-          <Button label={tr("Assembler le film MP4","Assemble MP4 film")} disabled={project.status==="rendering"} onPress={()=>void render()}/>
+          <Button label={tr("Assembler le film MP4","Assemble MP4 film")} onPress={()=>void render()}/>
         </>:null}
         {project.output_url?<Button label={tr("Ouvrir le film final","Open final film")} onPress={()=>void Linking.openURL(project.output_url||"")}/>:null}
         {project.error_message?<Text style={small}>{project.error_message}</Text>:null}

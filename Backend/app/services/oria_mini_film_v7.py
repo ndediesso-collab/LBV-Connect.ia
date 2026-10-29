@@ -424,8 +424,14 @@ def install(router: APIRouter, *, db: Any, authenticate: Callable, wallet_for_qu
                     await get_job_status(req,user_id=user_id,authorization=authorization)
                     job=get_job(uid,req)
             if job:
-                mapped={"completed":"completed","refunded":"refunded","failed":"failed"}.get(job["status"],"processing")
-                patch={"status":mapped,"error_message":job.get("error_message")}
+                # "reconcile" is not an ordinary in-progress video: it requires
+                # provider/ledger verification and MUST NOT trigger a paid retry.
+                mapped={"completed":"completed","refunded":"refunded","failed":"failed",
+                        "reconcile":"reconcile","releasing":"reconcile"}.get(job["status"],"processing")
+                issue = job.get("error_message")
+                if mapped == "reconcile" and not issue:
+                    issue = "Statut ou facturation en attente de vérification. Ne relancez pas la génération."
+                patch={"status":mapped,"error_message":issue}
                 if mapped=="completed" and job.get("media_id") and job.get("media_url"):
                     patch.update({"media_id":job["media_id"],"media_url":job["media_url"]})
                 db.table(_S).update(patch).eq("id",s["id"]).eq("user_id",uid).execute()
@@ -463,6 +469,48 @@ def install(router: APIRouter, *, db: Any, authenticate: Callable, wallet_for_qu
             db.table(_P).update({"status":"render_failed", "error_message":str(err)[:220]})\
                 .eq("id",pid).eq("user_id",uid).execute()
 
+    @router.get("/openrouter-media/projects/{project_id}/render-check")
+    async def render_check(project_id: str,
+                           user_id: str | None = Header(None, alias="user-id"),
+                           authorization: str | None = Header(None, alias="authorization")):
+        """Read-only preflight. Never starts a render or a provider request."""
+        uid=identify(user_id,authorization)
+        p=get_project(uid,project_id)
+        scenes=scenes_for(uid,project_id)
+        reasons=[]
+        ffmpeg_ok=bool(shutil.which("ffmpeg"))
+        ffprobe_ok=bool(shutil.which("ffprobe"))
+        if not ffmpeg_ok or not ffprobe_ok:
+            reasons.append("FFmpeg ou ffprobe absent sur Render. Installer les exécutables système avant le montage.")
+        ready_clips=sum(bool(s.get("status")=="completed" and s.get("media_id") and s.get("media_url")) for s in scenes)
+        if not scenes or ready_clips != len(scenes):
+            reasons.append(f"Scènes prêtes : {ready_clips}/{len(scenes)}. Synchroniser les scènes avant le montage.")
+        if p["status"] == "completed":
+            reasons.append("Ce projet possède déjà un montage final.")
+        elif p["status"] == "rendering":
+            updated=p.get("updated_at")
+            try:
+                elapsed=(datetime.now(timezone.utc)-datetime.fromisoformat(str(updated).replace("Z","+00:00"))).total_seconds()
+            except (TypeError,ValueError,OverflowError):
+                elapsed=0
+            if elapsed <= 20*60:
+                reasons.append("Montage déjà lancé. Actualiser le projet ; une reprise manuelle devient possible après 20 minutes si le serveur l'a interrompu.")
+        elif p["status"] not in ("draft","render_failed"):
+            reasons.append("Statut de projet incompatible avec le montage.")
+        wallet=wallet_for_quote(user_id=user_id, authorization=authorization)
+        if not wallet.is_pack_active:
+            reasons.append("Pack ORIA inactif.")
+        elif p["pack_id"] != wallet.pack_id:
+            reasons.append("Le pack du projet ne correspond plus au pack actif.")
+        else:
+            rights=rights_for_pack(wallet.pack_id)
+            if len(scenes)>rights["max_video_scenes"] or sum(int(s["duration_seconds"]) for s in scenes)>rights["max_video_project_seconds"]:
+                reasons.append("Le projet dépasse les limites du pack actif.")
+        return {"success":True,"ready":not reasons,"status":p["status"],
+                "ffmpeg_available":ffmpeg_ok,"ffprobe_available":ffprobe_ok,
+                "ready_scenes":ready_clips,"total_scenes":len(scenes),"reasons":reasons,
+                "note":"Diagnostic uniquement : aucun montage et aucun débit de crédits."}
+
     @router.post("/openrouter-media/projects/{project_id}/render")
     async def request_render(project_id: str, payload: RenderRequest, tasks: BackgroundTasks,
                              user_id: str | None = Header(None, alias="user-id"),
@@ -494,9 +542,13 @@ def install(router: APIRouter, *, db: Any, authenticate: Callable, wallet_for_qu
                 raise HTTPException(409,"Montage déjà en cours. Actualisez le projet.")
         elif p["status"] not in eligible:
             raise HTTPException(409,"Montage déjà lancé ou terminé.")
+        # IMPORTANT: explicitly return the updated row. Supabase/PostgREST may
+        # otherwise return data=[] after a successful UPDATE; in V7.2 that
+        # raised a false HTTP 409 *after changing status to rendering*, without
+        # scheduling the montage. This operation does NOT call a paid API.
         res=db.table(_P).update({"status":"rendering","error_message":None})\
             .eq("id",project_id).eq("user_id",uid).eq("status",p["status"])\
-            .eq("updated_at",p["updated_at"]).execute().data or []
+            .eq("updated_at",p["updated_at"]).select("id").execute().data or []
         if not res:
             raise HTTPException(409,"Un autre montage est en cours.")
         tasks.add_task(background_render,uid,project_id,music,voice,payload.music_volume,payload.keep_scene_audio,payload.transition)

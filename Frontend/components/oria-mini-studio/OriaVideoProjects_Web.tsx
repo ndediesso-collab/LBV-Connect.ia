@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Clapperboard, Film, RefreshCw, Play, Download, Plus, Music2 } from "lucide-react";
 
@@ -55,6 +55,31 @@ export default function OriaVideoProjectsWeb({ language, packId, caps, onWalletR
   const [budget,setBudget] = useState<{total_estimated_credits:number;maximum_total_reservation_credits:number;credits_sufficient_for_all:boolean;scenes:{scene:number;reservation_credits:number}[]} | null>(null);
   const [list,setList] = useState<{id:string;title:string;status:string}[]>([]);
   const [project,setProject] = useState<Project | null>(null);
+  const walletRef = useRef(onWalletRefresh);
+  useEffect(() => { walletRef.current = onWalletRefresh; }, [onWalletRefresh]);
+  const activeProjectId = project?.id;
+  const needsStatusTracking = !!project && (project.status === "rendering" ||
+    project.scenes.some(s => ["processing", "claimed"].includes(s.status) && !!s.request_id));
+  // Poll only the EXISTING job IDs. Never send a paid /video POST automatically.
+  // Polling OpenRouter every 30s is consistent with their asynchronous video guidance.
+  useEffect(() => {
+    if (!activeProjectId || !needsStatusTracking) return;
+    let stopped = false;
+    let inFlight = false;
+    const timer = setInterval(() => {
+      if (stopped || inFlight || document.visibilityState !== "visible") return;
+      inFlight = true;
+      void api<Project>(`/projects/${activeProjectId}/sync`, { method: "POST" })
+        .then(latest => {
+          if (stopped) return;
+          setProject(current => current?.id === activeProjectId ? latest : current);
+          walletRef.current?.();
+        })
+        .catch(() => { /* The manual Synchroniser button remains available. */ })
+        .finally(() => { inFlight = false; });
+    }, 30000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [activeProjectId, needsStatusTracking]);
   const [busy,setBusy] = useState(false); const [message,setMessage] = useState(""); const [problem,setProblem] = useState("");
   const [music,setMusic] = useState<File | null>(null); const [voice,setVoice] = useState<File | null>(null);
   const [keepAudio,setKeepAudio] = useState(true); const [rights,setRights] = useState(false);
@@ -125,6 +150,12 @@ export default function OriaVideoProjectsWeb({ language, packId, caps, onWalletR
   }); }
   async function render() { if(!project)return; await run(async()=>{
     if ((music || voice) && !rights) throw Error("Confirme les droits d'utilisation des pistes audio.");
+    const check=await api<{ready:boolean;reasons:string[];status:string}>(`/projects/${project.id}/render-check`);
+    if (!check.ready) {
+      // Refresh the status after an interrupted previous attempt, without any paid API call.
+      setProject(await api<Project>(`/projects/${project.id}`));
+      throw Error(check.reasons.join(" ") || "Montage momentanément indisponible.");
+    }
     const data=await api<{status:string}>(`/projects/${project.id}/render`,{method:"POST",body:JSON.stringify({
       music_b64: music?await toBase64(music):null,voice_b64:voice?await toBase64(voice):null,
       keep_scene_audio:keepAudio,rights_confirmed:rights,music_volume:0.16,transition})});
@@ -175,6 +206,8 @@ export default function OriaVideoProjectsWeb({ language, packId, caps, onWalletR
       </div> : <div className="mt-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><strong>{project.title}</strong><p className="text-xs text-muted">{project.duration_seconds}s · {project.aspect_ratio} · {project.status}</p></div>
           <button type="button" disabled={busy} className="rounded-lg border border-border p-2 text-xs" onClick={()=>void sync()}><RefreshCw size={14} className="inline"/> {tr("Synchroniser scènes", "Sync scenes")}</button></div>
+        {needsStatusTracking && <p className="text-xs text-muted">{tr("Suivi automatique toutes les 30 secondes. Les crédits affichés comme débités peuvent encore correspondre à une réservation. Ne relance pas cette scène.", "Automatically checking every 30 seconds. A reduced credit balance may still be a reservation. Do not resubmit this scene.")}</p>}
+        {project.scenes.some(s=>s.status==="reconcile") && <p className="text-xs text-red-600">{tr("Une scène nécessite un contrôle du fournisseur ou de la facturation. Ne relance pas cette scène tant que son statut n'est pas vérifié.", "A scene requires provider or billing reconciliation. Do not retry until it is checked.")}</p>}
         {project.scenes.map(s=><div key={s.id} className="rounded-lg border border-border p-3">
           <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-xs">Scène {s.position} · {s.duration_seconds}s</strong><span className="text-xs">{s.status}</span></div>
           <textarea key={`${s.id}:${s.status}`} className="mt-2 w-full rounded-lg border border-border bg-background p-2 text-xs" rows={3} defaultValue={s.prompt} disabled={!!s.request_id && s.status!=="refunded" && s.status!=="failed"} onBlur={e=>{if(e.target.value!==s.prompt && (s.status==="draft"||s.status==="refunded"||s.status==="failed"))void changeScene(s.position,e.target.value)}}/>
@@ -191,9 +224,10 @@ export default function OriaVideoProjectsWeb({ language, packId, caps, onWalletR
           </label>
           <label className="flex gap-2 text-xs"><input type="checkbox" checked={keepAudio} onChange={e=>setKeepAudio(e.target.checked)}/> {tr("Conserver l'audio original des scènes", "Keep original scene audio")}</label>
           <label className="flex gap-2 text-xs"><input type="checkbox" checked={rights} onChange={e=>setRights(e.target.checked)}/>{tr("Je dispose des droits sur les pistes ajoutées.", "I have rights to the added tracks.")}</label>
-          <button type="button" disabled={busy||project.status==="rendering"} onClick={()=>void render()} className="rounded-lg bg-foreground px-4 py-2 text-xs font-semibold text-background"><Film size={14} className="inline"/> {tr("Assembler le MP4 sans nouvelle génération payante", "Assemble MP4 without new paid AI")}</button>
+          <button type="button" disabled={busy} onClick={()=>void render()} className="rounded-lg bg-foreground px-4 py-2 text-xs font-semibold text-background"><Film size={14} className="inline"/> {tr("Assembler le MP4 sans nouvelle génération payante", "Assemble MP4 without new paid AI")}</button>
         </div>}
-        {project.status==="render_failed" && <p className="text-xs text-red-600">{project.error_message}</p>}
+        {project.status==="rendering" && <p className="text-xs text-muted">Montage en cours. L'état est actualisé toutes les 30 secondes. Vérifie avant une éventuelle reprise : aucun nouveau clip IA ne sera généré.</p>}
+        {project.status==="render_failed" && <p className="text-xs text-red-600">{project.error_message || "Le rendu a échoué. Réessaie l'assemblage sans générer de nouvelles scènes."}</p>}
         {project.output_url && <div className="space-y-2"><video src={project.output_url} controls className="w-full rounded-xl"/><a href={project.output_url} download className="inline-flex items-center gap-2 text-xs underline"><Download size={13}/> {tr("Télécharger le film", "Download film")}</a></div>}
       </div>}
     </>}
