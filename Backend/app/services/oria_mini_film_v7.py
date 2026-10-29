@@ -5,6 +5,7 @@ and /openrouter-media/video endpoints, with user consent and wallet settlement.
 from __future__ import annotations
 
 import base64
+import json
 import binascii
 import os
 import shutil
@@ -155,6 +156,78 @@ def _download_owned_media(db: Any, uid: str, media_id: str, url: str, to: Path) 
     to.write_bytes(payload)
 
 
+def _stream_copy_eligible(paths: list[Path], *, aspect: str, keep_scene_audio: bool,
+                          music: bytes | None, voice: bytes | None) -> tuple[bool, bool]:
+    """Strict preflight: only attempt fast MP4 concat when streams are genuinely compatible.
+
+    In particular, never concatenate files with different video formats or partially
+    missing audio tracks. Those take the existing normalisation/encoding path.
+    """
+    signatures = []
+    expected = 9 / 16 if aspect == "9:16" else 16 / 9
+    for idx, path in enumerate(paths):
+        raw = _run(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)],
+                   timeout=30, step=f"analyse rapide scène {idx+1}")
+        try:
+            streams = json.loads(raw).get("streams", [])
+        except (ValueError, TypeError):
+            return False, False
+        video = [x for x in streams if x.get("codec_type") == "video"]
+        audio = [x for x in streams if x.get("codec_type") == "audio"]
+        if len(video) != 1 or len(audio) > 1 or len(video) + len(audio) != len(streams):
+            return False, False
+        v = video[0]
+        w, h = int(v.get("width") or 0), int(v.get("height") or 0)
+        if not w or not h or abs(w / h - expected) > 0.02:
+            return False, False
+        if v.get("codec_name") not in ("h264", "hevc"):
+            return False, False
+        vid = tuple(v.get(k) for k in ("codec_name", "profile", "level", "width", "height",
+                                        "pix_fmt", "sample_aspect_ratio", "time_base", "r_frame_rate"))
+        if not keep_scene_audio:
+            aud = None
+            has_audio = False
+        elif audio:
+            a = audio[0]
+            if a.get("codec_name") != "aac":
+                return False, False
+            aud = tuple(a.get(k) for k in ("codec_name", "sample_rate", "channels", "channel_layout", "time_base"))
+            has_audio = True
+        else:
+            aud = None
+            has_audio = False
+        signatures.append((vid, aud, has_audio))
+    if not signatures or any(sig != signatures[0] for sig in signatures[1:]):
+        return False, False
+    # The existing optional soundtrack mixer expects a base audio track.
+    if (music or voice) and not signatures[0][2]:
+        return False, False
+    return True, signatures[0][2]
+
+
+def _concat_stream_copy(paths: list[Path], output: Path, *, with_audio: bool) -> None:
+    """Copy encoded streams instead of transcoding each clip (fast for Veo clips)."""
+    playlist = output.parent / "playlist_fast.txt"
+    # Use a dedicated local staging folder with fixed filenames. No untrusted paths in ffconcat.
+    local = []
+    for idx, src in enumerate(paths):
+        dst = output.parent / f"fast_{idx:02}.mp4"
+        try:
+            os.link(src, dst)  # Same temporary filesystem: constant-time, no media duplication.
+        except OSError:
+            shutil.copyfile(src, dst)
+        local.append(dst)
+    playlist.write_text("ffconcat version 1.0\n" + "".join(f"file '{x.name}'\n" for x in local))
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+           "-f", "concat", "-safe", "1", "-i", str(playlist), "-map", "0:v:0"]
+    if with_audio:
+        cmd += ["-map", "0:a:0"]
+    cmd += ["-c", "copy", "-movflags", "+faststart", str(output)]
+    _run(cmd, timeout=120, step="assemblage rapide sans réencodage")
+    if not output.exists() or output.stat().st_size == 0:
+        raise RuntimeError("L'assemblage rapide n'a pas produit de fichier final.")
+
+
 def render_montage(paths: list[Path], out: Path, *, aspect: str,
                    music: bytes | None = None, voice: bytes | None = None,
                    music_volume: float = 0.16, keep_scene_audio: bool = True,
@@ -165,34 +238,49 @@ def render_montage(paths: list[Path], out: Path, *, aspect: str,
     w,h = (720,1280) if aspect == "9:16" else (1280,720)
     with tempfile.TemporaryDirectory(prefix="oria-v7-mix-") as t:
         d = Path(t)
-        normalized: list[Path] = []
-        for idx, original in enumerate(paths):
-            clean = d / f"scene_{idx:02}.mp4"
-            visual = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24"
-            if transition == "fade":
-                meta = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nokey=1:noprint_wrappers=1", str(original)], timeout=30, step=f"analyse scène {idx+1}")
-                try:
-                    duration = float(meta.decode().strip())
-                except (ValueError, UnicodeError):
-                    duration = 0
-                if duration >= 0.7:
-                    visual += f",fade=t=in:st=0:d=0.2,fade=t=out:st={max(0.3,duration-0.2):.3f}:d=0.2"
-            src_has_audio = _has_audio(original) if keep_scene_audio else False
-            args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(original)]
-            if not src_has_audio:
-                args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
-            args += ["-map", "0:v:0", "-map", "0:a:0" if src_has_audio else "1:a:0", "-vf",
-                     visual,
-                     "-c:v", "libx264", "-preset", "superfast", "-crf", "24", "-pix_fmt", "yuv420p",
-                     "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "128k",
-                     "-shortest", "-movflags", "+faststart", str(clean)]
-            _run(args, timeout=360, step=f"encodage scène {idx+1}")
-            normalized.append(clean)
-        playlist = d / "playlist.txt"
-        playlist.write_text("ffconcat version 1.0\n" + "".join(f"file '{p.name}'\n" for p in normalized))
+        # Try a truly fast concat first for compatible Veo MP4 streams, without
+        # re-encoding the video or changing already-paid scene data.
         joined = d / "joined.mp4"
-        _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "concat", "-safe", "1",
-              "-i", str(playlist), "-c", "copy", "-movflags", "+faststart", str(joined)], timeout=240, step="assemblage des scènes")
+        fast_ok, source_has_audio = _stream_copy_eligible(
+            paths, aspect=aspect, keep_scene_audio=keep_scene_audio,
+            music=music, voice=voice,
+        ) if transition == "cut" else (False, False)
+        if fast_ok:
+            try:
+                _concat_stream_copy(paths, joined, with_audio=source_has_audio)
+            except RuntimeError:
+                # Bad timestamps or container quirks: use the regular reliable path.
+                joined.unlink(missing_ok=True)
+                fast_ok = False
+        if not fast_ok:
+            normalized: list[Path] = []
+            for idx, original in enumerate(paths):
+                clean = d / f"scene_{idx:02}.mp4"
+                visual = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24"
+                if transition == "fade":
+                    meta = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nokey=1:noprint_wrappers=1", str(original)], timeout=30, step=f"analyse scène {idx+1}")
+                    try:
+                        duration = float(meta.decode().strip())
+                    except (ValueError, UnicodeError):
+                        duration = 0
+                    if duration >= 0.7:
+                        visual += f",fade=t=in:st=0:d=0.2,fade=t=out:st={max(0.3,duration-0.2):.3f}:d=0.2"
+                src_has_audio = _has_audio(original) if keep_scene_audio else False
+                args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(original)]
+                if not src_has_audio:
+                    args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
+                args += ["-map", "0:v:0", "-map", "0:a:0" if src_has_audio else "1:a:0", "-vf",
+                         visual,
+                         "-c:v", "libx264", "-preset", "superfast", "-crf", "24", "-pix_fmt", "yuv420p",
+                         "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "128k",
+                         "-shortest", "-movflags", "+faststart", str(clean)]
+                _run(args, timeout=360, step=f"encodage scène {idx+1}")
+                normalized.append(clean)
+            playlist = d / "playlist.txt"
+            playlist.write_text("ffconcat version 1.0\n" + "".join(f"file '{p.name}'\n" for p in normalized))
+            joined = d / "joined.mp4"
+            _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "concat", "-safe", "1",
+                  "-i", str(playlist), "-c", "copy", "-movflags", "+faststart", str(joined)], timeout=240, step="assemblage des scènes")
         layers: list[Path] = []
         for idx, blob in enumerate((music, voice)):
             if blob:
@@ -202,7 +290,7 @@ def render_montage(paths: list[Path], out: Path, *, aspect: str,
                     raise RuntimeError("Fichier sonore non reconnu par FFmpeg.")
                 layers.append(path)
         if not layers:
-            out.write_bytes(joined.read_bytes()); return
+            shutil.copyfile(joined, out); return
         args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(joined)]
         for p in layers:
             args += ["-stream_loop", "-1" if p == layers[0] and music else "0", "-i", str(p)]
