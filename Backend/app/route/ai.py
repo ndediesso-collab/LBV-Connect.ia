@@ -7720,9 +7720,23 @@ def _or_catalog(service: _ORService, kind: str) -> list[dict[str, Any]]:
         raise HTTPException(502, f"Catalogue {kind} OpenRouter indisponible.") from e
 
 
-def _or_video_model(pack_id: str, catalog: list[dict[str, Any]]) -> dict[str, Any] | None:
-    key = _OR_VIDEO_BY_PACK.get(pack_id)
-    return next((row for row in catalog if row.get("id") == key), None)
+def _or_video_models_for_pack(pack_id: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Same or lower model tier only. User deliberately selects each fallback.
+    tiers = {
+        "light_pack": ("google/veo-3.1-lite",),
+        "intermediate_pack": ("google/veo-3.1-lite",),
+        "pro_pack": ("google/veo-3.1-fast", "google/veo-3.1-lite"),
+        "business_pack": ("google/veo-3.1", "google/veo-3.1-fast", "google/veo-3.1-lite"),
+    }.get(pack_id, ())
+    return [next(row for row in catalog if row.get("id") == ident)
+            for ident in tiers if any(row.get("id") == ident for row in catalog)]
+
+
+def _or_video_model(pack_id: str, catalog: list[dict[str, Any]],
+                    requested_model: str | None = None) -> dict[str, Any] | None:
+    options = _or_video_models_for_pack(pack_id, catalog)
+    requested = requested_model or _OR_VIDEO_BY_PACK.get(pack_id)
+    return next((row for row in options if row.get("id") == requested), None)
 
 
 def _or_allowed_images(pack_id: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -7748,6 +7762,64 @@ def _or_reservation(kind: str) -> tuple[int, int, Decimal]:
     return _or_credits(raw), _or_credits(raw * Decimal("1.20")), raw * Decimal("1.20")
 
 
+def _or_video_quote_usd(entry: dict[str, Any], duration: int, generate_audio: bool) -> tuple[Decimal, bool]:
+    """Use a *per-second* SKU when unambiguous. Else use admin's USD budget,
+    explicitly flagged as a ceiling rather than a provider quote. Audio pricing
+    is never inferred by multiplying an ambiguous generic SKU.
+    """
+    if generate_audio and entry.get("generate_audio") is not True:
+        raise HTTPException(400, "La génération audio est indisponible sur ce modèle vidéo.")
+    skus = entry.get("pricing_skus") or {}
+    if not isinstance(skus, dict):
+        skus = {}
+    keys = ("duration_seconds_with_audio", "per-video-second-with-audio", "per_video_second_with_audio") if generate_audio else (
+        "duration_seconds_without_audio", "per-video-second-without-audio", "per_video_second_without_audio")
+    # Only accept generic per-second if audio modes aren't distinguished; when
+    # ambiguous, stick with the budget cap to avoid invented USD prices.
+    source = next((skus.get(k) for k in keys if skus.get(k) is not None), None)
+    known = False
+    if source is not None:
+        try:
+            unit = Decimal(str(source))
+            if unit.is_finite() and Decimal("0") < unit <= Decimal("10"):
+                known = True
+                total = unit * Decimal(duration)
+        except Exception:
+            pass
+    cap = _or_limit("video")
+    if cap <= 0:
+        raise HTTPException(503, "Plafond USD vidéo absent.")
+    if known and total > cap:
+        raise HTTPException(409,
+            "Le coût indicatif de cette vidéo dépasse le plafond USD autorisé. "
+            "Augmenter le budget administrateur après validation des tarifs, pas le solde du client.")
+    return (total if known else cap, known)
+
+
+def _or_video_reservation(entry: dict[str, Any], duration: int, generate_audio: bool) -> tuple[int, int, Decimal, bool]:
+    amount, from_sku = _or_video_quote_usd(entry, duration, generate_audio)
+    # 20% accounting buffer. A real provider cost beyond this amount is sent
+    # to reconciliation, never silently charged beyond user's consent.
+    maximum = amount * Decimal("1.20")
+    return _or_credits(amount), _or_credits(maximum), maximum, from_sku
+
+
+def _or_video_cooldown(uid: str, model: str) -> int:
+    """Prevent paid POST storms after the last confirmed HTTP 429 per user/model.
+    Cross-process persistence relies on the Supabase job row, not local timers.
+    """
+    rows = (supabase.table(_OR_TABLE).select("updated_at,retry_after_seconds")
+            .eq("user_id", uid).eq("media_type", "video")
+            .eq("model", model).eq("status", "refunded")
+            .eq("provider_status_code", 429).order("updated_at", desc=True)
+            .limit(1).execute()).data or []
+    if not rows:
+        return 0
+    item = rows[0]
+    seconds = _or_job_seconds_since_update(item)
+    return max(0, int((item.get("retry_after_seconds") or 120) - seconds))
+
+
 def _or_verify_config(kind: str, *, pack_id: str, action: CreditAction | None,
                       model: str | None, resolution: str, mode: str,
                       ref_count: int, duration: int | None = None) -> dict[str, Any]:
@@ -7768,7 +7840,7 @@ def _or_verify_config(kind: str, *, pack_id: str, action: CreditAction | None,
         if ref_count and "input_references" not in (chosen.get("supported_parameters") or {}):
             raise HTTPException(400, "Ce modèle ne prend pas en charge les retouches.")
         return chosen
-    chosen = _or_video_model(pack_id, catalog)
+    chosen = _or_video_model(pack_id, catalog, model)
     if chosen is None:
         raise HTTPException(403, "Modèle vidéo OpenRouter non disponible pour ce pack.")
     if action is not None:
@@ -7858,7 +7930,9 @@ def _or_job_expired(item: dict[str, Any]) -> bool:
 
 
 def _or_release_confirmed_unbilled(uid: str, item: dict[str, Any],
-                                  *, previous_status: str, reason: str) -> dict[str, Any]:
+                                  *, previous_status: str, reason: str,
+                                  status_code: int | None = None,
+                                  retry_after_seconds: int | None = None) -> dict[str, Any]:
     """Restitution seulement lorsque l'absence d'appel facturable est CERTAINE.
 
     Transition DB exclusive AVANT le RPC de libération. En cas de panne du RPC,
@@ -7866,7 +7940,10 @@ def _or_release_confirmed_unbilled(uid: str, item: dict[str, Any],
     """
     request_id = item["request_id"]
     if not _or_job_update(uid, request_id,
-                          {"status": "releasing", "error_message": reason[:240]},
+                          {"status": "releasing", "error_message": reason[:240],
+                           "provider_status_code": status_code,
+                           "retry_after_seconds": min(900, max(1, retry_after_seconds or 120))
+                               if status_code == 429 else None},
                           previous_status):
         return _or_job_get(uid, request_id) or item
     try:
@@ -7920,6 +7997,9 @@ def _or_public_job(item: dict[str, Any]) -> dict[str, Any]:
             "timed_out": _or_job_expired(item) and item["status"] not in
                          ("completed", "failed", "refunded"),
             "error_message": item.get("error_message"),
+            "provider_status_code": item.get("provider_status_code"),
+            "retry_after_seconds": item.get("retry_after_seconds"),
+            "generate_audio": bool(item.get("generate_audio")),
             "mime_type": item.get("mime_type") or ("image/png" if item["media_type"] == "image" else "video/mp4"),
             "media_id": item.get("media_id"), "media_url": item.get("media_url"),
             "url": item.get("media_url")}
@@ -7931,7 +8011,9 @@ def _or_caps_for(wallet) -> dict[str, Any]:
     service = _or_service()
     images = _or_allowed_images(wallet.pack_id, _or_catalog(service, "image"))
     videos = _or_catalog(service, "video")
-    video = _or_video_model(wallet.pack_id, videos)
+    available_video_models = _or_video_models_for_pack(wallet.pack_id, videos)
+    video = _or_video_model(wallet.pack_id, videos) or (
+        available_video_models[0] if available_video_models else None)
     options = []
     for item in images:
         resolutions = [x for x in _or_image_choices(item, "resolution")
@@ -7956,6 +8038,10 @@ def _or_caps_for(wallet) -> dict[str, Any]:
                 "max_reference_images_in_pack": rights["max_reference_images"],
                 "max_reference_images_per_call_now": 1, "max_images_per_call_now": 1},
             "video": {"model": video["id"] if video else "",
+                "models": [{"model": m["id"],
+                            "durations": m.get("supported_durations") or [],
+                            "supports_audio": m.get("generate_audio") is True}
+                           for m in available_video_models],
                 "allowed_modes": list(rights["video_modes"]),
                 "available_now_modes": list(_OR_SAFE_MODES["video"]) if active and duration else [],
                 "duration_choices_seconds": duration,
@@ -7966,7 +8052,8 @@ def _or_caps_for(wallet) -> dict[str, Any]:
                 "provider_per_call_seconds": {"min": min(duration) if duration else 0,
                                                "max": max(duration) if duration else 0},
                 "short_clip_actions_available_now": allowed_actions if active else [],
-                "long_projects_generation_available": False},
+                "long_projects_generation_available": False,
+                "supports_audio": bool(video and video.get("generate_audio") is True)},
             "notice": "Les devis OpenRouter reposent sur un plafond USD administrateur explicite, "
                       "le coût final sur usage.cost, et la vidéo sur un job durable."}
 
@@ -7980,9 +8067,13 @@ async def openrouter_media_capabilities(
     return await asyncio.to_thread(_or_caps_for, wallet)
 
 
+class OpenRouterMediaQuoteRequest(GoogleMediaQuoteRequest):
+    generate_audio: bool = False
+
+
 @router.post("/openrouter-media/quote")
 async def openrouter_media_quote(
-    payload: GoogleMediaQuoteRequest,
+    payload: OpenRouterMediaQuoteRequest,
     user_id: str | None = Header(default=None, alias="user-id"),
     authorization: str | None = Header(default=None, alias="authorization"),
 ):
@@ -7990,6 +8081,8 @@ async def openrouter_media_quote(
     kind = str(payload.media_type).lower().strip()
     if kind not in ("image", "video") or payload.count != 1:
         raise HTTPException(400, "Devis limité à une image ou un clip à la fois.")
+    if kind == "image" and payload.generate_audio:
+        raise HTTPException(400, "L'option audio concerne uniquement la vidéo.")
     mode = (payload.mode or ("image_edit" if payload.reference_count else "text_to_image")
             if kind == "image" else payload.mode or
             ("image_to_video" if payload.reference_count else "text_to_video"))
@@ -8005,18 +8098,26 @@ async def openrouter_media_quote(
             raise HTTPException(400, "Devis vidéo réservé aux clips courts d'une seule scène.")
         resolution = str(payload.resolution or "720p")
         chosen = await asyncio.to_thread(_or_verify_config, kind, pack_id=wallet.pack_id,
-            action=None, model=None, resolution=resolution, mode=mode,
+            action=None, model=payload.model, resolution=resolution, mode=mode,
             ref_count=payload.reference_count, duration=payload.final_duration_seconds)
         model = chosen["id"]
-    estimated, reserved, _ = _or_reservation(kind)
+    if kind == "video":
+        estimated, reserved, _, provider_price_known = _or_video_reservation(
+            chosen, payload.final_duration_seconds, payload.generate_audio)
+    else:
+        estimated, reserved, _ = _or_reservation(kind)
+        provider_price_known = False
     return {"success": True, "provider": "openrouter", "media_type": kind,
+            "generate_audio": payload.generate_audio if kind == "video" else False,
+            "provider_price_known": provider_price_known,
             "mode": mode, "pack_id": wallet.pack_id, "model": model,
             "estimated_credits": estimated, "reservation_credits": reserved,
             "credits_available": int(wallet.balance),
             "credits_sufficient": int(wallet.balance) >= reserved,
             "generation_available": _or_switch(), "quote_only": True,
-            "notice": "Maximum de réservation prudent, NON prix exact. "
-                      "Le coût OpenRouter réel sera lu dans usage.cost après la génération."}
+            "notice": ("Devis indicatif basé sur les SKU du fournisseur ; "
+                       if provider_price_known else "Budget administrateur indicatif, prix fournisseur inconnu ; ")
+                      + "le coût OpenRouter réel sera lu dans usage.cost après création."}
 
 
 class OpenRouterImageGenerationRequest(GoogleImageGenerationRequest):
@@ -8025,6 +8126,8 @@ class OpenRouterImageGenerationRequest(GoogleImageGenerationRequest):
 
 class OpenRouterVideoGenerationRequest(GoogleVideoGenerationRequest):
     request_id: str
+    generate_audio: bool = False
+    model: str | None = None
 
 
 def _or_decode_preflight_reference(raw_b64: str | None, mime: str | None) -> bytes | None:
@@ -8039,7 +8142,8 @@ def _or_decode_preflight_reference(raw_b64: str | None, mime: str | None) -> byt
 
 
 def _or_start_record(uid: str, request_id: str, kind: str, action: CreditAction,
-                     model: str, prompt: str, reserved: int, mode: str) -> dict[str, Any] | None:
+                     model: str, prompt: str, reserved: int, mode: str,
+                     generate_audio: bool = False) -> dict[str, Any] | None:
     existing = _or_job_get(uid, request_id)
     if existing:
         return existing
@@ -8047,7 +8151,7 @@ def _or_start_record(uid: str, request_id: str, kind: str, action: CreditAction,
         _or_job_insert({"user_id": uid, "request_id": request_id, "media_type": kind,
             "action": action.value, "model": model, "mode": mode, "prompt": prompt,
             "status": "created", "reservation_id": str(uuid4()),
-            "reserved_credits": reserved})
+            "reserved_credits": reserved, "generate_audio": generate_audio})
     except Exception:
         # Un conflit de request_id est traité comme une reprise, jamais un second débit.
         existing = _or_job_get(uid, request_id)
@@ -8148,7 +8252,8 @@ async def openrouter_media_image(
                 and exc.status_code in _OR_NO_CHARGE_HTTP
                 and item and item.get("status") == "submitting"):
             item = _or_release_confirmed_unbilled(
-                uid, item, previous_status="submitting", reason=str(exc))
+                uid, item, previous_status="submitting", reason=str(exc),
+                status_code=exc.status_code, retry_after_seconds=exc.retry_after_seconds)
         else:
             _or_job_update(uid, request_id, {"status": "reconcile"})
             item = _or_job_get(uid, request_id)
@@ -8170,17 +8275,25 @@ async def openrouter_media_video(
         raise HTTPException(400, "Action vidéo ou description invalide.")
     mode = payload.mode or ("image_to_video" if payload.reference_image_b64 else "text_to_video")
     chosen = await asyncio.to_thread(_or_verify_config, "video", pack_id=wallet.pack_id,
-        action=action, model=None, resolution="720p", mode=mode,
+        action=action, model=payload.model, resolution="720p", mode=mode,
         ref_count=int(bool(payload.reference_image_b64)), duration=payload.requested_seconds)
     if payload.aspect_ratio not in (chosen.get("supported_aspect_ratios") or []):
         raise HTTPException(400, "Format vidéo indisponible pour ce modèle.")
     model = str(chosen["id"])
     ref_bytes = _or_decode_preflight_reference(payload.reference_image_b64, payload.reference_mime_type)
-    reserved_est, reserve, reserved_usd = _or_reservation("video")
+    reserved_est, reserve, reserved_usd, _ = _or_video_reservation(
+        chosen, payload.requested_seconds, payload.generate_audio)
+    try:
+        cooldown = _or_video_cooldown(uid, model)
+    except Exception as exc:
+        raise HTTPException(503, "Suivi des limites vidéo indisponible : vérifier la migration SQL V6.") from exc
+    if cooldown > 0:
+        raise HTTPException(429, f"Vidéo temporairement limitée par OpenRouter. Réessayez dans {cooldown} secondes, sans créer de nouvelle réservation.")
     _google_require_consent(SimpleNamespace(reservation_credits=reserve),
                             payload.accepted_max_credits, wallet.balance)
     _or_db_ready()
-    existing = _or_start_record(uid, request_id, "video", action, model, prompt, reserve, mode)
+    existing = _or_start_record(uid, request_id, "video", action, model, prompt, reserve, mode,
+                                generate_audio=payload.generate_audio)
     if existing:
         return _or_public_job(existing)
     _or_reserve(uid, repo, request_id, action, reserve, reserved_usd)
@@ -8191,6 +8304,7 @@ async def openrouter_media_video(
             job = await asyncio.to_thread(_or_service().submit_video,
                 model=model, prompt=prompt, duration=payload.requested_seconds,
                 resolution="720p", aspect_ratio=payload.aspect_ratio,
+                generate_audio=payload.generate_audio,
                 first_frame=ref_bytes, first_frame_mime=payload.reference_mime_type or "image/png")
             if not _or_job_update(uid, request_id, {"status": "submitted", "job_id": job["job_id"]}, "submitting"):
                 raise RuntimeError("Job vidéo créé mais son enregistrement est incertain.")
@@ -8201,7 +8315,8 @@ async def openrouter_media_video(
                 and exc.status_code in _OR_NO_CHARGE_HTTP
                 and item and item.get("status") == "submitting"):
             item = _or_release_confirmed_unbilled(
-                uid, item, previous_status="submitting", reason=str(exc))
+                uid, item, previous_status="submitting", reason=str(exc),
+                status_code=exc.status_code, retry_after_seconds=exc.retry_after_seconds)
         else:
             _or_job_update(uid, request_id, {"status": "reconcile"})
             item = _or_job_get(uid, request_id)

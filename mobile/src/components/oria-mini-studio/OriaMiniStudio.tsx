@@ -53,6 +53,7 @@ type Capabilities = {
   };
   video: {
     model: string;
+    models?: {model: string; durations: number[]; supports_audio: boolean}[];
     allowed_modes: VideoMode[];
     available_now_modes: VideoMode[];
     duration_choices_seconds: number[];
@@ -61,6 +62,7 @@ type Capabilities = {
     billable_resolutions: string[];
     short_clip_actions_available_now: string[];
     long_projects_generation_available: boolean;
+    supports_audio?: boolean;
   };
 };
 type Quote = {
@@ -74,6 +76,8 @@ type Quote = {
   credits_available: number;
   credits_sufficient: boolean;
   generation_available: boolean;
+  generate_audio?: boolean;
+  provider_price_known?: boolean;
   notice?: string;
 };
 type Media = {
@@ -226,6 +230,8 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
   const [resolution, setResolution] = useState("1K");
   const [imageRatio, setImageRatio] = useState("1:1");
   const [videoRatio, setVideoRatio] = useState("16:9");
+  const [videoAudio, setVideoAudio] = useState(false);
+  const [videoModel, setVideoModel] = useState("");
   const [imageAction, setImageAction] = useState("");
   const [videoAction, setVideoAction] = useState("");
   const [photo, setPhoto] = useState<Photo | null>(null);
@@ -299,6 +305,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
       }
       if (!mounted.current) return;
       setCaps(rights);
+      setVideoModel(rights.video.model || "");
       if (MEDIA_PROVIDER === "openrouter") {
         try {
           const previous = await api<{ jobs: Generation[] }>(`${MEDIA_API}/jobs`);
@@ -371,8 +378,9 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
         reference_count: needsPhoto ? 1 : 0, count: 1,
       } : {
         media_type: "video", mode: videoMode, reference_count: needsPhoto ? 1 : 0,
-        resolution: "720p", count: 1, final_duration_seconds: offerVideo.seconds,
-        scene_durations_seconds: [offerVideo.seconds],
+        model: videoModel, resolution: "720p", count: 1, final_duration_seconds: offerVideo.seconds,
+                scene_durations_seconds: [offerVideo.seconds],
+        ...(MEDIA_PROVIDER === "openrouter" ? { generate_audio: videoAudio } : {}),
       };
       const result = await api<Quote>(`${MEDIA_API}/quote`, { method: "POST", body: JSON.stringify(payload) });
       if (!mounted.current || currentVersion !== quoteVersion.current) return;
@@ -407,7 +415,8 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
         ...shared, mode: imageMode, model: imageModel, resolution, aspect_ratio: imageRatio,
         ...(photoB64 ? { reference_image_b64: photoB64, reference_mime_type: photo?.mimeType } : {}),
       } : {
-        ...shared, mode: videoMode, requested_seconds: offerVideo.seconds, aspect_ratio: videoRatio,
+        ...shared, mode: videoMode, model: videoModel, requested_seconds: offerVideo.seconds, aspect_ratio: videoRatio,
+        ...(MEDIA_PROVIDER === "openrouter" ? { generate_audio: videoAudio } : {}),
         ...(photoB64 ? { reference_image_b64: photoB64, reference_mime_type: photo?.mimeType } : {}),
       };
       // En cas de timeout, le request_id doit survivre pour vérifier le job.
@@ -417,9 +426,9 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
       if (MEDIA_PROVIDER === "openrouter" && ["refunded", "failed"].includes(output.status || "")) {
         setPendingRequestId(null);
         quoteVersion.current += 1; setQuote(null); setAccepted(false);
-        setNotice(output.status === "refunded"
+        setNotice(`${output.status === "refunded"
           ? tr("Création refusée : réservation restituée.", "Creation declined: reservation returned.")
-          : tr("Création non commencée : aucun débit.", "Creation not started: no charge."));
+          : tr("Création non commencée : aucun débit.", "Creation not started: no charge.")}${output.error_message ? ` ${tr("Motif :", "Reason:")} ${output.error_message}` : ""}`);
         try { const current = await api<{ wallet: Wallet }>("/credits/me"); if (mounted.current) setWallet(current.wallet); } catch {}
         onWalletRefresh?.();
         return;
@@ -537,9 +546,9 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                       setNotice(tr("Création terminée et enregistrée.", "Creation completed and saved."));
                     } else if (["refunded", "failed"].includes(job.status || "")) {
                       setPendingRequestId(null);
-                      setNotice(job.status === "refunded"
+                      setNotice(`${job.status === "refunded"
                         ? tr("Création refusée : crédits restitués.", "Creation declined: credits returned.")
-                        : tr("Création non démarrée : aucun débit.", "Creation not started: no charge."));
+                        : tr("Création non démarrée : aucun débit.", "Creation not started: no charge.")}${job.error_message ? ` ${tr("Motif :", "Reason:")} ${job.error_message}` : ""}`);
                       try { const data = await api<{ wallet: Wallet }>("/credits/me"); if (mounted.current) setWallet(data.wallet); } catch {}
                       onWalletRefresh?.();
                     } else setNotice(`${tr("Statut", "Status")}: ${job.status || "pending"}. ${job.error_message || (job.timed_out
@@ -644,6 +653,32 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                         ))}</View>
                       </>
                     ) : null}
+                    {kind === "video" && MEDIA_PROVIDER === "openrouter" && (caps?.video.models?.length || 0) > 1 ? (
+                      <View>
+                        <Text style={[styles.fieldLabel, mutedStyle]}>{tr("Modèle vidéo", "Video model")}</Text>
+                        <View style={styles.flexWrap}>
+                          {caps?.video.models?.map(m => (
+                            <Choice key={m.model} title={m.model} active={videoModel === m.model}
+                              onPress={() => { invalidateQuote(); setVideoModel(m.model); setVideoAudio(false); }} />
+                          ))}
+                        </View>
+                      </View>
+                    ) : null}
+                    {kind === "video" && MEDIA_PROVIDER === "openrouter" ? (
+                      <View>
+                        <Text style={[styles.fieldLabel, mutedStyle]}>{tr("Son de la vidéo", "Video audio")}</Text>
+                        <View style={styles.flexWrap}>
+                          <Choice title={tr("Muette", "Muted")} active={!videoAudio}
+                            onPress={() => { invalidateQuote(); setVideoAudio(false); }} />
+                          <Choice title={tr("Avec audio", "With audio")} active={videoAudio}
+                            disabled={!(caps?.video.models?.find(m => m.model === videoModel)?.supports_audio ?? caps?.video.supports_audio)}
+                            onPress={() => { invalidateQuote(); setVideoAudio(true); }} />
+                        </View>
+                        <Text style={[styles.note, mutedStyle]}>{(caps?.video.models?.find(m => m.model === videoModel)?.supports_audio ?? caps?.video.supports_audio)
+                          ? tr("Audio : voix et sons synchronisés ; devis séparé.", "Audio: synchronized voices and sound; separate quote.")
+                          : tr("Ce modèle ne prend pas en charge l'audio.", "This model doesn't support audio.")}</Text>
+                      </View>
+                    ) : null}
                     <Text style={[styles.fieldLabel, mutedStyle]}>{tr("Format", "Aspect ratio")}</Text>
                     <View style={styles.flexWrap}>{(kind === "image" ? IMAGE_RATIOS : VIDEO_RATIOS).map((ratio) => (
                       <Choice key={ratio} title={ratio} active={(kind === "image" ? imageRatio : videoRatio) === ratio}
@@ -663,6 +698,9 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                       <View style={[styles.quoteBox, { backgroundColor: palette.notice }]}>
                         <Text style={[styles.label, textStyle]}>{tr("Estimation :", "Estimate:")} {credits(quote.estimated_credits, language)} {tr("crédits", "credits")}</Text>
                         <Text style={[styles.label, textStyle]}>{tr("Réservation maximale :", "Maximum reservation:")} {credits(quote.reservation_credits, language)} {tr("crédits", "credits")}</Text>
+                        {kind === "video" ? <Text style={[styles.note, mutedStyle]}>{quote.provider_price_known
+                          ? tr("Estimation calculée avec la grille OpenRouter.", "Estimate calculated from OpenRouter's price list.")
+                          : tr("Estimation = plafond administrateur, pas tarif fournisseur confirmé.", "Estimate = admin budget, not a verified provider price.")}</Text> : null}
                         <Text style={[styles.note, mutedStyle]}>{quote.credits_sufficient
                           ? tr("Solde suffisant", "Sufficient balance") : tr("Solde insuffisant", "Insufficient balance")}</Text>
                         <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: accepted }} disabled={busy || !quote.credits_sufficient}

@@ -36,6 +36,7 @@ type Capabilities = {
   };
   video: {
     model: string;
+    models?: {model: string; durations: number[]; supports_audio: boolean}[];
     allowed_modes: VideoMode[];
     available_now_modes: VideoMode[];
     duration_choices_seconds: number[];
@@ -45,6 +46,7 @@ type Capabilities = {
     provider_per_call_seconds: { min: number; max: number };
     short_clip_actions_available_now: string[];
     long_projects_generation_available: boolean;
+    supports_audio?: boolean;
   };
 };
 type Quote = {
@@ -58,6 +60,8 @@ type Quote = {
   credits_available: number;
   credits_sufficient: boolean;
   generation_available: boolean;
+  generate_audio?: boolean;
+  provider_price_known?: boolean;
   pricing_reference_date?: string;
   notice?: string;
 };
@@ -229,6 +233,8 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const [resolution, setResolution] = useState("1K");
   const [ratioImage, setRatioImage] = useState("1:1");
   const [ratioVideo, setRatioVideo] = useState("16:9");
+  const [videoAudio, setVideoAudio] = useState(false);
+  const [videoModel, setVideoModel] = useState("");
   const [imageAction, setImageAction] = useState("");
   const [videoAction, setVideoAction] = useState("");
   const [reference, setReference] = useState<File | null>(null);
@@ -279,6 +285,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         throw new Error("Les droits de création ne correspondent pas au pack actif.");
       }
       setCaps(remote);
+      setVideoModel(remote.video.model || "");
       if (MEDIA_PROVIDER === "openrouter") {
         try {
           const previous = await api<{ jobs: Generation[] }>(`${MEDIA_API}/jobs`);
@@ -373,8 +380,9 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         reference_count: needsReference ? 1 : 0, count: 1,
       } : {
         media_type: "video", mode: modeVideo, reference_count: needsReference ? 1 : 0,
-        resolution: "720p", count: 1, final_duration_seconds: selectedVideoOffer.seconds,
-        scene_durations_seconds: [selectedVideoOffer.seconds],
+        model: videoModel, resolution: "720p", count: 1, final_duration_seconds: selectedVideoOffer.seconds,
+                scene_durations_seconds: [selectedVideoOffer.seconds],
+        ...(MEDIA_PROVIDER === "openrouter" ? { generate_audio: videoAudio } : {}),
       };
       const calculated = await api<Quote>(`${MEDIA_API}/quote`, { method: "POST", body: JSON.stringify(payload) });
       if (calculated.pack_id !== wallet?.pack_id || calculated.media_type !== activeKind) {
@@ -400,7 +408,8 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         ...shared, mode: modeImage, model: imageModel, resolution, aspect_ratio: ratioImage,
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
       } : {
-        ...shared, mode: modeVideo, requested_seconds: selectedVideoOffer.seconds, aspect_ratio: ratioVideo,
+        ...shared, mode: modeVideo, model: videoModel, requested_seconds: selectedVideoOffer.seconds, aspect_ratio: ratioVideo,
+        ...(MEDIA_PROVIDER === "openrouter" ? { generate_audio: videoAudio } : {}),
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
       };
       // Retenir l'identifiant AVANT le POST : si le réseau coupe, rechercher
@@ -413,9 +422,9 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
       if (MEDIA_PROVIDER === "openrouter" && ["refunded", "failed"].includes(result.status || "")) {
         setPendingRequestId(null);
         setQuote(null); setAccepted(false);
-        setNotice(result.status === "refunded"
-          ? tr("Création refusée : réservation restituée. Vérifiez votre solde.", "Creation declined: reservation returned. Check your balance.")
-          : tr("Création non commencée : aucun débit.", "Creation not started: no charge."));
+        setNotice(`${result.status === "refunded"
+          ? tr("Création refusée : réservation restituée.", "Creation declined: reservation returned.")
+          : tr("Création non commencée : aucun débit.", "Creation not started: no charge.")}${result.error_message ? ` ${tr("Motif :", "Reason:")} ${result.error_message}` : ""}`);
         try { const current = await api<{ wallet: Wallet }>("/credits/me"); setWallet(current.wallet); } catch {}
         onWalletRefresh?.();
         return;
@@ -534,9 +543,9 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                    setNotice(tr("Création terminée et enregistrée.", "Creation completed and saved."));
                  } else if (["refunded", "failed"].includes(job.status || "")) {
                    setPendingRequestId(null);
-                   setNotice(job.status === "refunded"
+                   setNotice(`${job.status === "refunded"
                      ? tr("Génération refusée : les crédits réservés ont été restitués.", "Creation declined: reserved credits were returned.")
-                     : tr("Création non démarrée, aucun débit.", "Creation not started; no charge."));
+                     : tr("Création non démarrée, aucun débit.", "Creation not started; no charge.")}${job.error_message ? ` ${tr("Motif :", "Reason:")} ${job.error_message}` : ""}`);
                    try { const current = await api<{ wallet: Wallet }>("/credits/me"); setWallet(current.wallet); } catch {}
                    onWalletRefresh?.();
                  } else setNotice(`${tr("Statut", "Status")} : ${job.status || "pending"}. ${job.error_message || (job.timed_out
@@ -663,6 +672,29 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                     <p className="mt-2 text-[11px] text-muted">{tr(`Votre pack prévoit jusqu'à ${caps?.images.max_reference_images_in_pack ?? 1} références pour les images. Une seule est actuellement prise en charge par génération.`, `Your plan allows up to ${caps?.images.max_reference_images_in_pack ?? 1} image references. Only one is currently supported per generation.`)}</p>
                   </div>}
                 </section>
+                {screen === "video" && MEDIA_PROVIDER === "openrouter" && (caps?.video.models?.length || 0) > 1 && (
+                  <div className="mt-3 rounded-xl border border-border bg-surface-secondary p-3">
+                    <label className="mb-1 block text-xs font-medium">{tr("Modèle vidéo", "Video model")}</label>
+                    <select value={videoModel} disabled={busy || quoting}
+                      onChange={e => { setVideoModel(e.target.value); setVideoAudio(false); invalidateQuote(); }}
+                      className="w-full rounded-lg border border-border bg-background p-2 text-xs">
+                      {caps?.video.models?.map(m => <option key={m.model} value={m.model}>{m.model}</option>)}
+                    </select>
+                    <p className="mt-1 text-[11px] text-muted">{tr("En cas de limite 429, choisissez volontairement un autre modèle et redemandez un devis.", "After a 429 limit, choose another model and request a new quote.")}</p>
+                  </div>
+                )}
+                {screen === "video" && MEDIA_PROVIDER === "openrouter" && (
+                  <div className="mt-3 rounded-xl border border-border bg-surface-secondary p-3">
+                    <label className="flex items-center gap-2 text-xs font-medium">
+                      <input type="checkbox" checked={videoAudio} disabled={busy || quoting || !(caps?.video.models?.find(m => m.model === videoModel)?.supports_audio ?? caps?.video.supports_audio)}
+                        onChange={e => { setVideoAudio(e.target.checked); invalidateQuote(); }} />
+                      {tr("Générer avec audio (voix, ambiance, bruitages)", "Generate with audio (voice, ambience, effects)")}
+                    </label>
+                    <p className="mt-2 text-[11px] text-muted">{(caps?.video.models?.find(m => m.model === videoModel)?.supports_audio ?? caps?.video.supports_audio)
+                      ? tr("Le devis dépend du modèle, de la durée et du mode audio.", "Quote depends on the model, duration and audio choice.")
+                      : tr("Audio indisponible sur le modèle de ce pack.", "Audio unavailable for this plan's model.")}</p>
+                  </div>
+                )}
                 {screen === "video" && caps && <div className="rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-5 text-muted-strong">
                   <p className="font-semibold text-foreground">{tr("Projets vidéo avancés", "Advanced video projects")}</p>
                   <p className="mt-1">{tr(`Ton pack prévoit des projets jusqu'à ${caps.video.max_project_seconds} s (${caps.video.max_project_scenes} scène(s) maximum), mais seuls les clips courts peuvent être générés actuellement.`, `Your plan allows projects up to ${caps.video.max_project_seconds}s (${caps.video.max_project_scenes} scenes max), but only short clips can currently be generated.`)}</p>
@@ -681,6 +713,9 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                     {quoting ? <Loader2 size={17} className="animate-spin"/> : <RefreshCw size={16}/>}{tr("Obtenir le devis", "Get quote")}
                   </button>
                   {quoteReady && quote && <div className="mt-4 space-y-3 rounded-xl bg-surface-secondary p-4">
+                    {screen === "video" && <p className="text-[11px] text-muted">{quote.provider_price_known
+                      ? tr("Estimation selon les tarifs annoncés par OpenRouter.", "Estimate based on OpenRouter's reported price.")
+                      : tr("Estimation = budget administrateur, pas un prix fournisseur confirmé.", "Estimate = admin budget, not a confirmed provider price.")}</p>}
                     <p className="text-xs text-muted">{tr("Coût estimé", "Estimated cost")} : <strong className="text-foreground">{formatted(quote.estimated_credits, language)} {tr("crédits", "credits")}</strong></p>
                     <p className="text-xs text-muted">{tr("Réservation maximale acceptée", "Maximum accepted reservation")} :</p>
                     <p className="text-2xl font-bold tracking-tight">{formatted(quote.reservation_credits, language)} <span className="text-sm font-normal text-muted">{tr("crédits", "credits")}</span></p>

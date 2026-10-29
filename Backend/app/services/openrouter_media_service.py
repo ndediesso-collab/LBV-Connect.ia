@@ -19,6 +19,7 @@ import binascii
 import json
 import os
 import re
+import datetime
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -40,9 +41,13 @@ _IMAGE_SIGNATURES = {
 
 
 class OpenRouterMediaError(RuntimeError):
-    def __init__(self, message: str, *, status_code: int | None = None):
+    def __init__(self, message: str, *, status_code: int | None = None,
+                 retry_after_seconds: int | None = None, provider_reason: str | None = None):
         super().__init__(message)
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
+        # Structured, bounded, sanitized reason only. Never store raw provider bodies.
+        self.provider_reason = provider_reason
 
 
 @dataclass(frozen=True)
@@ -87,6 +92,47 @@ class OpenRouterMediaService:
             ("google/veo-3.1-lite", "google/veo-3.1-fast", "google/veo-3.1"),
         )
 
+    @staticmethod
+    def _retry_after(exc: urllib.error.HTTPError) -> int | None:
+        value = str(exc.headers.get("Retry-After", "")).strip() if exc.headers else ""
+        if value.isdigit():
+            return min(900, max(1, int(value)))
+        # HTTP-date accepted without an unbounded delay.
+        if value:
+            try:
+                from email.utils import parsedate_to_datetime
+                date = parsedate_to_datetime(value)
+                now = datetime.datetime.now(datetime.timezone.utc)
+                seconds = int((date - now).total_seconds())
+                return min(900, max(1, seconds))
+            except (TypeError, ValueError, OverflowError):
+                pass
+        return None
+
+    @staticmethod
+    def _safe_provider_reason(exc: urllib.error.HTTPError) -> str | None:
+        # Parse only a small, allowlisted error code; do not return arbitrary text or prompts.
+        try:
+            raw = exc.read(8192)
+            obj = json.loads(raw)
+            error = obj.get("error") if isinstance(obj, dict) else None
+            code = error.get("code") if isinstance(error, dict) else None
+            message = error.get("message") if isinstance(error, dict) else None
+            normalized = " ".join(str(x).lower() for x in (code, message) if x is not None)
+            for needle, label in (
+                ("resource_exhausted", "resource_exhausted"),
+                ("rate_limit", "rate_limit"),
+                ("rate limit", "rate_limit"),
+                ("quota", "quota"),
+                ("capacity", "capacity"),
+                ("temporarily unavailable", "temporarily_unavailable"),
+            ):
+                if needle in normalized:
+                    return label
+        except (ValueError, TypeError, UnicodeError, AttributeError, OSError):
+            pass
+        return None
+
     def _call(self, method: str, route: str, *, payload: Mapping[str, Any] | None = None,
               timeout: int = 40, max_bytes: int = 3 * 1024 * 1024) -> bytes:
         # Never allow user-supplied hostnames, query URLs, arbitrary job paths, etc.
@@ -122,8 +168,16 @@ class OpenRouterMediaService:
                 404: "Modèle ou tâche OpenRouter introuvable.",
                 429: "Limite OpenRouter atteinte.",
             }
-            raise OpenRouterMediaError(mapping.get(exc.code, "Erreur du fournisseur OpenRouter."),
-                                       status_code=exc.code) from exc
+            retry_after = self._retry_after(exc) if exc.code == 429 else None
+            reason = self._safe_provider_reason(exc) if exc.code == 429 else None
+            message = mapping.get(exc.code, "Erreur du fournisseur OpenRouter.")
+            if exc.code == 429:
+                message = ("OpenRouter a refusé cette requête (HTTP 429 : débit, quota ou capacité). "
+                           "L'existence de crédits USD ne supprime pas cette limite. "
+                           f"Nouvelle tentative conseillée dans {retry_after or 120} secondes.")
+            raise OpenRouterMediaError(message, status_code=exc.code,
+                                       retry_after_seconds=retry_after,
+                                       provider_reason=reason) from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             # Unknown upstream execution outcome: caller must NOT automatically retry a paid POST.
             raise OpenRouterMediaError(
@@ -277,7 +331,7 @@ class OpenRouterMediaService:
         self._assert_choice(aspect_ratio, entry.get("supported_aspect_ratios"), "Format")
         if type(generate_audio) is not bool:
             raise OpenRouterMediaError("Paramètre audio invalide.")
-        if generate_audio and entry.get("generate_audio") is False:
+        if generate_audio and entry.get("generate_audio") is not True:
             raise OpenRouterMediaError("Ce modèle ne génère pas d'audio.")
         payload: dict[str, Any] = {
             "model": model, "prompt": prompt.strip(), "duration": duration,
