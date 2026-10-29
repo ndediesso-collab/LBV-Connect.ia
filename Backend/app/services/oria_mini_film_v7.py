@@ -91,20 +91,30 @@ def decode_track(raw: str | None, label: str) -> bytes | None:
     return data
 
 
-def _run(args: list[str], *, timeout: int = 150) -> bytes:
+def _run(args: list[str], *, timeout: int = 150, step: str = "traitement") -> bytes:
+    """Execute FFmpeg with a bounded timeout and a safe actionable failure reason.
+
+    Never expose raw stderr: it could contain private storage paths or prompts.
+    """
     try:
         p = subprocess.run(args, capture_output=True, timeout=timeout, check=False)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("Moteur FFmpeg indisponible ou délai de montage dépassé.") from exc
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"{step} : exécutable {args[0]} introuvable sur Render.") from exc
+    except PermissionError as exc:
+        raise RuntimeError(f"{step} : exécutable {args[0]} non autorisé sur Render.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{step} : délai de traitement dépassé ({timeout} secondes). Réessayer le montage sans générer de nouvelles scènes.") from exc
+    except OSError as exc:
+        raise RuntimeError(f"{step} : impossible de lancer {args[0]} sur Render.") from exc
     if p.returncode:
-        # Do not persist raw ffmpeg stderr, which may include user or storage paths.
-        raise RuntimeError("FFmpeg n'a pas pu traiter ce média (codec, format ou fichier).");
+        # Do not persist raw stderr, which may include user or storage paths.
+        raise RuntimeError(f"{step} : FFmpeg a refusé ce média (codec, format ou données incompatibles).")
     return p.stdout
 
 
 def _has_audio(path: Path) -> bool:
     result = _run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
-                   "stream=codec_type", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], timeout=20)
+                   "stream=codec_type", "-of", "default=noprint_wrappers=1:nokey=1", str(path)], timeout=30, step="vérification audio")
     return b"audio" in result
 
 
@@ -160,7 +170,7 @@ def render_montage(paths: list[Path], out: Path, *, aspect: str,
             clean = d / f"scene_{idx:02}.mp4"
             visual = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24"
             if transition == "fade":
-                meta = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nokey=1:noprint_wrappers=1", str(original)], timeout=20)
+                meta = _run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nokey=1:noprint_wrappers=1", str(original)], timeout=30, step=f"analyse scène {idx+1}")
                 try:
                     duration = float(meta.decode().strip())
                 except (ValueError, UnicodeError):
@@ -173,16 +183,16 @@ def render_montage(paths: list[Path], out: Path, *, aspect: str,
                 args += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
             args += ["-map", "0:v:0", "-map", "0:a:0" if src_has_audio else "1:a:0", "-vf",
                      visual,
-                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p",
+                     "-c:v", "libx264", "-preset", "superfast", "-crf", "24", "-pix_fmt", "yuv420p",
                      "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "128k",
                      "-shortest", "-movflags", "+faststart", str(clean)]
-            _run(args, timeout=120)
+            _run(args, timeout=360, step=f"encodage scène {idx+1}")
             normalized.append(clean)
         playlist = d / "playlist.txt"
         playlist.write_text("ffconcat version 1.0\n" + "".join(f"file '{p.name}'\n" for p in normalized))
         joined = d / "joined.mp4"
         _run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "concat", "-safe", "1",
-              "-i", str(playlist), "-c", "copy", "-movflags", "+faststart", str(joined)], timeout=120)
+              "-i", str(playlist), "-c", "copy", "-movflags", "+faststart", str(joined)], timeout=240, step="assemblage des scènes")
         layers: list[Path] = []
         for idx, blob in enumerate((music, voice)):
             if blob:
@@ -205,7 +215,7 @@ def render_montage(paths: list[Path], out: Path, *, aspect: str,
         args += ["-filter_complex", ";".join(audio_filters), "-map", "0:v:0", "-map", "[aout]",
                  "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-shortest",
                  "-movflags", "+faststart", str(out)]
-        _run(args, timeout=150)
+        _run(args, timeout=240, step="mixage de la musique et des voix")
 
 
 def install(router: APIRouter, *, db: Any, authenticate: Callable, wallet_for_quote: Callable,
@@ -366,7 +376,7 @@ def install(router: APIRouter, *, db: Any, authenticate: Callable, wallet_for_qu
                 _download_owned_media(db,uid,earlier["media_id"],earlier["media_url"],src)
                 frame=Path(t)/"frame.jpg"
                 _run(["ffmpeg","-hide_banner","-loglevel","error","-nostdin","-y",
-                      "-sseof","-0.20","-i",str(src),"-frames:v","1","-q:v","4",str(frame)],timeout=30)
+                      "-sseof","-0.20","-i",str(src),"-frames:v","1","-q:v","4",str(frame)],timeout=30,step="extraction de l'image de raccord")
                 content=frame.read_bytes()
                 if not 0<len(content)<2*1024*1024:
                     raise RuntimeError("Image finale trop volumineuse.")
@@ -482,6 +492,12 @@ def install(router: APIRouter, *, db: Any, authenticate: Callable, wallet_for_qu
         ffprobe_ok=bool(shutil.which("ffprobe"))
         if not ffmpeg_ok or not ffprobe_ok:
             reasons.append("FFmpeg ou ffprobe absent sur Render. Installer les exécutables système avant le montage.")
+        else:
+            try:
+                _run(["ffmpeg", "-version"], timeout=8, step="test FFmpeg")
+                _run(["ffprobe", "-version"], timeout=8, step="test ffprobe")
+            except RuntimeError as exc:
+                reasons.append(str(exc))
         ready_clips=sum(bool(s.get("status")=="completed" and s.get("media_id") and s.get("media_url")) for s in scenes)
         if not scenes or ready_clips != len(scenes):
             reasons.append(f"Scènes prêtes : {ready_clips}/{len(scenes)}. Synchroniser les scènes avant le montage.")
@@ -529,6 +545,11 @@ def install(router: APIRouter, *, db: Any, authenticate: Callable, wallet_for_qu
         voice=decode_track(payload.voice_b64,"Voix")
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             raise HTTPException(503,"FFmpeg et ffprobe doivent être installés sur Render pour assembler les vidéos.")
+        try:
+            _run(["ffmpeg", "-version"], timeout=8, step="test FFmpeg")
+            _run(["ffprobe", "-version"], timeout=8, step="test ffprobe")
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
         eligible=("draft","render_failed")
         if p["status"] == "rendering":
             # A Render restart may kill a BackgroundTask. Explicit manual resumption
