@@ -87,6 +87,8 @@ type Generation = {
   data?: string | null;
   request_id?: string;
   status?: string;
+  timed_out?: boolean;
+  error_message?: string | null;
 };
 
 type Props = {
@@ -280,7 +282,8 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
       if (MEDIA_PROVIDER === "openrouter") {
         try {
           const previous = await api<{ jobs: Generation[] }>(`${MEDIA_API}/jobs`);
-          const active = previous.jobs?.find(item => item.status !== "completed" && item.status !== "failed");
+          const active = previous.jobs?.find(item =>
+            !["completed", "failed", "refunded"].includes(item.status || ""));
           if (active?.request_id) setPendingRequestId(active.request_id);
         } catch { /* La galerie reste accessible si la table de jobs est indisponible. */ }
       }
@@ -355,7 +358,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const optionsForModel = caps?.images.models.find(model => model.model === imageModel)?.resolutions || [];
 
   const canQuote = Boolean(
-    wallet?.is_pack_active && caps?.quote_available && !loading && !busy && !quoting && !pendingRequestId &&
+    wallet?.is_pack_active && caps?.quote_available && !loading && !busy && !quoting &&
     prompt.trim() && prompt.length <= 8000 && modeAvailableNow &&
     (!needsReference || reference) &&
     (activeKind === "image" ? imageModel && selectedImageOffer && optionsForModel.includes(resolution) && resolutionRank(resolution) <= resolutionRank(selectedImageOffer.maxResolution) : selectedVideoOffer),
@@ -407,10 +410,20 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         method: "POST", body: JSON.stringify(payload),
       });
       if (!result.success) throw new Error("La génération n'a pas été confirmée.");
+      if (MEDIA_PROVIDER === "openrouter" && ["refunded", "failed"].includes(result.status || "")) {
+        setPendingRequestId(null);
+        setQuote(null); setAccepted(false);
+        setNotice(result.status === "refunded"
+          ? tr("Création refusée : réservation restituée. Vérifiez votre solde.", "Creation declined: reservation returned. Check your balance.")
+          : tr("Création non commencée : aucun débit.", "Creation not started: no charge."));
+        try { const current = await api<{ wallet: Wallet }>("/credits/me"); setWallet(current.wallet); } catch {}
+        onWalletRefresh?.();
+        return;
+      }
       if (MEDIA_PROVIDER === "openrouter" && result.status && result.status !== "completed") {
         setPendingRequestId(result.request_id || request_id);
-        setNotice(tr("Création enregistrée chez OpenRouter. Consultez son état, sans relancer une génération payante.",
-          "OpenRouter creation accepted. Check its status without submitting another paid request."));
+        setNotice(tr("Création suivie. Vous pouvez continuer avec une autre création ; ne renvoyez pas cette même demande.",
+          "Creation tracked. You may start a different creation; do not resubmit this same request."));
         setQuote(null); setAccepted(false);
         return;
       }
@@ -519,7 +532,16 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                      credits_cost: job.cost });
                    await loadGallery(); onWalletRefresh?.();
                    setNotice(tr("Création terminée et enregistrée.", "Creation completed and saved."));
-                 } else setNotice(`${tr("Statut", "Status")} : ${job.status || "pending"}. ${tr("Ne relancez pas une génération.", "Do not submit another generation.")}`);
+                 } else if (["refunded", "failed"].includes(job.status || "")) {
+                   setPendingRequestId(null);
+                   setNotice(job.status === "refunded"
+                     ? tr("Génération refusée : les crédits réservés ont été restitués.", "Creation declined: reserved credits were returned.")
+                     : tr("Création non démarrée, aucun débit.", "Creation not started; no charge."));
+                   try { const current = await api<{ wallet: Wallet }>("/credits/me"); setWallet(current.wallet); } catch {}
+                   onWalletRefresh?.();
+                 } else setNotice(`${tr("Statut", "Status")} : ${job.status || "pending"}. ${job.error_message || (job.timed_out
+                   ? tr("Délai dépassé : rapprochement financier en cours. Vous pouvez demander un autre devis avec votre solde disponible.", "Timeout: billing review pending. You may request another quote using your available balance.")
+                   : tr("Vous pouvez continuer à créer sans renvoyer cette même demande.", "You may keep creating without resubmitting this request."))}`);
                } catch (e) { setError(e instanceof Error ? e.message : "Statut indisponible."); }
              }} className="mb-4 rounded-xl border border-border px-4 py-2 text-xs font-semibold">
              {tr("Vérifier la création en attente", "Check pending creation")}

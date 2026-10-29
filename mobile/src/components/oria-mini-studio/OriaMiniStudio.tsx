@@ -101,6 +101,8 @@ type Generation = {
   data?: string | null;
   request_id?: string;
   status?: string;
+  timed_out?: boolean;
+  error_message?: string | null;
 };
 type Photo = { uri: string; mimeType: "image/jpeg" | "image/png" | "image/webp"; size?: number };
 type Offer = { action: string; label: string; resolution?: string; seconds?: number };
@@ -264,7 +266,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
     : Boolean(offerVideo?.action && caps?.video.duration_choices_seconds.includes(offerVideo.seconds || 0));
   const canQuote = Boolean(wallet?.is_pack_active && caps?.quote_available && currentlyAllowed &&
     prompt.trim() && prompt.length <= 8000 && modelAndOfferReady && (!needsPhoto || photo) &&
-    !loading && !busy && !quoting && !pendingRequestId);
+    !loading && !busy && !quoting);
   const quoteReady = Boolean(quote?.success && quote?.pack_id === wallet?.pack_id && quote?.media_type === kind);
   const canGenerate = Boolean(canQuote && quoteReady && accepted && quote?.credits_sufficient &&
     quote?.generation_available && caps?.generation_available &&
@@ -300,7 +302,8 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
       if (MEDIA_PROVIDER === "openrouter") {
         try {
           const previous = await api<{ jobs: Generation[] }>(`${MEDIA_API}/jobs`);
-          const active = previous.jobs?.find(item => item.status !== "completed" && item.status !== "failed");
+          const active = previous.jobs?.find(item =>
+            !["completed", "failed", "refunded"].includes(item.status || ""));
           if (active?.request_id) setPendingRequestId(active.request_id);
         } catch { /* La galerie reste accessible si la table de jobs est indisponible. */ }
       }
@@ -411,10 +414,20 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
       if (MEDIA_PROVIDER === "openrouter") setPendingRequestId(request_id);
       const output = await api<Generation>(`${MEDIA_API}/${kind}`, { method: "POST", body: JSON.stringify(payload) });
       if (!output.success) throw new Error("La génération n'a pas été confirmée.");
+      if (MEDIA_PROVIDER === "openrouter" && ["refunded", "failed"].includes(output.status || "")) {
+        setPendingRequestId(null);
+        quoteVersion.current += 1; setQuote(null); setAccepted(false);
+        setNotice(output.status === "refunded"
+          ? tr("Création refusée : réservation restituée.", "Creation declined: reservation returned.")
+          : tr("Création non commencée : aucun débit.", "Creation not started: no charge."));
+        try { const current = await api<{ wallet: Wallet }>("/credits/me"); if (mounted.current) setWallet(current.wallet); } catch {}
+        onWalletRefresh?.();
+        return;
+      }
       if (MEDIA_PROVIDER === "openrouter" && output.status && output.status !== "completed") {
         setPendingRequestId(output.request_id || request_id);
-        setNotice(tr("Création en cours. Utilisez le suivi, sans nouvelle génération payante.",
-          "Creation pending. Check status without submitting another paid request."));
+        setNotice(tr("Création suivie. Vous pouvez continuer avec une autre création, sans renvoyer cette demande.",
+          "Creation tracked. You may continue creating without resubmitting this request."));
         quoteVersion.current += 1; setQuote(null); setAccepted(false);
         return;
       }
@@ -522,7 +535,16 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                         action: job.action, created_at: new Date().toISOString() });
                       setPendingRequestId(null); void loadGallery(); onWalletRefresh?.();
                       setNotice(tr("Création terminée et enregistrée.", "Creation completed and saved."));
-                    } else setNotice(`${tr("Statut", "Status")}: ${job.status || "pending"}. ${tr("Ne pas relancer.", "Do not resubmit.")}`);
+                    } else if (["refunded", "failed"].includes(job.status || "")) {
+                      setPendingRequestId(null);
+                      setNotice(job.status === "refunded"
+                        ? tr("Création refusée : crédits restitués.", "Creation declined: credits returned.")
+                        : tr("Création non démarrée : aucun débit.", "Creation not started: no charge."));
+                      try { const data = await api<{ wallet: Wallet }>("/credits/me"); if (mounted.current) setWallet(data.wallet); } catch {}
+                      onWalletRefresh?.();
+                    } else setNotice(`${tr("Statut", "Status")}: ${job.status || "pending"}. ${job.error_message || (job.timed_out
+                      ? tr("Délai dépassé, contrôle financier nécessaire. Vous pouvez continuer à créer.", "Timeout; billing review required. You may keep creating.")
+                      : tr("Cette tâche reste suivie, sans bloquer vos autres créations.", "This job is tracked without blocking other creations."))}`);
                   } catch (cause) { setError(cause instanceof Error ? cause.message : "Statut indisponible."); }
                 }}><Text style={[styles.note, textStyle]}>{tr("Vérifier la création en attente", "Check pending creation")}</Text></Pressable>
               ) : null}

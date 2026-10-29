@@ -7670,6 +7670,12 @@ _OR_SHORT_ACTIONS = {
 _OR_SAFE_MODES = {"image": ("text_to_image", "image_edit"),
                   "video": ("text_to_video", "image_to_video")}
 _OR_TABLE = "oria_openrouter_media_jobs"
+_OR_IMAGE_TIMEOUT_SECONDS = 3 * 60
+_OR_VIDEO_TIMEOUT_SECONDS = 15 * 60
+# Rejets HTTP explicites du POST : aucune création payante n'a été acceptée.
+# 5xx, timeout, JSON corrompu et panne réseau restent INCERTAINS.
+_OR_NO_CHARGE_HTTP = frozenset({400, 401, 402, 403, 404, 422, 429})
+
 
 
 def _or_limit(kind: str) -> Decimal:
@@ -7832,11 +7838,88 @@ def _or_actual(usage: Any, reserved_credits: int) -> tuple[int, Decimal, Decimal
     return credits, amount, amount * Decimal(str(credit_costs_config.ACCOUNTING_USD_XAF))
 
 
+def _or_job_seconds_since_update(item: dict[str, Any]) -> float:
+    raw = item.get("updated_at") or item.get("created_at")
+    if not isinstance(raw, str):
+        return 0.0
+    try:
+        value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - value).total_seconds())
+    except (ValueError, OverflowError):
+        return 0.0
+
+
+def _or_job_expired(item: dict[str, Any]) -> bool:
+    timeout = (_OR_IMAGE_TIMEOUT_SECONDS if item["media_type"] == "image"
+               else _OR_VIDEO_TIMEOUT_SECONDS)
+    return _or_job_seconds_since_update(item) >= timeout
+
+
+def _or_release_confirmed_unbilled(uid: str, item: dict[str, Any],
+                                  *, previous_status: str, reason: str) -> dict[str, Any]:
+    """Restitution seulement lorsque l'absence d'appel facturable est CERTAINE.
+
+    Transition DB exclusive AVANT le RPC de libération. En cas de panne du RPC,
+    conserver 'releasing' pour revue comptable, sans rejouer aveuglément.
+    """
+    request_id = item["request_id"]
+    if not _or_job_update(uid, request_id,
+                          {"status": "releasing", "error_message": reason[:240]},
+                          previous_status):
+        return _or_job_get(uid, request_id) or item
+    try:
+        SupabaseCreditRepository(supabase).release_credit_reservation(
+            user_id=uid, reference_id=item["reservation_id"])
+    except Exception:
+        # L'état du RPC peut être incertain. Ne jamais effectuer un 2e release
+        # avant vérification du ledger et de la transaction par un administrateur.
+        return _or_job_get(uid, request_id) or item
+    _or_job_update(uid, request_id, {"status": "refunded"}, "releasing")
+    return _or_job_get(uid, request_id) or item
+
+
+def _or_expire_safe_jobs(uid: str, item: dict[str, Any]) -> dict[str, Any]:
+    """Expiration paresseuse, déclenchée par lecture des jobs.
+
+    Une réserve 'reserved' n'a pas encore franchi le CAS vers 'submitting',
+    donc aucun POST payant n'a commencé. Tout état ultérieur est INCERTAIN.
+    """
+    if not _or_job_expired(item):
+        return item
+    status = item["status"]
+    if status == "created":
+        _or_job_update(uid, item["request_id"],
+                       {"status": "failed", "error_message": "Création non démarrée."},
+                       "created")
+    elif status == "reserved":
+        return _or_release_confirmed_unbilled(
+            uid, item, previous_status="reserved",
+            reason="Délai dépassé avant tout appel fournisseur : crédits restitués.")
+    elif status == "reserving":
+        # Reserve RPC pourrait avoir réussi avant une perte de connexion.
+        _or_job_update(uid, item["request_id"],
+                       {"status": "reconcile", "error_message":
+                        "Réservation à rapprocher : résultat du RPC incertain."}, "reserving")
+    elif status == "submitting":
+        # Une génération déjà acceptée peut aboutir après un timeout.
+        _or_job_update(uid, item["request_id"],
+                       {"status": "reconcile", "error_message":
+                        "Délai dépassé : facturation fournisseur à vérifier."}, "submitting")
+    return _or_job_get(uid, item["request_id"]) or item
+
+
 def _or_public_job(item: dict[str, Any]) -> dict[str, Any]:
     return {"success": True, "provider": "openrouter", "request_id": item["request_id"],
             "status": item["status"], "type": item["media_type"],
             "model": item["model"], "action": item["action"],
             "cost": int(item.get("settled_credits") or 0),
+            "reserved_credits": int(item.get("reserved_credits") or 0),
+            "created_at": item.get("created_at"),
+            "timed_out": _or_job_expired(item) and item["status"] not in
+                         ("completed", "failed", "refunded"),
+            "error_message": item.get("error_message"),
             "mime_type": item.get("mime_type") or ("image/png" if item["media_type"] == "image" else "video/mp4"),
             "media_id": item.get("media_id"), "media_url": item.get("media_url"),
             "url": item.get("media_url")}
@@ -8059,9 +8142,17 @@ async def openrouter_media_image(
             _or_job_update(uid, request_id, {"status": "generated"})
             return await asyncio.to_thread(_or_finish, uid, _or_job_get(uid, request_id),
                                            generated, "image")
-    except Exception:
-        _or_job_update(uid, request_id, {"status": "reconcile"})
-        return _or_public_job(_or_job_get(uid, request_id))
+    except Exception as exc:
+        item = _or_job_get(uid, request_id)
+        if (isinstance(exc, _ORError)
+                and exc.status_code in _OR_NO_CHARGE_HTTP
+                and item and item.get("status") == "submitting"):
+            item = _or_release_confirmed_unbilled(
+                uid, item, previous_status="submitting", reason=str(exc))
+        else:
+            _or_job_update(uid, request_id, {"status": "reconcile"})
+            item = _or_job_get(uid, request_id)
+        return _or_public_job(item)
 
 
 @router.post("/openrouter-media/video")
@@ -8104,9 +8195,17 @@ async def openrouter_media_video(
             if not _or_job_update(uid, request_id, {"status": "submitted", "job_id": job["job_id"]}, "submitting"):
                 raise RuntimeError("Job vidéo créé mais son enregistrement est incertain.")
             return _or_public_job(_or_job_get(uid, request_id))
-    except Exception:
-        _or_job_update(uid, request_id, {"status": "reconcile"})
-        return _or_public_job(_or_job_get(uid, request_id))
+    except Exception as exc:
+        item = _or_job_get(uid, request_id)
+        if (isinstance(exc, _ORError)
+                and exc.status_code in _OR_NO_CHARGE_HTTP
+                and item and item.get("status") == "submitting"):
+            item = _or_release_confirmed_unbilled(
+                uid, item, previous_status="submitting", reason=str(exc))
+        else:
+            _or_job_update(uid, request_id, {"status": "reconcile"})
+            item = _or_job_get(uid, request_id)
+        return _or_public_job(item)
 
 
 @router.get("/openrouter-media/jobs")
@@ -8120,7 +8219,10 @@ async def openrouter_media_jobs(
             "created_at", desc=True).limit(30).execute()
     except Exception as e:
         raise HTTPException(503, "Historique des tâches OpenRouter inaccessible.") from e
-    return {"success": True, "jobs": [_or_public_job(row) for row in (response.data or [])]}
+    jobs = []
+    for row in (response.data or []):
+        jobs.append(_or_public_job(_or_expire_safe_jobs(uid, row)))
+    return {"success": True, "jobs": jobs}
 
 
 @router.get("/openrouter-media/jobs/{request_id}")
@@ -8133,6 +8235,7 @@ async def openrouter_media_job_status(
     item = _or_job_get(uid, _or_request_id(request_id))
     if not item:
         raise HTTPException(404, "Création non trouvée.")
+    item = _or_expire_safe_jobs(uid, item)
     if item["media_type"] != "video" or item["status"] != "submitted" or not item.get("job_id"):
         return _or_public_job(item)
     try:
