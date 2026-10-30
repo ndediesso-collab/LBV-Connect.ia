@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import os
 import re
 import datetime
@@ -33,6 +34,7 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_VIDEO_BYTES = 150 * 1024 * 1024
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
 _IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp"}
+_RECOVERY_LOG = logging.getLogger("oria.openrouter.recovery")
 _IMAGE_SIGNATURES = {
     "image/png": lambda b: b.startswith(b"\x89PNG\r\n\x1a\n"),
     "image/jpeg": lambda b: b.startswith(b"\xff\xd8\xff"),
@@ -42,12 +44,14 @@ _IMAGE_SIGNATURES = {
 
 class OpenRouterMediaError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None,
-                 retry_after_seconds: int | None = None, provider_reason: str | None = None):
+                 retry_after_seconds: int | None = None, provider_reason: str | None = None,
+                 phase: str | None = None):
         super().__init__(message)
         self.status_code = status_code
         self.retry_after_seconds = retry_after_seconds
         # Structured, bounded, sanitized reason only. Never store raw provider bodies.
         self.provider_reason = provider_reason
+        self.phase = phase
 
 
 @dataclass(frozen=True)
@@ -168,8 +172,10 @@ class OpenRouterMediaService:
         return None
 
     def _call(self, method: str, route: str, *, payload: Mapping[str, Any] | None = None,
-              timeout: int = 40, max_bytes: int = 3 * 1024 * 1024) -> bytes:
+              timeout: int = 40, max_bytes: int = 3 * 1024 * 1024,
+              trace_id: str | None = None) -> bytes:
         # Never allow user-supplied hostnames, query URLs, arbitrary job paths, etc.
+        trace = trace_id if isinstance(trace_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,80}", trace_id) else "unknown"
         if not route.startswith("/") or ".." in route or "//" in route or "?" in route:
             raise OpenRouterMediaError("Route OpenRouter interne invalide.")
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8") if payload is not None else None
@@ -188,9 +194,21 @@ class OpenRouterMediaService:
                     raise OpenRouterMediaError(
                         f"OpenRouter a répondu HTTP {response.status}.", status_code=response.status
                     )
-                result = response.read(max_bytes + 1)
+                try:
+                    result = response.read(max_bytes + 1)
+                except Exception as exc:
+                    if route == "/images" and method == "POST":
+                        _RECOVERY_LOG.warning(
+                            "image_recovery phase=http_read_failed request_id=%s error_type=%s",
+                            trace, type(exc).__name__,
+                        )
+                    raise
                 if len(result) > max_bytes:
-                    raise OpenRouterMediaError("Réponse OpenRouter trop volumineuse.")
+                    if route == "/images" and method == "POST":
+                        _RECOVERY_LOG.warning("image_recovery phase=http_size_limit request_id=%s bytes=%d", trace, len(result))
+                    raise OpenRouterMediaError("Réponse OpenRouter trop volumineuse.", phase="http_size_limit")
+                if route == "/images" and method == "POST":
+                    _RECOVERY_LOG.info("image_recovery phase=http_received request_id=%s http_status=%d bytes=%d", trace, response.status, len(result))
                 return result
         except urllib.error.HTTPError as exc:
             # Never log full vendor body, which can contain echoed prompts/metadata.
@@ -222,14 +240,15 @@ class OpenRouterMediaService:
             ) from exc
 
     def _json(self, method: str, route: str, *, payload: Mapping[str, Any] | None = None,
-              timeout: int = 40, max_bytes: int = 3 * 1024 * 1024) -> dict[str, Any]:
-        result = self._call(method, route, payload=payload, timeout=timeout, max_bytes=max_bytes)
+              timeout: int = 40, max_bytes: int = 3 * 1024 * 1024,
+              trace_id: str | None = None) -> dict[str, Any]:
+        result = self._call(method, route, payload=payload, timeout=timeout, max_bytes=max_bytes, trace_id=trace_id)
         try:
             data = json.loads(result)
         except (UnicodeDecodeError, ValueError) as exc:
-            raise OpenRouterMediaError("Réponse JSON OpenRouter invalide.") from exc
+            raise OpenRouterMediaError("Réponse JSON OpenRouter invalide.", phase="json_decode") from exc
         if not isinstance(data, dict):
-            raise OpenRouterMediaError("Réponse OpenRouter inattendue.")
+            raise OpenRouterMediaError("Réponse OpenRouter inattendue.", phase="json_shape")
         return data
 
     @staticmethod
@@ -309,10 +328,43 @@ class OpenRouterMediaService:
         # Absence of cost is not zero cost. Downstream billing must reconcile.
         return {"cost": None, "reconciliation_required": True}
 
+    @staticmethod
+    def _verified_image(b64_value: Any, declared_mime: Any) -> tuple[bytes, str]:
+        """Decode a bounded image and recognize its MIME from a verified signature.
+
+        OpenRouter may omit media_type; defaulting to PNG would discard valid JPEGs.
+        We never fetch arbitrary provider URLs or trust an unverified MIME.
+        """
+        if not isinstance(b64_value, str) or not b64_value:
+            raise OpenRouterMediaError("Image Base64 absente.", phase="base64_missing")
+        if len(b64_value) > 4 * ((MAX_IMAGE_BYTES + 2) // 3) + 64:
+            raise OpenRouterMediaError("Image Base64 trop volumineuse.", phase="base64_size_limit")
+        if b64_value.startswith("data:"):
+            # Optional data URI supported without fetching third-party URLs.
+            prefix, sep, value = b64_value.partition(",")
+            match = re.fullmatch(r"data:(image/(?:png|jpeg|webp));base64", prefix, re.I)
+            if not sep or not match:
+                raise OpenRouterMediaError("Data URI image invalide.", phase="data_uri")
+            b64_value = value
+        try:
+            decoded = base64.b64decode(b64_value, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise OpenRouterMediaError("Image Base64 invalide.", phase="base64_decode") from exc
+        if not decoded or len(decoded) > MAX_IMAGE_BYTES:
+            raise OpenRouterMediaError("Image décodée hors limites.", phase="image_size_limit")
+        real_mime = next((mime for mime, check in _IMAGE_SIGNATURES.items() if check(decoded)), None)
+        if real_mime is None:
+            raise OpenRouterMediaError("Signature image non reconnue.", phase="image_signature")
+        if declared_mime and declared_mime not in _IMAGE_MIMES:
+            raise OpenRouterMediaError("Format image fournisseur non pris en charge.", phase="media_type_unsupported")
+        # If metadata disagrees with signature, verified bytes are authoritative.
+        return decoded, real_mime
+
     def create_image(self, *, model: str, prompt: str, destination: Path,
                      resolution: str = "1K", aspect_ratio: str = "1:1",
                      reference_bytes: bytes | None = None,
-                     reference_mime: str = "image/png") -> OpenRouterMediaFile:
+                     reference_mime: str = "image/png",
+                     request_id: str | None = None) -> OpenRouterMediaFile:
         """PAID: only call after ORIA's reservation and idempotency checks."""
         if not 1 <= len(prompt.strip()) <= 8000:
             raise OpenRouterMediaError("Description image invalide.")
@@ -325,26 +377,46 @@ class OpenRouterMediaService:
             if self._parameter(model_entry, "input_references") is None:
                 raise OpenRouterMediaError("Ce modèle ne prend pas en charge la retouche avec référence.")
             payload["input_references"] = [self._reference(reference_mime, reference_bytes)]
-        # Base64 image response can be large; bound JSON response to ~29MiB.
-        result = self._json("POST", "/images", payload=payload, timeout=150,
-                            max_bytes=29 * 1024 * 1024)
-        images = result.get("data")
-        if not isinstance(images, list) or not images or not isinstance(images[0], dict):
-            raise OpenRouterMediaError("OpenRouter n'a pas retourné d'image.")
-        item = images[0]
-        mime = str(item.get("media_type") or "image/png")
-        if mime not in _IMAGE_MIMES:
-            raise OpenRouterMediaError("Format d'image générée inattendu.")
+        # Base64 image response can be large; bound the complete JSON to ~29 MiB.
+        # IMPORTANT: never resubmit this paid POST automatically after a failure.
+        trace = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,80}", request_id) else "unknown"
+        phase = "http_request"
         try:
-            content = base64.b64decode(item["b64_json"], validate=True)
-        except (KeyError, TypeError, ValueError, binascii.Error) as exc:
-            raise OpenRouterMediaError("Image générée absente ou mal encodée.") from exc
-        if not _IMAGE_SIGNATURES[mime](content):
-            raise OpenRouterMediaError("Image générée corrompue.")
-        output = Path(destination).with_suffix({"image/png": ".png", "image/jpeg": ".jpg",
-                                                "image/webp": ".webp"}[mime])
-        self._save_media(output, content, MAX_IMAGE_BYTES)
-        return OpenRouterMediaFile(str(output), mime, model, self._usage(result))
+            result = self._json("POST", "/images", payload=payload, timeout=150,
+                                max_bytes=29 * 1024 * 1024, trace_id=trace)
+            phase = "json_decoded"
+            images = result.get("data")
+            if not isinstance(images, list) or not images:
+                raise OpenRouterMediaError("OpenRouter n'a pas retourné d'image.", phase="image_list_empty")
+            _RECOVERY_LOG.info("image_recovery phase=json_decoded request_id=%s entries=%d has_usage=%s",
+                               trace, len(images), isinstance(result.get("usage"), dict))
+            failure: OpenRouterMediaError | None = None
+            # Some responses include empty or unsupported entries before the first usable image.
+            for index, item in enumerate(images):
+                phase = "base64_decode"
+                if not isinstance(item, dict):
+                    failure = OpenRouterMediaError("Entrée image invalide.", phase="image_item_type")
+                    continue
+                try:
+                    content, mime = self._verified_image(item.get("b64_json"), item.get("media_type"))
+                except OpenRouterMediaError as exc:
+                    failure = exc
+                    _RECOVERY_LOG.warning("image_recovery phase=%s request_id=%s index=%d",
+                                          exc.phase or "decode_failed", trace, index)
+                    continue
+                phase = "temporary_file"
+                output = Path(destination).with_suffix({"image/png": ".png", "image/jpeg": ".jpg",
+                                                        "image/webp": ".webp"}[mime])
+                self._save_media(output, content, MAX_IMAGE_BYTES)
+                _RECOVERY_LOG.info("image_recovery phase=temporary_file_saved request_id=%s index=%d mime=%s bytes=%d",
+                                   trace, index, mime, len(content))
+                return OpenRouterMediaFile(str(output), mime, model, self._usage(result))
+            raise failure or OpenRouterMediaError("Aucune image exploitable.", phase="image_unusable")
+        except Exception as exc:
+            known_phase = getattr(exc, "phase", None) or phase
+            _RECOVERY_LOG.error("image_recovery phase=%s request_id=%s error_type=%s",
+                                known_phase, trace, type(exc).__name__)
+            raise
 
     @staticmethod
     def _job_id(job_id: str) -> str:
