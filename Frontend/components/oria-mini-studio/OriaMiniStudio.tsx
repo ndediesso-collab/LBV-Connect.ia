@@ -7,7 +7,6 @@ import {
   AlertCircle, ShieldCheck, Clapperboard,
 } from "lucide-react";
 import Link from "next/link";
-import OriaVideoProjectsWeb from "./OriaVideoProjects_Web";
 import { createClient } from "@/lib/supabase/client";
 
 type Language = "fr" | "en";
@@ -37,7 +36,6 @@ type Capabilities = {
   };
   video: {
     model: string;
-    models?: {model: string; durations: number[]; supports_audio: boolean}[];
     allowed_modes: VideoMode[];
     available_now_modes: VideoMode[];
     duration_choices_seconds: number[];
@@ -47,7 +45,6 @@ type Capabilities = {
     provider_per_call_seconds: { min: number; max: number };
     short_clip_actions_available_now: string[];
     long_projects_generation_available: boolean;
-    supports_audio?: boolean;
   };
 };
 type Quote = {
@@ -61,8 +58,6 @@ type Quote = {
   credits_available: number;
   credits_sufficient: boolean;
   generation_available: boolean;
-  generate_audio?: boolean;
-  provider_price_known?: boolean;
   pricing_reference_date?: string;
   notice?: string;
 };
@@ -203,6 +198,22 @@ function fileToB64(file: File): Promise<string> {
   });
 }
 function resolutionRank(value: string) { return ({ "1K": 1, "2K": 2, "4K": 4 } as Record<string, number>)[value] ?? 0; }
+
+// Une résolution n'est proposée que si le pack, une offre ET un modèle serveur l'autorisent.
+function availableImageResolutions(
+  images: Capabilities["images"] | undefined,
+  offers: typeof IMAGE_OFFERS[string],
+): string[] {
+  if (!images) return [];
+  return ["1K", "2K", "4K"].filter(r =>
+    images.resolutions.includes(r) &&
+    images.models.some(model => model.resolutions.includes(r)) &&
+    offers.some(offer => resolutionRank(r) <= resolutionRank(offer.maxResolution)),
+  );
+}
+function cheapestCompatibleOffer(offers: typeof IMAGE_OFFERS[string], resolution: string) {
+  return offers.find(offer => resolutionRank(resolution) <= resolutionRank(offer.maxResolution));
+}
 function asMedia(raw: unknown): Media | null {
   if (!raw || typeof raw !== "object") return null;
   const m = raw as Record<string, unknown>;
@@ -234,8 +245,6 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const [resolution, setResolution] = useState("1K");
   const [ratioImage, setRatioImage] = useState("1:1");
   const [ratioVideo, setRatioVideo] = useState("16:9");
-  const [videoAudio, setVideoAudio] = useState(false);
-  const [videoModel, setVideoModel] = useState("");
   const [imageAction, setImageAction] = useState("");
   const [videoAction, setVideoAction] = useState("");
   const [reference, setReference] = useState<File | null>(null);
@@ -254,6 +263,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const imageOffers = useMemo(() => IMAGE_OFFERS[wallet?.pack_id || ""] || [], [wallet?.pack_id]);
   const videoOffers = useMemo(() => VIDEO_OFFERS[wallet?.pack_id || ""] || [], [wallet?.pack_id]);
   const selectedImageOffer = imageOffers.find(o => o.action === imageAction) || imageOffers[0];
+  const packImageResolutions = availableImageResolutions(caps?.images, imageOffers);
   const selectedVideoOffer = videoOffers.find(o => o.action === videoAction) || videoOffers[0];
   const activeKind: Kind = screen === "video" ? "video" : "image";
   const mode: Mode = activeKind === "image" ? modeImage : modeVideo;
@@ -286,7 +296,6 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         throw new Error("Les droits de création ne correspondent pas au pack actif.");
       }
       setCaps(remote);
-      setVideoModel(remote.video.model || "");
       if (MEDIA_PROVIDER === "openrouter") {
         try {
           const previous = await api<{ jobs: Generation[] }>(`${MEDIA_API}/jobs`);
@@ -354,13 +363,46 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     if (screen === "image") setModeImage(next as ImageMode); else setModeVideo(next as VideoMode);
     if (next === "text_to_image" || next === "text_to_video") setReference(null);
   }
+  // Choisir une offre sélectionne aussi sa résolution et un modèle compatible.
+  // Si le catalogue OpenRouter ne contient pas cette résolution, on ne simule pas le droit.
   function selectOffer(next: string) {
-    invalidateQuote();
-    if (screen === "image") {
-      const offer = imageOffers.find(o => o.action === next);
-      setImageAction(next);
-      if (offer && resolutionRank(resolution) > resolutionRank(offer.maxResolution)) setResolution(offer.maxResolution);
-    } else setVideoAction(next);
+    if (screen !== "image") { invalidateQuote(); setVideoAction(next); return; }
+    const offer = imageOffers.find(o => o.action === next);
+    if (!offer) return;
+    const target = offer.maxResolution;
+    const model = caps?.images.models.find(m => m.model === imageModel && m.resolutions.includes(target))
+      || caps?.images.models.find(m => m.resolutions.includes(target));
+    if (!packImageResolutions.includes(target) || !model) {
+      setError(tr(`L'offre ${offer.label} requiert ${target}, indisponible avec les modèles du fournisseur actuellement.`,
+        `${offer.label} requires ${target}, which is currently unavailable from the provider's models.`));
+      return;
+    }
+    invalidateQuote(); setError(null);
+    setImageAction(offer.action); setImageModel(model.model); setResolution(target);
+  }
+
+  // Sélectionner 2K ou 4K ajuste en une seule opération l'offre ET le modèle.
+  function selectImageResolution(target: string) {
+    if (!packImageResolutions.includes(target)) return;
+    const offer = cheapestCompatibleOffer(imageOffers, target);
+    const model = caps?.images.models.find(m => m.model === imageModel && m.resolutions.includes(target))
+      || caps?.images.models.find(m => m.resolutions.includes(target));
+    if (!offer || !model) return;
+    invalidateQuote(); setError(null);
+    setResolution(target); setImageModel(model.model); setImageAction(offer.action);
+  }
+
+  // Changer de modèle ne doit jamais conserver une action Ultra pour une sortie 1K.
+  function selectImageModel(next: string) {
+    const model = caps?.images.models.find(m => m.model === next);
+    if (!model) return;
+    const target = model.resolutions.includes(resolution) ? resolution
+      : packImageResolutions.find(r => model.resolutions.includes(r));
+    if (!target) return;
+    const offer = cheapestCompatibleOffer(imageOffers, target);
+    if (!offer) return;
+    invalidateQuote(); setError(null);
+    setImageModel(next); setResolution(target); setImageAction(offer.action);
   }
 
   const optionsForModel = caps?.images.models.find(model => model.model === imageModel)?.resolutions || [];
@@ -381,9 +423,8 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         reference_count: needsReference ? 1 : 0, count: 1,
       } : {
         media_type: "video", mode: modeVideo, reference_count: needsReference ? 1 : 0,
-        model: videoModel, resolution: "720p", count: 1, final_duration_seconds: selectedVideoOffer.seconds,
-                scene_durations_seconds: [selectedVideoOffer.seconds],
-        ...(MEDIA_PROVIDER === "openrouter" ? { generate_audio: videoAudio } : {}),
+        resolution: "720p", count: 1, final_duration_seconds: selectedVideoOffer.seconds,
+        scene_durations_seconds: [selectedVideoOffer.seconds],
       };
       const calculated = await api<Quote>(`${MEDIA_API}/quote`, { method: "POST", body: JSON.stringify(payload) });
       if (calculated.pack_id !== wallet?.pack_id || calculated.media_type !== activeKind) {
@@ -409,8 +450,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         ...shared, mode: modeImage, model: imageModel, resolution, aspect_ratio: ratioImage,
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
       } : {
-        ...shared, mode: modeVideo, model: videoModel, requested_seconds: selectedVideoOffer.seconds, aspect_ratio: ratioVideo,
-        ...(MEDIA_PROVIDER === "openrouter" ? { generate_audio: videoAudio } : {}),
+        ...shared, mode: modeVideo, requested_seconds: selectedVideoOffer.seconds, aspect_ratio: ratioVideo,
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
       };
       // Retenir l'identifiant AVANT le POST : si le réseau coupe, rechercher
@@ -423,14 +463,26 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
       if (MEDIA_PROVIDER === "openrouter" && ["refunded", "failed"].includes(result.status || "")) {
         setPendingRequestId(null);
         setQuote(null); setAccepted(false);
-        setNotice(`${result.status === "refunded"
-          ? tr("Création refusée : réservation restituée.", "Creation declined: reservation returned.")
-          : tr("Création non commencée : aucun débit.", "Creation not started: no charge.")}${result.error_message ? ` ${tr("Motif :", "Reason:")} ${result.error_message}` : ""}`);
+        setNotice(result.status === "refunded"
+          ? tr("Création refusée : réservation restituée. Vérifiez votre solde.", "Creation declined: reservation returned. Check your balance.")
+          : tr("Création non commencée : aucun débit.", "Creation not started: no charge."));
         try { const current = await api<{ wallet: Wallet }>("/credits/me"); setWallet(current.wallet); } catch {}
         onWalletRefresh?.();
         return;
       }
       if (MEDIA_PROVIDER === "openrouter" && result.status && result.status !== "completed") {
+        if (activeKind === "image" && (result.media_url || result.url)) {
+          setLastResult({ id: result.media_id || request_id, media_type: "image",
+            url: String(result.media_url || result.url), model: result.model,
+            action: result.action, prompt: prompt.trim(), mime_type: result.mime_type,
+            created_at: new Date().toISOString(), credits_cost: result.cost });
+          await loadGallery();
+          setNotice(tr("Image sauvegardée. La facturation reste en vérification ; ne relancez pas cette demande.",
+            "Image saved. Billing is still under review; do not submit this request again."));
+          setPendingRequestId(result.request_id || request_id);
+          setQuote(null); setAccepted(false);
+          return;
+        }
         setPendingRequestId(result.request_id || request_id);
         setNotice(tr("Création suivie. Vous pouvez continuer avec une autre création ; ne renvoyez pas cette même demande.",
           "Creation tracked. You may start a different creation; do not resubmit this same request."));
@@ -534,19 +586,22 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
              disabled={busy} onClick={async () => {
                try {
                  const job = await api<Generation>(`${MEDIA_API}/jobs/${encodeURIComponent(pendingRequestId)}`);
-                 if (job.status === "completed" && (job.media_url || job.url)) {
-                   setPendingRequestId(null);
+                 if (job.media_url || job.url) {
+                   if (job.status === "completed") setPendingRequestId(null);
                    setLastResult({ id: job.media_id || pendingRequestId, media_type: job.type,
                      url: String(job.media_url || job.url), model: job.model, action: job.action,
                      prompt: prompt.trim(), mime_type: job.mime_type, created_at: new Date().toISOString(),
                      credits_cost: job.cost });
                    await loadGallery(); onWalletRefresh?.();
-                   setNotice(tr("Création terminée et enregistrée.", "Creation completed and saved."));
+                   setNotice(job.status === "completed"
+                     ? tr("Création terminée et enregistrée.", "Creation completed and saved.")
+                     : tr("Image disponible, mais facturation en rapprochement. Ne relancez pas cette demande.",
+                         "Image available; billing under review. Do not resubmit this request."));
                  } else if (["refunded", "failed"].includes(job.status || "")) {
                    setPendingRequestId(null);
-                   setNotice(`${job.status === "refunded"
+                   setNotice(job.status === "refunded"
                      ? tr("Génération refusée : les crédits réservés ont été restitués.", "Creation declined: reserved credits were returned.")
-                     : tr("Création non démarrée, aucun débit.", "Creation not started; no charge.")}${job.error_message ? ` ${tr("Motif :", "Reason:")} ${job.error_message}` : ""}`);
+                     : tr("Création non démarrée, aucun débit.", "Creation not started; no charge."));
                    try { const current = await api<{ wallet: Wallet }>("/credits/me"); setWallet(current.wallet); } catch {}
                    onWalletRefresh?.();
                  } else setNotice(`${tr("Statut", "Status")} : ${job.status || "pending"}. ${job.error_message || (job.timed_out
@@ -621,18 +676,16 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                     <div className="mt-4 grid gap-3 sm:grid-cols-3">
                       <div>
                         <label className="mb-1 block text-xs font-medium">{tr("Modèle", "Model")}</label>
-                        <select value={imageModel} disabled={busy || quoting || loading} onChange={e => { setImageModel(e.target.value); invalidateQuote(); }}
+                        <select value={imageModel} disabled={busy || quoting || loading} onChange={e => selectImageModel(e.target.value)}
                           className="w-full rounded-xl border border-border bg-background p-2.5 text-xs">
                           {caps?.images.models.map(m => <option key={m.model} value={m.model}>{m.model.replace(/^gemini-/, "")}</option>)}
                         </select>
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-medium">{tr("Résolution", "Resolution")}</label>
-                        <select value={resolution} disabled={busy || quoting || loading} onChange={e => { setResolution(e.target.value); invalidateQuote(); }}
+                        <select value={resolution} disabled={busy || quoting || loading} onChange={e => selectImageResolution(e.target.value)}
                           className="w-full rounded-xl border border-border bg-background p-2.5 text-xs">
-                          {caps?.images.resolutions.filter(r => optionsForModel.includes(r)).map(r => (
-                            <option key={r} value={r} disabled={resolutionRank(r) > resolutionRank(selectedImageOffer?.maxResolution || "1K")}>{r}</option>
-                          ))}
+                          {packImageResolutions.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
                       </div>
                       <div>
@@ -641,6 +694,14 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                           {IMAGE_RATIOS.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
                       </div>
+                      <p className="sm:col-span-3 text-[11px] leading-5 text-muted">
+                        {tr("Les résolutions proposées dépendent du modèle et du fournisseur. Changer la résolution ajuste automatiquement le modèle et l'offre.",
+                          "Resolutions depend on the model and provider. Changing resolution automatically matches the model and offer.")}
+                        {(["pro_pack", "business_pack"].includes(wallet?.pack_id || "") && !packImageResolutions.includes("4K"))
+                          ? <span className="block">{tr("4K figure dans les capacités du pack mais n'est pas disponible via les modèles du fournisseur actuellement.",
+                            "4K is included in the plan's maximum capabilities, but the provider currently exposes no compatible model.")}</span>
+                          : null}
+                      </p>
                     </div>
                   ) : (
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -673,33 +734,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                     <p className="mt-2 text-[11px] text-muted">{tr(`Votre pack prévoit jusqu'à ${caps?.images.max_reference_images_in_pack ?? 1} références pour les images. Une seule est actuellement prise en charge par génération.`, `Your plan allows up to ${caps?.images.max_reference_images_in_pack ?? 1} image references. Only one is currently supported per generation.`)}</p>
                   </div>}
                 </section>
-                {screen === "video" && MEDIA_PROVIDER === "openrouter" && (caps?.video.models?.length || 0) > 1 && (
-                  <div className="mt-3 rounded-xl border border-border bg-surface-secondary p-3">
-                    <label className="mb-1 block text-xs font-medium">{tr("Modèle vidéo", "Video model")}</label>
-                    <select value={videoModel} disabled={busy || quoting}
-                      onChange={e => { setVideoModel(e.target.value); setVideoAudio(false); invalidateQuote(); }}
-                      className="w-full rounded-lg border border-border bg-background p-2 text-xs">
-                      {caps?.video.models?.map(m => <option key={m.model} value={m.model}>{m.model}</option>)}
-                    </select>
-                    <p className="mt-1 text-[11px] text-muted">{tr("En cas de limite 429, choisissez volontairement un autre modèle et redemandez un devis.", "After a 429 limit, choose another model and request a new quote.")}</p>
-                  </div>
-                )}
-                {screen === "video" && MEDIA_PROVIDER === "openrouter" && (
-                  <div className="mt-3 rounded-xl border border-border bg-surface-secondary p-3">
-                    <label className="flex items-center gap-2 text-xs font-medium">
-                      <input type="checkbox" checked={videoAudio} disabled={busy || quoting || !(caps?.video.models?.find(m => m.model === videoModel)?.supports_audio ?? caps?.video.supports_audio)}
-                        onChange={e => { setVideoAudio(e.target.checked); invalidateQuote(); }} />
-                      {tr("Générer avec audio (voix, ambiance, bruitages)", "Generate with audio (voice, ambience, effects)")}
-                    </label>
-                    <p className="mt-2 text-[11px] text-muted">{(caps?.video.models?.find(m => m.model === videoModel)?.supports_audio ?? caps?.video.supports_audio)
-                      ? tr("Le devis dépend du modèle, de la durée et du mode audio.", "Quote depends on the model, duration and audio choice.")
-                      : tr("Audio indisponible sur le modèle de ce pack.", "Audio unavailable for this plan's model.")}</p>
-                  </div>
-                )}
-                {screen === "video" && caps && MEDIA_PROVIDER === "openrouter" && wallet?.pack_id && (
-                  <OriaVideoProjectsWeb language={language} packId={wallet.pack_id} caps={caps.video} onWalletRefresh={onWalletRefresh}/>
-                )}
-                {screen === "video" && caps && MEDIA_PROVIDER !== "openrouter" && <div className="rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-5 text-muted-strong">
+                {screen === "video" && caps && <div className="rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-5 text-muted-strong">
                   <p className="font-semibold text-foreground">{tr("Projets vidéo avancés", "Advanced video projects")}</p>
                   <p className="mt-1">{tr(`Ton pack prévoit des projets jusqu'à ${caps.video.max_project_seconds} s (${caps.video.max_project_scenes} scène(s) maximum), mais seuls les clips courts peuvent être générés actuellement.`, `Your plan allows projects up to ${caps.video.max_project_seconds}s (${caps.video.max_project_scenes} scenes max), but only short clips can currently be generated.`)}</p>
                   <div className="mt-2 flex flex-wrap gap-2">{caps.video.allowed_modes.filter(m => !caps.video.available_now_modes.includes(m)).map(m => (
@@ -717,9 +752,6 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                     {quoting ? <Loader2 size={17} className="animate-spin"/> : <RefreshCw size={16}/>}{tr("Obtenir le devis", "Get quote")}
                   </button>
                   {quoteReady && quote && <div className="mt-4 space-y-3 rounded-xl bg-surface-secondary p-4">
-                    {screen === "video" && <p className="text-[11px] text-muted">{quote.provider_price_known
-                      ? tr("Estimation selon les tarifs annoncés par OpenRouter.", "Estimate based on OpenRouter's reported price.")
-                      : tr("Estimation = budget administrateur, pas un prix fournisseur confirmé.", "Estimate = admin budget, not a confirmed provider price.")}</p>}
                     <p className="text-xs text-muted">{tr("Coût estimé", "Estimated cost")} : <strong className="text-foreground">{formatted(quote.estimated_credits, language)} {tr("crédits", "credits")}</strong></p>
                     <p className="text-xs text-muted">{tr("Réservation maximale acceptée", "Maximum accepted reservation")} :</p>
                     <p className="text-2xl font-bold tracking-tight">{formatted(quote.reservation_credits, language)} <span className="text-sm font-normal text-muted">{tr("crédits", "credits")}</span></p>
