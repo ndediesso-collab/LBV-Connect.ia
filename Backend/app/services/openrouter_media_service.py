@@ -30,7 +30,10 @@ from typing import Any, Mapping
 
 BASE_URL = "https://openrouter.ai/api/v1"
 MAX_REFERENCE_BYTES = 10 * 1024 * 1024
-MAX_IMAGE_BYTES = 20 * 1024 * 1024
+# Encoded 4K responses can exceed 29 MiB, and decoded PNGs can exceed 20 MiB.
+# Keep independent bounded limits: HTTP/JSON bytes and decoded image bytes.
+MAX_IMAGE_BYTES = 40 * 1024 * 1024
+MAX_IMAGE_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_VIDEO_BYTES = 150 * 1024 * 1024
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
 _IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp"}
@@ -377,13 +380,14 @@ class OpenRouterMediaService:
             if self._parameter(model_entry, "input_references") is None:
                 raise OpenRouterMediaError("Ce modèle ne prend pas en charge la retouche avec référence.")
             payload["input_references"] = [self._reference(reference_mime, reference_bytes)]
-        # Base64 image response can be large; bound the complete JSON to ~29 MiB.
+        # Image bytes are Base64-encoded inside JSON (roughly 4/3 expansion).
+        # Bound the whole response, then independently check decoded image bytes.
         # IMPORTANT: never resubmit this paid POST automatically after a failure.
         trace = request_id if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,80}", request_id) else "unknown"
         phase = "http_request"
         try:
             result = self._json("POST", "/images", payload=payload, timeout=150,
-                                max_bytes=29 * 1024 * 1024, trace_id=trace)
+                                max_bytes=MAX_IMAGE_RESPONSE_BYTES, trace_id=trace)
             phase = "json_decoded"
             images = result.get("data")
             if not isinstance(images, list) or not images:
