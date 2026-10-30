@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { supabase } from "@/lib/supabase/client";
 import * as SecureStore from "expo-secure-store";
 
@@ -767,6 +767,13 @@ function getTopUpDescription(
 
 export default function PacksPage() {
   const insets = useSafeAreaInsets();
+  const { tab } = useLocalSearchParams<{ tab?: string }>();
+  const [activePackTab, setActivePackTab] = useState<"primary" | "addon">(
+    tab === "addon" || tab === "topups" ? "addon" : "primary",
+  );
+  useFocusEffect(useCallback(() => {
+    if (tab === "addon" || tab === "topups") setActivePackTab("addon");
+  }, [tab]));
   const [language, setLanguage] = useState<OriaLanguage>("fr");
   const [theme, setTheme] = useState<OriaTheme>("light");
   const isDark = theme === "dark";
@@ -803,11 +810,6 @@ export default function PacksPage() {
     openFaq,
     setOpenFaq,
   ] = useState<number | null>(null);
-
-  const [
-    showCreditTopUp,
-    setShowCreditTopUp,
-  ] = useState(false);
 
   const [
     isPaying,
@@ -1038,7 +1040,6 @@ export default function PacksPage() {
     >
       <StatusBar
         barStyle={isDark ? "light-content" : "dark-content"}
-        backgroundColor={isDark ? "#101012" : "#fafafa"}
       />
       <View
         style={styles.container}
@@ -1166,6 +1167,38 @@ export default function PacksPage() {
               {t.heroDescription}
             </Text>
 
+          </View>
+
+          {/* Deux catégories visibles à égalité : abonnements et recharges. */}
+          <View style={styles.packTabs} accessibilityRole="tablist">
+            <Pressable
+              onPress={() => setActivePackTab("primary")}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activePackTab === "primary" }}
+              style={[styles.packTab, activePackTab === "primary" && styles.packTabActive]}
+            >
+              <Ionicons name="albums-outline" size={18}
+                color={activePackTab === "primary" ? "#ffffff" : themedIconColor("#52525b", isDark)} />
+              <Text style={[styles.packTabText, activePackTab === "primary" && styles.packTabTextActive]}>
+                {t.packsOria}
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setActivePackTab("addon")}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activePackTab === "addon" }}
+              style={[styles.packTab, activePackTab === "addon" && styles.packTabActive]}
+            >
+              <Ionicons name="flash-outline" size={18}
+                color={activePackTab === "addon" ? "#ffffff" : themedIconColor("#52525b", isDark)} />
+              <Text style={[styles.packTabText, activePackTab === "addon" && styles.packTabTextActive]}>
+                {t.additionalCredits}
+              </Text>
+            </Pressable>
+          </View>
+
+          {activePackTab === "primary" ? (
+            <>
             <View
               style={
                 styles.launchBanner
@@ -1199,113 +1232,77 @@ export default function PacksPage() {
                 {t.launchLimit}
               </Text>
             </View>
-          </View>
-
-          {/* Packs */}
-
-          <View
-            style={styles.packList}
-          >
-            {displayedPacks.map(
-              (pack) => (
-                <PackCard
-                  key={pack.id}
-                  pack={pack}
-                  onSelect={
-                    handlePackSelection
-                  }
-                  isPaying={
-                    isPaying
-                  }
-                  language={language}
-                />
-              ),
-            )}
-          </View>
-
-          {/* {t.additionalCredits} */}
-
-          <View
-            style={
-              styles.topUpSection
-            }
-          >
-            <View
-              style={
-                styles.topUpTextArea
-              }
-            >
-              <View
-                style={
-                  styles.sectionTitleRow
-                }
-              >
-                <Ionicons
-                  name="flash-outline"
-                  size={19}
-                  color={themedIconColor("#18181b", isDark)}
-                />
-
-                <Text
-                  style={
-                    styles.sectionTitle
-                  }
-                >
-                  {t.needMoreCredits}
-                </Text>
+              <View style={styles.packList}>
+                {displayedPacks.map((pack) => (
+                  <PackCard
+                    key={pack.id}
+                    pack={pack}
+                    onSelect={handlePackSelection}
+                    isPaying={isPaying}
+                    language={language}
+                  />
+                ))}
               </View>
-
-              <Text
-                style={
-                  styles.sectionDescription
-                }
-              >
-                {t.topUpIntro}
-              </Text>
-
-              <Text
-                style={
-                  styles.topUpPriceText
-                }
-              >
-                {t.fromPrice}
-              </Text>
+              <View style={styles.topUpSection}>
+                <View style={styles.sectionTitleRow}>
+                  <Ionicons name="information-circle-outline" size={19} color={themedIconColor("#18181b", isDark)} />
+                  <Text style={styles.sectionTitle}>
+                    {language === "fr" ? "Créations image et vidéo" : "Image and video creation"}
+                  </Text>
+                </View>
+                <Text style={styles.sectionDescription}>
+                  {language === "fr"
+                    ? "Tous les packs permettent la création selon leurs options. Les vidéos peuvent consommer beaucoup de crédits : vérifiez le devis avant chaque génération. Pour des créations régulières, privilégiez Pro ou Business."
+                    : "All packs support creation within their available options. Videos can use many credits: check the quote before each generation. Pro or Business are recommended for regular creations."}
+                </Text>
+                <Pressable onPress={() => setActivePackTab("addon")} style={styles.secondaryTabButton}>
+                  <Text style={styles.secondaryTabButtonText}>
+                    {language === "fr" ? "Voir les crédits complémentaires" : "View additional credits"}
+                  </Text>
+                  <Ionicons name="arrow-forward" size={16} color={themedIconColor("#18181b", isDark)} />
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <View style={styles.addonSection}>
+              <Text style={styles.addonHeading}>{t.topUpBalance}</Text>
+              <Text style={styles.sectionDescription}>{t.topUpIntro}</Text>
+              {complementaryCredits.map((topUp) => (
+                <View key={topUp.id} style={styles.topUpOption}>
+                  <View style={styles.topUpOptionInfo}>
+                    <Text style={styles.topUpCredits}>
+                      {topUp.credits.toLocaleString(language === "en" ? "en-US" : "fr-FR")} {t.credits}
+                    </Text>
+                    <Text style={styles.topUpDescription}>{getTopUpDescription(topUp, language)}</Text>
+                  </View>
+                  <View style={styles.topUpOptionAction}>
+                    <Text style={styles.topUpOptionPrice}>{topUp.price}</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${t.buy} ${topUp.credits} ${t.credits}`}
+                      onPress={() => handleCreditTopUp(topUp)}
+                      disabled={isPaying !== null}
+                      style={({ pressed }) => [styles.smallPrimaryButton, pressed && styles.primaryButtonPressed,
+                        isPaying !== null && styles.disabled]}
+                    >
+                      {isPaying === topUp.id ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <Text style={styles.smallPrimaryButtonText}>{t.buy}</Text>
+                      )}
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+              <View style={styles.paymentNotice}>
+                <Ionicons name="information-circle-outline" size={17} color={themedIconColor("#71717a", isDark)} />
+                <Text style={styles.paymentNoticeText}>{t.paymentNotice}</Text>
+              </View>
             </View>
+          )}
 
-            <Pressable
-              onPress={() =>
-                setShowCreditTopUp(
-                  true,
-                )
-              }
-              disabled={
-                isPaying !== null
-              }
-              style={({ pressed }) => [
-                styles.primaryButton,
-                pressed &&
-                  styles.primaryButtonPressed,
-                isPaying !==
-                  null &&
-                  styles.disabled,
-              ]}
-            >
-              <Text
-                style={
-                  styles.primaryButtonText
-                }
-              >
-                {t.buyCredits}
-              </Text>
-
-              <Ionicons
-                name="flash-outline"
-                size={17}
-                color="#ffffff"
-              />
-            </Pressable>
-          </View>
-
+          {activePackTab === "primary" ? (
+            <>
           {/* {t.howItWorks} */}
 
           <View
@@ -1654,234 +1651,11 @@ export default function PacksPage() {
               )}
             </View>
           </View>
+            </>
+          ) : null}
         </ScrollView>
       </View>
 
-      {/* Modal crédits complémentaires */}
-
-      <Modal
-        visible={
-          showCreditTopUp
-        }
-        transparent
-        animationType="slide"
-        onRequestClose={() =>
-          setShowCreditTopUp(
-            false,
-          )
-        }
-      >
-        <View
-          style={
-            styles.modalOverlay
-          }
-        >
-          <Pressable
-            style={
-              styles.modalBackdrop
-            }
-            onPress={() =>
-              setShowCreditTopUp(
-                false,
-              )
-            }
-          />
-
-          <View
-            style={[
-              styles.topUpModal,
-              { paddingBottom: 25 + insets.bottom },
-            ]}
-          >
-            <View
-              style={
-                styles.modalHandle
-              }
-            />
-
-            <View
-              style={
-                styles.modalHeader
-              }
-            >
-              <View
-                style={
-                  styles.modalHeaderTextArea
-                }
-              >
-                <Text
-                  style={
-                    styles.modalEyebrow
-                  }
-                >
-                  {t.additionalCredits}
-                </Text>
-
-                <Text
-                  style={
-                    styles.modalTitle
-                  }
-                >
-                  {t.topUpBalance}
-                </Text>
-
-                <Text
-                  style={
-                    styles.modalDescription
-                  }
-                >
-                  {t.topUpModalDescription}
-                </Text>
-              </View>
-
-              <Pressable
-                onPress={() =>
-                  setShowCreditTopUp(
-                    false,
-                  )
-                }
-                accessibilityRole="button"
-                accessibilityLabel={t.close}
-                style={
-                  styles.modalCloseButton
-                }
-              >
-                <Ionicons
-                  name="close"
-                  size={20}
-                  color={themedIconColor("#52525b", isDark)}
-                />
-              </Pressable>
-            </View>
-
-            <ScrollView
-              style={
-                styles.topUpOptionsScroll
-              }
-              showsVerticalScrollIndicator={
-                false
-            }
-              contentContainerStyle={
-                styles.topUpOptions
-              }
-            >
-              {complementaryCredits.map(
-                (
-                  topUp,
-                ) => (
-                  <View
-                    key={
-                      topUp.id
-                    }
-                    style={
-                      styles.topUpOption
-                    }
-                  >
-                    <View
-                      style={
-                        styles.topUpOptionInfo
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.topUpCredits
-                        }
-                      >
-                        {topUp.credits.toLocaleString(
-                          language === "en" ? "en-US" : "fr-FR",
-                        )}{" "}
-                        {t.credits}
-                      </Text>
-
-                      <Text
-                        style={
-                          styles.topUpDescription
-                        }
-                      >
-                        {
-                          getTopUpDescription(topUp, language)
-                        }
-                      </Text>
-                    </View>
-
-                    <View
-                      style={
-                        styles.topUpOptionAction
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.topUpOptionPrice
-                        }
-                      >
-                        {
-                          topUp.price
-                        }
-                      </Text>
-
-                      <Pressable
-                        onPress={() =>
-                          handleCreditTopUp(
-                            topUp,
-                          )
-                        }
-                        disabled={
-                          isPaying !==
-                          null
-                        }
-                        style={({ pressed }) => [
-                          styles.smallPrimaryButton,
-                          pressed &&
-                            styles.primaryButtonPressed,
-                          isPaying !==
-                            null &&
-                            styles.disabled,
-                        ]}
-                      >
-                        {isPaying ===
-                        topUp.id ? (
-                          <ActivityIndicator
-                            size="small"
-                            color="#ffffff"
-                          />
-                        ) : (
-                          <Text
-                            style={
-                              styles.smallPrimaryButtonText
-                            }
-                          >
-                            {t.buy}
-                          </Text>
-                        )}
-                      </Pressable>
-                    </View>
-                  </View>
-                ),
-              )}
-            </ScrollView>
-
-            <View
-              style={
-                styles.paymentNotice
-              }
-            >
-              <Ionicons
-                name="information-circle-outline"
-                size={17}
-                color={themedIconColor("#71717a", isDark)}
-              />
-
-              <Text
-                style={
-                  styles.paymentNoticeText
-                }
-              >
-                {t.paymentNotice}
-              </Text>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
     </OriaThemeContext.Provider>
   );
@@ -2493,6 +2267,53 @@ function Step({
  */
 
 const baseStyles = StyleSheet.create({
+  packTabs: {
+    flexDirection: "row",
+    gap: 6,
+    padding: 5,
+    marginBottom: 18,
+    marginTop: 19,
+    borderWidth: 1,
+    borderRadius: 16,
+    borderColor: "#e4e4e7",
+    backgroundColor: "#f4f4f5",
+  },
+  packTab: {
+    flex: 1,
+    minHeight: 58,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  packTabActive: { backgroundColor: "#111111" },
+  packTabText: {
+    flexShrink: 1,
+    color: "#52525b",
+    textAlign: "center",
+    fontWeight: "700",
+    fontSize: 12,
+  },
+  packTabTextActive: { color: "#ffffff" },
+  secondaryTabButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 13,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#d4d4d8",
+    backgroundColor: "#ffffff",
+  },
+  secondaryTabButtonText: {
+    fontSize: 12, fontWeight: "700", color: "#18181b",
+  },
+  addonSection: { gap: 13 },
+  addonHeading: { fontSize: 22, fontWeight: "700", color: "#18181b" },
   safeArea: {
     flex: 1,
     backgroundColor: "#fafafa",

@@ -3907,6 +3907,38 @@ export default function ChatPage() {
     setCurrentUserId,
   ] = useState<string | null>(null);
 
+  // Alerte locale, une seule fois par seuil et par activation de pack.
+  const [creditAlert, setCreditAlert] = useState<number | null>(null);
+  const creditAlertCycleRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!wallet || !currentUserId || !wallet.is_pack_active ||
+        !wallet.pack_expires_at || new Date(wallet.pack_expires_at).getTime() <= Date.now()) {
+      setCreditAlert(null);
+      return;
+    }
+    const cycle = `${currentUserId}:${wallet.pack_id ?? "unknown"}:${wallet.pack_activated_at ?? wallet.pack_expires_at}`;
+    if (creditAlertCycleRef.current !== cycle) {
+      creditAlertCycleRef.current = cycle;
+      setCreditAlert(null);
+    }
+    const key = `oria_credit_alerts_v1:${cycle}`;
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(key) || "[]");
+      const shown: number[] = Array.isArray(stored) ? stored.filter((n): n is number =>
+        typeof n === "number" && [5000, 3000, 1000, 0].includes(n)) : [];
+      // Le seuil le plus bas atteint est prioritaire : jamais quatre alertes d'un coup.
+      const threshold = [0, 1000, 3000, 5000].find((n) => wallet.balance <= n && !shown.includes(n));
+      if (threshold !== undefined) {
+        window.localStorage.setItem(key, JSON.stringify([...new Set([...shown, ...[5000, 3000, 1000, 0].filter((n) => wallet.balance <= n)])]));
+        setCreditAlert(threshold);
+      }
+    } catch (error) {
+      console.warn("Notification de crédits indisponible :", error);
+    }
+  }, [wallet, currentUserId]);
+
+
   // Ajouts Chat Web : lecteur source, images de recherche, notes vocales.
   const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
   const [documentPreview, setDocumentPreview] = useState<DocumentPreviewData | null>(null);
@@ -6615,6 +6647,21 @@ export default function ChatPage() {
 
   return (
     <main className="min-h-dvh w-full min-w-0 overflow-x-clip bg-background text-foreground">
+      {creditAlert !== null && wallet?.is_pack_active && (
+        <div role="status" aria-live="polite" className="fixed bottom-5 left-1/2 z-[80] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-2xl border border-border bg-surface p-4 shadow-2xl sm:left-auto sm:right-6 sm:translate-x-0">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <Wallet size={19} className="mt-0.5 shrink-0 text-muted-strong" />
+              <div>
+                <p className="text-sm font-semibold">{language === "fr" ? (creditAlert === 0 ? "Crédits épuisés" : "Votre solde de crédits diminue") : (creditAlert === 0 ? "Credits exhausted" : "Your credit balance is running low")}</p>
+                <p className="mt-1 text-xs leading-5 text-muted">{language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Rechargez votre portefeuille pour continuer à utiliser ORIA.` : `You have ${wallet.balance.toLocaleString("en-US")} credits left. Top up to keep using ORIA.`}</p>
+                <Link href="/packs" onClick={() => setCreditAlert(null)} className="mt-3 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground hover:opacity-85">{language === "fr" ? "Recharger mes crédits" : "Top up credits"}</Link>
+              </div>
+            </div>
+            <button type="button" onClick={() => setCreditAlert(null)} aria-label={language === "fr" ? "Fermer la notification" : "Dismiss notification"} className="rounded-lg p-1 text-muted hover:bg-surface-secondary"><X size={17}/></button>
+          </div>
+        </div>
+      )}
       {codePreview ? <CodePreviewModal preview={codePreview} onClose={() => setCodePreview(null)} language={language}/> : null}
       {documentPreview ? <DocumentPreviewModal
         preview={documentPreview}

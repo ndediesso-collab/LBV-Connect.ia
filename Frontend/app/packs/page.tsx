@@ -42,7 +42,6 @@ import {
 
 
 
-  X,
 
 
 
@@ -58,7 +57,7 @@ import Link from "next/link";
 
 
 
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useState } from "react";
 
 
 
@@ -1445,11 +1444,7 @@ export default function PacksPage() {
 
 
 
-  const [showCreditTopUp, setShowCreditTopUp] =
-
-
-
-    useState(false);
+  const [activePackTab, setActivePackTab] = useState<"primary" | "addon">("primary");
 
 
 
@@ -2173,565 +2168,58 @@ export default function PacksPage() {
 
 
 
-        {/* Packs */}
-
-
-
-
-
-
-
-        <div className="mt-10 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-
-
-
-          {displayedPacks.map((pack) => (
-
-
-
-            <PackCard
-
-
-
-              key={pack.id}
-
-
-
-              pack={pack}
-
-
-
-              language={language}
-
-
-
-              onSelect={handlePackSelection}
-
-
-
-            />
-
-
-
-          ))}
-
-
-
+        {/* Deux offres commerciales visibles au même niveau */}
+        <div className="mt-10 grid grid-cols-2 gap-2 rounded-2xl border border-border bg-surface-secondary p-1.5" role="tablist" aria-label={language === "fr" ? "Catégories de crédits" : "Credit categories"}>
+          <button type="button" role="tab" aria-selected={activePackTab === "primary"} onClick={() => setActivePackTab("primary")}
+            className={`rounded-xl px-3 py-3 text-sm font-semibold transition ${activePackTab === "primary" ? "bg-accent text-accent-foreground" : "text-muted-strong hover:bg-surface-tertiary"}`}>
+            {UI[language].packsOria}
+          </button>
+          <button type="button" role="tab" aria-selected={activePackTab === "addon"} onClick={() => setActivePackTab("addon")}
+            className={`rounded-xl px-3 py-3 text-sm font-semibold transition ${activePackTab === "addon" ? "bg-accent text-accent-foreground" : "text-muted-strong hover:bg-surface-tertiary"}`}>
+            {UI[language].complementaryCredits}
+          </button>
         </div>
 
-
-
-
-
-
-
-        {/* Crédits complémentaires */}
-
-
-
-
-
-
-
-        <section className="mt-8 overflow-hidden rounded-3xl border border-border bg-surface-secondary">
-
-
-
-          <div className="grid gap-6 p-6 sm:p-8 lg:grid-cols-[1fr_auto] lg:items-center">
-
-
-
-            <div>
-
-
-
-              <div className="flex items-center gap-2">
-
-
-
-                <Zap size={18} />
-
-
-
-
-
-
-
-                <h2 className="text-lg font-semibold">
-
-
-
-                  {UI[language].needMoreCredits}
-
-
-
-                </h2>
-
-
-
-              </div>
-
-
-
-
-
-
-
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-
-
-
-                {UI[language].topUpDescription}
-
-
-
-              </p>
-
-
-
-
-
-
-
-              <p className="mt-3 text-sm font-medium">
-
-
-
-                {UI[language].startingAt}
-
-
-
-              </p>
-
-
-
+        {activePackTab === "primary" ? (
+          <section className="mt-6" role="tabpanel">
+            <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+              {displayedPacks.map((pack) => (
+                <PackCard key={pack.id} pack={pack} language={language} onSelect={handlePackSelection} />
+              ))}
             </div>
-
-
-
-
-
-
-
-            <button
-
-
-
-              type="button"
-
-
-
-              onClick={() => setShowCreditTopUp(true)}
-
-
-
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-medium text-accent-foreground transition hover:opacity-85"
-
-
-
-            >
-
-
-
-              {UI[language].buyCredits}
-
-
-
-              <Zap size={16} />
-
-
-
-            </button>
-
-
-
-          </div>
-
-
-
-        </section>
-
-
-
-
-
-
-
-        {/* Modal crédits complémentaires */}
-
-
-
-
-
-
-
-        {showCreditTopUp && (
-
-
-
-          <div
-
-
-
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-
-
-
-            role="dialog"
-
-
-
-            aria-modal="true"
-
-
-
-            aria-labelledby="credit-topup-title"
-
-
-
-            onMouseDown={(event: MouseEvent<HTMLDivElement>) => {
-
-
-
-              if (event.target === event.currentTarget) {
-
-
-
-                setShowCreditTopUp(false);
-
-
-
-              }
-
-
-
-            }}
-
-
-
-          >
-
-
-
-            <div className="w-full max-w-lg rounded-3xl border border-border bg-surface p-6 shadow-2xl sm:p-7">
-
-
-
-              <div className="flex items-start justify-between gap-4">
-
-
-
-                <div>
-
-
-
-                  <p className="text-sm font-medium text-muted">
-
-
-
-                    {UI[language].complementaryCredits}
-
-
-
-                  </p>
-
-
-
-
-
-
-
-                  <h2
-
-
-
-                    id="credit-topup-title"
-
-
-
-                    className="mt-1 text-2xl font-semibold tracking-tight"
-
-
-
-                  >
-
-
-
-                    {UI[language].topUpBalance}
-
-
-
-                  </h2>
-
-
-
-
-
-
-
-                  <p className="mt-2 text-sm leading-6 text-muted">
-
-
-
-                    {UI[language].topUpModalDescription}
-
-
-
-                  </p>
-
-
-
-                </div>
-
-
-
-
-
-
-
-                <button
-
-
-
-                  type="button"
-
-
-
-                  onClick={() => setShowCreditTopUp(false)}
-
-
-
-                  aria-label={UI[language].close}
-
-
-
-                  className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
-
-
-
-                >
-
-
-
-                  <X size={18} />
-
-
-
-                </button>
-
-
-
-              </div>
-
-
-
-
-
-
-
-              <div className="mt-6 space-y-3">
-
-
-
-                {complementaryCredits.map((topUp) => (
-
-
-
-                  <div
-
-
-
-                    key={topUp.id}
-
-
-
-                    className="flex flex-col gap-4 rounded-2xl border border-border bg-surface-secondary p-5 sm:flex-row sm:items-center sm:justify-between"
-
-
-
-                  >
-
-
-
-                    <div>
-
-
-
-                      <p className="text-lg font-semibold">
-
-
-
-                        {topUp.credits.toLocaleString(
-
-
-
-                          language === "en" ? "en-US" : "fr-FR",
-
-
-
-                        )}{" "}
-
-
-
-                        {UI[language].credits}
-
-
-
-                      </p>
-
-
-
-
-
-
-
-                      <p className="mt-1 text-sm text-muted">
-
-
-
-                        {getTopUpDescription(
-
-
-
-                          topUp.credits,
-
-
-
-                          language,
-
-
-
-                        )}
-
-
-
-                      </p>
-
-
-
-                    </div>
-
-
-
-
-
-
-
-                    <div className="flex items-center justify-between gap-4 sm:flex-col sm:items-end">
-
-
-
-                      <span className="text-lg font-semibold">
-
-
-
-                        {topUp.price}
-
-
-
-                      </span>
-
-
-
-
-
-
-
-                      <button
-
-
-
-                        type="button"
-
-
-
-                        onClick={() => handleCreditTopUp(topUp)}
-
-
-
-                        disabled={isPaying !== null}
-
-
-
-                        className="rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
-
-
-
-                      >
-
-
-
-                        {isPaying === topUp.id
-
-
-
-                          ? UI[language].redirecting
-
-
-
-                          : UI[language].buy}
-
-
-
-                      </button>
-
-
-
-                    </div>
-
-
-
-                  </div>
-
-
-
-                ))}
-
-
-
-              </div>
-
-
-
-
-
-
-
-              <div className="mt-5 rounded-2xl border border-border bg-surface-secondary p-4">
-
-
-
-                <p className="text-xs leading-5 text-muted">
-
-
-
-                  {UI[language].paymentNotice}
-
-
-
-                </p>
-
-
-
-              </div>
-
-
-
+            <div className="mt-6 rounded-2xl border border-border bg-surface-secondary p-5 sm:p-6">
+              <div className="flex items-center gap-2 font-semibold"><HelpCircle size={18} />{language === "fr" ? "À savoir avant de créer des vidéos" : "Before creating videos"}</div>
+              <p className="mt-2 text-sm leading-6 text-muted">
+                {language === "fr"
+                  ? "Tous les packs donnent accès aux créations vidéo selon leurs options disponibles. Attention : une vidéo peut consommer une part importante, voire la totalité de vos crédits. Les packs Léger et Intermédiaire sont principalement adaptés aux études, au chat, aux documents et à la productivité. Pour des créations médias régulières, privilégiez Pro (36 000 crédits) ou Business (120 000 crédits). Le coût en crédits est présenté avant confirmation de la génération."
+                  : "All packs offer video creation within their available settings. A video can consume a substantial share, or even all, of your credits. Light and Intermediate are mainly suited to studying, chat, documents and productivity. For regular media creation, consider Pro (36,000 credits) or Business (120,000 credits). The credit quote is shown before confirming a generation."}
+              </p>
             </div>
-
-
-
-          </div>
-
-
-
+          </section>
+        ) : (
+          <section className="mt-6" role="tabpanel">
+            <div className="mb-5">
+              <h2 className="text-2xl font-semibold tracking-tight">{UI[language].topUpBalance}</h2>
+              <p className="mt-2 text-sm leading-6 text-muted">{UI[language].topUpDescription}</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {complementaryCredits.map((topUp) => (
+                <article key={topUp.id} className="flex flex-col rounded-3xl border border-border bg-surface p-6 transition hover:border-border-strong">
+                  <Zap size={22} className="text-muted-strong" />
+                  <p className="mt-5 text-3xl font-semibold tracking-tight">{topUp.credits.toLocaleString(language === "en" ? "en-US" : "fr-FR")}</p>
+                  <p className="mt-1 text-sm text-muted">{UI[language].credits}</p>
+                  <p className="mt-6 text-2xl font-semibold">{topUp.price}</p>
+                  <p className="mt-2 flex-1 text-sm leading-6 text-muted">{getTopUpDescription(topUp.credits, language)}</p>
+                  <button type="button" onClick={() => handleCreditTopUp(topUp)} disabled={isPaying !== null}
+                    className="mt-7 w-full rounded-xl bg-accent px-4 py-3 text-sm font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50">
+                    {isPaying === topUp.id ? UI[language].redirecting : UI[language].buyCredits}
+                  </button>
+                </article>
+              ))}
+            </div>
+            <p className="mt-5 rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-5 text-muted">{UI[language].paymentNotice}</p>
+          </section>
         )}
-
-
-
-
-
-
 
         {/* Fonctionnement */}
 

@@ -3911,6 +3911,10 @@ export default function ChatPage() {
   const [activeCapability, setActiveCapability] =
     useState<string | null>(null);
   const [wallet, setWallet] = useState<WalletData | null>(null);
+  // Seulement un avertissement affiché à la fois, jamais une série.
+  const [creditAlert, setCreditAlert] = useState<number | null>(null);
+  const creditAlertCheckRef = useRef(0);
+
   const [trials, setTrials] =
     useState<Record<string, TrialInfo>>({});
   const [isLoadingWallet, setIsLoadingWallet] = useState(true);
@@ -3919,6 +3923,48 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  // Les crédits proviennent de /credits/me. Aucune nouvelle route backend.
+  // Stockage séparé par compte et activation : les alertes ne se répètent pas
+  // après fermeture du Chat, mais redeviennent disponibles au pack suivant.
+  useEffect(() => {
+    const checkId = ++creditAlertCheckRef.current;
+    let cancelled = false;
+    if (!wallet || !currentUserId || !wallet.is_pack_active ||
+        !wallet.pack_expires_at ||
+        new Date(wallet.pack_expires_at).getTime() <= Date.now() ||
+        !Number.isFinite(wallet.balance)) {
+      setCreditAlert(null);
+      return () => { cancelled = true; };
+    }
+
+    const cycle = `${wallet.pack_id ?? "unknown"}:${wallet.pack_activated_at ?? wallet.pack_expires_at}`;
+    const key = `oria_credit_alerts_v1_${currentUserId.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+    const balance = wallet.balance;
+    void (async () => {
+      try {
+        const raw = Platform.OS === "web"
+          ? getWebStorage()?.getItem(key) ?? null
+          : await SecureStore.getItemAsync(key);
+        if (cancelled || checkId !== creditAlertCheckRef.current) return;
+        const parsed: unknown = raw ? JSON.parse(raw) : null;
+        const data = parsed && typeof parsed === "object" ? parsed as { cycle?: unknown; shown?: unknown } : null;
+        const shown = data?.cycle === cycle && Array.isArray(data.shown)
+          ? data.shown.filter((n): n is number => typeof n === "number" && [5000, 3000, 1000, 0].includes(n))
+          : [];
+        const reached = [5000, 3000, 1000, 0].filter((n) => balance <= n);
+        const threshold = [0, 1000, 3000, 5000].find((n) => reached.includes(n) && !shown.includes(n));
+        if (threshold === undefined) return;
+        const payload = JSON.stringify({ cycle, shown: [...new Set([...shown, ...reached])] });
+        if (Platform.OS === "web") getWebStorage()?.setItem(key, payload);
+        else await SecureStore.setItemAsync(key, payload);
+        if (!cancelled && checkId === creditAlertCheckRef.current) setCreditAlert(threshold);
+      } catch (storageError) {
+        console.warn("ORIA — sauvegarde de l'alerte crédits indisponible :", storageError);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [wallet, currentUserId]);
+
   const [drawerVisible, setDrawerVisible] = useState(false);
   const { width: screenWidth } = useWindowDimensions();
   const { top: safeAreaTop, bottom: safeAreaBottom } = useSafeAreaInsets();
@@ -7561,6 +7607,41 @@ export default function ChatPage() {
             </View>
           </View> : null}
 
+          {!coursesOpen && creditAlert !== null && wallet?.is_pack_active ? (
+            <View style={[styles.creditAlertBanner, {
+              backgroundColor: isDark ? "#202024" : "#f4f4f5",
+              borderColor: isDark ? "#3a3a40" : "#e4e4e7",
+            }]}>
+              <Ionicons name={creditAlert === 0 ? "alert-circle-outline" : "wallet-outline"}
+                size={21} color={isDark ? "#eeeeee" : "#27272a"} />
+              <View style={{ flex: 1, gap: 3 }}>
+                <Text style={{ color: isDark ? "#ffffff" : "#18181b", fontSize: 13, fontWeight: "700" }}>
+                  {creditAlert === 0
+                    ? (language === "fr" ? "Crédits épuisés" : "Credits exhausted")
+                    : (language === "fr" ? "Votre solde de crédits diminue" : "Your credits are running low")}
+                </Text>
+                <Text style={{ color: isDark ? "#c4c4cb" : "#52525b", fontSize: 12, lineHeight: 17 }}>
+                  {language === "fr"
+                    ? (creditAlert === 0 ? "Vous pouvez recharger vos crédits pour continuer." : `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits.`)
+                    : (creditAlert === 0 ? "You can top up your credits to continue." : `${wallet.balance.toLocaleString("en-US")} credits remaining.`)}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => router.push({ pathname: "/packs", params: { tab: "addon" } } as any)}
+                  style={{ alignSelf: "flex-start", paddingVertical: 6 }}
+                >
+                  <Text style={{ color: isDark ? "#ffffff" : "#111111", fontSize: 12, fontWeight: "700", textDecorationLine: "underline" }}>
+                    {language === "fr" ? "Recharger mes crédits" : "Top up my credits"}
+                  </Text>
+                </Pressable>
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel={language === "fr" ? "Fermer l'alerte" : "Dismiss alert"}
+                onPress={() => setCreditAlert(null)} style={{ padding: 4 }}>
+                <Ionicons name="close" size={18} color={isDark ? "#dddddd" : "#52525b"} />
+              </Pressable>
+            </View>
+          ) : null}
+
           {coursesOpen ? (
             <OriaCoursesMobilePanel language={language} wallet={wallet} userId={currentUserId}
               onWalletRefresh={() => { void loadWallet(); }} onClose={() => setCoursesOpen(false)} />
@@ -8547,6 +8628,17 @@ export default function ChatPage() {
 
 
 const baseStyles = StyleSheet.create({
+  creditAlertBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    marginHorizontal: 12,
+    marginVertical: 7,
+  },
   safe: {
     flex: 1,
     backgroundColor: "#f8f8f6",
