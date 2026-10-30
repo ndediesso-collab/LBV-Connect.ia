@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,9 +7,20 @@ from app.routes import router
 
 from app.route.ai import router as ai_router
 
+from app.services.oria_memory_middleware import OriaMemoryCleanupMiddleware
+
 
 app = FastAPI(
     title="LBV-Connect Backend",
+)
+
+
+# ============================================================
+# ORIA — GESTION AUTOMATIQUE DE LA RAM
+# ============================================================
+
+app.add_middleware(
+    OriaMemoryCleanupMiddleware
 )
 
 

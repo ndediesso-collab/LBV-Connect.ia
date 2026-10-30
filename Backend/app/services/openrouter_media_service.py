@@ -23,6 +23,9 @@ import re
 import datetime
 import urllib.error
 import urllib.request
+import threading
+
+from app.services.oria_memory_management import purge_ram
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -38,6 +41,9 @@ MAX_VIDEO_BYTES = 150 * 1024 * 1024
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
 _IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp"}
 _RECOVERY_LOG = logging.getLogger("oria.openrouter.recovery")
+# One heavy OpenRouter media operation at a time per Python worker.
+# Across multiple Gunicorn/Uvicorn workers, set WEB_CONCURRENCY=1 on small Render plans.
+_HEAVY_MEDIA_LOCK = threading.Lock()
 _IMAGE_SIGNATURES = {
     "image/png": lambda b: b.startswith(b"\x89PNG\r\n\x1a\n"),
     "image/jpeg": lambda b: b.startswith(b"\xff\xd8\xff"),
@@ -320,8 +326,16 @@ class OpenRouterMediaService:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_symlink():
             raise OpenRouterMediaError("Destination de média invalide.")
-        with path.open("xb") as handle:
-            handle.write(data)
+        created = False
+        try:
+            with path.open("xb") as handle:
+                created = True
+                handle.write(data)
+        except BaseException:
+            # Only unlink a newly created partial file, after its handle closes.
+            if created:
+                path.unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def _usage(data: Mapping[str, Any]) -> dict[str, Any]:
@@ -364,6 +378,27 @@ class OpenRouterMediaService:
         return decoded, real_mime
 
     def create_image(self, *, model: str, prompt: str, destination: Path,
+                     resolution: str = "1K", aspect_ratio: str = "1:1",
+                     reference_bytes: bytes | None = None,
+                     reference_mime: str = "image/png",
+                     request_id: str | None = None) -> OpenRouterMediaFile:
+        """Serialise large image operations; purge after the inner stack is released.
+
+        Billing reservation and idempotency remain the caller's responsibility.
+        This lock is per worker process, not a distributed lock.
+        """
+        with _HEAVY_MEDIA_LOCK:
+            try:
+                return self._create_image_impl(
+                    model=model, prompt=prompt, destination=destination,
+                    resolution=resolution, aspect_ratio=aspect_ratio,
+                    reference_bytes=reference_bytes, reference_mime=reference_mime,
+                    request_id=request_id,
+                )
+            finally:
+                purge_ram("openrouter_image")
+
+    def _create_image_impl(self, *, model: str, prompt: str, destination: Path,
                      resolution: str = "1K", aspect_ratio: str = "1:1",
                      reference_bytes: bytes | None = None,
                      reference_mime: str = "image/png",
@@ -411,10 +446,16 @@ class OpenRouterMediaService:
                 phase = "temporary_file"
                 output = Path(destination).with_suffix({"image/png": ".png", "image/jpeg": ".jpg",
                                                         "image/webp": ".webp"}[mime])
+                usage = self._usage(result)
+                # The decoded bytes have been verified. Drop the huge Base64 JSON
+                # immediately rather than keeping it alive through file writes.
+                item.clear()
+                images.clear()
+                result.clear()
                 self._save_media(output, content, MAX_IMAGE_BYTES)
                 _RECOVERY_LOG.info("image_recovery phase=temporary_file_saved request_id=%s index=%d mime=%s bytes=%d",
                                    trace, index, mime, len(content))
-                return OpenRouterMediaFile(str(output), mime, model, self._usage(result))
+                return OpenRouterMediaFile(str(output), mime, model, usage)
             raise failure or OpenRouterMediaError("Aucune image exploitable.", phase="image_unusable")
         except Exception as exc:
             known_phase = getattr(exc, "phase", None) or phase
@@ -481,16 +522,71 @@ class OpenRouterMediaService:
                 "usage": self._usage(data) if state == "completed" else None}
 
     def download_video(self, *, job_id: str, destination: Path, model: str) -> OpenRouterMediaFile:
-        """PAID result retrieval; only after owner check + confirmed completed state."""
+        """Download completed video with bounded RAM; serialise heavyweight work."""
+        with _HEAVY_MEDIA_LOCK:
+            try:
+                return self._download_video_impl(job_id=job_id, destination=destination, model=model)
+            finally:
+                purge_ram("openrouter_video_download")
+
+    def _download_video_impl(self, *, job_id: str, destination: Path, model: str) -> OpenRouterMediaFile:
+        """Stream directly to an exclusive file; never buffer 150 MiB in RAM."""
         status = self.get_video_status(job_id)
         if status["status"] != "completed":
             raise OpenRouterMediaError("La vidéo n'est pas terminée.")
-        data = self._call("GET", f"/videos/{self._job_id(job_id)}/content", timeout=90,
-                          max_bytes=MAX_VIDEO_BYTES)
-        # Validate common MP4/ISO BMFF signature instead of blindly trusting extension.
-        if len(data) < 12 or data[4:8] != b"ftyp":
-            raise OpenRouterMediaError("OpenRouter n'a pas retourné une vidéo MP4 valide.")
+
+        job_id = self._job_id(job_id)
         output = Path(destination).with_suffix(".mp4")
-        self._save_media(output, data, MAX_VIDEO_BYTES)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if output.is_symlink():
+            raise OpenRouterMediaError("Destination de média invalide.")
+        req = urllib.request.Request(
+            BASE_URL + f"/videos/{job_id}/content",
+            method="GET",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Accept": "video/mp4",
+                "X-Title": "ORIA",
+            },
+        )
+        # Exclusive create; never delete a pre-existing file if open("xb") fails.
+        created = False
+        try:
+            try:
+                with output.open("xb") as handle:
+                    created = True
+                    with self.opener(req, timeout=90) as response:
+                        if not 200 <= response.status < 300:
+                            raise OpenRouterMediaError(
+                                f"OpenRouter a répondu HTTP {response.status}.", status_code=response.status
+                            )
+                        total = 0
+                        header = b""
+                        while True:
+                            chunk = response.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            total += len(chunk)
+                            if total > MAX_VIDEO_BYTES:
+                                raise OpenRouterMediaError("Vidéo OpenRouter trop volumineuse.", phase="video_size_limit")
+                            if len(header) < 12:
+                                header = (header + chunk)[:12]
+                            handle.write(chunk)
+                        if total < 12 or header[4:8] != b"ftyp":
+                            raise OpenRouterMediaError("OpenRouter n'a pas retourné une vidéo MP4 valide.")
+            except BaseException:
+                if created:
+                    output.unlink(missing_ok=True)
+                raise
+        except urllib.error.HTTPError as exc:
+            raise OpenRouterMediaError(
+                f"OpenRouter a répondu HTTP {exc.code} lors de la récupération vidéo.",
+                status_code=exc.code, phase="video_download_http",
+            ) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise OpenRouterMediaError(
+                "Échec réseau lors de la récupération vidéo ; consulter le statut avant de recommencer.",
+                phase="video_download_network",
+            ) from exc
         return OpenRouterMediaFile(str(output), "video/mp4", model,
                                    status["usage"] or {}, interaction_id=job_id)
