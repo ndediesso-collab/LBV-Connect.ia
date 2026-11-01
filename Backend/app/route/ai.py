@@ -8831,6 +8831,12 @@ def _or_caps_for(wallet) -> dict[str, Any]:
             "duration_choices_seconds": durations,
             "billable_resolutions": [r for r in (item.get("supported_resolutions") or []) if r == "720p"],
             "aspect_ratios": list(item.get("supported_aspect_ratios") or []),
+            "supports_audio": item.get("generate_audio") is True,
+            "supports_first_frame": any(
+                frame == "first_frame" if isinstance(frame, str)
+                else isinstance(frame, dict) and frame.get("frame_type") == "first_frame"
+                for frame in (item.get("supported_frame_images") or [])
+            ),
         })
     allowed_actions = [
         a for a in _OR_SHORT_ACTIONS.get(wallet.pack_id, ())
@@ -8858,7 +8864,11 @@ def _or_caps_for(wallet) -> dict[str, Any]:
                 "provider_per_call_seconds": {"min": min(duration) if duration else 0,
                                                "max": max(duration) if duration else 0},
                 "short_clip_actions_available_now": allowed_actions if active else [],
-                "long_projects_generation_available": False},
+                "long_projects_generation_available": bool(
+                    active and "multi_scene" in rights["video_modes"] and
+                    int(rights["max_video_scenes"]) >= 2 and
+                    bool(duration) and bool(video_options)
+                )},
             "notice": "Les devis OpenRouter reposent sur un plafond USD administrateur explicite, "
                       "le coût final sur usage.cost, et la vidéo sur un job durable."}
 
@@ -9204,3 +9214,45 @@ async def openrouter_media_job_status(
     except Exception:
         _or_job_update(uid, request_id, {"status": "reconcile"})
         return _or_public_job(_or_job_get(uid, request_id))
+
+# ================================================================
+# ORIA MINI-FILM V7 — RACCORDEMENT DES ROUTES EXISTANTES
+# ================================================================
+# Cette installation avait disparu du routeur ai.py lors des
+# modifications OpenRouter ; elle ne recrée ni facturation ni moteur.
+# L'extension exige déjà les tables oria_video_projects et
+# oria_video_project_scenes, plus FFmpeg/ffprobe pour le montage.
+from app.services.oria_mini_film_v7 import install as _install_oria_mini_film_v7
+
+
+def _oria_film_video_reservation(
+    _provider_model: dict[str, Any],
+    _duration_seconds: int,
+    _generate_audio: bool,
+) -> tuple[int, int, Decimal, bool]:
+    """Même réserve maximale par clip que le devis OpenRouter existant.
+
+    Valeur fournisseur non certifiée = False ; le coût réel reste déterminé
+    par le traitement OpenRouter et la régularisation du job individuel.
+    """
+    estimated, maximum, _reserved_usd = _or_reservation("video")
+    return estimated, maximum, _or_limit("video"), False
+
+
+_install_oria_mini_film_v7(
+    router,
+    db=supabase,
+    authenticate=_authenticate_chat_user,
+    wallet_for_quote=_google_wallet_for_quote,
+    rights_for_pack=credit_costs_config.google_media_capabilities_for_pack,
+    short_actions=_OR_SHORT_ACTIONS,
+    config=credit_costs_config,
+    verify_video=_or_verify_config,
+    video_models_for_pack=_or_allowed_video_models,
+    catalog_for_video=_or_catalog,
+    video_service=_or_service,
+    get_job=_or_job_get,
+    get_job_status=openrouter_media_job_status,
+    media_service=MediaService,
+    video_reservation=_oria_film_video_reservation,
+)

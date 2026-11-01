@@ -1,4 +1,5 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
+import Animated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
 import {
   ActivityIndicator,
   Alert,
@@ -8,6 +9,7 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  useColorScheme,
   Text,
   TextInput,
   View,
@@ -146,6 +148,10 @@ function localizeAuthError(message: string, language: OriaLanguage) {
 }
 
 export default function LoginPage() {
+  // Pages publiques : le thème suit le réglage système sans requête Supabase.
+  const isDark = useColorScheme() === "dark";
+  const styles = useMemo(() => authStyles(isDark), [isDark]);
+
   const [language, setLanguage] = useState<OriaLanguage>("fr");
   const [showPassword, setShowPassword] = useState(false);
 
@@ -278,13 +284,13 @@ export default function LoginPage() {
               accessibilityRole="button"
               accessibilityLabel={t.homeAccessibility}
             >
-              <Ionicons name="sparkles" size={18} color="#17171b" />
+              <Ionicons name="sparkles" size={18} color={isDark ? "#ffffff" : "#111111"} />
               <Text style={styles.brand}>Oria.</Text>
             </Pressable>
           </View>
 
           <View style={styles.center}>
-            <View style={styles.card}>
+            <Animated.View entering={FadeInDown.duration(440).reduceMotion(ReduceMotion.System)} style={styles.card}>
               <Pressable
                 onPress={goHome}
                 disabled={loading}
@@ -294,7 +300,7 @@ export default function LoginPage() {
                   loading && styles.disabled,
                 ]}
               >
-                <Ionicons name="arrow-back" size={17} color="#777780" />
+                <Ionicons name="arrow-back" size={17} color={isDark ? "#bcbcbc" : "#777777"} />
                 <Text style={styles.backText}>{t.back}</Text>
               </Pressable>
 
@@ -303,7 +309,7 @@ export default function LoginPage() {
                   <Ionicons
                     name="lock-closed-outline"
                     size={19}
-                    color="#fff"
+                    color={isDark ? "#000000" : "#ffffff"}
                   />
                 </View>
 
@@ -329,7 +335,7 @@ export default function LoginPage() {
                     autoComplete="email"
                     textContentType="emailAddress"
                     placeholder={t.emailPlaceholder}
-                    placeholderTextColor="#9999a2"
+                    placeholderTextColor={isDark ? "#858585" : "#999999"}
                     style={[styles.input, loading && styles.inputDisabled]}
                     returnKeyType="next"
                   />
@@ -364,7 +370,7 @@ export default function LoginPage() {
                       autoComplete="password"
                       textContentType="password"
                       placeholder={t.passwordPlaceholder}
-                      placeholderTextColor="#9999a2"
+                      placeholderTextColor={isDark ? "#858585" : "#999999"}
                       style={[
                         styles.input,
                         styles.passwordInput,
@@ -392,7 +398,7 @@ export default function LoginPage() {
                             : "eye-outline"
                         }
                         size={19}
-                        color="#777780"
+                        color={isDark ? "#bcbcbc" : "#777777"}
                       />
                     </Pressable>
                   </View>
@@ -431,7 +437,7 @@ export default function LoginPage() {
                 >
                   {loading ? (
                     <>
-                      <ActivityIndicator size="small" color="#fff" />
+                      <ActivityIndicator size="small" color={isDark ? "#000000" : "#ffffff"} />
                       <Text style={styles.submitText}>{t.signingIn}</Text>
                     </>
                   ) : (
@@ -472,7 +478,7 @@ export default function LoginPage() {
                   {t.createAccount}
                 </Text>
               </Text>
-            </View>
+            </Animated.View>
 
             <Text style={styles.legalText}>
               {t.legal}
@@ -484,10 +490,10 @@ export default function LoginPage() {
   );
 }
 
-const styles = StyleSheet.create({
+const lightStyles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
   },
 
   keyboardView: {
@@ -515,7 +521,7 @@ const styles = StyleSheet.create({
   },
 
   brand: {
-    color: "#17171b",
+    color: "#191919",
     fontSize: 15,
     fontWeight: "700",
     letterSpacing: -0.2,
@@ -533,11 +539,11 @@ const styles = StyleSheet.create({
   card: {
     width: "100%",
     borderWidth: 1,
-    borderColor: "#e7e7eb",
-    borderRadius: 28,
-    backgroundColor: "#fff",
+    borderColor: "#e6e6e6",
+    borderRadius: 27,
+    backgroundColor: "#ffffff",
     padding: 24,
-    shadowColor: "#000",
+    shadowColor: "#000000",
     shadowOpacity: 0.04,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 6 },
@@ -554,7 +560,7 @@ const styles = StyleSheet.create({
   },
 
   backText: {
-    color: "#777780",
+    color: "#717171",
     fontSize: 14,
     fontWeight: "500",
   },
@@ -569,12 +575,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#17171b",
+    backgroundColor: "#191919",
   },
 
   title: {
     marginTop: 22,
-    color: "#17171b",
+    color: "#191919",
     fontSize: 29,
     lineHeight: 36,
     fontWeight: "700",
@@ -583,7 +589,7 @@ const styles = StyleSheet.create({
 
   subtitle: {
     marginTop: 7,
-    color: "#777780",
+    color: "#717171",
     fontSize: 14,
     lineHeight: 22,
   },
@@ -595,7 +601,7 @@ const styles = StyleSheet.create({
 
   label: {
     marginBottom: 8,
-    color: "#242429",
+    color: "#222222",
     fontSize: 14,
     fontWeight: "600",
   },
@@ -604,11 +610,11 @@ const styles = StyleSheet.create({
     height: 50,
     width: "100%",
     borderWidth: 1,
-    borderColor: "#dedee3",
-    borderRadius: 13,
-    backgroundColor: "#f7f7f8",
+    borderColor: "#d8d8d8",
+    borderRadius: 16,
+    backgroundColor: "#f5f5f5",
     paddingHorizontal: 15,
-    color: "#17171b",
+    color: "#191919",
     fontSize: 14,
   },
 
@@ -624,7 +630,7 @@ const styles = StyleSheet.create({
   },
 
   forgotText: {
-    color: "#777780",
+    color: "#717171",
     fontSize: 12,
     fontWeight: "600",
   },
@@ -654,8 +660,8 @@ const styles = StyleSheet.create({
     gap: 8,
     borderWidth: 1,
     borderColor: "#f2c9c5",
-    borderRadius: 13,
-    backgroundColor: "#fff4f2",
+    borderRadius: 16,
+    backgroundColor: "#f5f5f5",
     paddingHorizontal: 13,
     paddingVertical: 11,
   },
@@ -673,8 +679,8 @@ const styles = StyleSheet.create({
     gap: 8,
     borderWidth: 1,
     borderColor: "#b7e3c5",
-    borderRadius: 13,
-    backgroundColor: "#f0fbf3",
+    borderRadius: 16,
+    backgroundColor: "#fafafa",
     paddingHorizontal: 13,
     paddingVertical: 11,
   },
@@ -688,8 +694,8 @@ const styles = StyleSheet.create({
 
   submitButton: {
     height: 50,
-    borderRadius: 13,
-    backgroundColor: "#17171b",
+    borderRadius: 16,
+    backgroundColor: "#191919",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -706,7 +712,7 @@ const styles = StyleSheet.create({
   },
 
   submitText: {
-    color: "#fff",
+    color: "#ffffff",
     fontSize: 14,
     fontWeight: "600",
   },
@@ -721,11 +727,11 @@ const styles = StyleSheet.create({
   divider: {
     flex: 1,
     height: 1,
-    backgroundColor: "#e7e7eb",
+    backgroundColor: "#e6e6e6",
   },
 
   dividerText: {
-    color: "#9999a2",
+    color: "#9d9d9d",
     fontSize: 12,
   },
 
@@ -733,9 +739,9 @@ const styles = StyleSheet.create({
     height: 50,
     width: "100%",
     borderWidth: 1,
-    borderColor: "#dedee3",
-    borderRadius: 13,
-    backgroundColor: "#fff",
+    borderColor: "#d8d8d8",
+    borderRadius: 16,
+    backgroundColor: "#ffffff",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -756,7 +762,7 @@ const styles = StyleSheet.create({
   },
 
   googleText: {
-    color: "#242429",
+    color: "#222222",
     fontSize: 14,
     fontWeight: "600",
   },
@@ -764,13 +770,13 @@ const styles = StyleSheet.create({
   registerText: {
     marginTop: 27,
     textAlign: "center",
-    color: "#777780",
+    color: "#717171",
     fontSize: 13,
     lineHeight: 20,
   },
 
   registerLink: {
-    color: "#17171b",
+    color: "#191919",
     fontWeight: "700",
   },
 
@@ -778,7 +784,7 @@ const styles = StyleSheet.create({
     marginTop: 18,
     paddingHorizontal: 10,
     textAlign: "center",
-    color: "#9999a2",
+    color: "#9d9d9d",
     fontSize: 11,
     lineHeight: 18,
   },
@@ -791,3 +797,38 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
 });
+
+// Couleurs natives de la version MONO Web. Les formulaires et actions sont inchangés.
+const darkStyles = StyleSheet.create({
+  'safeArea': {backgroundColor: '#000000'},
+  'brand': {color: '#ffffff'},
+  'card': {backgroundColor: '#101010', borderColor: '#2b2b2b', shadowOpacity: 0.15, elevation: 0},
+  'backText': {color: '#b5b5b5'},
+  'lockIcon': {backgroundColor: '#ffffff'},
+  'title': {color: '#ffffff'},
+  'subtitle': {color: '#b5b5b5'},
+  'label': {color: '#eeeeee'},
+  'input': {color: '#ffffff', backgroundColor: '#171717', borderColor: '#333333'},
+  'forgotText': {color: '#bdbdbd'},
+  'submitButton': {backgroundColor: '#ffffff'},
+  'submitText': {color: '#000000'},
+  'divider': {backgroundColor: '#303030'},
+  'dividerText': {color: '#9c9c9c'},
+  'googleButton': {backgroundColor: '#171717', borderColor: '#343434'},
+  'googleText': {color: '#ffffff'},
+  'registerText': {color: '#b5b5b5'},
+  'registerLink': {color: '#ffffff'},
+  'legalText': {color: '#939393'},
+  'errorBox': {backgroundColor: '#271616', borderColor: '#633636'},
+  'successBox': {backgroundColor: '#102719', borderColor: '#2d6141'},
+});
+
+function authStyles(dark: boolean): typeof lightStyles {
+  if (!dark) return lightStyles;
+  const overrides = darkStyles as Partial<Record<keyof typeof lightStyles, object>>;
+  const entries = Object.keys(lightStyles).map((key) => {
+    const id = key as keyof typeof lightStyles;
+    return [key, overrides[id] ? [lightStyles[id], overrides[id]] : lightStyles[id]] as const;
+  });
+  return Object.fromEntries(entries) as typeof lightStyles;
+}

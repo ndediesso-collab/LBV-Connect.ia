@@ -1,4 +1,5 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
+import Animated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
 import {
   ActivityIndicator,
   Alert,
@@ -9,6 +10,7 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  useColorScheme,
   Text,
   TextInput,
   View,
@@ -486,6 +488,10 @@ function buildInternationalPhone(
  * restent séparées et explicites.
  */
 export default function RegisterPage() {
+  // Pages publiques : le thème suit le réglage système sans requête Supabase.
+  const isDark = useColorScheme() === "dark";
+  const styles = useMemo(() => authStyles(isDark), [isDark]);
+
   const [language, setLanguage] = useState<OriaLanguage>("fr");
   const t = UI[language];
 
@@ -1083,7 +1089,7 @@ export default function RegisterPage() {
               <Ionicons
                 name="sparkles"
                 size={19}
-                color="#111111"
+                color={isDark ? "#ffffff" : "#111111"}
               />
 
               <Text
@@ -1099,7 +1105,7 @@ export default function RegisterPage() {
           <View
             style={styles.registerArea}
           >
-            <View
+            <Animated.View entering={FadeInDown.duration(440).reduceMotion(ReduceMotion.System)}
               style={styles.card}
             >
               {/* Back */}
@@ -1120,7 +1126,7 @@ export default function RegisterPage() {
                 <Ionicons
                   name="arrow-back"
                   size={17}
-                  color="#71717a"
+                  color={isDark ? "#bcbcbc" : "#777777"}
                 />
 
                 <Text
@@ -1143,7 +1149,7 @@ export default function RegisterPage() {
                   <Ionicons
                     name="person-outline"
                     size={20}
-                    color="#ffffff"
+                    color={isDark ? "#000000" : "#ffffff"}
                   />
                 </View>
 
@@ -1195,7 +1201,7 @@ export default function RegisterPage() {
                         setFirstName
                       }
                       placeholder={t.firstNamePlaceholder}
-                      placeholderTextColor="#a1a1aa"
+                      placeholderTextColor={isDark ? "#858585" : "#999999"}
                       autoCapitalize="words"
                       autoCorrect={false}
                       autoComplete="given-name"
@@ -1229,7 +1235,7 @@ export default function RegisterPage() {
                         setLastName
                       }
                       placeholder={t.lastNamePlaceholder}
-                      placeholderTextColor="#a1a1aa"
+                      placeholderTextColor={isDark ? "#858585" : "#999999"}
                       autoCapitalize="words"
                       autoCorrect={false}
                       autoComplete="family-name"
@@ -1296,7 +1302,7 @@ export default function RegisterPage() {
                     <Ionicons
                       name="chevron-down"
                       size={18}
-                      color="#71717a"
+                      color={isDark ? "#bcbcbc" : "#777777"}
                     />
                   </Pressable>
 
@@ -1347,7 +1353,7 @@ export default function RegisterPage() {
                         setPhone
                       }
                       placeholder="06 12 34 56 7"
-                      placeholderTextColor="#a1a1aa"
+                      placeholderTextColor={isDark ? "#858585" : "#999999"}
                       keyboardType="phone-pad"
                       autoComplete="tel"
                       editable={
@@ -1386,7 +1392,7 @@ export default function RegisterPage() {
                       setEmail
                     }
                     placeholder={t.emailPlaceholder}
-                    placeholderTextColor="#a1a1aa"
+                    placeholderTextColor={isDark ? "#858585" : "#999999"}
                     keyboardType="email-address"
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -1424,7 +1430,7 @@ export default function RegisterPage() {
                         setPassword
                       }
                       placeholder={t.passwordPlaceholder}
-                      placeholderTextColor="#a1a1aa"
+                      placeholderTextColor={isDark ? "#858585" : "#999999"}
                       secureTextEntry={
                         !showPassword
                       }
@@ -1468,7 +1474,7 @@ export default function RegisterPage() {
                             : "eye-outline"
                         }
                         size={19}
-                        color="#71717a"
+                        color={isDark ? "#bcbcbc" : "#777777"}
                       />
                     </Pressable>
                   </View>
@@ -1506,7 +1512,7 @@ export default function RegisterPage() {
                         setConfirmPassword
                       }
                       placeholder={t.confirmPasswordPlaceholder}
-                      placeholderTextColor="#a1a1aa"
+                      placeholderTextColor={isDark ? "#858585" : "#999999"}
                       secureTextEntry={
                         !showConfirmPassword
                       }
@@ -1550,7 +1556,7 @@ export default function RegisterPage() {
                             : "eye-outline"
                         }
                         size={19}
-                        color="#71717a"
+                        color={isDark ? "#bcbcbc" : "#777777"}
                       />
                     </Pressable>
                   </View>
@@ -1624,7 +1630,7 @@ export default function RegisterPage() {
                     ]}
                   >
                     {termsAccepted ? (
-                      <Ionicons name="checkmark" size={13} color="#ffffff" />
+                      <Ionicons name="checkmark" size={13} color={isDark ? "#000000" : "#ffffff"} />
                     ) : null}
                   </Pressable>
 
@@ -1675,7 +1681,7 @@ export default function RegisterPage() {
                     >
                       <ActivityIndicator
                         size="small"
-                        color="#ffffff"
+                        color={isDark ? "#000000" : "#ffffff"}
                       />
 
                       <Text
@@ -1800,7 +1806,7 @@ export default function RegisterPage() {
                   </Text>
                 </Pressable>
               </View>
-            </View>
+            </Animated.View>
 
             {/* Footer */}
 
@@ -1892,7 +1898,7 @@ export default function RegisterPage() {
                 <Ionicons
                   name="close"
                   size={22}
-                  color="#52525b"
+                  color={isDark ? "#bcbcbc" : "#555555"}
                 />
               </Pressable>
             </View>
@@ -1962,7 +1968,7 @@ export default function RegisterPage() {
                         <Ionicons
                           name="checkmark-circle"
                           size={21}
-                          color="#111111"
+                          color={isDark ? "#ffffff" : "#111111"}
                         />
                       ) : null}
                     </Pressable>
@@ -1986,10 +1992,10 @@ export default function RegisterPage() {
  * fond, carte, champs, messages, bouton principal,
  * séparateur et sélecteur de pays.
  */
-const styles = StyleSheet.create({
+const lightStyles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
   },
 
   keyboardContainer: {
@@ -2039,8 +2045,8 @@ const styles = StyleSheet.create({
     width: "100%",
     backgroundColor: "#ffffff",
     borderWidth: 1,
-    borderColor: "#e4e4e7",
-    borderRadius: 24,
+    borderColor: "#e6e6e6",
+    borderRadius: 27,
     paddingHorizontal: 22,
     paddingVertical: 24,
     shadowColor: "#000000",
@@ -2064,7 +2070,7 @@ const styles = StyleSheet.create({
   },
 
   backText: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 14,
     fontWeight: "500",
   },
@@ -2080,7 +2086,7 @@ const styles = StyleSheet.create({
 
   title: {
     marginTop: 22,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 28,
     lineHeight: 34,
     fontWeight: "700",
@@ -2089,7 +2095,7 @@ const styles = StyleSheet.create({
 
   description: {
     marginTop: 8,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 14,
     lineHeight: 22,
     fontWeight: "400",
@@ -2111,7 +2117,7 @@ const styles = StyleSheet.create({
 
   label: {
     marginBottom: 8,
-    color: "#27272a",
+    color: "#292929",
     fontSize: 14,
     lineHeight: 20,
     fontWeight: "600",
@@ -2120,20 +2126,20 @@ const styles = StyleSheet.create({
   input: {
     minHeight: 50,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
-    borderRadius: 12,
+    borderColor: "#e6e6e6",
+    borderRadius: 16,
     backgroundColor: "#fafafa",
     paddingHorizontal: 15,
     paddingVertical: 12,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 14,
   },
 
   selectButton: {
     minHeight: 50,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
-    borderRadius: 12,
+    borderColor: "#e6e6e6",
+    borderRadius: 16,
     backgroundColor: "#fafafa",
     paddingHorizontal: 15,
     flexDirection: "row",
@@ -2147,13 +2153,13 @@ const styles = StyleSheet.create({
   },
 
   selectText: {
-    color: "#27272a",
+    color: "#292929",
     fontSize: 14,
   },
 
   helperText: {
     marginTop: 7,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
     lineHeight: 18,
   },
@@ -2168,16 +2174,16 @@ const styles = StyleSheet.create({
     minWidth: 62,
     minHeight: 50,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
-    borderRadius: 12,
-    backgroundColor: "#f4f4f5",
+    borderColor: "#e6e6e6",
+    borderRadius: 16,
+    backgroundColor: "#f5f5f5",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 10,
   },
 
   countryCodeText: {
-    color: "#27272a",
+    color: "#292929",
     fontSize: 14,
     fontWeight: "600",
   },
@@ -2211,8 +2217,8 @@ const styles = StyleSheet.create({
     gap: 9,
     borderWidth: 1,
     borderColor: "#fecaca",
-    borderRadius: 12,
-    backgroundColor: "#fef2f2",
+    borderRadius: 16,
+    backgroundColor: "#f5f5f5",
     paddingHorizontal: 13,
     paddingVertical: 12,
   },
@@ -2230,8 +2236,8 @@ const styles = StyleSheet.create({
     gap: 9,
     borderWidth: 1,
     borderColor: "#a7f3d0",
-    borderRadius: 12,
-    backgroundColor: "#ecfdf5",
+    borderRadius: 16,
+    backgroundColor: "#fafafa",
     paddingHorizontal: 13,
     paddingVertical: 12,
   },
@@ -2253,7 +2259,7 @@ const styles = StyleSheet.create({
     width: 18,
     height: 18,
     borderWidth: 1.5,
-    borderColor: "#a1a1aa",
+    borderColor: "#9d9d9d",
     borderRadius: 5,
     alignItems: "center",
     justifyContent: "center",
@@ -2267,7 +2273,7 @@ const styles = StyleSheet.create({
 
   termsText: {
     flex: 1,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
     lineHeight: 19,
   },
@@ -2280,7 +2286,7 @@ const styles = StyleSheet.create({
 
   submitButton: {
     minHeight: 50,
-    borderRadius: 12,
+    borderRadius: 16,
     backgroundColor: "#111111",
     alignItems: "center",
     justifyContent: "center",
@@ -2314,19 +2320,19 @@ const styles = StyleSheet.create({
   dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: "#e4e4e7",
+    backgroundColor: "#e6e6e6",
   },
 
   dividerText: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
   },
 
   googleButton: {
     minHeight: 50,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
-    borderRadius: 12,
+    borderColor: "#e6e6e6",
+    borderRadius: 16,
     backgroundColor: "#ffffff",
     flexDirection: "row",
     alignItems: "center",
@@ -2353,7 +2359,7 @@ const styles = StyleSheet.create({
   },
 
   googleText: {
-    color: "#27272a",
+    color: "#292929",
     fontSize: 14,
     fontWeight: "600",
   },
@@ -2368,12 +2374,12 @@ const styles = StyleSheet.create({
   },
 
   loginText: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
   },
 
   loginLink: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 13,
     fontWeight: "600",
   },
@@ -2381,7 +2387,7 @@ const styles = StyleSheet.create({
   footerText: {
     marginTop: 18,
     paddingHorizontal: 8,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
     lineHeight: 19,
     textAlign: "center",
@@ -2424,7 +2430,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 4,
     borderRadius: 99,
-    backgroundColor: "#d4d4d8",
+    backgroundColor: "#d8d8d8",
     marginBottom: 18,
   },
 
@@ -2436,14 +2442,14 @@ const styles = StyleSheet.create({
   },
 
   modalTitle: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 18,
     fontWeight: "700",
   },
 
   modalSubtitle: {
     marginTop: 4,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
   },
 
@@ -2451,7 +2457,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2475,7 +2481,7 @@ const styles = StyleSheet.create({
   },
 
   countryItemSelected: {
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
   },
 
   countryItemText: {
@@ -2487,7 +2493,7 @@ const styles = StyleSheet.create({
   },
 
   countryName: {
-    color: "#27272a",
+    color: "#292929",
     fontSize: 14,
   },
 
@@ -2497,7 +2503,60 @@ const styles = StyleSheet.create({
   },
 
   countryCallingCode: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
   },
 });
+
+// Couleurs natives de la version MONO Web. Les formulaires et actions sont inchangés.
+const darkStyles = StyleSheet.create({
+  'safeArea': {backgroundColor: '#000000'},
+  'brandText': {color: '#ffffff'},
+  'card': {backgroundColor: '#101010', borderColor: '#2b2b2b', shadowOpacity: 0.14, elevation: 0},
+  'backText': {color: '#b5b5b5'},
+  'introIcon': {backgroundColor: '#ffffff'},
+  'title': {color: '#ffffff'},
+  'description': {color: '#b5b5b5'},
+  'label': {color: '#eeeeee'},
+  'input': {color: '#ffffff', backgroundColor: '#171717', borderColor: '#333333'},
+  'selectButton': {backgroundColor: '#171717', borderColor: '#333333'},
+  'selectText': {color: '#f5f5f5'},
+  'helperText': {color: '#aaa'},
+  'countryCodeBox': {backgroundColor: '#222222', borderColor: '#333333'},
+  'countryCodeText': {color: '#ffffff'},
+  'checkbox': {borderColor: '#888888'},
+  'checkboxChecked': {backgroundColor: '#ffffff', borderColor: '#ffffff'},
+  'termsText': {color: '#bbbbbb'},
+  'termsLink': {color: '#ffffff'},
+  'submitButton': {backgroundColor: '#ffffff'},
+  'submitText': {color: '#000000'},
+  'dividerLine': {backgroundColor: '#333333'},
+  'dividerText': {color: '#aaaaaa'},
+  'googleButton': {backgroundColor: '#171717', borderColor: '#333333'},
+  'googlePressed': {backgroundColor: '#222222'},
+  'googleText': {color: '#ffffff'},
+  'loginText': {color: '#b5b5b5'},
+  'loginLink': {color: '#ffffff'},
+  'footerText': {color: '#999999'},
+  'countryModal': {backgroundColor: '#101010'},
+  'modalHandle': {backgroundColor: '#444444'},
+  'modalTitle': {color: '#ffffff'},
+  'modalSubtitle': {color: '#aaaaaa'},
+  'modalClose': {backgroundColor: '#242424'},
+  'countryItemSelected': {backgroundColor: '#262626'},
+  'countryName': {color: '#ffffff'},
+  'countryNameSelected': {color: '#ffffff'},
+  'countryCallingCode': {color: '#aaaaaa'},
+  'errorBox': {backgroundColor: '#271616', borderColor: '#633636'},
+  'successBox': {backgroundColor: '#102719', borderColor: '#2d6141'},
+});
+
+function authStyles(dark: boolean): typeof lightStyles {
+  if (!dark) return lightStyles;
+  const overrides = darkStyles as Partial<Record<keyof typeof lightStyles, object>>;
+  const entries = Object.keys(lightStyles).map((key) => {
+    const id = key as keyof typeof lightStyles;
+    return [key, overrides[id] ? [lightStyles[id], overrides[id]] : lightStyles[id]] as const;
+  });
+  return Object.fromEntries(entries) as typeof lightStyles;
+}

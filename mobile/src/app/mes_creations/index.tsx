@@ -4,6 +4,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import Animated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
 import {
   ActivityIndicator,
   Alert,
@@ -527,9 +528,9 @@ function darkThemeNeutral(
   if (property === "color") {
     if (luminance >= 0.82) return value;
     if (luminance >= 0.42) {
-      return "#b7b7be";
+      return "#b7b7b7";
     }
-    return "#f3f3f5";
+    return "#f3f3f3";
   }
 
   if (
@@ -540,27 +541,27 @@ function darkThemeNeutral(
     property === "borderRightColor"
   ) {
     return luminance >= 0.45
-      ? "#303036"
-      : "#3a3a40";
+      ? "#303030"
+      : "#3a3a3a";
   }
 
   if (luminance >= 0.94) {
-    return "#101012";
+    return "#101010";
   }
 
   if (luminance >= 0.78) {
-    return "#17171a";
+    return "#171717";
   }
 
   if (luminance >= 0.45) {
-    return "#1d1d21";
+    return "#1d1d1d";
   }
 
   if (luminance <= 0.12) {
-    return "#222226";
+    return "#222222";
   }
 
-  return "#18181b";
+  return "#181818";
 }
 
 function buildDarkStyleOverride(
@@ -636,6 +637,8 @@ function getThemedStyles(
     ];
   }
 
+  themed.safeArea = [themed.safeArea, { backgroundColor: "#000000" }];
+  themed.container = [themed.container, { backgroundColor: "#000000" }];
   return themed as unknown as typeof baseStyles;
 }
 
@@ -1492,7 +1495,7 @@ export default function CreationsPage() {
             />
           }
         >
-          <View
+          <Animated.View entering={FadeInDown.duration(330).reduceMotion(ReduceMotion.System)}
             style={styles.header}
           >
             <View
@@ -1610,7 +1613,7 @@ export default function CreationsPage() {
                 {t.refresh}
               </Text>
             </Pressable>
-          </View>
+          </Animated.View>
 
           {!loading &&
             !error &&
@@ -2500,12 +2503,12 @@ export default function CreationsPage() {
                {!!artifactPreview && (
                  <Pressable style={styles.artifactModalAction} accessibilityLabel={t.download}
                    onPress={() => void handleDownload(artifactPreview.item)}>
-                   <Ionicons name="download-outline" size={22} color={isDark ? "#f3f3f5" : "#2c2c32"} />
+                   <Ionicons name="download-outline" size={22} color={isDark ? "#f3f3f3" : "#2c2c32"} />
                  </Pressable>
                )}
                <Pressable style={styles.artifactModalAction} accessibilityLabel={t.close}
                  onPress={closeArtifactPreview}>
-                 <Ionicons name="close" size={24} color={isDark ? "#f3f3f5" : "#2c2c32"} />
+                 <Ionicons name="close" size={24} color={isDark ? "#f3f3f3" : "#2c2c32"} />
                </Pressable>
              </View>
              {artifactPreview?.loading ? (
@@ -2558,7 +2561,7 @@ export default function CreationsPage() {
                      return <View key={index} style={{ marginBottom: heading ? 16 : 10 }}>
                        <Text selectable style={heading ? styles.artifactHeading : styles.artifactParagraph}>
                          {kind.includes("bullet") || kind.includes("list") ? "•  " : ""}
-                         <DocPreviewText block={block} color={isDark ? "#f3f3f5" : "#2a2a31"} />
+                         <DocPreviewText block={block} color={isDark ? "#f3f3f3" : "#2a2a31"} />
                        </Text>
                      </View>;
                    }) : <Text style={styles.artifactMuted}>{t.noPreviewContent}</Text>;
@@ -2790,7 +2793,7 @@ export default function CreationsPage() {
 const baseStyles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#f7f7f5",
+    backgroundColor: "#ffffff",
   },
 
   container: {
@@ -2818,7 +2821,7 @@ const baseStyles = StyleSheet.create({
   },
 
   backText: {
-    color: "#6f6f77",
+    color: "#717171",
     fontSize: 13,
     fontWeight: "600",
   },
@@ -2835,7 +2838,7 @@ const baseStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 16,
-    backgroundColor: "#17171b",
+    backgroundColor: "#191919",
   },
 
   logoText: {
@@ -2845,7 +2848,7 @@ const baseStyles = StyleSheet.create({
   },
 
   eyebrow: {
-    color: "#8a8a90",
+    color: "#888888",
     fontSize: 10,
     fontWeight: "700",
     textTransform: "uppercase",
@@ -2854,7 +2857,7 @@ const baseStyles = StyleSheet.create({
 
   title: {
     marginTop: 2,
-    color: "#17171b",
+    color: "#191919",
     fontSize: 28,
     fontWeight: "700",
     letterSpacing: -0.8,
@@ -2863,7 +2866,7 @@ const baseStyles = StyleSheet.create({
   description: {
     marginTop: 12,
     maxWidth: 520,
-    color: "#6f6f77",
+    color: "#717171",
     fontSize: 13,
     lineHeight: 20,
   },
@@ -2877,13 +2880,13 @@ const baseStyles = StyleSheet.create({
     minHeight: 42,
     paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: "#e2e2df",
+    borderColor: "#e6e6e6",
     borderRadius: 13,
     backgroundColor: "#ffffff",
   },
 
   refreshText: {
-    color: "#17171b",
+    color: "#191919",
     fontSize: 13,
     fontWeight: "700",
   },
@@ -2907,7 +2910,7 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: "#17171b",
+    backgroundColor: "#191919",
   },
 
   statDarkText: {
@@ -2920,13 +2923,13 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderWidth: 1,
-    borderColor: "#e2e2df",
+    borderColor: "#e6e6e6",
     borderRadius: 999,
     backgroundColor: "#ffffff",
   },
 
   statLightText: {
-    color: "#68686f",
+    color: "#717171",
     fontSize: 12,
     fontWeight: "600",
   },
@@ -2941,18 +2944,18 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 9,
     borderWidth: 1,
-    borderColor: "#e2e2df",
+    borderColor: "#e6e6e6",
     borderRadius: 12,
     backgroundColor: "#ffffff",
   },
 
   filterActive: {
-    borderColor: "#17171b",
-    backgroundColor: "#17171b",
+    borderColor: "#191919",
+    backgroundColor: "#191919",
   },
 
   filterText: {
-    color: "#66666d",
+    color: "#606060",
     fontSize: 12,
     fontWeight: "700",
   },
@@ -2962,11 +2965,11 @@ const baseStyles = StyleSheet.create({
   },
 
   count: {
-    color: "#9a9aa0",
+    color: "#9d9d9d",
   },
 
   countActive: {
-    color: "#bfc0c4",
+    color: "#bbbbbb",
   },
 
   errorBox: {
@@ -2979,7 +2982,7 @@ const baseStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#fecaca",
     borderRadius: 14,
-    backgroundColor: "#fef2f2",
+    backgroundColor: "#f5f5f5",
   },
 
   errorContent: {
@@ -3006,13 +3009,13 @@ const baseStyles = StyleSheet.create({
     justifyContent: "center",
     gap: 12,
     borderWidth: 1,
-    borderColor: "#e2e2df",
+    borderColor: "#e6e6e6",
     borderRadius: 24,
     backgroundColor: "#ffffff",
   },
 
   loadingText: {
-    color: "#777780",
+    color: "#717171",
     fontSize: 13,
   },
 
@@ -3023,7 +3026,7 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 26,
     borderWidth: 1,
     borderStyle: "dashed",
-    borderColor: "#d8d8d5",
+    borderColor: "#d8d8d8",
     borderRadius: 24,
     backgroundColor: "#ffffff",
   },
@@ -3035,11 +3038,11 @@ const baseStyles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 18,
     borderRadius: 20,
-    backgroundColor: "#f1f1ee",
+    backgroundColor: "#efefef",
   },
 
   emptyTitle: {
-    color: "#17171b",
+    color: "#191919",
     fontSize: 20,
     fontWeight: "700",
   },
@@ -3047,7 +3050,7 @@ const baseStyles = StyleSheet.create({
   emptyDescription: {
     maxWidth: 380,
     marginTop: 8,
-    color: "#74747b",
+    color: "#717171",
     fontSize: 13,
     lineHeight: 20,
     textAlign: "center",
@@ -3059,7 +3062,7 @@ const baseStyles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 18,
     borderRadius: 12,
-    backgroundColor: "#17171b",
+    backgroundColor: "#191919",
   },
 
   createButtonText: {
@@ -3072,13 +3075,13 @@ const baseStyles = StyleSheet.create({
     paddingVertical: 50,
     paddingHorizontal: 20,
     borderWidth: 1,
-    borderColor: "#e2e2df",
+    borderColor: "#e6e6e6",
     borderRadius: 22,
     backgroundColor: "#ffffff",
   },
 
   filterEmptyText: {
-    color: "#777780",
+    color: "#717171",
     fontSize: 13,
     textAlign: "center",
   },
@@ -3092,7 +3095,7 @@ const baseStyles = StyleSheet.create({
   card: {
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#e1e1de",
+    borderColor: "#e6e6e6",
     borderRadius: 18,
     backgroundColor: "#ffffff",
   },
@@ -3100,7 +3103,7 @@ const baseStyles = StyleSheet.create({
   preview: {
     aspectRatio: 1,
     overflow: "hidden",
-    backgroundColor: "#f0f0ed",
+    backgroundColor: "#efefef",
   },
 
   previewPressed: {
@@ -3110,13 +3113,13 @@ const baseStyles = StyleSheet.create({
   mediaContent: {
     width: "100%",
     height: "100%",
-    backgroundColor: "#09090b",
+    backgroundColor: "#111111",
   },
 
   videoPreview: {
     width: "100%",
     height: "100%",
-    backgroundColor: "#09090b",
+    backgroundColor: "#111111",
   },
 
   playOverlay: {
@@ -3170,7 +3173,7 @@ const baseStyles = StyleSheet.create({
 
   prompt: {
     minHeight: 40,
-    color: "#333338",
+    color: "#323232",
     fontSize: 13,
     fontWeight: "600",
     lineHeight: 19,
@@ -3178,7 +3181,7 @@ const baseStyles = StyleSheet.create({
 
   date: {
     marginTop: 5,
-    color: "#94949b",
+    color: "#9d9d9d",
     fontSize: 10,
   },
 
@@ -3190,7 +3193,7 @@ const baseStyles = StyleSheet.create({
     marginTop: 13,
     paddingTop: 11,
     borderTopWidth: 1,
-    borderTopColor: "#efefec",
+    borderTopColor: "#efefef",
   },
 
   meta: {
@@ -3205,11 +3208,11 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 4,
     borderRadius: 7,
-    backgroundColor: "#f1f1ee",
+    backgroundColor: "#efefef",
   },
 
   metaText: {
-    color: "#707077",
+    color: "#717171",
     fontSize: 9,
     fontWeight: "600",
   },
@@ -3232,7 +3235,7 @@ const baseStyles = StyleSheet.create({
     minHeight: 230,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#e1e1de",
+    borderColor: "#e6e6e6",
     borderRadius: 18,
     backgroundColor: "#ffffff",
   },
@@ -3248,12 +3251,12 @@ const baseStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 16,
-    backgroundColor: "#f0f0ed",
+    backgroundColor: "#efefef",
   },
 
   fileName: {
     marginTop: 16,
-    color: "#2b2b30",
+    color: "#292929",
     fontSize: 14,
     fontWeight: "700",
     lineHeight: 20,
@@ -3266,7 +3269,7 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: "#efefec",
+    borderTopColor: "#efefef",
   },
 
   modalBackdrop: {
@@ -3294,7 +3297,7 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#ecece9",
+    borderBottomColor: "#efefef",
   },
 
   modalHeaderText: {
@@ -3302,14 +3305,14 @@ const baseStyles = StyleSheet.create({
   },
 
   modalTitle: {
-    color: "#2b2b30",
+    color: "#292929",
     fontSize: 14,
     fontWeight: "700",
   },
 
   modalDate: {
     marginTop: 3,
-    color: "#8e8e95",
+    color: "#888888",
     fontSize: 10,
   },
 
@@ -3332,7 +3335,7 @@ const baseStyles = StyleSheet.create({
     maxHeight: 640,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#09090b",
+    backgroundColor: "#111111",
   },
 
   modalImage: {
@@ -3341,7 +3344,7 @@ const baseStyles = StyleSheet.create({
   },
 
   unavailableText: {
-    color: "#bcbcc2",
+    color: "#bbbbbb",
     fontSize: 13,
   },
 
@@ -3355,7 +3358,7 @@ const baseStyles = StyleSheet.create({
   },
 
   modalPrompt: {
-    color: "#66666d",
+    color: "#606060",
     fontSize: 11,
     lineHeight: 17,
   },
@@ -3364,33 +3367,33 @@ const baseStyles = StyleSheet.create({
     borderRadius: 12, backgroundColor: "#fff7dc", marginBottom: 12,
   },
   syncWarningText: { flex: 1, fontSize: 12, lineHeight: 18, color: "#72591b" },
-  artifactModalSafe: { flex: 1, backgroundColor: "#f6f6f4" },
+  artifactModalSafe: { flex: 1, backgroundColor: "#f5f5f5" },
   artifactModalHeader: {
-    backgroundColor: "#fff", flexDirection: "row", alignItems: "center",
+    backgroundColor: "#ffffff", flexDirection: "row", alignItems: "center",
     paddingHorizontal: 14, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: "#ecece8",
+    borderBottomWidth: 1, borderBottomColor: "#efefef",
   },
-  artifactModalLabel: { color: "#777780", fontSize: 11, fontWeight: "600", marginBottom: 4 },
-  artifactModalTitle: { color: "#232329", fontSize: 15, fontWeight: "700" },
+  artifactModalLabel: { color: "#717171", fontSize: 11, fontWeight: "600", marginBottom: 4 },
+  artifactModalTitle: { color: "#222222", fontSize: 15, fontWeight: "700" },
   artifactModalAction: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   artifactModalCenter: { flex: 1, alignItems: "center", justifyContent: "center", padding: 26, gap: 16 },
-  artifactModalMessage: { color: "#707077", fontSize: 13, lineHeight: 21, textAlign: "center" },
-  artifactPrimaryButton: { backgroundColor: "#19191c", paddingHorizontal: 25, paddingVertical: 14, borderRadius: 12, marginTop: 6 },
-  artifactPrimaryButtonText: { color: "#fff", fontWeight: "700", fontSize: 14 },
+  artifactModalMessage: { color: "#717171", fontSize: 13, lineHeight: 21, textAlign: "center" },
+  artifactPrimaryButton: { backgroundColor: "#191919", paddingHorizontal: 25, paddingVertical: 14, borderRadius: 12, marginTop: 6 },
+  artifactPrimaryButtonText: { color: "#ffffff", fontWeight: "700", fontSize: 14 },
   artifactScroll: { flex: 1 },
-  artifactTextPage: { backgroundColor: "#fff", padding: 20, flexGrow: 1 },
+  artifactTextPage: { backgroundColor: "#ffffff", padding: 20, flexGrow: 1 },
   artifactDocumentPage: {
-    backgroundColor: "#fff", marginHorizontal: 12, marginVertical: 12,
+    backgroundColor: "#ffffff", marginHorizontal: 12, marginVertical: 12,
     padding: 22, borderRadius: 14, minHeight: 300,
   },
-  artifactText: { color: "#24242a", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12, lineHeight: 21 },
-  artifactParagraph: { color: "#292930", fontSize: 14, lineHeight: 23 },
-  artifactHeading: { color: "#202026", fontSize: 17, lineHeight: 26, fontWeight: "700", marginTop: 10, marginBottom: 10 },
-  artifactMuted: { color: "#777780", fontSize: 12, lineHeight: 19, marginTop: 12 },
+  artifactText: { color: "#222222", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12, lineHeight: 21 },
+  artifactParagraph: { color: "#292929", fontSize: 14, lineHeight: 23 },
+  artifactHeading: { color: "#222222", fontSize: 17, lineHeight: 26, fontWeight: "700", marginTop: 10, marginBottom: 10 },
+  artifactMuted: { color: "#717171", fontSize: 12, lineHeight: 19, marginTop: 12 },
   artifactTableCell: {
     minWidth: 110, maxWidth: 190, minHeight: 38,
-    borderWidth: 1, borderColor: "#e5e5e2", padding: 8,
+    borderWidth: 1, borderColor: "#e6e6e6", padding: 8,
   },
-  artifactTableText: { color: "#3a3a41", fontSize: 11, lineHeight: 17 },
+  artifactTableText: { color: "#414141", fontSize: 11, lineHeight: 17 },
 
 });

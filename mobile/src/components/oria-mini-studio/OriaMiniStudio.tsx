@@ -8,20 +8,22 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { File as ExpoFile } from "expo-file-system";
 import { supabase } from "@/lib/supabase/client";
+import OriaVideoProjectsExpo from "@/components/oria-mini-studio/OriaVideoProjects_expo";
+import Animated, { FadeInDown, useReducedMotion } from "react-native-reanimated";
 
 /**
  * ORIA MINI-STUDIO — REACT NATIVE / EXPO
  * Interface indépendante du Chat mobile : Google Image, retouche, vidéo et galerie.
  * Les droits de chaque pack et tous les prix proviennent du backend authentifié.
  * Aucun accès direct à GOOGLE_LBV_KEY ; aucun débit de wallet dans ce composant.
- * Les vidéos longues/multi-scènes sont uniquement des options informatives.
+ * Les projets vidéo réutilisent le composant multi-scènes Expo et les routes OpenRouter existantes.
  * Chemin : components/oria-mini-studio/OriaMiniStudio.tsx
  */
 
 type Language = "fr" | "en";
 type Theme = "light" | "dark";
 type Kind = "image" | "video";
-type Section = Kind | "gallery";
+type Section = Kind | "gallery" | "projects";
 type ImageMode = "text_to_image" | "image_edit" | "multi_reference" | "advanced_edit";
 type VideoMode = "text_to_video" | "image_to_video" | "multi_scene" | "extend_video" | "first_last_frame" | "edit_video";
 type Mode = ImageMode | VideoMode;
@@ -53,6 +55,8 @@ type Capabilities = {
   };
   video: {
     model: string;
+    models?: Array<{ model: string; duration_choices_seconds: number[];
+      generate_audio?: boolean; supported_frame_images?: unknown[] }>;
     allowed_modes: VideoMode[];
     available_now_modes: VideoMode[];
     duration_choices_seconds: number[];
@@ -165,7 +169,6 @@ const IMAGE_MODES: Array<{ id: ImageMode; fr: string; en: string }> = [
 const VIDEO_MODES: Array<{ id: VideoMode; fr: string; en: string }> = [
   { id: "text_to_video", fr: "Texte vers vidéo", en: "Text to video" },
   { id: "image_to_video", fr: "Animer une photo", en: "Animate a photo" },
-  { id: "multi_scene", fr: "Film multi-scènes · bientôt", en: "Multi-scene film · soon" },
   { id: "extend_video", fr: "Prolonger une vidéo · bientôt", en: "Extend video · soon" },
   { id: "first_last_frame", fr: "Image début/fin · bientôt", en: "First/last image · soon" },
   { id: "edit_video", fr: "Montage vidéo · bientôt", en: "Video editing · soon" },
@@ -250,17 +253,22 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [lastResult, setLastResult] = useState<Media | null>(null);
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
+  const [openrouterFilmCaps, setOpenrouterFilmCaps] = useState<Capabilities | null>(null);
+  const [filmLoading, setFilmLoading] = useState(false);
+  const [filmError, setFilmError] = useState<string | null>(null);
+  const [filmRetry, setFilmRetry] = useState(0);
+  const reduceMotion = useReducedMotion();
   const quoteVersion = useRef(0);
   const inFlight = useRef(false);
   const mounted = useRef(true);
 
   const dark = theme === "dark";
   const palette = useMemo(() => dark ? {
-    bg: "#101115", card: "#1b1d23", text: "#f4f5f8", muted: "#b0b5c3", line: "#30343e",
-    chip: "#242731", active: "#4440a7", notice: "#222333",
+    bg: "#000000", card: "#101010", text: "#ffffff", muted: "#bcbcbc", line: "#303030",
+    chip: "#181818", active: "#ffffff", notice: "#171717", activeText: "#000000",
   } : {
-    bg: "#f7f8fa", card: "#ffffff", text: "#191923", muted: "#697084", line: "#e4e7ed",
-    chip: "#f1f3f8", active: "#ebeaff", notice: "#f0f2ff",
+    bg: "#ffffff", card: "#ffffff", text: "#111111", muted: "#666666", line: "#e5e5e5",
+    chip: "#f6f6f6", active: "#111111", notice: "#f6f6f6", activeText: "#ffffff",
   }, [dark]);
   const tr = (fr: string, en: string) => language === "fr" ? fr : en;
   const kind: Kind = section === "video" ? "video" : "image";
@@ -287,6 +295,44 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
   const canGenerate = Boolean(canQuote && quoteReady && accepted && quote?.credits_sufficient &&
     quote?.generation_available && caps?.generation_available &&
     (kind === "image" || caps?.video.short_clip_actions_available_now.includes(offerVideo?.action || "")));
+
+  // Les droits du moteur FILMS sont toujours demandés à OpenRouter.
+  // Un fournisseur Google actif pour les clips/images ne doit pas masquer les films existants.
+  useEffect(() => {
+    if (!visible || section !== "projects") return;
+    let cancelled = false;
+    setFilmLoading(true);
+    setFilmError(null);
+    void api<Capabilities>("/ai/openrouter-media/capabilities")
+      .then(result => {
+        if (cancelled) return;
+        if (!result.success || result.provider !== "openrouter") {
+          throw new Error("Droits des projets OpenRouter indisponibles.");
+        }
+        setOpenrouterFilmCaps(result);
+      })
+      .catch(cause => {
+        if (cancelled) return;
+        setOpenrouterFilmCaps(null);
+        setFilmError(cause instanceof Error ? cause.message : "Chargement des projets vidéo impossible.");
+      })
+      .finally(() => { if (!cancelled) setFilmLoading(false); });
+    return () => { cancelled = true; };
+  }, [visible, section, filmRetry]);
+
+  const filmCaps = useMemo(() => ({
+    max_project_seconds: openrouterFilmCaps?.video.max_project_seconds ?? 0,
+    max_project_scenes: openrouterFilmCaps?.video.max_project_scenes ?? 0,
+    allowed_modes: openrouterFilmCaps?.video.allowed_modes ?? [],
+    models: (openrouterFilmCaps?.video.models ?? []).map(item => ({
+      model: item.model,
+      durations: item.duration_choices_seconds ?? [],
+      // Ne jamais annoncer une option payante sur une capacité inconnue.
+      supports_audio: item.generate_audio === true,
+      supports_first_frame: Array.isArray(item.supported_frame_images) &&
+        item.supported_frame_images.includes("first_frame"),
+    })),
+  }), [openrouterFilmCaps]);
 
   function invalidateQuote() {
     quoteVersion.current += 1;
@@ -535,8 +581,8 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
   const Choice = ({ title, active, disabled, onPress }: { title: string; active: boolean; disabled?: boolean; onPress: () => void }) => (
     <Pressable accessibilityRole="button" accessibilityState={{ selected: active, disabled: Boolean(disabled) }}
       onPress={onPress} disabled={disabled || busy}
-      style={[styles.choice, chipStyle, active && { borderColor: "#756de0", backgroundColor: dark ? "#302f53" : "#eceafd" }, disabled && styles.unavailable]}>
-      <Text style={[styles.choiceText, textStyle]}>{title}</Text>{active ? <Ionicons name="checkmark" size={15} color="#756de0" /> : null}
+      style={[styles.choice, chipStyle, active && { borderColor: palette.active, backgroundColor: palette.active }, disabled && styles.unavailable]}>
+      <Text style={[styles.choiceText, { color: active ? palette.activeText : palette.text }]}>{title}</Text>{active ? <Ionicons name="checkmark" size={15} color={palette.activeText} /> : null}
     </Pressable>
   );
 
@@ -547,7 +593,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
         <StatusBar barStyle={dark ? "light-content" : "dark-content"} />
         <SafeAreaView style={{ flex: 1, backgroundColor: palette.bg }} edges={["top", "bottom", "left", "right"]}>
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-            <View style={[styles.topbar, { borderColor: palette.line }]}>
+            <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(280)} style={[styles.topbar, { borderColor: palette.line }]}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.h1, textStyle]}>{tr("Mini-Studio ORIA", "ORIA Mini-Studio")}</Text>
                 <Text style={[styles.subtitle, mutedStyle]}>{tr(`Images, retouches et vidéos · ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video · ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`)}</Text>
@@ -556,23 +602,23 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                 disabled={busy} onPress={requestClose} style={[styles.close, chipStyle]}>
                 <Ionicons name="close" size={22} color={palette.text} />
               </Pressable>
-            </View>
+            </Animated.View>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
               <View style={styles.tabs}>
-                {(["image", "video", "gallery"] as Section[]).map((tab) => (
+                {(["image", "video", "projects", "gallery"] as Section[]).map((tab) => (
                   <Pressable key={tab} disabled={busy} onPress={() => changeSection(tab)}
                     accessibilityRole="tab" accessibilityState={{ selected: section === tab }}
-                    style={[styles.tab, chipStyle, section === tab && styles.tabSelected]}>
-                    <Ionicons name={tab === "image" ? "images-outline" : tab === "video" ? "videocam-outline" : "albums-outline"}
-                      size={17} color={section === tab ? "#fff" : palette.text} />
-                    <Text style={[styles.tabText, { color: section === tab ? "#fff" : palette.text }]}>
-                      {tab === "image" ? tr("Images", "Images") : tab === "video" ? tr("Vidéo", "Video") : tr("Galerie", "Gallery")}
+                    style={[styles.tab, chipStyle, section === tab && { backgroundColor: palette.active, borderColor: palette.active }]}>
+                    <Ionicons name={tab === "image" ? "images-outline" : tab === "video" ? "videocam-outline" : tab === "projects" ? "film-outline" : "albums-outline"}
+                      size={17} color={section === tab ? palette.activeText : palette.text} />
+                    <Text style={[styles.tabText, { color: section === tab ? palette.activeText : palette.text }]}>
+                      {tab === "image" ? tr("Images", "Images") : tab === "video" ? tr("Vidéo", "Video") : tab === "projects" ? tr("Projets", "Projects") : tr("Galerie", "Gallery")}
                     </Text>
                   </Pressable>
                 ))}
               </View>
               <View style={[styles.wallet, panelStyle]}>
-                <Ionicons name="wallet-outline" size={19} color="#7269e6" />
+                <Ionicons name="wallet-outline" size={19} color={palette.text} />
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.label, textStyle]}>{wallet?.pack_id ? PACK_NAMES[wallet.pack_id] || wallet.pack_id : tr("Aucun pack", "No plan")}</Text>
                   <Text style={[styles.note, mutedStyle]}>{wallet
@@ -583,7 +629,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                   <Ionicons name="refresh-outline" size={19} color={palette.text}/>
                 </Pressable>
               </View>
-              {loading ? <View style={styles.status}><ActivityIndicator color="#746be8"/><Text style={mutedStyle}>{tr("Chargement des droits…", "Loading permissions…")}</Text></View> : null}
+              {loading ? <View style={styles.status}><ActivityIndicator color={palette.text}/><Text style={mutedStyle}>{tr("Chargement des droits…", "Loading permissions…")}</Text></View> : null}
               {error ? <View style={styles.error}><Text style={styles.errorText}>{error}</Text></View> : null}
               {notice ? <View style={[styles.info, { backgroundColor: palette.notice }]}><Text style={[styles.note, textStyle]}>{notice}</Text></View> : null}
               {MEDIA_PROVIDER === "openrouter" && pendingRequestId ? (
@@ -614,19 +660,33 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                   } catch (cause) { setError(cause instanceof Error ? cause.message : "Statut indisponible."); }
                 }}><Text style={[styles.note, textStyle]}>{tr("Vérifier la création en attente", "Check pending creation")}</Text></Pressable>
               ) : null}
-              {caps && !caps.generation_available && section !== "gallery" ? (
+              {caps && !caps.generation_available && section !== "gallery" && section !== "projects" ? (
                 <View style={[styles.info, { backgroundColor: palette.notice }]}>
                   <Text style={[styles.note, textStyle]}>{tr("Les créations payantes sont encore désactivées côté backend pendant les contrôles de sécurité. Les devis restent consultables.",
                     "Paid generations are disabled on the backend pending safety checks. Quotes remain available.")}</Text>
                 </View>
               ) : null}
 
-              {section === "gallery" ? (
+              {section === "projects" ? (
+                <View style={[styles.card, panelStyle]}>
+                  <Text style={[styles.h2, textStyle]}>{tr("Projets vidéo · films multi-scènes", "Video projects · multi-scene films")}</Text>
+                  {filmLoading ? <View style={styles.status}><ActivityIndicator color={palette.text}/><Text style={mutedStyle}>{tr("Vérification des droits OpenRouter…", "Checking OpenRouter rights…")}</Text></View> : null}
+                  {filmError ? <View style={[styles.info, { backgroundColor: palette.notice }]}><Text style={[styles.note, textStyle]}>{filmError}</Text>
+                    <Pressable accessibilityRole="button" onPress={() => { setFilmError(null); setFilmRetry(value => value + 1); }}><Text style={[styles.link, { color: palette.text }]}>{tr("Réessayer", "Retry")}</Text></Pressable>
+                  </View> : null}
+                  {openrouterFilmCaps && wallet?.is_pack_active && !filmLoading ? (
+                    <OriaVideoProjectsExpo language={language} packId={wallet.pack_id || ""}
+                      theme={theme} caps={filmCaps} onWalletRefresh={onWalletRefresh} />
+                  ) : !filmLoading && !filmError ? (
+                    <Text style={mutedStyle}>{tr("Un pack actif est nécessaire pour créer un film.", "An active plan is required to create films.")}</Text>
+                  ) : null}
+                </View>
+              ) : section === "gallery" ? (
                 <View style={[styles.card, panelStyle]}>
                   <View style={styles.headerRow}>
                     <Text style={[styles.h2, textStyle]}>{tr("Mes créations", "My creations")}</Text>
                     <Pressable disabled={galleryLoading} onPress={() => void loadGallery()}>
-                      {galleryLoading ? <ActivityIndicator color="#7269e6"/> : <Ionicons name="refresh-outline" size={20} color={palette.text}/>}
+                      {galleryLoading ? <ActivityIndicator color={palette.text}/> : <Ionicons name="refresh-outline" size={20} color={palette.text}/>}
                     </Pressable>
                   </View>
                   {gallery.length === 0 ? <Text style={mutedStyle}>{tr("Aucune création enregistrée.", "No saved creations yet.")}</Text> : null}
@@ -663,7 +723,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                     </View>
                     {caps ? <Text style={[styles.note, mutedStyle]}>{kind === "image"
                       ? `${tr("Votre pack : jusqu'à", "Your plan: up to")} ${caps.images.max_reference_images_in_pack} ${tr("photos théoriques. Une seule photo par appel actuellement.", "reference photos in theory. One photo per call currently.")}`
-                      : `${tr("Projet prévu jusqu'à", "Project limit")} ${caps.video.max_project_seconds} s · ${tr("clips courts seuls actifs actuellement", "only short clips implemented for now")}`}</Text> : null}
+                      : `${tr("Projet prévu jusqu'à", "Project limit")} ${caps.video.max_project_seconds} s · ${tr("clips courts ici ; films multi-scènes dans Projets", "short clips here; multi-scene films in Projects")}`}</Text> : null}
                     <Text style={[styles.fieldLabel, mutedStyle]}>{tr("Description", "Description")}</Text>
                     <TextInput multiline value={prompt} onChangeText={(value: string) => { invalidateQuote(); setPrompt(value); }}
                       editable={!busy} placeholder={kind === "image" ? tr("Décris l'image ou la retouche…", "Describe the image or edit…") : tr("Décris la scène à animer…", "Describe the scene…")}
@@ -726,8 +786,8 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                     <Text style={[styles.note, mutedStyle]}>{tr("Le devis ne débite aucun crédit. Confirmez son plafond avant la génération.",
                       "A quote doesn't debit credits. Approve its cap before generating.")}</Text>
                     <Pressable accessibilityRole="button" disabled={!canQuote} onPress={() => void prepareQuote()}
-                      style={[styles.primaryButton, !canQuote && styles.unavailable]}>
-                      {quoting ? <ActivityIndicator color="#fff"/> : <Ionicons name="calculator-outline" size={18} color="#fff"/>}
+                      style={[styles.primaryButton, { backgroundColor: "#111111" }, !canQuote && styles.unavailable]}>
+                      {quoting ? <ActivityIndicator color="#fff"/> : <Ionicons name="calculator-outline" size={18} color="#ffffff"/>}
                       <Text style={styles.primaryText}>{tr("Calculer mon devis", "Calculate quote")}</Text>
                     </Pressable>
                     {quote && quoteReady ? (
@@ -738,7 +798,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                           ? tr("Solde suffisant", "Sufficient balance") : tr("Solde insuffisant", "Insufficient balance")}</Text>
                         <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: accepted }} disabled={busy || !quote.credits_sufficient}
                           onPress={() => setAccepted((v) => !v)} style={styles.acceptRow}>
-                          <Ionicons name={accepted ? "checkbox" : "square-outline"} size={22} color="#6b64dc" />
+                          <Ionicons name={accepted ? "checkbox" : "square-outline"} size={22} color="#ffffff" />
                           <Text style={[styles.note, { flex: 1, color: palette.text }]}>{tr("J'accepte la réservation maximale indiquée avant l'appel Google.",
                             "I approve the maximum reservation shown before the Google call.")}</Text>
                         </Pressable>
@@ -747,8 +807,8 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                       </View>
                     ) : null}
                     <Pressable accessibilityRole="button" disabled={!canGenerate || busy} onPress={() => void generate()}
-                      style={[styles.primaryButton, { backgroundColor: "#151722" }, (!canGenerate || busy) && styles.unavailable]}>
-                      {busy ? <ActivityIndicator color="#fff"/> : <Ionicons name="sparkles" size={18} color="#fff" />}
+                      style={[styles.primaryButton, { backgroundColor: "#111111" }, (!canGenerate || busy) && styles.unavailable]}>
+                      {busy ? <ActivityIndicator color="#fff"/> : <Ionicons name="sparkles" size={18} color="#ffffff" />}
                       <Text style={styles.primaryText}>{kind === "image" ? tr("Générer l'image", "Generate image") : tr("Créer la vidéo", "Generate video")}</Text>
                     </Pressable>
                     {!caps?.generation_available ? <Text style={[styles.note, mutedStyle]}>{tr("Bouton bloqué jusqu'à l'activation sécurisée du backend.",
@@ -780,7 +840,7 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 14, paddingTop: 16, paddingBottom: 44, gap: 14, width: "100%", maxWidth: 750, alignSelf: "center" },
   tabs: { flexDirection: "row", gap: 8 },
   tab: { flex: 1, minHeight: 48, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 4, paddingHorizontal: 5 },
-  tabSelected: { backgroundColor: "#7168dd", borderColor: "#7168dd" },
+  tabSelected: { backgroundColor: "transparent", borderColor: "transparent" },
   tabText: { fontSize: 11, fontWeight: "700" },
   wallet: { borderWidth: 1, borderRadius: 15, padding: 14, flexDirection: "row", gap: 11, alignItems: "center" },
   card: { borderWidth: 1, borderRadius: 19, padding: 15, gap: 13 },
@@ -801,13 +861,13 @@ const styles = StyleSheet.create({
   photoPicker: { borderWidth: 1, borderRadius: 13, minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   photoPreview: { flexDirection: "row", alignItems: "center", gap: 14, marginVertical: 9 },
   refImage: { height: 90, width: 120, borderRadius: 12 },
-  primaryButton: { minHeight: 48, borderRadius: 13, paddingHorizontal: 12, backgroundColor: "#746be2", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9 },
+  primaryButton: { minHeight: 48, borderRadius: 13, paddingHorizontal: 12, backgroundColor: "#111111", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9 },
   primaryText: { color: "#fff", fontSize: 13, fontWeight: "800" },
   quoteBox: { borderRadius: 12, padding: 13, gap: 8 },
   acceptRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 7 },
-  link: { fontSize: 12, color: "#635bd2", fontWeight: "700", paddingVertical: 8 },
+  link: { fontSize: 12, color: "#777777", fontWeight: "700", paddingVertical: 8 },
   galleryItem: { borderTopWidth: 1, paddingTop: 12, flexDirection: "row", gap: 11 },
   galleryImage: { width: 104, height: 102, borderRadius: 11 },
-  videoPlaceholder: { alignItems: "center", justifyContent: "center", backgroundColor: "#2f3240" },
-  lastImage: { width: "100%", height: 240, borderRadius: 13, backgroundColor: "#161622" },
+  videoPlaceholder: { alignItems: "center", justifyContent: "center", backgroundColor: "#171717" },
+  lastImage: { width: "100%", height: 240, borderRadius: 13, backgroundColor: "#161616" },
 });

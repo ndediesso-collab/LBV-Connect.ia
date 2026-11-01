@@ -247,10 +247,10 @@ function darkThemeNeutral(
     }
 
     if (luminance >= 0.42) {
-      return "#b7b7be";
+      return "#b8b8b8";
     }
 
-    return "#f3f3f5";
+    return "#f3f3f3";
   }
 
   if (
@@ -260,26 +260,26 @@ function darkThemeNeutral(
     property === "borderLeftColor" ||
     property === "borderRightColor"
   ) {
-    return luminance >= 0.45 ? "#303036" : "#3a3a40";
+    return luminance >= 0.45 ? "#303030" : "#3a3a3a";
   }
 
   if (luminance >= 0.94) {
-    return "#101012";
+    return "#141414";
   }
 
   if (luminance >= 0.78) {
-    return "#17171a";
+    return "#171717";
   }
 
   if (luminance >= 0.45) {
-    return "#1d1d21";
+    return "#1d1d1d";
   }
 
   if (luminance <= 0.12) {
-    return "#222226";
+    return "#222222";
   }
 
-  return "#18181b";
+  return "#181818";
 }
 
 function buildDarkStyleOverride(style: unknown) {
@@ -325,6 +325,7 @@ function getThemedStyles(theme: OriaTheme) {
     themed[key] = [
       style,
       buildDarkStyleOverride(style),
+      ["safe", "container", "screen", "main", "root"].includes(key) ? { backgroundColor: "#000000" } : undefined,
     ];
   }
 
@@ -1830,7 +1831,7 @@ function MessageCopyButton({
       <Ionicons
         name={copied ? "checkmark" : "copy-outline"}
         size={13}
-        color={themedIconColor("#777771", isDark)}
+        color={themedIconColor("#777777", isDark)}
       />
       <Text style={styles.messageCopyText}>
         {copied ? CHAT_TEXT[language].copied : CHAT_TEXT[language].copy}
@@ -2071,17 +2072,17 @@ function oriaMobileIsTableDivider(line: string): boolean {
 }
 
 const oriaVisualStyles = StyleSheet.create({
-  tableFrame: { borderWidth: 1, borderColor: "#dddddf", borderRadius: 13, overflow: "hidden", marginVertical: 5 },
-  tableToolbar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 8, paddingHorizontal: 10, backgroundColor: "#f4f4f5" },
+  tableFrame: { borderWidth: 1, borderColor: "#dddddd", borderRadius: 13, overflow: "hidden", marginVertical: 5 },
+  tableToolbar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 8, paddingHorizontal: 10, backgroundColor: "#f4f4f4" },
   tableRow: { flexDirection: "row", alignItems: "stretch" },
-  tableCell: { width: 142, minHeight: 40, paddingVertical: 9, paddingHorizontal: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, borderColor: "#e0e0e3", justifyContent: "center" },
-  tableText: { fontSize: 12, lineHeight: 19, color: "#242428" },
-  smallLabel: { fontSize: 11, fontWeight: "600", color: "#66666d" },
+  tableCell: { width: 142, minHeight: 40, paddingVertical: 9, paddingHorizontal: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, borderColor: "#e0e0e0", justifyContent: "center" },
+  tableText: { fontSize: 12, lineHeight: 19, color: "#242424" },
+  smallLabel: { fontSize: 11, fontWeight: "600", color: "#676767" },
   actionText: { fontSize: 11, fontWeight: "600", color: "#2563eb" },
-  callout: { borderLeftWidth: 4, borderRadius: 10, padding: 12, gap: 5, marginVertical: 4, backgroundColor: "#f5f5f7" },
-  calloutHeading: { fontSize: 12, fontWeight: "700", color: "#25252a" },
+  callout: { borderLeftWidth: 4, borderRadius: 10, padding: 12, gap: 5, marginVertical: 4, backgroundColor: "#f5f5f5" },
+  calloutHeading: { fontSize: 12, fontWeight: "700", color: "#252525" },
   checklistRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
-  checkBox: { width: 17, height: 17, borderRadius: 4, borderWidth: 1.3, borderColor: "#888890", alignItems: "center", justifyContent: "center", marginTop: 2 },
+  checkBox: { width: 17, height: 17, borderRadius: 4, borderWidth: 1.3, borderColor: "#898989", alignItems: "center", justifyContent: "center", marginTop: 2 },
 });
 
 function OriaMobileTable({ headers, rows, alignment, language }: {
@@ -2090,10 +2091,10 @@ function OriaMobileTable({ headers, rows, alignment, language }: {
 }) {
   const dark = useIsDarkTheme();
   const [copied, setCopied] = useState(false);
-  const background = dark ? "#17171a" : "#ffffff";
-  const headerBackground = dark ? "#242428" : "#f4f4f5";
-  const textColor = dark ? "#f0f0f2" : "#242428";
-  const borderColor = dark ? "#36363d" : "#e0e0e3";
+  const background = dark ? "#171717" : "#ffffff";
+  const headerBackground = dark ? "#242424" : "#f4f4f4";
+  const textColor = dark ? "#f0f0f0" : "#242424";
+  const borderColor = dark ? "#373737" : "#e0e0e0";
   const tsv = [headers, ...rows].map((row) => headers.map((_, index) =>
     (row[index] ?? "").replace(/[\t\r\n]/g, " ")).join("\t")).join("\n");
   const renderRow = (row: string[], rowIndex: number, header: boolean) => (
@@ -2145,8 +2146,8 @@ function OriaMobileCallout({ kind, lines, language }: {
   };
   const [color, fr, en] = entries[kind] ?? entries.NOTE;
   return <View style={[oriaVisualStyles.callout, {
-    borderLeftColor: color, backgroundColor: dark ? "#242428" : "#f5f5f7" }]}>
-    <Text style={[oriaVisualStyles.calloutHeading, { color: dark ? "#f4f4f5" : "#25252a" }]}>{language === "fr" ? fr : en}</Text>
+    borderLeftColor: color, backgroundColor: dark ? "#242424" : "#f5f5f5" }]}>
+    <Text style={[oriaVisualStyles.calloutHeading, { color: dark ? "#f4f4f4" : "#252525" }]}>{language === "fr" ? fr : en}</Text>
     {lines.map((line, index) => <InlineMarkdown key={index} text={line} />)}
   </View>;
 }
@@ -2683,7 +2684,7 @@ function AttachmentCard({
         <Image source={{ uri: attachment.uri }} style={styles.attachmentImage} />
       ) : (
         <View style={styles.fileIcon}>
-          <Ionicons name="document-text-outline" size={22} color={themedIconColor("#666", isDark)} />
+          <Ionicons name="document-text-outline" size={22} color={themedIconColor("#666666", isDark)} />
         </View>
       )}
 
@@ -2697,7 +2698,7 @@ function AttachmentCard({
       </View>
 
       <Pressable onPress={onRemove} style={styles.removeAttachment}>
-        <Ionicons name="close" size={16} color={themedIconColor("#666", isDark)} />
+        <Ionicons name="close" size={16} color={themedIconColor("#666666", isDark)} />
       </Pressable>
     </View>
   );
@@ -2733,7 +2734,7 @@ function WebIllustratedMessage({
         {image.caption ? <Text style={mobileExtras.webImageCaption}>{image.caption}</Text> : null}
         <Pressable onPress={() => void Linking.openURL(image.source_url).catch(() => undefined)}
           style={mobileExtras.webImageLink} accessibilityRole="link">
-          <Ionicons name="link-outline" size={13} color="#666" />
+          <Ionicons name="link-outline" size={13} color="#666666" />
           <Text style={mobileExtras.webImageLinkText}>{CHAT_TEXT[language].webImageSource}</Text>
         </Pressable>
       </View>);
@@ -2747,7 +2748,7 @@ function WebIllustratedMessage({
       {image.caption ? <Text style={mobileExtras.webImageCaption}>{image.caption}</Text> : null}
       <Pressable onPress={() => void Linking.openURL(image.source_url).catch(() => undefined)}
         style={mobileExtras.webImageLink} accessibilityRole="link">
-        <Ionicons name="link-outline" size={13} color="#666" />
+        <Ionicons name="link-outline" size={13} color="#666666" />
         <Text style={mobileExtras.webImageLinkText}>{CHAT_TEXT[language].webImageSource}</Text>
       </Pressable>
     </View>);
@@ -2916,18 +2917,18 @@ function HighlightedCode({ code }: { code: string }) {
     const color = /^(?:\/\*|\/\/|#)/.test(token) ? "#8a99a9" :
       /^["'`]/.test(token) ? "#a5e3c5" :
       /^\d/.test(token) ? "#f6ca88" :
-      /^(?:[A-Za-z_]+)$/.test(token) && token.length > 1 ? "#99bffa" : "#e9e9ef";
+      /^(?:[A-Za-z_]+)$/.test(token) && token.length > 1 ? "#99bffa" : "#e9e9e9";
     return <Text key={index} style={{ color }}>{token}</Text>;
   })}</Text>;
 }
 
 const mobileExtras = StyleSheet.create({
   webImageCard: { borderRadius: 14, overflow: "hidden", borderWidth: 1,
-    borderColor: "#deded9", backgroundColor: "#f6f6f6", marginVertical: 6 },
-  webImage: { width: "100%", height: 178, backgroundColor: "#ddd" },
-  webImageCaption: { fontSize: 12, lineHeight: 17, color: "#555", paddingHorizontal: 11, paddingTop: 8 },
+    borderColor: "#dedede", backgroundColor: "#f6f6f6", marginVertical: 6 },
+  webImage: { width: "100%", height: 178, backgroundColor: "#dddddd" },
+  webImageCaption: { fontSize: 12, lineHeight: 17, color: "#555555", paddingHorizontal: 11, paddingTop: 8 },
   webImageLink: { flexDirection: "row", gap: 5, alignItems: "center", padding: 11 },
-  webImageLinkText: { fontSize: 12, fontWeight: "600", color: "#555" },
+  webImageLinkText: { fontSize: 12, fontWeight: "600", color: "#555555" },
   voiceCardOuter: { maxWidth: 325, borderRadius: 20, backgroundColor: "#161616",
     padding: 11, alignSelf: "flex-end" },
   voiceBubble: { minHeight: 72, width: "100%", padding: 12, borderRadius: 16,
@@ -2935,36 +2936,36 @@ const mobileExtras = StyleSheet.create({
   voicePlay: { width: 44, height: 44, borderRadius: 22,
     backgroundColor: "#222222", alignItems: "center", justifyContent: "center" },
   voiceMetaRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 5 },
-  voiceMeta: { color: "#777", fontSize: 11 },
+  voiceMeta: { color: "#777777", fontSize: 11 },
   waveBars: { height: 28, flexDirection: "row", alignItems: "center", gap: 2 },
-  waveBar: { width: 3, borderRadius: 2, backgroundColor: "#5e6664" },
+  waveBar: { width: 3, borderRadius: 2, backgroundColor: "#646464" },
   voiceTranscriptButton: { flexDirection: "row", alignItems: "center", gap: 6,
     paddingTop: 12, paddingBottom: 6, paddingHorizontal: 3 },
   voiceTranscriptLabel: { color: "#eeeeee", fontSize: 12 },
   voiceTranscriptText: { color: "#eeeeee", lineHeight: 22, fontSize: 13,
     paddingTop: 8, paddingBottom: 10, paddingHorizontal: 4 },
   voicePlaybackError: { color: "#ffc4c4", fontSize: 11, paddingTop: 8 },
-  draftCard: { borderWidth: 1, borderColor: "#d7d7d2", backgroundColor: "#f7f7f5",
+  draftCard: { borderWidth: 1, borderColor: "#d7d7d7", backgroundColor: "#f7f7f7",
     borderRadius: 17, padding: 12, gap: 9, marginBottom: 10 },
   draftTitle: { fontSize: 13, color: "#252525", fontWeight: "700" },
-  draftHint: { fontSize: 12, color: "#777", lineHeight: 18 },
-  draftTextarea: { backgroundColor: "#fff", borderColor: "#deded9", borderWidth: 1,
-    borderRadius: 11, padding: 10, color: "#222", minHeight: 65, maxHeight: 130,
+  draftHint: { fontSize: 12, color: "#777777", lineHeight: 18 },
+  draftTextarea: { backgroundColor: "#ffffff", borderColor: "#dedede", borderWidth: 1,
+    borderRadius: 11, padding: 10, color: "#222222", minHeight: 65, maxHeight: 130,
     fontSize: 14, textAlignVertical: "top" },
   draftActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   draftAction: { paddingVertical: 10, paddingHorizontal: 12, backgroundColor: "#232323",
     borderRadius: 11, flexDirection: "row", alignItems: "center", gap: 6 },
-  draftActionSecondary: { backgroundColor: "#e4e4e0" },
-  draftActionText: { color: "#fff", fontSize: 12, fontWeight: "600" },
-  draftActionTextSecondary: { color: "#333" },
-  microphoneButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: "#ededeb",
+  draftActionSecondary: { backgroundColor: "#e4e4e4" },
+  draftActionText: { color: "#ffffff", fontSize: 12, fontWeight: "600" },
+  draftActionTextSecondary: { color: "#333333" },
+  microphoneButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: "#ededed",
     alignItems: "center", justifyContent: "center" },
   microphoneActive: { backgroundColor: "#c53a48" },
-  codeModal: { flex: 1, backgroundColor: "#121318" },
+  codeModal: { flex: 1, backgroundColor: "#131313" },
   codeModalBar: { paddingHorizontal: 14, paddingVertical: 12, flexDirection: "row",
-    alignItems: "center", gap: 10, backgroundColor: "#202126" },
+    alignItems: "center", gap: 10, backgroundColor: "#212121" },
   codeModalTitle: { flex: 1, color: "#f5f5f5", fontWeight: "700", fontSize: 14 },
-  codeModalButton: { padding: 7, borderRadius: 8, backgroundColor: "#34353a" },
+  codeModalButton: { padding: 7, borderRadius: 8, backgroundColor: "#353535" },
   codeText: { fontSize: 12, lineHeight: 20, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
 });
 
@@ -3080,11 +3081,11 @@ function OriaCoursesMobilePanel({ language, wallet, userId, onClose, onWalletRef
   const isDark = useIsDarkTheme();
   const courseRouter = useRouter();
   const tr = (fr: string, en: string) => language === "en" ? en : fr;
-  const bg = isDark ? "#101012" : "#ffffff";
-  const card = isDark ? "#1b1b20" : "#f6f6f8";
-  const ink = isDark ? "#f5f5f5" : "#17171b";
-  const muted = isDark ? "#b4b4bd" : "#666671";
-  const line = isDark ? "#3c3c44" : "#e4e4e8";
+  const bg = isDark ? "#101010" : "#ffffff";
+  const card = isDark ? "#1b1b1b" : "#f6f6f6";
+  const ink = isDark ? "#f5f5f5" : "#171717";
+  const muted = isDark ? "#b5b5b5" : "#676767";
+  const line = isDark ? "#3d3d3d" : "#e4e4e4";
   const [capabilities, setCapabilities] = useState<CourseCapabilities | null>(null);
   const [title, setTitle] = useState("");
   const [format, setFormat] = useState<"pdf" | "docx">("pdf");
@@ -6911,7 +6912,7 @@ export default function ChatPage() {
               accessibilityLabel={t.modify}
             >
               <Ionicons name="create-outline" size={14}
-                color={themedIconColor("#777771", isDark)} />
+                color={themedIconColor("#777777", isDark)} />
               <Text style={styles.modifyMessageButtonText}>{t.modify}</Text>
             </Pressable>
           ) : null}
@@ -6940,7 +6941,7 @@ export default function ChatPage() {
                 name="create-outline"
                 size={13}
                 color={themedIconColor(
-                  "#777771",
+                  "#777777",
                   isDark,
                 )}
               />
@@ -6972,7 +6973,7 @@ export default function ChatPage() {
               editable={!completedEditBusy}
               style={styles.modificationInput}
               placeholder={language === "fr" ? "Modifie ton message..." : "Edit your request..."}
-              placeholderTextColor={themedIconColor("#92928c", isDark)}
+              placeholderTextColor={themedIconColor("#929292", isDark)}
               textAlignVertical="top"
             />
             {oriaMessageHasFiles(completedEditOriginal) ? (
@@ -6985,13 +6986,13 @@ export default function ChatPage() {
             {completedEditFiles.map((file) => (
               <View key={file.id} style={styles.completedEditFileRow}>
                 <Ionicons name="document-attach-outline" size={15}
-                  color={themedIconColor("#777771", isDark)}/>
+                  color={themedIconColor("#777777", isDark)}/>
                 <Text style={styles.completedEditFileName} numberOfLines={1}>{file.name}</Text>
                 <Pressable disabled={completedEditBusy} onPress={() =>
                   setCompletedEditFiles((current) => current.filter((selected) => selected.id !== file.id))}
                   accessibilityRole="button" accessibilityLabel={t.cancel}>
                   <Ionicons name="close-circle-outline" size={20}
-                    color={themedIconColor("#777771", isDark)}/>
+                    color={themedIconColor("#777777", isDark)}/>
                 </Pressable>
               </View>
             ))}
@@ -7001,7 +7002,7 @@ export default function ChatPage() {
               accessibilityRole="button"
               accessibilityLabel={language === "fr" ? "Joindre un fichier" : "Attach a file"}>
               <Ionicons name="attach-outline" size={16}
-                color={themedIconColor("#777771", isDark)}/>
+                color={themedIconColor("#777777", isDark)}/>
               <Text style={styles.completedEditAttachText}>
                 {language === "fr" ? "Ajouter un fichier ou une image" : "Add a file or image"}
               </Text>
@@ -7065,7 +7066,7 @@ export default function ChatPage() {
               }
               placeholderTextColor={
                 themedIconColor(
-                  "#92928c",
+                  "#929292",
                   isDark,
                 )
               }
@@ -7351,7 +7352,7 @@ export default function ChatPage() {
           >
             <View style={mobileExtras.codeModalBar}>
               <Pressable onPress={() => setCodePreview(null)} style={mobileExtras.codeModalButton}>
-                <Ionicons name="close" size={21} color="#fff" />
+                <Ionicons name="close" size={21} color="#ffffff" />
               </Pressable>
               <Text style={mobileExtras.codeModalTitle} numberOfLines={1}>
                 {codePreview?.title || t.codeViewer}
@@ -7359,7 +7360,7 @@ export default function ChatPage() {
               <Pressable style={mobileExtras.codeModalButton} onPress={() =>
                 void Clipboard.setStringAsync(codePreview?.code || "")}
                 accessibilityLabel={t.copy}>
-                <Ionicons name="copy-outline" size={19} color="#fff" />
+                <Ionicons name="copy-outline" size={19} color="#ffffff" />
               </Pressable>
               {codePreview?.downloadUrl ? (
                 <Pressable style={mobileExtras.codeModalButton}
@@ -7368,7 +7369,7 @@ export default function ChatPage() {
                     if (url) void Linking.openURL(url).catch(() => undefined);
                   }}
                   accessibilityLabel={t.download}>
-                  <Ionicons name="download-outline" size={19} color="#fff" />
+                  <Ionicons name="download-outline" size={19} color="#ffffff" />
                 </Pressable>
               ) : null}
             </View>
@@ -7382,20 +7383,20 @@ export default function ChatPage() {
       </Modal>
       <Modal visible={Boolean(wordPreview)} animationType="slide"
         presentationStyle="fullScreen" onRequestClose={() => setWordPreview(null)}>
-        <SafeAreaProvider style={{flex:1, backgroundColor:theme==="dark" ? "#101012" : "#fff"}}>
+        <SafeAreaProvider style={{flex:1, backgroundColor:theme==="dark" ? "#101010" : "#ffffff"}}>
           <SafeAreaView edges={["top","bottom","left","right"]}
-            style={{flex:1, backgroundColor:theme==="dark" ? "#101012" : "#fff"}}>
+            style={{flex:1, backgroundColor:theme==="dark" ? "#101010" : "#ffffff"}}>
             <View style={{flexDirection:"row",alignItems:"center",padding:14,borderBottomWidth:1,
-              borderColor:theme==="dark" ? "#303036" : "#e5e7eb"}}>
+              borderColor:theme==="dark" ? "#303030" : "#e7e7e7"}}>
               <Pressable onPress={() => setWordPreview(null)} accessibilityRole="button"
                 accessibilityLabel={language==="fr" ? "Fermer" : "Close"} style={{padding:7}}>
-                <Ionicons name="close" size={24} color={theme==="dark" ? "#fff" : "#111"}/>
+                <Ionicons name="close" size={24} color={theme==="dark" ? "#ffffff" : "#111111"}/>
               </Pressable>
               <View style={{flex:1,marginLeft:10}}>
-                <Text numberOfLines={1} style={{fontSize:15,fontWeight:"700",color:theme==="dark" ? "#fff" : "#111"}}>
+                <Text numberOfLines={1} style={{fontSize:15,fontWeight:"700",color:theme==="dark" ? "#ffffff" : "#111111"}}>
                   {wordPreview?.filename}
                 </Text>
-                <Text style={{fontSize:11,color:theme==="dark" ? "#aaa" : "#667085"}}>
+                <Text style={{fontSize:11,color:theme==="dark" ? "#aaaaaa" : "#667085"}}>
                   DOCX · {language==="fr" ? "Aperçu privé en lecture seule" : "Private read-only preview"}
                 </Text>
               </View>
@@ -7404,20 +7405,20 @@ export default function ChatPage() {
                   const artifact = generatedArtifacts.find((item) => item.id === wordPreview?.id);
                   if (artifact) void downloadArtifact(artifact);
                 }}>
-                <Ionicons name="download-outline" size={21} color={theme==="dark" ? "#fff" : "#111"}/>
+                <Ionicons name="download-outline" size={21} color={theme==="dark" ? "#ffffff" : "#111111"}/>
               </Pressable>
             </View>
-            <ScrollView style={{flex:1,backgroundColor:theme==="dark" ? "#18181b" : "#f0f2f5"}}
+            <ScrollView style={{flex:1,backgroundColor:theme==="dark" ? "#181818" : "#f2f2f2"}}
               contentContainerStyle={{paddingHorizontal:12,paddingVertical:18}}>
-              <View style={{backgroundColor:"#fff",borderRadius:10,paddingHorizontal:21,
+              <View style={{backgroundColor:"#ffffff",borderRadius:10,paddingHorizontal:21,
                 paddingVertical:30,minHeight:500,maxWidth:850,alignSelf:"stretch"}}>
                 {(wordPreview?.blocks || []).map((block,index) => {
                   if (block.type === "table") return <ScrollView horizontal key={`table-${index}`}
                     style={{marginVertical:11}}>
-                    <View style={{borderWidth:1,borderColor:"#d5dee5"}}>
+                    <View style={{borderWidth:1,borderColor:"#dddddd"}}>
                       {(block.rows || []).map((row,ri)=><View key={ri} style={{flexDirection:"row"}}>
                         {row.map((cell,ci)=><View key={ci} style={{width:180,padding:9,borderBottomWidth:1,
-                          borderRightWidth:1,borderColor:"#d5dee5",backgroundColor:ri===0?"#eaf2f7":"#fff"}}>
+                          borderRightWidth:1,borderColor:"#dddddd",backgroundColor:ri===0?"#f1f1f1":"#ffffff"}}>
                           <Text selectable style={{fontSize:12,color:"#263346",fontWeight:ri===0?"700":"400"}}>{cell}</Text>
                         </View>)}
                       </View>)}
@@ -7446,7 +7447,7 @@ export default function ChatPage() {
                   </View>;
                 })}
               </View>
-              <Text style={{padding:12,fontSize:11,textAlign:"center",color:theme==="dark" ? "#aaa" : "#667085"}}>
+              <Text style={{padding:12,fontSize:11,textAlign:"center",color:theme==="dark" ? "#aaaaaa" : "#667085"}}>
                 {language==="fr" ? "Aperçu simplifié : pagination et certaines mises en page peuvent différer du fichier Word. Téléchargez le DOCX pour tout consulter." :
                   "Simplified preview: pagination and some Word layouts may differ. Download the DOCX for full fidelity."}
                 {wordPreview?.truncated ? (language==="fr" ? " Aperçu tronqué." : " Preview truncated.") : ""}
@@ -7457,37 +7458,37 @@ export default function ChatPage() {
       </Modal>
       <Modal visible={Boolean(spreadsheetPreview)} animationType="slide"
         presentationStyle="fullScreen" onRequestClose={() => setSpreadsheetPreview(null)}>
-        <SafeAreaProvider style={{flex:1, backgroundColor: theme === "dark" ? "#101012" : "#fff"}}>
-          <SafeAreaView edges={["top","bottom","left","right"]} style={{flex:1, backgroundColor: theme === "dark" ? "#101012" : "#fff"}}>
+        <SafeAreaProvider style={{flex:1, backgroundColor: theme === "dark" ? "#101010" : "#ffffff"}}>
+          <SafeAreaView edges={["top","bottom","left","right"]} style={{flex:1, backgroundColor: theme === "dark" ? "#101010" : "#ffffff"}}>
             <View style={{flexDirection:"row", alignItems:"center", padding:14,
-              borderBottomWidth:1, borderColor: theme === "dark" ? "#303036" : "#e5e7eb"}}>
+              borderBottomWidth:1, borderColor: theme === "dark" ? "#303030" : "#e7e7e7"}}>
               <Pressable onPress={() => setSpreadsheetPreview(null)} accessibilityRole="button"
                 accessibilityLabel={language === "fr" ? "Fermer" : "Close"} style={{padding:7}}>
-                <Ionicons name="close" size={24} color={theme === "dark" ? "#fff" : "#111"}/>
+                <Ionicons name="close" size={24} color={theme === "dark" ? "#ffffff" : "#111111"}/>
               </Pressable>
               <View style={{flex:1, marginLeft:10}}>
-                <Text numberOfLines={1} style={{fontSize:15,fontWeight:"700", color:theme === "dark" ? "#fff" : "#111"}}>
+                <Text numberOfLines={1} style={{fontSize:15,fontWeight:"700", color:theme === "dark" ? "#ffffff" : "#111111"}}>
                   {spreadsheetPreview?.filename}
                 </Text>
-                <Text style={{fontSize:11, color:theme === "dark" ? "#aaa" : "#667085"}}>
+                <Text style={{fontSize:11, color:theme === "dark" ? "#aaaaaa" : "#667085"}}>
                   XLSX · {language === "fr" ? "Aperçu privé en lecture seule" : "Private read-only preview"}
                 </Text>
               </View>
             </View>
             <ScrollView horizontal style={{flexGrow:0, borderBottomWidth:1,
-              borderColor:theme === "dark" ? "#303036" : "#e5e7eb"}}
+              borderColor:theme === "dark" ? "#303030" : "#e7e7e7"}}
               contentContainerStyle={{padding:9, gap:7}}>
               {(spreadsheetPreview?.sheets || []).map((sheet, idx) => (
                 <Pressable key={`${idx}-${sheet.name}`} onPress={() => setSpreadsheetSheetIndex(idx)}
                   style={{paddingHorizontal:13,paddingVertical:9,borderRadius:9,
-                    backgroundColor:spreadsheetSheetIndex===idx ? (theme==="dark" ? "#fff" : "#111") : (theme==="dark" ? "#24242a" : "#f3f4f6")}}>
-                  <Text style={{fontSize:12,fontWeight:"600",color:spreadsheetSheetIndex===idx ? (theme==="dark" ? "#111" : "#fff") : (theme==="dark" ? "#ddd" : "#333")}}>{sheet.name}</Text>
+                    backgroundColor:spreadsheetSheetIndex===idx ? (theme==="dark" ? "#ffffff" : "#111111") : (theme==="dark" ? "#242424" : "#f4f4f4")}}>
+                  <Text style={{fontSize:12,fontWeight:"600",color:spreadsheetSheetIndex===idx ? (theme==="dark" ? "#111111" : "#ffffff") : (theme==="dark" ? "#dddddd" : "#333333")}}>{sheet.name}</Text>
                 </Pressable>
               ))}
             </ScrollView>
             <ScrollView style={{flex:1}} nestedScrollEnabled>
               <ScrollView horizontal nestedScrollEnabled contentContainerStyle={{padding:12}}>
-                <View style={{borderWidth:1,borderColor:theme==="dark" ? "#36363d" : "#d9dce1",borderRadius:10,overflow:"hidden"}}>
+                <View style={{borderWidth:1,borderColor:theme==="dark" ? "#373737" : "#dcdcdc",borderRadius:10,overflow:"hidden"}}>
                   {(() => {
                     const sheet = spreadsheetPreview?.sheets[spreadsheetSheetIndex];
                     if (!sheet) return null;
@@ -7495,8 +7496,8 @@ export default function ChatPage() {
                     const valueText = (value: string | number | boolean | null | undefined) => value == null ? "" : typeof value === "number" ? value.toLocaleString(language === "fr" ? "fr-FR" : "en-US") : String(value);
                     const cell = (value: string, isHead:boolean, key:string) => <View key={key}
                       style={{width:170,paddingVertical:10,paddingHorizontal:9,borderRightWidth:1,borderBottomWidth:1,
-                        borderColor:theme==="dark" ? "#36363d" : "#e5e7eb",backgroundColor:isHead ? (theme==="dark" ? "#232329" : "#edf2f7") : (theme==="dark" ? "#101012" : "#fff")}}>
-                        <Text selectable numberOfLines={5} style={{fontSize:12,lineHeight:18,fontWeight:isHead ? "700" : "400",color:theme==="dark" ? "#eee" : "#263248"}}>{value}</Text>
+                        borderColor:theme==="dark" ? "#373737" : "#e7e7e7",backgroundColor:isHead ? (theme==="dark" ? "#232323" : "#f1f1f1") : (theme==="dark" ? "#101010" : "#ffffff")}}>
+                        <Text selectable numberOfLines={5} style={{fontSize:12,lineHeight:18,fontWeight:isHead ? "700" : "400",color:theme==="dark" ? "#eeeeee" : "#263248"}}>{value}</Text>
                       </View>;
                     return <>
                       <View style={{flexDirection:"row"}}>
@@ -7512,7 +7513,7 @@ export default function ChatPage() {
                 </View>
               </ScrollView>
             </ScrollView>
-            <Text style={{padding:12,fontSize:11,textAlign:"center",color:theme==="dark" ? "#aaa" : "#667085"}}>
+            <Text style={{padding:12,fontSize:11,textAlign:"center",color:theme==="dark" ? "#aaaaaa" : "#667085"}}>
               {language === "fr" ? "Aperçu limité à 120 lignes, 16 colonnes et 10 feuilles. Téléchargez le classeur pour tout consulter." : "Preview limited to 120 rows, 16 columns and 10 sheets. Download for full content."}
             </Text>
           </SafeAreaView>
@@ -7568,7 +7569,7 @@ export default function ChatPage() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={language === "en" ? "ORIA Courses" : "ORIA Cours"}
-                style={[courseUi.pill, { borderColor: isDark ? "#555" : "#ddd", paddingHorizontal: 10, paddingVertical: 7 }]}
+                style={[courseUi.pill, { borderColor: isDark ? "#555555" : "#dddddd", paddingHorizontal: 10, paddingVertical: 7 }]}
                 onPress={() => {
                   if (recorderState.isRecording) {
                     Alert.alert("ORIA", language === "en" ? "Stop your voice note first." : "Arrêtez d'abord la note vocale.");
@@ -7609,18 +7610,18 @@ export default function ChatPage() {
 
           {!coursesOpen && creditAlert !== null && wallet?.is_pack_active ? (
             <View style={[styles.creditAlertBanner, {
-              backgroundColor: isDark ? "#202024" : "#f4f4f5",
-              borderColor: isDark ? "#3a3a40" : "#e4e4e7",
+              backgroundColor: isDark ? "#202020" : "#f4f4f4",
+              borderColor: isDark ? "#3a3a3a" : "#e4e4e4",
             }]}>
               <Ionicons name={creditAlert === 0 ? "alert-circle-outline" : "wallet-outline"}
-                size={21} color={isDark ? "#eeeeee" : "#27272a"} />
+                size={21} color={isDark ? "#eeeeee" : "#272727"} />
               <View style={{ flex: 1, gap: 3 }}>
-                <Text style={{ color: isDark ? "#ffffff" : "#18181b", fontSize: 13, fontWeight: "700" }}>
+                <Text style={{ color: isDark ? "#ffffff" : "#181818", fontSize: 13, fontWeight: "700" }}>
                   {creditAlert === 0
                     ? (language === "fr" ? "Crédits épuisés" : "Credits exhausted")
                     : (language === "fr" ? "Votre solde de crédits diminue" : "Your credits are running low")}
                 </Text>
-                <Text style={{ color: isDark ? "#c4c4cb" : "#52525b", fontSize: 12, lineHeight: 17 }}>
+                <Text style={{ color: isDark ? "#c5c5c5" : "#535353", fontSize: 12, lineHeight: 17 }}>
                   {language === "fr"
                     ? (creditAlert === 0 ? "Vous pouvez recharger vos crédits pour continuer." : `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits.`)
                     : (creditAlert === 0 ? "You can top up your credits to continue." : `${wallet.balance.toLocaleString("en-US")} credits remaining.`)}
@@ -7637,7 +7638,7 @@ export default function ChatPage() {
               </View>
               <Pressable accessibilityRole="button" accessibilityLabel={language === "fr" ? "Fermer l'alerte" : "Dismiss alert"}
                 onPress={() => setCreditAlert(null)} style={{ padding: 4 }}>
-                <Ionicons name="close" size={18} color={isDark ? "#dddddd" : "#52525b"} />
+                <Ionicons name="close" size={18} color={isDark ? "#dddddd" : "#535353"} />
               </Pressable>
             </View>
           ) : null}
@@ -7719,7 +7720,7 @@ export default function ChatPage() {
                 <View style={styles.oriaStatusRow} accessibilityLiveRegion="polite">
                   <ActivityIndicator
                     size="small"
-                    color={themedIconColor("#777771", isDark)}
+                    color={themedIconColor("#777777", isDark)}
                   />
                   <Text
                     style={styles.oriaStatusText}
@@ -7799,7 +7800,7 @@ export default function ChatPage() {
             ) : null}
             {voiceUploading ? (
               <View style={[mobileExtras.draftCard, { flexDirection: "row", alignItems: "center" }]}>
-                <ActivityIndicator size="small" color="#333" />
+                <ActivityIndicator size="small" color="#333333" />
                 <Text style={mobileExtras.draftHint}>{t.voiceUploading}</Text>
               </View>
             ) : null}
@@ -7823,7 +7824,7 @@ export default function ChatPage() {
                   <Pressable style={mobileExtras.draftAction}
                     disabled={isThinking || voiceUploading}
                     onPress={() => void submitLocalVoiceDraft()}>
-                    <Ionicons name="arrow-up" size={16} color="#fff" />
+                    <Ionicons name="arrow-up" size={16} color="#ffffff" />
                     <Text style={mobileExtras.draftActionText}>{t.voicePrepareSend}</Text>
                   </Pressable>
                   <Pressable style={[mobileExtras.draftAction, mobileExtras.draftActionSecondary]}
@@ -7856,12 +7857,12 @@ export default function ChatPage() {
                     <View style={mobileExtras.draftActions}>
                       <Pressable style={mobileExtras.draftAction} disabled={voiceDraft.busy || isThinking}
                         onPress={() => void deliverVoiceDraft("voice")}>
-                        <Ionicons name="mic-outline" size={16} color="#fff" />
+                        <Ionicons name="mic-outline" size={16} color="#ffffff" />
                         <Text style={mobileExtras.draftActionText}>{t.sendAsVoice}</Text>
                       </Pressable>
                       <Pressable style={mobileExtras.draftAction} disabled={voiceDraft.busy || isThinking}
                         onPress={() => void deliverVoiceDraft("text")}>
-                        <Ionicons name="chatbubble-outline" size={16} color="#fff" />
+                        <Ionicons name="chatbubble-outline" size={16} color="#ffffff" />
                         <Text style={mobileExtras.draftActionText}>{t.sendAsText}</Text>
                       </Pressable>
                     </View>
@@ -8332,7 +8333,7 @@ export default function ChatPage() {
                     onPress={() => void (recorderState.isRecording ? stopVoiceRecording() : startVoiceRecording())}
                     accessibilityLabel={recorderState.isRecording ? t.recordStop : t.microphone}>
                     <Ionicons name={recorderState.isRecording ? "stop" : "mic-outline"}
-                      size={21} color={recorderState.isRecording ? "#fff" : themedIconColor("#444", isDark)} />
+                      size={21} color={recorderState.isRecording ? "#ffffff" : themedIconColor("#444444", isDark)} />
                   </Pressable>
                   <Pressable
                     style={[
@@ -8362,7 +8363,7 @@ export default function ChatPage() {
                     onPress={() => void (recorderState.isRecording ? stopVoiceRecording() : startVoiceRecording())}
                     accessibilityLabel={recorderState.isRecording ? t.recordStop : t.microphone}>
                     <Ionicons name={recorderState.isRecording ? "stop" : "mic-outline"} size={21}
-                      color={recorderState.isRecording ? "#fff" : themedIconColor("#444", isDark)} />
+                      color={recorderState.isRecording ? "#ffffff" : themedIconColor("#444444", isDark)} />
                   </Pressable>
                 <Pressable
                   style={[
@@ -8641,14 +8642,14 @@ const baseStyles = StyleSheet.create({
   },
   safe: {
     flex: 1,
-    backgroundColor: "#f8f8f6",
+    backgroundColor: "#ffffff",
   },
   flex: {
     flex: 1,
   },
   container: {
     flex: 1,
-    backgroundColor: "#f8f8f6",
+    backgroundColor: "#ffffff",
   },
   row: {
     flexDirection: "row",
@@ -8668,7 +8669,7 @@ const baseStyles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#e5e5e2",
+    borderBottomColor: "#e5e5e5",
   },
   headerButton: {
     width: 42,
@@ -8677,12 +8678,12 @@ const baseStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#dfdfdc",
+    borderColor: "#dfdfdf",
     backgroundColor: "#ffffff",
   },
 
   emptyMenuText: {
-  color: "#8b8b95",
+  color: "#8c8c8c",
   fontSize: 14,
   paddingVertical: 12,
   paddingHorizontal: 14,
@@ -8693,7 +8694,7 @@ const baseStyles = StyleSheet.create({
   },
   headerOverline: {
     fontSize: 10,
-    color: "#8a8a86",
+    color: "#8a8a8a",
     textTransform: "uppercase",
     letterSpacing: 1.3,
   },
@@ -8701,7 +8702,7 @@ const baseStyles = StyleSheet.create({
     marginTop: 2,
     fontSize: 14,
     fontWeight: "600",
-    color: "#171715",
+    color: "#171717",
   },
   headerRight: {
     flexDirection: "row",
@@ -8716,7 +8717,7 @@ const baseStyles = StyleSheet.create({
     height: 38,
     borderRadius: 19,
     borderWidth: 1,
-    borderColor: "#dfdfdc",
+    borderColor: "#dfdfdf",
     backgroundColor: "#ffffff",
   },
   creditText: {
@@ -8731,7 +8732,7 @@ const baseStyles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "#dfdfdc",
+    borderColor: "#dfdfdf",
     backgroundColor: "#ffffff",
   },
   profileLetter: {
@@ -8745,9 +8746,9 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 13,
-    backgroundColor: "#eeeeeb",
+    backgroundColor: "#eeeeee",
     borderWidth: 1,
-    borderColor: "#ddddda",
+    borderColor: "#dddddd",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -8757,7 +8758,7 @@ const baseStyles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     lineHeight: 18,
-    color: "#4f4f4b",
+    color: "#4f4f4f",
   },
   emptyState: {
     flex: 1,
@@ -8780,7 +8781,7 @@ const baseStyles = StyleSheet.create({
   },
   brandOverline: {
     fontSize: 10,
-    color: "#8a8a86",
+    color: "#8a8a8a",
     textTransform: "uppercase",
     letterSpacing: 1.6,
   },
@@ -8788,7 +8789,7 @@ const baseStyles = StyleSheet.create({
     marginTop: 3,
     fontSize: 13,
     fontWeight: "600",
-    color: "#171715",
+    color: "#171717",
   },
   emptyHeading: {
     fontSize: 38,
@@ -8802,7 +8803,7 @@ const baseStyles = StyleSheet.create({
     maxWidth: 370,
     fontSize: 14,
     lineHeight: 21,
-    color: "#7b7b76",
+    color: "#7b7b7b",
   },
   messageViewport: {
     flex: 1,
@@ -8820,7 +8821,7 @@ const baseStyles = StyleSheet.create({
     height: 42,
     borderRadius: 21,
     borderWidth: 1,
-    borderColor: "#d6d6d2",
+    borderColor: "#d6d6d6",
     backgroundColor: "#ffffff",
     alignItems: "center",
     justifyContent: "center",
@@ -8850,7 +8851,7 @@ const baseStyles = StyleSheet.create({
     flexShrink: 1,
     fontSize: 12,
     lineHeight: 18,
-    color: "#777771",
+    color: "#777777",
   },
   messageRow: {
     width: "100%",
@@ -8882,7 +8883,7 @@ const baseStyles = StyleSheet.create({
   },
   messageCopyText: {
     fontSize: 10,
-    color: "#777771",
+    color: "#777777",
     fontWeight: "500",
   },
   modifyMessageButton: {
@@ -8895,7 +8896,7 @@ const baseStyles = StyleSheet.create({
   },
   modifyMessageButtonText: {
     fontSize: 10,
-    color: "#777771",
+    color: "#777777",
     fontWeight: "500",
   },
   modificationCard: {
@@ -8903,19 +8904,19 @@ const baseStyles = StyleSheet.create({
     width: "94%",
     maxWidth: 520,
     borderWidth: 1,
-    borderColor: "#deded9",
+    borderColor: "#dedede",
     borderRadius: 17,
     backgroundColor: "#ffffff",
     padding: 12,
   },
   modificationTitle: {
-    color: "#22221f",
+    color: "#222222",
     fontSize: 12,
     fontWeight: "700",
   },
   modificationHelp: {
     marginTop: 4,
-    color: "#777771",
+    color: "#777777",
     fontSize: 10,
     lineHeight: 15,
   },
@@ -8924,18 +8925,18 @@ const baseStyles = StyleSheet.create({
     minHeight: 88,
     maxHeight: 150,
     borderWidth: 1,
-    borderColor: "#deded9",
+    borderColor: "#dedede",
     borderRadius: 13,
-    backgroundColor: "#f7f7f4",
+    backgroundColor: "#f7f7f7",
     paddingHorizontal: 11,
     paddingVertical: 10,
-    color: "#171715",
+    color: "#171717",
     fontSize: 14,
     lineHeight: 20,
   },
   modificationHint: {
     marginTop: 8,
-    color: "#777771",
+    color: "#777777",
     fontSize: 9,
     lineHeight: 14,
   },
@@ -8954,7 +8955,7 @@ const baseStyles = StyleSheet.create({
     justifyContent: "center",
   },
   modificationCancelText: {
-    color: "#666661",
+    color: "#666666",
     fontSize: 11,
     fontWeight: "600",
   },
@@ -8988,11 +8989,11 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 7,
     borderRadius: 9,
     borderWidth: 1,
-    borderColor: "#deded9",
+    borderColor: "#dedede",
   },
   completedEditFileName: {
     flex: 1,
-    color: "#777771",
+    color: "#777777",
     fontSize: 11,
   },
   completedEditAttachButton: {
@@ -9005,7 +9006,7 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 7,
   },
   completedEditAttachText: {
-    color: "#777771",
+    color: "#777777",
     fontSize: 11,
   },
   completedEditError: {
@@ -9017,7 +9018,7 @@ const baseStyles = StyleSheet.create({
   modificationStatus: {
     marginTop: 4,
     maxWidth: "94%",
-    color: "#777771",
+    color: "#777777",
     fontSize: 9,
     lineHeight: 13,
     textAlign: "right",
@@ -9060,7 +9061,7 @@ const baseStyles = StyleSheet.create({
     opacity: 0.86,
   },
   messageText: {
-    color: "#1b1b19",
+    color: "#1b1b1b",
     fontSize: 14,
     lineHeight: 22,
   },
@@ -9080,7 +9081,7 @@ const baseStyles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   mathFallbackText: {
-    color: "#1b1b19",
+    color: "#1b1b1b",
     fontSize: 15,
     lineHeight: 23,
     fontStyle: "italic",
@@ -9095,7 +9096,7 @@ const baseStyles = StyleSheet.create({
     fontStyle: "italic",
   },
   inlineCode: {
-    backgroundColor: "#eeeeeb",
+    backgroundColor: "#eeeeee",
     color: "#222222",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     fontSize: 12,
@@ -9143,48 +9144,48 @@ const baseStyles = StyleSheet.create({
     width: 15,
     fontSize: 16,
     lineHeight: 22,
-    color: "#444440",
+    color: "#444444",
   },
   number: {
     width: 22,
     fontSize: 13,
     lineHeight: 22,
-    color: "#666660",
+    color: "#666666",
   },
   quote: {
     borderLeftWidth: 2,
-    borderLeftColor: "#999993",
+    borderLeftColor: "#999999",
     paddingLeft: 11,
   },
   quoteText: {
-    color: "#686863",
+    color: "#686868",
     fontSize: 14,
     lineHeight: 22,
   },
   separator: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: "#deded9",
+    backgroundColor: "#dedede",
     marginVertical: 8,
   },
   codeBlock: {
     marginTop: 3,
     borderRadius: 14,
     overflow: "hidden",
-    backgroundColor: "#181816",
+    backgroundColor: "#181818",
     borderWidth: 1,
-    borderColor: "#292925",
+    borderColor: "#292929",
   },
   codeHeader: {
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#33332f",
+    borderBottomColor: "#333333",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
   codeLanguage: {
-    color: "#bcbcb4",
+    color: "#bbbbbb",
     fontSize: 9,
     textTransform: "uppercase",
     letterSpacing: 1.2,
@@ -9193,10 +9194,10 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 5,
     borderRadius: 7,
-    backgroundColor: "#2b2b27",
+    backgroundColor: "#2b2b2b",
   },
   copyText: {
-    color: "#eeeeea",
+    color: "#eeeeee",
     fontSize: 10,
     fontWeight: "600",
   },
@@ -9205,7 +9206,7 @@ const baseStyles = StyleSheet.create({
     maxHeight: 360,
   },
   codeText: {
-    color: "#f0f0ec",
+    color: "#f0f0f0",
     fontSize: 11,
     lineHeight: 18,
     padding: 12,
@@ -9218,12 +9219,12 @@ const baseStyles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "#111111",
     borderWidth: 1,
-    borderColor: "#deded9",
+    borderColor: "#dedede",
   },
   generatedImage: {
     width: "100%",
     height: 310,
-    backgroundColor: "#eeeeeb",
+    backgroundColor: "#eeeeee",
   },
   video: {
     width: "100%",
@@ -9256,7 +9257,7 @@ const baseStyles = StyleSheet.create({
     minHeight: 64,
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#deded9",
+    borderColor: "#dedede",
     backgroundColor: "#ffffff",
     paddingHorizontal: 10,
     paddingVertical: 9,
@@ -9270,20 +9271,20 @@ const baseStyles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#eeeeeb",
+    backgroundColor: "#eeeeee",
   },
   artifactInfo: {
     flex: 1,
     minWidth: 0,
   },
   artifactName: {
-    color: "#22221f",
+    color: "#222222",
     fontSize: 12,
     fontWeight: "600",
   },
   artifactMeta: {
     marginTop: 3,
-    color: "#777771",
+    color: "#777777",
     fontSize: 9,
     fontWeight: "500",
   },
@@ -9292,8 +9293,8 @@ const baseStyles = StyleSheet.create({
     height: 38,
     borderRadius: 11,
     borderWidth: 1,
-    borderColor: "#deded9",
-    backgroundColor: "#f7f7f4",
+    borderColor: "#dedede",
+    backgroundColor: "#f7f7f7",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -9303,7 +9304,7 @@ const baseStyles = StyleSheet.create({
     elevation: 20,
     paddingHorizontal: 13,
     paddingTop: 6,
-    backgroundColor: "#f8f8f6",
+    backgroundColor: "#f8f8f8",
   },
   modelSelectorWrap: {
     position: "relative",
@@ -9326,7 +9327,7 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 10,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#ddddda",
+    borderColor: "#dddddd",
     backgroundColor: "#ffffff",
     flexDirection: "row",
     alignItems: "center",
@@ -9336,7 +9337,7 @@ const baseStyles = StyleSheet.create({
   reasoningSelectorText: {
     fontSize: 11,
     fontWeight: "600",
-    color: "#4c4c47",
+    color: "#4c4c4c",
   },
   reasoningMenu: {
     position: "absolute",
@@ -9345,7 +9346,7 @@ const baseStyles = StyleSheet.create({
     width: 270,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#ddddda",
+    borderColor: "#dddddd",
     backgroundColor: "#ffffff",
     padding: 7,
     shadowColor: "#000000",
@@ -9364,7 +9365,7 @@ const baseStyles = StyleSheet.create({
     gap: 9,
   },
   reasoningOptionActive: {
-    backgroundColor: "#f0f0ed",
+    backgroundColor: "#f0f0f0",
   },
   reasoningOptionIcon: {
     width: 34,
@@ -9372,18 +9373,18 @@ const baseStyles = StyleSheet.create({
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f3f3f0",
+    backgroundColor: "#f3f3f3",
   },
   reasoningOptionTitle: {
     fontSize: 12,
     fontWeight: "700",
-    color: "#22221f",
+    color: "#222222",
   },
   reasoningOptionDescription: {
     marginTop: 2,
     fontSize: 9,
     lineHeight: 13,
-    color: "#777771",
+    color: "#777777",
   },
   modelMenu: {
     position: "absolute",
@@ -9393,7 +9394,7 @@ const baseStyles = StyleSheet.create({
     maxHeight: 300,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#ddddda",
+    borderColor: "#dddddd",
     backgroundColor: "#ffffff",
     padding: 7,
     shadowColor: "#000000",
@@ -9408,7 +9409,7 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 11,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#ddddda",
+    borderColor: "#dddddd",
     backgroundColor: "#ffffff",
     flexDirection: "row",
     alignItems: "center",
@@ -9418,7 +9419,7 @@ const baseStyles = StyleSheet.create({
   modelSelectorText: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#171715",
+    color: "#171717",
   },
   modelOption: {
     paddingHorizontal: 11,
@@ -9426,18 +9427,18 @@ const baseStyles = StyleSheet.create({
     borderRadius: 11,
   },
   modelOptionActive: {
-    backgroundColor: "#f0f0ed",
+    backgroundColor: "#f0f0f0",
   },
   modelName: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#171715",
+    color: "#171717",
   },
   modelDescription: {
     marginTop: 3,
     fontSize: 11,
     lineHeight: 16,
-    color: "#777771",
+    color: "#777777",
   },
   trialBadge: {
     overflow: "hidden",
@@ -9452,7 +9453,7 @@ const baseStyles = StyleSheet.create({
   smallMuted: {
     fontSize: 9,
     lineHeight: 14,
-    color: "#83837d",
+    color: "#838383",
   },
   disabled: {
     opacity: 0.42,
@@ -9461,7 +9462,7 @@ const baseStyles = StyleSheet.create({
     padding: 10,
     borderRadius: 15,
     borderWidth: 1,
-    borderColor: "#ddddda",
+    borderColor: "#dddddd",
     backgroundColor: "#ffffff",
     flexDirection: "row",
     alignItems: "center",
@@ -9474,24 +9475,24 @@ const baseStyles = StyleSheet.create({
     borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#eeeeeb",
+    backgroundColor: "#eeeeee",
   },
   capabilityTitle: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#171715",
+    color: "#171717",
   },
   capabilityDescription: {
     marginTop: 2,
     fontSize: 9,
     lineHeight: 14,
-    color: "#83837d",
+    color: "#838383",
   },
   mediaPanel: {
     padding: 12,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#ddddda",
+    borderColor: "#dddddd",
     backgroundColor: "#ffffff",
     marginBottom: 8,
   },
@@ -9502,9 +9503,9 @@ const baseStyles = StyleSheet.create({
     padding: 12,
     marginBottom: 12,
     borderRadius: 12,
-    backgroundColor: "#F3F3F1",
+    backgroundColor: "#f3f3f3",
     borderWidth: 1,
-    borderColor: "#E2E2DE",
+    borderColor: "#e2e2e2",
   },
   mediaLockedTitle: {
     fontSize: 13,
@@ -9515,7 +9516,7 @@ const baseStyles = StyleSheet.create({
     marginTop: 2,
     fontSize: 12,
     lineHeight: 17,
-    color: "#777771",
+    color: "#777777",
   },
   mediaTypeButtonLocked: {
     opacity: 0.55,
@@ -9525,7 +9526,7 @@ const baseStyles = StyleSheet.create({
   },
   mediaPromptLocked: {
     opacity: 0.55,
-    backgroundColor: "#F3F3F1",
+    backgroundColor: "#f3f3f3",
   },
   mediaTypeRow: {
     flexDirection: "row",
@@ -9539,19 +9540,19 @@ const baseStyles = StyleSheet.create({
     paddingVertical: 9,
     borderRadius: 13,
     borderWidth: 1,
-    borderColor: "#ddddda",
+    borderColor: "#dddddd",
     alignItems: "center",
     justifyContent: "center",
     gap: 3,
   },
   mediaTypeButtonActive: {
-    backgroundColor: "#eeeeeb",
-    borderColor: "#bdbdb8",
+    backgroundColor: "#eeeeee",
+    borderColor: "#bdbdbd",
   },
   mediaTypeText: {
     fontSize: 10,
     fontWeight: "600",
-    color: "#171715",
+    color: "#171717",
     textAlign: "center",
   },
   mediaSectionLabel: {
@@ -9559,7 +9560,7 @@ const baseStyles = StyleSheet.create({
     marginBottom: 7,
     fontSize: 9,
     fontWeight: "600",
-    color: "#777771",
+    color: "#777777",
   },
   horizontalOptions: {
     gap: 7,
@@ -9570,18 +9571,18 @@ const baseStyles = StyleSheet.create({
     padding: 10,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#ddddda",
+    borderColor: "#dddddd",
     gap: 5,
   },
   mediaOptionActive: {
-    backgroundColor: "#eeeeeb",
-    borderColor: "#bdbdb8",
+    backgroundColor: "#eeeeee",
+    borderColor: "#bdbdbd",
   },
   mediaOptionTitle: {
     flex: 1,
     fontSize: 11,
     fontWeight: "600",
-    color: "#171715",
+    color: "#171717",
   },
   mediaPrompt: {
     marginTop: 10,
@@ -9591,8 +9592,8 @@ const baseStyles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 11,
     borderWidth: 1,
-    borderColor: "#ddddda",
-    color: "#171715",
+    borderColor: "#dddddd",
+    color: "#171717",
     fontSize: 12,
     lineHeight: 18,
     textAlignVertical: "top",
@@ -9616,7 +9617,7 @@ const baseStyles = StyleSheet.create({
   },
   composer: {
     borderWidth: 1,
-    borderColor: "#d2d2ce",
+    borderColor: "#d2d2d2",
     backgroundColor: "#ffffff",
     overflow: "hidden",
   },
@@ -9647,8 +9648,8 @@ const baseStyles = StyleSheet.create({
     padding: 6,
     borderRadius: 13,
     borderWidth: 1,
-    borderColor: "#deded9",
-    backgroundColor: "#f7f7f4",
+    borderColor: "#dedede",
+    backgroundColor: "#f7f7f7",
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
@@ -9664,7 +9665,7 @@ const baseStyles = StyleSheet.create({
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#eaeae6",
+    backgroundColor: "#eaeaea",
   },
   attachmentInfo: {
     flex: 1,
@@ -9673,7 +9674,7 @@ const baseStyles = StyleSheet.create({
   attachmentName: {
     fontSize: 10,
     fontWeight: "600",
-    color: "#22221f",
+    color: "#222222",
   },
   removeAttachment: {
     position: "absolute",
@@ -9687,8 +9688,11 @@ const baseStyles = StyleSheet.create({
     backgroundColor: "#ffffff",
   },
   composerInput: {
+    borderWidth: 0,
+    borderTopWidth: 0,
+    borderBottomWidth: 0,
     flex: 1,
-    color: "#171715",
+    color: "#171717",
     fontSize: 16,
     lineHeight: 23,
   },
@@ -9723,6 +9727,7 @@ const baseStyles = StyleSheet.create({
     zIndex: -1,
   },
   composerFooter: {
+    borderTopWidth: 0,
     minHeight: 58,
     paddingHorizontal: 10,
     paddingBottom: 10,
@@ -9747,7 +9752,7 @@ const baseStyles = StyleSheet.create({
   capabilityButtonText: {
     fontSize: 11,
     fontWeight: "500",
-    color: "#555550",
+    color: "#555555",
   },
   capabilityActive: {
     backgroundColor: "#111111",
@@ -9780,7 +9785,7 @@ const baseStyles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 9,
     lineHeight: 14,
-    color: "#8a8a85",
+    color: "#8a8a8a",
     textAlign: "center",
   },
   drawerOverlay: {
@@ -9828,7 +9833,7 @@ const baseStyles = StyleSheet.create({
     lineHeight: 13,
     textTransform: "uppercase",
     letterSpacing: 1.8,
-    color: "#888882",
+    color: "#888888",
   },
   closeButton: {
     width: 38,
@@ -9848,17 +9853,17 @@ const baseStyles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#e0e0dc",
-    backgroundColor: "#f7f7f5",
+    borderColor: "#e0e0e0",
+    backgroundColor: "#f7f7f7",
   },
   returnConversationText: { flex: 1, paddingRight: 12 },
   returnConversationHeading: {
-    color: "#171715",
+    color: "#171717",
     fontSize: 14,
     fontWeight: "600",
   },
   returnConversationSubtitle: {
-    color: "#777771",
+    color: "#777777",
     fontSize: 12,
     marginTop: 5,
   },
@@ -9889,7 +9894,7 @@ const baseStyles = StyleSheet.create({
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 1.5,
-    color: "#888882",
+    color: "#888888",
   },
   historyScroller: {
     flexGrow: 0,
@@ -9907,33 +9912,33 @@ const baseStyles = StyleSheet.create({
     borderRadius: 14,
   },
   conversationItemActive: {
-    backgroundColor: "#f0f0ed",
+    backgroundColor: "#f0f0f0",
   },
   conversationTitle: {
     fontSize: 14,
     lineHeight: 20,
-    color: "#565650",
+    color: "#565656",
   },
   walletCard: {
     marginTop: 10,
     padding: 16,
     borderRadius: 19,
-    backgroundColor: "#f7f7f5",
+    backgroundColor: "#f7f7f7",
     borderWidth: 1,
-    borderColor: "#deded9",
+    borderColor: "#dedede",
   },
   walletBalance: {
     marginTop: 10,
     fontSize: 27,
     lineHeight: 32,
     fontWeight: "700",
-    color: "#171715",
+    color: "#171717",
   },
   drawerLinks: {
     marginTop: 14,
     paddingTop: 13,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#e1e1dc",
+    borderTopColor: "#e1e1e1",
     gap: 3,
   },
   drawerLink: {
@@ -9947,15 +9952,15 @@ const baseStyles = StyleSheet.create({
   drawerLinkText: {
     flex: 1,
     fontSize: 14,
-    color: "#555550",
+    color: "#555555",
   },
   drawerCount: {
     minWidth: 24,
     paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 20,
-    backgroundColor: "#e5e5e1",
-    color: "#666660",
+    backgroundColor: "#e5e5e5",
+    color: "#666666",
     fontSize: 10,
     textAlign: "center",
   },

@@ -8035,7 +8035,7 @@ export default function ChatPage() {
                   disabled={
                     isThinking
                   }
-                  className="block w-full min-h-[44px] max-h-[128px] resize-none overflow-y-auto bg-transparent px-4 pb-2 pt-3 text-[16px] leading-6 outline-none placeholder:text-muted disabled:opacity-60 sm:px-5"
+                  className="block w-full min-h-[44px] max-h-[128px] appearance-none resize-none overflow-y-auto border-0 bg-transparent px-4 pb-2 pt-3 text-[16px] leading-6 shadow-none outline-none ring-0 focus:border-0 focus:shadow-none focus:outline-none focus:ring-0 placeholder:text-muted disabled:opacity-60 sm:px-5"
                 />
 
                 <div className="flex items-center justify-between gap-1.5 px-2 pb-2.5 pt-1 sm:gap-3 sm:px-4 sm:pb-3 sm:pt-2">

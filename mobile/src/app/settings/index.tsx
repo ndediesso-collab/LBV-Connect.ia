@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import Animated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
 import {
   ActivityIndicator,
   Alert,
@@ -2195,7 +2196,6 @@ export default function SettingsPage() {
     >
       <StatusBar
         barStyle={theme === "dark" ? "light-content" : "dark-content"}
-        backgroundColor={theme === "dark" ? "#09090b" : "#fafafa"}
       />
 
       <KeyboardAvoidingView
@@ -2219,7 +2219,7 @@ export default function SettingsPage() {
               HEADER
           ================================================== */}
 
-          <View
+          <Animated.View entering={FadeInDown.duration(330).reduceMotion(ReduceMotion.System)}
             style={[
               styles.header,
               theme === "dark" &&
@@ -2323,7 +2323,7 @@ export default function SettingsPage() {
                 {t.myCredits}
               </Text>
             </Pressable>
-          </View>
+          </Animated.View>
 
           {/* ==================================================
               CONTENT
@@ -4480,11 +4480,11 @@ function LanguageOption({
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
   },
 
   safeAreaDark: {
-    backgroundColor: "#09090b",
+    backgroundColor: "#000000",
   },
 
   keyboardContainer: {
@@ -4493,11 +4493,11 @@ const styles = StyleSheet.create({
 
   page: {
     flex: 1,
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
   },
 
   pageDark: {
-    backgroundColor: "#09090b",
+    backgroundColor: "#000000",
   },
 
   /* ==========================================================
@@ -4508,14 +4508,14 @@ const styles = StyleSheet.create({
     minHeight: 64,
     paddingHorizontal: 18,
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
 
   headerDark: {
-    borderBottomColor: "#27272a",
+    borderBottomColor: "#292929",
   },
 
   headerLeft: {
@@ -4540,18 +4540,18 @@ const styles = StyleSheet.create({
   },
 
   brandText: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 15,
     fontWeight: "700",
     letterSpacing: -0.2,
   },
 
   textDark: {
-    color: "#f4f4f5",
+    color: "#f5f5f5",
   },
 
   textMutedDark: {
-    color: "#a1a1aa",
+    color: "#9d9d9d",
   },
 
   headerCreditsButton: {
@@ -4559,15 +4559,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
     borderRadius: 11,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
-    backgroundColor: "#f4f4f5",
+    borderColor: "#e6e6e6",
+    backgroundColor: "#f5f5f5",
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
   },
 
   headerCreditsText: {
-    color: "#52525b",
+    color: "#505050",
     fontSize: 13,
     fontWeight: "500",
   },
@@ -4594,14 +4594,14 @@ const styles = StyleSheet.create({
   },
 
   eyebrow: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
     fontWeight: "500",
   },
 
   pageTitle: {
     marginTop: 4,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 34,
     lineHeight: 40,
     fontWeight: "700",
@@ -4610,7 +4610,7 @@ const styles = StyleSheet.create({
 
   pageDescription: {
     marginTop: 7,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
     lineHeight: 20,
   },
@@ -4623,7 +4623,7 @@ const styles = StyleSheet.create({
     minHeight: 92,
     marginBottom: 17,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 18,
     backgroundColor: "#ffffff",
     alignItems: "center",
@@ -4632,12 +4632,12 @@ const styles = StyleSheet.create({
   },
 
   cardDark: {
-    borderColor: "#27272a",
-    backgroundColor: "#18181b",
+    borderColor: "#292929",
+    backgroundColor: "#191919",
   },
 
   loadingText: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
   },
 
@@ -4658,12 +4658,12 @@ const styles = StyleSheet.create({
 
   errorBanner: {
     borderColor: "#fecaca",
-    backgroundColor: "#fef2f2",
+    backgroundColor: "#f5f5f5",
   },
 
   successBanner: {
     borderColor: "#bbf7d0",
-    backgroundColor: "#f0fdf4",
+    backgroundColor: "#fafafa",
   },
 
   messageText: {
@@ -4695,14 +4695,14 @@ const styles = StyleSheet.create({
     marginTop: 18,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 20,
     backgroundColor: "#ffffff",
   },
 
   settingsSectionDark: {
-    borderColor: "#27272a",
-    backgroundColor: "#18181b",
+    borderColor: "#292929",
+    backgroundColor: "#191919",
   },
 
   sectionHeader: {
@@ -4710,7 +4710,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 17,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
     backgroundColor: "#ffffff",
     flexDirection: "row",
     alignItems: "center",
@@ -4718,8 +4718,8 @@ const styles = StyleSheet.create({
   },
 
   sectionHeaderDark: {
-    borderBottomColor: "#27272a",
-    backgroundColor: "#18181b",
+    borderBottomColor: "#292929",
+    backgroundColor: "#191919",
   },
 
   sectionHeaderText: {
@@ -4727,14 +4727,14 @@ const styles = StyleSheet.create({
   },
 
   sectionTitle: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 14,
     fontWeight: "700",
   },
 
   sectionDescription: {
     marginTop: 3,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 11,
     lineHeight: 17,
   },
@@ -4744,7 +4744,7 @@ const styles = StyleSheet.create({
   },
 
   sectionBodyDark: {
-    backgroundColor: "#09090b",
+    backgroundColor: "#111111",
   },
 
   /* ==========================================================
@@ -4755,14 +4755,14 @@ const styles = StyleSheet.create({
     width: 37,
     height: 37,
     borderRadius: 11,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
   },
 
   iconBoxDark: {
-    backgroundColor: "#27272a",
+    backgroundColor: "#292929",
   },
 
   /* ==========================================================
@@ -4774,7 +4774,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 17,
     paddingVertical: 13,
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
@@ -4785,14 +4785,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 17,
     paddingVertical: 13,
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
   },
 
   settingsPreferenceRowDark: {
-    borderBottomColor: "#27272a",
+    borderBottomColor: "#292929",
   },
 
   settingsNavigationRow: {
@@ -4800,14 +4800,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 17,
     paddingVertical: 13,
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
   },
 
   settingsNavigationRowDark: {
-    borderBottomColor: "#27272a",
+    borderBottomColor: "#292929",
   },
 
   rowTextArea: {
@@ -4816,14 +4816,14 @@ const styles = StyleSheet.create({
   },
 
   rowTitle: {
-    color: "#27272a",
+    color: "#292929",
     fontSize: 13,
     fontWeight: "600",
   },
 
   rowDescription: {
     marginTop: 3,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 11,
     lineHeight: 17,
   },
@@ -4834,7 +4834,7 @@ const styles = StyleSheet.create({
   },
 
   rowPressed: {
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
   },
 
   /* ==========================================================
@@ -4844,13 +4844,13 @@ const styles = StyleSheet.create({
   expandedArea: {
     padding: 17,
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
     backgroundColor: "#ffffff",
   },
 
   expandedAreaDark: {
-    borderBottomColor: "#27272a",
-    backgroundColor: "#09090b",
+    borderBottomColor: "#292929",
+    backgroundColor: "#111111",
   },
 
   /* ==========================================================
@@ -4863,7 +4863,7 @@ const styles = StyleSheet.create({
 
   inputLabel: {
     marginBottom: 7,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 11,
     fontWeight: "600",
   },
@@ -4873,17 +4873,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 12,
     backgroundColor: "#fafafa",
-    color: "#18181b",
+    color: "#191919",
     fontSize: 13,
   },
 
   textInputDark: {
-    borderColor: "#3f3f46",
-    backgroundColor: "#18181b",
-    color: "#f4f4f5",
+    borderColor: "#414141",
+    backgroundColor: "#191919",
+    color: "#f5f5f5",
   },
 
   infoField: {
@@ -4891,26 +4891,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 11,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 12,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     justifyContent: "center",
   },
 
   infoFieldDark: {
-    borderColor: "#3f3f46",
-    backgroundColor: "#27272a",
+    borderColor: "#414141",
+    backgroundColor: "#292929",
   },
 
   infoFieldText: {
-    color: "#3f3f46",
+    color: "#414141",
     fontSize: 12,
   },
 
   helperText: {
     marginTop: -2,
     marginBottom: 2,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 10,
     lineHeight: 16,
   },
@@ -4932,7 +4932,7 @@ const styles = StyleSheet.create({
   },
 
   primaryActionDark: {
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
   },
 
   primaryActionText: {
@@ -4949,7 +4949,7 @@ const styles = StyleSheet.create({
     minHeight: 43,
     marginTop: 13,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 11,
     paddingHorizontal: 13,
     alignItems: "center",
@@ -4959,12 +4959,12 @@ const styles = StyleSheet.create({
   },
 
   secondaryActionDark: {
-    borderColor: "#3f3f46",
-    backgroundColor: "#18181b",
+    borderColor: "#414141",
+    backgroundColor: "#191919",
   },
 
   secondaryActionText: {
-    color: "#3f3f46",
+    color: "#414141",
     fontSize: 12,
     fontWeight: "600",
   },
@@ -4981,31 +4981,31 @@ const styles = StyleSheet.create({
     marginBottom: 13,
     padding: 15,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 16,
     backgroundColor: "#fafafa",
   },
 
   innerDark: {
-    borderColor: "#3f3f46",
-    backgroundColor: "#18181b",
+    borderColor: "#414141",
+    backgroundColor: "#191919",
   },
 
   securityTitle: {
-    color: "#27272a",
+    color: "#292929",
     fontSize: 13,
     fontWeight: "700",
   },
 
   securityValue: {
     marginTop: 5,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
   },
 
   securityDescription: {
     marginTop: 5,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 11,
     lineHeight: 18,
   },
@@ -5014,15 +5014,15 @@ const styles = StyleSheet.create({
     height: 1,
     marginTop: 17,
     marginBottom: 13,
-    backgroundColor: "#e4e4e7",
+    backgroundColor: "#e6e6e6",
   },
 
   subDividerDark: {
-    backgroundColor: "#3f3f46",
+    backgroundColor: "#414141",
   },
 
   resetDescription: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 10,
     lineHeight: 16,
   },
@@ -5042,7 +5042,7 @@ const styles = StyleSheet.create({
     minWidth: 118,
     paddingHorizontal: 10,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 10,
     backgroundColor: "#fafafa",
     flexDirection: "row",
@@ -5052,12 +5052,12 @@ const styles = StyleSheet.create({
   },
 
   selectButtonDark: {
-    borderColor: "#3f3f46",
-    backgroundColor: "#18181b",
+    borderColor: "#414141",
+    backgroundColor: "#191919",
   },
 
   selectButtonText: {
-    color: "#27272a",
+    color: "#292929",
     fontSize: 12,
     fontWeight: "500",
   },
@@ -5066,7 +5066,7 @@ const styles = StyleSheet.create({
     minHeight: 39,
     paddingHorizontal: 11,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 10,
     backgroundColor: "#fafafa",
     flexDirection: "row",
@@ -5076,12 +5076,12 @@ const styles = StyleSheet.create({
   },
 
   secondarySmallButtonDark: {
-    borderColor: "#3f3f46",
-    backgroundColor: "#18181b",
+    borderColor: "#414141",
+    backgroundColor: "#191919",
   },
 
   secondarySmallButtonText: {
-    color: "#3f3f46",
+    color: "#414141",
     fontSize: 12,
     fontWeight: "500",
   },
@@ -5095,36 +5095,36 @@ const styles = StyleSheet.create({
     paddingTop: 13,
     paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
     backgroundColor: "#fafafa",
   },
 
   locationDetailsDark: {
-    borderBottomColor: "#27272a",
-    backgroundColor: "#18181b",
+    borderBottomColor: "#292929",
+    backgroundColor: "#191919",
   },
 
   locationLabel: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 10,
   },
 
   locationValue: {
     marginTop: 4,
-    color: "#27272a",
+    color: "#292929",
     fontSize: 13,
     fontWeight: "600",
   },
 
   locationSubdivision: {
     marginTop: 3,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 11,
   },
 
   locationCode: {
     marginTop: 5,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 9,
     fontWeight: "700",
     letterSpacing: 1.2,
@@ -5141,7 +5141,7 @@ const styles = StyleSheet.create({
   },
 
   navigationActionText: {
-    color: "#27272a",
+    color: "#292929",
     fontSize: 12,
     fontWeight: "600",
   },
@@ -5161,7 +5161,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#fee2e2",
     borderRadius: 18,
-    backgroundColor: "#fef2f2",
+    backgroundColor: "#f5f5f5",
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
@@ -5202,7 +5202,7 @@ const styles = StyleSheet.create({
 
   versionText: {
     marginTop: 25,
-    color: "#a1a1aa",
+    color: "#9d9d9d",
     fontSize: 10,
     textAlign: "center",
   },
@@ -5236,7 +5236,7 @@ const styles = StyleSheet.create({
   },
 
   languageModalDark: {
-    backgroundColor: "#18181b",
+    backgroundColor: "#191919",
   },
 
   modalHandle: {
@@ -5245,7 +5245,7 @@ const styles = StyleSheet.create({
     height: 4,
     marginBottom: 18,
     borderRadius: 99,
-    backgroundColor: "#d4d4d8",
+    backgroundColor: "#d8d8d8",
   },
 
   modalHeader: {
@@ -5260,14 +5260,14 @@ const styles = StyleSheet.create({
   },
 
   modalEyebrow: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 11,
     fontWeight: "600",
   },
 
   modalTitle: {
     marginTop: 4,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 23,
     lineHeight: 29,
     fontWeight: "700",
@@ -5278,7 +5278,7 @@ const styles = StyleSheet.create({
     width: 39,
     height: 39,
     borderRadius: 11,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -5292,7 +5292,7 @@ const styles = StyleSheet.create({
     minHeight: 62,
     paddingHorizontal: 13,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 15,
     backgroundColor: "#fafafa",
     flexDirection: "row",
@@ -5301,25 +5301,25 @@ const styles = StyleSheet.create({
   },
 
   languageOptionDark: {
-    borderColor: "#3f3f46",
-    backgroundColor: "#09090b",
+    borderColor: "#414141",
+    backgroundColor: "#111111",
   },
 
   languageOptionSelected: {
-    borderColor: "#a1a1aa",
+    borderColor: "#9d9d9d",
   },
 
   languageCode: {
     width: 38,
     height: 38,
     borderRadius: 11,
-    backgroundColor: "#e4e4e7",
+    backgroundColor: "#e6e6e6",
     alignItems: "center",
     justifyContent: "center",
   },
 
   languageCodeText: {
-    color: "#52525b",
+    color: "#505050",
     fontSize: 10,
     fontWeight: "800",
     letterSpacing: 0.6,
@@ -5327,7 +5327,7 @@ const styles = StyleSheet.create({
 
   languageTitle: {
     flex: 1,
-    color: "#27272a",
+    color: "#292929",
     fontSize: 13,
     fontWeight: "600",
   },

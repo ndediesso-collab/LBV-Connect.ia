@@ -1,0 +1,9 @@
+{
+  "studio_dynamic_import": true,
+  "studio_get_preflight": true,
+  "studio_has_old_flag_gate": false,
+  "backend_mount": true,
+  "backend_flag_pack_bound": true,
+  "composer_explicit_border": true,
+  "composer_css_fallback": true
+}

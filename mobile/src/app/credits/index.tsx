@@ -398,10 +398,10 @@ function darkThemeNeutral(
     }
 
     if (luminance >= 0.42) {
-      return "#b7b7be";
+      return "#b8b8b8";
     }
 
-    return "#f3f3f5";
+    return "#f3f3f3";
   }
 
   if (
@@ -411,26 +411,26 @@ function darkThemeNeutral(
     property === "borderLeftColor" ||
     property === "borderRightColor"
   ) {
-    return luminance >= 0.45 ? "#303036" : "#3a3a40";
+    return luminance >= 0.45 ? "#303030" : "#3a3a3a";
   }
 
   if (luminance >= 0.94) {
-    return "#101012";
+    return "#141414";
   }
 
   if (luminance >= 0.78) {
-    return "#17171a";
+    return "#171717";
   }
 
   if (luminance >= 0.45) {
-    return "#1d1d21";
+    return "#1d1d1d";
   }
 
   if (luminance <= 0.12) {
-    return "#222226";
+    return "#222222";
   }
 
-  return "#18181b";
+  return "#181818";
 }
 
 function buildDarkStyleOverride(style: unknown) {
@@ -476,6 +476,7 @@ function getThemedStyles(theme: OriaTheme) {
     themed[key] = [
       style,
       buildDarkStyleOverride(style),
+      ["safe", "container", "screen", "main", "root"].includes(key) ? { backgroundColor: "#000000" } : undefined,
     ];
   }
 
@@ -1835,7 +1836,7 @@ function StatCard({
 
 
 
-        <Ionicons name={icon} size={18} color={themedIconColor("#55555f", isDark)} />
+        <Ionicons name={icon} size={18} color={themedIconColor("#565656", isDark)} />
 
 
 
@@ -1947,7 +1948,7 @@ function TransactionItem({
 
 
 
-          color={themedIconColor("#62626b", isDark)}
+          color={themedIconColor("#636363", isDark)}
 
 
 
@@ -2511,7 +2512,7 @@ export default function CreditsPage() {
 
 
 
-            <Ionicons name="arrow-back" size={20} color={themedIconColor("#4f4f58", isDark)} />
+            <Ionicons name="arrow-back" size={20} color={themedIconColor("#505050", isDark)} />
 
 
 
@@ -2527,7 +2528,7 @@ export default function CreditsPage() {
 
 
 
-            <Ionicons name="sparkles" size={15} color={themedIconColor("#15151a", isDark)} />
+            <Ionicons name="sparkles" size={15} color={themedIconColor("#151515", isDark)} />
 
 
 
@@ -2563,7 +2564,7 @@ export default function CreditsPage() {
 
 
 
-          <Ionicons name="add" size={17} color="#fff" />
+          <Ionicons name="add" size={17} color="#ffffff" />
 
 
 
@@ -2607,7 +2608,7 @@ export default function CreditsPage() {
 
 
 
-            tintColor={themedIconColor("#111114", isDark)}
+            tintColor={themedIconColor("#111111", isDark)}
 
 
 
@@ -2667,7 +2668,7 @@ export default function CreditsPage() {
 
 
 
-            <ActivityIndicator color={themedIconColor("#111114", isDark)} />
+            <ActivityIndicator color={themedIconColor("#111111", isDark)} />
 
 
 
@@ -2707,7 +2708,7 @@ export default function CreditsPage() {
 
 
 
-              color={themedIconColor("#62626b", isDark)}
+              color={themedIconColor("#636363", isDark)}
 
 
 
@@ -2807,7 +2808,7 @@ export default function CreditsPage() {
 
 
 
-                  <Ionicons name="wallet-outline" size={21} color="#fff" />
+                  <Ionicons name="wallet-outline" size={21} color="#ffffff" />
 
 
 
@@ -3012,7 +3013,7 @@ export default function CreditsPage() {
 
 
 
-                  <Ionicons name="calendar-outline" size={20} color={themedIconColor("#5d5d66", isDark)} />
+                  <Ionicons name="calendar-outline" size={20} color={themedIconColor("#5e5e5e", isDark)} />
 
 
 
@@ -3108,7 +3109,7 @@ export default function CreditsPage() {
 
 
 
-                  <Ionicons name="time-outline" size={16} color={themedIconColor("#66666f", isDark)} />
+                  <Ionicons name="time-outline" size={16} color={themedIconColor("#676767", isDark)} />
 
 
 
@@ -3155,7 +3156,7 @@ export default function CreditsPage() {
 
 
 
-                    color={themedIconColor("#66666f", isDark)}
+                    color={themedIconColor("#676767", isDark)}
 
 
 
@@ -3207,7 +3208,7 @@ export default function CreditsPage() {
 
 
 
-                <Ionicons name="arrow-forward" size={15} color={themedIconColor("#202025", isDark)} />
+                <Ionicons name="arrow-forward" size={15} color={themedIconColor("#202020", isDark)} />
 
 
 
@@ -3319,7 +3320,7 @@ export default function CreditsPage() {
 
 
 
-                  <Ionicons name="time-outline" size={18} color={themedIconColor("#4f4f58", isDark)} />
+                  <Ionicons name="time-outline" size={18} color={themedIconColor("#505050", isDark)} />
 
 
 
@@ -3415,7 +3416,7 @@ export default function CreditsPage() {
 
 
 
-                      color={themedIconColor("#888891", isDark)}
+                      color={themedIconColor("#898989", isDark)}
 
 
 
@@ -3504,7 +3505,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#fff",
+    backgroundColor: "#ffffff",
 
 
 
@@ -3524,7 +3525,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    borderBottomColor: "#dedee3",
+    borderBottomColor: "#dedede",
 
 
 
@@ -3612,7 +3613,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#f0f0f2",
+    backgroundColor: "#f0f0f0",
 
 
 
@@ -3636,7 +3637,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#15151a",
+    color: "#151515",
 
 
 
@@ -3668,7 +3669,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#111114",
+    backgroundColor: "#111111",
 
 
 
@@ -3692,7 +3693,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#fff",
+    color: "#ffffff",
 
 
 
@@ -3748,7 +3749,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#777780",
+    color: "#787878",
 
 
 
@@ -3776,7 +3777,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#15151a",
+    color: "#151515",
 
 
 
@@ -3804,7 +3805,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#777780",
+    color: "#787878",
 
 
 
@@ -3836,7 +3837,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    borderColor: "#e3e3e7",
+    borderColor: "#e3e3e3",
 
 
 
@@ -3860,7 +3861,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#777780",
+    color: "#787878",
 
 
 
@@ -3884,7 +3885,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    borderColor: "#e1e1e5",
+    borderColor: "#e1e1e1",
 
 
 
@@ -3912,7 +3913,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#202025",
+    color: "#202020",
 
 
 
@@ -3936,7 +3937,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#777780",
+    color: "#787878",
 
 
 
@@ -3968,7 +3969,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#111114",
+    backgroundColor: "#111111",
 
 
 
@@ -3992,7 +3993,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#fff",
+    color: "#ffffff",
 
 
 
@@ -4012,7 +4013,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#111114",
+    backgroundColor: "#111111",
 
 
 
@@ -4052,7 +4053,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#fff",
+    color: "#ffffff",
 
 
 
@@ -4092,7 +4093,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#fff",
+    color: "#ffffff",
 
 
 
@@ -4120,7 +4121,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#fff",
+    color: "#ffffff",
 
 
 
@@ -4204,7 +4205,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#fff",
+    color: "#ffffff",
 
 
 
@@ -4260,7 +4261,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#fff",
+    backgroundColor: "#ffffff",
 
 
 
@@ -4328,7 +4329,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#fff",
+    color: "#ffffff",
 
 
 
@@ -4348,7 +4349,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#fff",
+    color: "#ffffff",
 
 
 
@@ -4380,7 +4381,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    borderColor: "#e3e3e7",
+    borderColor: "#e3e3e3",
 
 
 
@@ -4436,7 +4437,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#f0f0f2",
+    backgroundColor: "#f0f0f0",
 
 
 
@@ -4476,7 +4477,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#eeeeef",
+    backgroundColor: "#eeeeee",
 
 
 
@@ -4488,7 +4489,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#f3f3f4",
+    backgroundColor: "#f3f3f3",
 
 
 
@@ -4500,7 +4501,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#5d5d66",
+    color: "#5e5e5e",
 
 
 
@@ -4520,7 +4521,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#777780",
+    color: "#787878",
 
 
 
@@ -4540,7 +4541,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#1b1b20",
+    color: "#1b1b1b",
 
 
 
@@ -4564,7 +4565,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#777780",
+    color: "#787878",
 
 
 
@@ -4620,7 +4621,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#66666f",
+    color: "#676767",
 
 
 
@@ -4664,7 +4665,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#202025",
+    color: "#202020",
 
 
 
@@ -4708,7 +4709,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    borderColor: "#e3e3e7",
+    borderColor: "#e3e3e3",
 
 
 
@@ -4744,7 +4745,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#f0f0f2",
+    backgroundColor: "#f0f0f0",
 
 
 
@@ -4764,7 +4765,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#777780",
+    color: "#787878",
 
 
 
@@ -4784,7 +4785,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#1b1b20",
+    color: "#1b1b1b",
 
 
 
@@ -4808,7 +4809,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#888891",
+    color: "#898989",
 
 
 
@@ -4868,7 +4869,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#f0f0f2",
+    backgroundColor: "#f0f0f0",
 
 
 
@@ -4904,7 +4905,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#1b1b20",
+    color: "#1b1b1b",
 
 
 
@@ -4924,7 +4925,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#777780",
+    color: "#787878",
 
 
 
@@ -4952,7 +4953,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    borderColor: "#e3e3e7",
+    borderColor: "#e3e3e3",
 
 
 
@@ -4964,7 +4965,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#fff",
+    backgroundColor: "#ffffff",
 
 
 
@@ -4992,7 +4993,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    borderBottomColor: "#e8e8eb",
+    borderBottomColor: "#e8e8e8",
 
 
 
@@ -5024,7 +5025,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    backgroundColor: "#f0f0f2",
+    backgroundColor: "#f0f0f0",
 
 
 
@@ -5064,7 +5065,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#29292f",
+    color: "#292929",
 
 
 
@@ -5084,7 +5085,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#777780",
+    color: "#787878",
 
 
 
@@ -5104,7 +5105,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#9999a1",
+    color: "#9a9a9a",
 
 
 
@@ -5124,7 +5125,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#29292f",
+    color: "#292929",
 
 
 
@@ -5184,7 +5185,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#29292f",
+    color: "#292929",
 
 
 
@@ -5208,7 +5209,7 @@ const baseStyles = StyleSheet.create({
 
 
 
-    color: "#888891",
+    color: "#898989",
 
 
 

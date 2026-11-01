@@ -188,10 +188,10 @@ function darkThemeNeutral(
     }
 
     if (luminance >= 0.42) {
-      return "#b7b7be";
+      return "#b8b8b8";
     }
 
-    return "#f3f3f5";
+    return "#f3f3f3";
   }
 
   if (
@@ -201,26 +201,26 @@ function darkThemeNeutral(
     property === "borderLeftColor" ||
     property === "borderRightColor"
   ) {
-    return luminance >= 0.45 ? "#303036" : "#3a3a40";
+    return luminance >= 0.45 ? "#303030" : "#3a3a3a";
   }
 
   if (luminance >= 0.94) {
-    return "#101012";
+    return "#141414";
   }
 
   if (luminance >= 0.78) {
-    return "#17171a";
+    return "#171717";
   }
 
   if (luminance >= 0.45) {
-    return "#1d1d21";
+    return "#1d1d1d";
   }
 
   if (luminance <= 0.12) {
-    return "#222226";
+    return "#222222";
   }
 
-  return "#18181b";
+  return "#181818";
 }
 
 function buildDarkStyleOverride(style: unknown) {
@@ -266,6 +266,7 @@ function getThemedStyles(theme: OriaTheme) {
     themed[key] = [
       style,
       buildDarkStyleOverride(style),
+      ["safe", "container", "screen", "main", "root"].includes(key) ? { backgroundColor: "#000000" } : undefined,
     ];
   }
 
@@ -729,7 +730,7 @@ function ConversationCard({
 
       <View style={styles.cardIcon}>
 
-        <Ionicons name="chatbubble-outline" size={18} color={themedIconColor("#55555f", isDark)} />
+        <Ionicons name="chatbubble-outline" size={18} color={themedIconColor("#565656", isDark)} />
 
       </View>
 
@@ -805,7 +806,7 @@ function ConversationCard({
 
             size={19}
 
-            color={themedIconColor("#8b8b95", isDark)}
+            color={themedIconColor("#8c8c8c", isDark)}
 
           />
 
@@ -833,11 +834,11 @@ function ConversationCard({
 
           {isDeleting ? (
 
-            <ActivityIndicator size="small" color={themedIconColor("#66666f", isDark)} />
+            <ActivityIndicator size="small" color={themedIconColor("#676767", isDark)} />
 
           ) : (
 
-            <Ionicons name="trash-outline" size={18} color={themedIconColor("#8b8b95", isDark)} />
+            <Ionicons name="trash-outline" size={18} color={themedIconColor("#8c8c8c", isDark)} />
 
           )}
 
@@ -1255,7 +1256,7 @@ export default function ConversationsPage() {
 
             >
 
-              <Ionicons name="arrow-back" size={20} color={themedIconColor("#4f4f58", isDark)} />
+              <Ionicons name="arrow-back" size={20} color={themedIconColor("#505050", isDark)} />
 
             </Pressable>
 
@@ -1263,7 +1264,7 @@ export default function ConversationsPage() {
 
             <View style={styles.brandIcon}>
 
-              <Ionicons name="sparkles" size={15} color={themedIconColor("#15151a", isDark)} />
+              <Ionicons name="sparkles" size={15} color={themedIconColor("#151515", isDark)} />
 
             </View>
 
@@ -1323,7 +1324,7 @@ export default function ConversationsPage() {
 
               onRefresh={onRefresh}
 
-              tintColor={themedIconColor("#111114", isDark)}
+              tintColor={themedIconColor("#111111", isDark)}
 
             />
 
@@ -1365,7 +1366,7 @@ export default function ConversationsPage() {
 
                 >
 
-                  <Ionicons name="add" size={18} color={themedIconColor("#fff", isDark)} />
+                  <Ionicons name="add" size={18} color={themedIconColor("#ffffff", isDark)} />
 
                   <Text style={styles.newButtonText}>
 
@@ -1387,7 +1388,7 @@ export default function ConversationsPage() {
 
                   size={18}
 
-                  color={themedIconColor("#9999a2", isDark)}
+                  color={themedIconColor("#9a9a9a", isDark)}
 
                   style={styles.searchIcon}
 
@@ -1401,7 +1402,7 @@ export default function ConversationsPage() {
 
                   placeholder={t.searchPlaceholder}
 
-                  placeholderTextColor={themedIconColor("#9999a2", isDark)}
+                  placeholderTextColor={themedIconColor("#9a9a9a", isDark)}
 
                   style={styles.searchInput}
 
@@ -1427,7 +1428,7 @@ export default function ConversationsPage() {
 
                       size={18}
 
-                      color={themedIconColor("#a0a0a8", isDark)}
+                      color={themedIconColor("#a1a1a1", isDark)}
 
                     />
 
@@ -1449,7 +1450,7 @@ export default function ConversationsPage() {
 
                     size={18}
 
-                    color={themedIconColor("#66666f", isDark)}
+                    color={themedIconColor("#676767", isDark)}
 
                   />
 
@@ -1471,7 +1472,7 @@ export default function ConversationsPage() {
 
                 <View style={styles.loadingBox}>
 
-                  <ActivityIndicator size="small" color={themedIconColor("#111114", isDark)} />
+                  <ActivityIndicator size="small" color={themedIconColor("#111111", isDark)} />
 
                   <Text style={styles.loadingText}>
 
@@ -1519,7 +1520,7 @@ export default function ConversationsPage() {
 
                     size={22}
 
-                    color={themedIconColor("#66666f", isDark)}
+                    color={themedIconColor("#676767", isDark)}
 
                   />
 
@@ -1573,7 +1574,7 @@ export default function ConversationsPage() {
 
                       size={16}
 
-                      color={themedIconColor("#fff", isDark)}
+                      color={themedIconColor("#ffffff", isDark)}
 
                     />
 
@@ -1583,8 +1584,7 @@ export default function ConversationsPage() {
 
               </View>
 
-            ) : null
-
+                ) : undefined
           }
 
         />
@@ -1635,7 +1635,7 @@ export default function ConversationsPage() {
 
                     size={19}
 
-                    color={themedIconColor("#33333a", isDark)}
+                    color={themedIconColor("#343434", isDark)}
 
                   />
 
@@ -1731,7 +1731,7 @@ const baseStyles = StyleSheet.create({
 
     borderBottomWidth: StyleSheet.hairlineWidth,
 
-    borderBottomColor: "#dedee3",
+    borderBottomColor: "#dedede",
 
     paddingHorizontal: 18,
 
@@ -1777,7 +1777,7 @@ const baseStyles = StyleSheet.create({
 
     borderRadius: 9,
 
-    backgroundColor: "#f0f0f2",
+    backgroundColor: "#f0f0f0",
 
     alignItems: "center",
 
@@ -1789,7 +1789,7 @@ const baseStyles = StyleSheet.create({
 
   brandText: {
 
-    color: "#15151a",
+    color: "#151515",
 
     fontSize: 15,
 
@@ -1805,7 +1805,7 @@ const baseStyles = StyleSheet.create({
 
     borderWidth: 1,
 
-    borderColor: "#e2e2e6",
+    borderColor: "#e2e2e2",
 
     backgroundColor: "#fafafa",
 
@@ -1821,7 +1821,7 @@ const baseStyles = StyleSheet.create({
 
   creditLabel: {
 
-    color: "#7b7b84",
+    color: "#7c7c7c",
 
     fontSize: 11,
 
@@ -1831,7 +1831,7 @@ const baseStyles = StyleSheet.create({
 
   creditValue: {
 
-    color: "#17171c",
+    color: "#171717",
 
     fontSize: 13,
 
@@ -1869,7 +1869,7 @@ const baseStyles = StyleSheet.create({
 
   overline: {
 
-    color: "#7c7c85",
+    color: "#7d7d7d",
 
     fontSize: 11,
 
@@ -1883,7 +1883,7 @@ const baseStyles = StyleSheet.create({
 
   pageTitle: {
 
-    color: "#15151a",
+    color: "#151515",
 
     fontSize: 31,
 
@@ -1897,7 +1897,7 @@ const baseStyles = StyleSheet.create({
 
   pageDescription: {
 
-    color: "#777780",
+    color: "#787878",
 
     fontSize: 14,
 
@@ -1917,7 +1917,7 @@ const baseStyles = StyleSheet.create({
 
     borderRadius: 12,
 
-    backgroundColor: "#111114",
+    backgroundColor: "#111111",
 
     paddingHorizontal: 15,
 
@@ -1953,7 +1953,7 @@ const baseStyles = StyleSheet.create({
 
     borderWidth: 1,
 
-    borderColor: "#dedee3",
+    borderColor: "#dedede",
 
     backgroundColor: "#fafafa",
 
@@ -1981,7 +1981,7 @@ const baseStyles = StyleSheet.create({
 
     paddingHorizontal: 10,
 
-    color: "#17171c",
+    color: "#171717",
 
     fontSize: 14,
 
@@ -1999,7 +1999,7 @@ const baseStyles = StyleSheet.create({
 
     borderWidth: 1,
 
-    borderColor: "#e0e0e4",
+    borderColor: "#e0e0e0",
 
     backgroundColor: "#fafafa",
 
@@ -2021,7 +2021,7 @@ const baseStyles = StyleSheet.create({
 
     flex: 1,
 
-    color: "#66666f",
+    color: "#676767",
 
     fontSize: 12,
 
@@ -2033,7 +2033,7 @@ const baseStyles = StyleSheet.create({
 
   retryText: {
 
-    color: "#17171c",
+    color: "#171717",
 
     fontSize: 12,
 
@@ -2047,7 +2047,7 @@ const baseStyles = StyleSheet.create({
 
     borderWidth: 1,
 
-    borderColor: "#e5e5e8",
+    borderColor: "#e5e5e5",
 
     borderRadius: 15,
 
@@ -2061,7 +2061,7 @@ const baseStyles = StyleSheet.create({
 
   loadingText: {
 
-    color: "#777780",
+    color: "#787878",
 
     fontSize: 13,
 
@@ -2075,7 +2075,7 @@ const baseStyles = StyleSheet.create({
 
     borderWidth: 1,
 
-    borderColor: "#e4e4e8",
+    borderColor: "#e4e4e4",
 
     borderRadius: 15,
 
@@ -2105,7 +2105,7 @@ const baseStyles = StyleSheet.create({
 
     borderRadius: 11,
 
-    backgroundColor: "#f1f1f3",
+    backgroundColor: "#f1f1f1",
 
     alignItems: "center",
 
@@ -2139,7 +2139,7 @@ const baseStyles = StyleSheet.create({
 
     flex: 1,
 
-    color: "#1a1a1f",
+    color: "#1a1a1a",
 
     fontSize: 14,
 
@@ -2151,7 +2151,7 @@ const baseStyles = StyleSheet.create({
 
   cardDate: {
 
-    color: "#9a9aa2",
+    color: "#9b9b9b",
 
     fontSize: 10.5,
 
@@ -2159,7 +2159,7 @@ const baseStyles = StyleSheet.create({
 
   cardPreview: {
 
-    color: "#777780",
+    color: "#787878",
 
     fontSize: 12.5,
 
@@ -2173,7 +2173,7 @@ const baseStyles = StyleSheet.create({
 
     alignSelf: "flex-start",
 
-    backgroundColor: "#f2f2f4",
+    backgroundColor: "#f2f2f2",
 
     borderRadius: 20,
 
@@ -2185,7 +2185,7 @@ const baseStyles = StyleSheet.create({
 
   modelBadgeText: {
 
-    color: "#777780",
+    color: "#787878",
 
     fontSize: 10,
 
@@ -2227,7 +2227,7 @@ const baseStyles = StyleSheet.create({
 
     borderStyle: "dashed",
 
-    borderColor: "#d7d7dc",
+    borderColor: "#d7d7d7",
 
     borderRadius: 16,
 
@@ -2249,7 +2249,7 @@ const baseStyles = StyleSheet.create({
 
     borderRadius: 13,
 
-    backgroundColor: "#f1f1f3",
+    backgroundColor: "#f1f1f1",
 
     alignItems: "center",
 
@@ -2259,7 +2259,7 @@ const baseStyles = StyleSheet.create({
 
   emptyTitle: {
 
-    color: "#202025",
+    color: "#202020",
 
     fontSize: 14,
 
@@ -2271,7 +2271,7 @@ const baseStyles = StyleSheet.create({
 
   emptyDescription: {
 
-    color: "#81818a",
+    color: "#828282",
 
     fontSize: 12.5,
 
@@ -2291,7 +2291,7 @@ const baseStyles = StyleSheet.create({
 
     borderRadius: 11,
 
-    backgroundColor: "#111114",
+    backgroundColor: "#111111",
 
     paddingHorizontal: 14,
 
@@ -2347,7 +2347,7 @@ const baseStyles = StyleSheet.create({
 
     borderRadius: 3,
 
-    backgroundColor: "#d3d3d7",
+    backgroundColor: "#d3d3d3",
 
     alignSelf: "center",
 
@@ -2357,7 +2357,7 @@ const baseStyles = StyleSheet.create({
 
   sheetTitle: {
 
-    color: "#18181d",
+    color: "#181818",
 
     fontSize: 15,
 
@@ -2373,7 +2373,7 @@ const baseStyles = StyleSheet.create({
 
     borderBottomWidth: StyleSheet.hairlineWidth,
 
-    borderBottomColor: "#ededf0",
+    borderBottomColor: "#ededed",
 
     flexDirection: "row",
 
@@ -2389,7 +2389,7 @@ const baseStyles = StyleSheet.create({
 
     borderRadius: 10,
 
-    backgroundColor: "#f2f2f4",
+    backgroundColor: "#f2f2f2",
 
     alignItems: "center",
 
@@ -2401,7 +2401,7 @@ const baseStyles = StyleSheet.create({
 
   sheetActionText: {
 
-    color: "#29292f",
+    color: "#292929",
 
     fontSize: 14,
 
@@ -2421,7 +2421,7 @@ const baseStyles = StyleSheet.create({
 
     borderRadius: 12,
 
-    backgroundColor: "#f1f1f3",
+    backgroundColor: "#f1f1f1",
 
     alignItems: "center",
 
@@ -2433,7 +2433,7 @@ const baseStyles = StyleSheet.create({
 
   cancelButtonText: {
 
-    color: "#29292f",
+    color: "#292929",
 
     fontSize: 13,
 

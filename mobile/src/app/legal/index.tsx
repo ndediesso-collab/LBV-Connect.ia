@@ -1,8 +1,10 @@
-import React, { useMemo, useState } from "react";
-import { Linking, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import { Linking, Pressable, ScrollView, StatusBar, StyleSheet, Text, View, useColorScheme } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import Animated, { FadeInDown } from "react-native-reanimated";
+import { supabase } from "@/lib/supabase/client";
 // ORIA : contenu integre dans ce fichier. Aucun legal-content.json requis.
 type LegalSection = {
   title: string;
@@ -584,6 +586,24 @@ const ICONS: Record<string, IconName> = {
 
 export default function OriaLegalMobileScreen() {
   const router = useRouter();
+  const systemScheme = useColorScheme();
+  const [profileTheme, setProfileTheme] = useState<"dark" | "light" | null>(null);
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        const { data } = await supabase.from("profiles").select("theme").eq("id", user.id).maybeSingle();
+        if (active && (data?.theme === "dark" || data?.theme === "light")) setProfileTheme(data.theme);
+      } catch { /* Sans session, utiliser le thème du système. */ }
+    };
+    void load();
+    return () => { active = false; };
+  }, []);
+  const isDark = (profileTheme ?? systemScheme) === "dark";
+  const C = isDark ? LEGAL_MONO.dark : LEGAL_MONO.light;
+  const s = useMemo(() => makeLegalStyles(isDark), [isDark]);
   const { tab, from } = useLocalSearchParams<{ tab?: string | string[]; from?: string | string[] }>();
   const queryTab = Array.isArray(tab) ? tab[0] : tab;
   const cameFromSignup = (Array.isArray(from) ? from[0] : from) === "signup";
@@ -606,15 +626,15 @@ export default function OriaLegalMobileScreen() {
   return (
     <SafeAreaView style={s.screen} edges={["top", "bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <StatusBar barStyle="light-content" backgroundColor="#0b0d13" />
+      <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
       <View style={s.topbar}>
         <Pressable onPress={goBack} accessibilityRole="button" accessibilityLabel={cameFromSignup ? "Revenir à l'inscription" : "Revenir aux paramètres"} style={s.back}>
-          <Ionicons name="arrow-back" size={20} color="#f5f6fa" />
+          <Ionicons name="arrow-back" size={20} color={C.text} />
           <Text style={s.backText}>{cameFromSignup ? "Inscription" : "Paramètres"}</Text>
         </Pressable>
         <Text style={s.wordmark}>ORIA<Text style={s.accent}>.</Text></Text>
       </View>
-      <ScrollView key={scrollKey} showsVerticalScrollIndicator={false} contentContainerStyle={s.content}>
+      <Animated.ScrollView key={scrollKey} entering={FadeInDown.duration(280)} showsVerticalScrollIndicator={false} contentContainerStyle={s.content}>
         <Text style={s.eyebrow}>TRANSPARENCE & CONFIANCE</Text>
         <Text style={s.title}>Informations et politiques</Text>
         <Text style={s.intro}>{content.intro}</Text>
@@ -625,7 +645,7 @@ export default function OriaLegalMobileScreen() {
             const selected = item.id === current.id;
             return (
               <Pressable key={item.id} accessibilityRole="tab" accessibilityState={{ selected }} onPress={() => choose(item.id)} style={[s.navItem, selected && s.navSelected]}>
-                <Ionicons name={ICONS[item.id] || "reader-outline"} size={19} color={selected ? "#d0c6ff" : "#a7aab6"} />
+                <Ionicons name={ICONS[item.id] || "reader-outline"} size={19} color={selected ? C.text : C.muted} />
                 <Text numberOfLines={2} style={[s.navLabel, selected && s.navLabelSelected]}>{item.label}</Text>
               </Pressable>
             );
@@ -634,7 +654,7 @@ export default function OriaLegalMobileScreen() {
 
         <View style={s.panel}>
           <View style={s.panelTitleRow}>
-            <View style={s.iconBox}><Ionicons name={ICONS[current.id] || "reader-outline"} size={24} color="#c0b4ff" /></View>
+            <View style={s.iconBox}><Ionicons name={ICONS[current.id] || "reader-outline"} size={24} color={C.text} /></View>
             <View style={s.titleWrap}><Text style={s.panelTitle}>{current.label}</Text><Text style={s.panelSubtitle}>{current.subtitle}</Text></View>
           </View>
           {current.sections.map((section, index) => (
@@ -651,43 +671,51 @@ export default function OriaLegalMobileScreen() {
           <View style={s.contact}>
             <Text style={s.contactHeading}>Besoin d'aide ?</Text>
             <Pressable onPress={openEmail} accessibilityRole="link" style={s.emailRow}>
-              <Ionicons name="mail-outline" color="#c0b4ff" size={19} />
+              <Ionicons name="mail-outline" color={C.text} size={19} />
               <Text style={s.email} selectable>{content.email}</Text>
-              <Ionicons name="open-outline" color="#c0b4ff" size={16} />
+              <Ionicons name="open-outline" color={C.text} size={16} />
             </Pressable>
           </View>
         </View>
         <Text style={s.footer}>© ORIA · Informations et politiques · {content.updated}</Text>
-      </ScrollView>
+      </Animated.ScrollView>
     </SafeAreaView>
   );
 }
 
-const s = StyleSheet.create({
-  screen:{flex:1,backgroundColor:"#0b0d13"},
-  topbar:{paddingHorizontal:17,paddingVertical:11,borderBottomWidth:1,borderBottomColor:"#252731",flexDirection:"row",alignItems:"center",justifyContent:"space-between"},
-  back:{flexDirection:"row",alignItems:"center",gap:9,borderWidth:1,borderColor:"#30323b",borderRadius:13,backgroundColor:"#171922",paddingHorizontal:13,paddingVertical:11},
-  backText:{fontSize:13,color:"#f3f4f8",fontWeight:"600"},
-  wordmark:{fontSize:19,fontWeight:"900",color:"#fff",letterSpacing:2},accent:{color:"#afa5ff"},
+const LEGAL_MONO = {
+  light: { background: "#ffffff", surface: "#f7f7f7", text: "#111111", muted: "#606060", border: "#e5e5e5", selected: "#eeeeee", icon: "#f1f1f1" },
+  dark:  { background: "#000000", surface: "#141414", text: "#ffffff", muted: "#b8b8b8", border: "#303030", selected: "#292929", icon: "#222222" },
+} as const;
+
+function makeLegalStyles(dark: boolean) {
+  const C = dark ? LEGAL_MONO.dark : LEGAL_MONO.light;
+  return StyleSheet.create({
+  screen:{flex:1,backgroundColor:C.background},
+  topbar:{paddingHorizontal:17,paddingVertical:11,borderBottomWidth:1,borderBottomColor:C.border,flexDirection:"row",alignItems:"center",justifyContent:"space-between"},
+  back:{flexDirection:"row",alignItems:"center",gap:9,borderWidth:1,borderColor:C.border,borderRadius:13,backgroundColor:C.surface,paddingHorizontal:13,paddingVertical:11},
+  backText:{fontSize:13,color:C.text,fontWeight:"600"},
+  wordmark:{fontSize:19,fontWeight:"900",color:C.text,letterSpacing:2},accent:{color:C.text},
   content:{paddingHorizontal:18,paddingTop:30,paddingBottom:55},
-  eyebrow:{color:"#b5aaff",fontSize:10,letterSpacing:2.5,fontWeight:"800",marginBottom:12},
-  title:{color:"#fff",fontSize:29,letterSpacing:-.7,fontWeight:"800",lineHeight:35},
-  intro:{color:"#b1b5c2",fontSize:14,lineHeight:23,marginTop:12},
-  meta:{color:"#9da3b2",fontSize:12,marginTop:14},
+  eyebrow:{color:C.muted,fontSize:10,letterSpacing:2.5,fontWeight:"800",marginBottom:12},
+  title:{color:C.text,fontSize:29,letterSpacing:-.7,fontWeight:"800",lineHeight:35},
+  intro:{color:C.muted,fontSize:14,lineHeight:23,marginTop:12},
+  meta:{color:C.muted,fontSize:12,marginTop:14},
   nav:{flexDirection:"row",flexWrap:"wrap",gap:9,marginTop:27,marginBottom:22},
-  navItem:{width:"48%",minHeight:74,borderWidth:1,borderColor:"#282b34",backgroundColor:"#151821",borderRadius:16,padding:12,flexDirection:"row",gap:10,alignItems:"center"},
-  navSelected:{borderColor:"#8576cc",backgroundColor:"#262139"},
-  navLabel:{color:"#e0e2e9",fontSize:12,lineHeight:17,flexShrink:1,fontWeight:"600"},
-  navLabelSelected:{color:"#fff"},
-  panel:{borderRadius:24,backgroundColor:"#151821",borderWidth:1,borderColor:"#282b34",padding:19},
-  panelTitleRow:{flexDirection:"row",alignItems:"center",gap:14,paddingBottom:20,borderBottomWidth:1,borderBottomColor:"#2d303b"},
-  iconBox:{width:48,height:48,borderRadius:15,backgroundColor:"#2c2540",alignItems:"center",justifyContent:"center"},
-  titleWrap:{flex:1},panelTitle:{fontSize:22,fontWeight:"800",color:"#fff",lineHeight:28},panelSubtitle:{fontSize:12,color:"#aeb0bd",marginTop:3},
+  navItem:{width:"48%",minHeight:74,borderWidth:1,borderColor:C.border,backgroundColor:C.surface,borderRadius:16,padding:12,flexDirection:"row",gap:10,alignItems:"center"},
+  navSelected:{borderColor:C.border,backgroundColor:C.selected},
+  navLabel:{color:C.text,fontSize:12,lineHeight:17,flexShrink:1,fontWeight:"600"},
+  navLabelSelected:{color:C.text},
+  panel:{borderRadius:24,backgroundColor:C.surface,borderWidth:1,borderColor:C.border,padding:19},
+  panelTitleRow:{flexDirection:"row",alignItems:"center",gap:14,paddingBottom:20,borderBottomWidth:1,borderBottomColor:C.border},
+  iconBox:{width:48,height:48,borderRadius:15,backgroundColor:C.icon,alignItems:"center",justifyContent:"center"},
+  titleWrap:{flex:1},panelTitle:{fontSize:22,fontWeight:"800",color:C.text,lineHeight:28},panelSubtitle:{fontSize:12,color:C.muted,marginTop:3},
   section:{paddingTop:23},sectionHeader:{flexDirection:"row",flexWrap:"wrap",gap:8,alignItems:"center",marginBottom:12},
-  sectionTitle:{color:"#f6f6f9",fontWeight:"700",fontSize:16,lineHeight:23,flexShrink:1},
-  paragraph:{fontSize:13.5,lineHeight:23,color:"#c9ccd6",marginBottom:12},
-  bulletRow:{flexDirection:"row",gap:10,marginBottom:10},bullet:{color:"#afa5ff",fontSize:16,lineHeight:22},bulletText:{color:"#c9ccd6",fontSize:13.5,lineHeight:22,flex:1},
-  contact:{marginTop:28,paddingTop:20,borderTopWidth:1,borderTopColor:"#30333c"},contactHeading:{color:"#a7acba",fontSize:13,marginBottom:12},
-  emailRow:{flexDirection:"row",gap:10,alignItems:"center",flexWrap:"wrap"},email:{color:"#c0b4ff",fontWeight:"700",fontSize:13.5},
-  footer:{textAlign:"center",color:"#838997",fontSize:11,marginTop:28}
-});
+  sectionTitle:{color:C.text,fontWeight:"700",fontSize:16,lineHeight:23,flexShrink:1},
+  paragraph:{fontSize:13.5,lineHeight:23,color:C.muted,marginBottom:12},
+  bulletRow:{flexDirection:"row",gap:10,marginBottom:10},bullet:{color:C.text,fontSize:16,lineHeight:22},bulletText:{color:C.muted,fontSize:13.5,lineHeight:22,flex:1},
+  contact:{marginTop:28,paddingTop:20,borderTopWidth:1,borderTopColor:C.border},contactHeading:{color:C.muted,fontSize:13,marginBottom:12},
+  emailRow:{flexDirection:"row",gap:10,alignItems:"center",flexWrap:"wrap"},email:{color:C.text,fontWeight:"700",fontSize:13.5},
+  footer:{textAlign:"center",color:C.muted,fontSize:11,marginTop:28}
+  });
+}

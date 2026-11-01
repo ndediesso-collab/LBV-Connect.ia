@@ -445,17 +445,12 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
           throw new Error(tr("Aucun pack compatible avec les projets vidéo n'est actif.",
             "No plan eligible for video projects is active."));
         }
-        if (!remote.generation_available) {
-          throw new Error(tr("Les projets vidéo sont temporairement désactivés côté serveur.",
-            "Video projects are temporarily disabled on the server."));
-        }
-        // Le drapeau serveur doit autoriser les films, indépendamment des clips.
-        if (!remote.video.long_projects_generation_available) {
-          throw new Error(tr("L'outil Projets vidéo est restauré, mais les films multi-scènes ne sont pas encore activés sur le serveur. Aucun appel payant ne sera envoyé.",
-            "Video Projects is restored, but multi-scene movies are not enabled on the server yet. No paid request will be sent."));
-        }
-        // Si le routeur multi-scènes n'est pas déployé, ne pas exposer les
-        // boutons de génération qui pointeraient vers des 404.
+        // Ne pas bloquer le storyboard sur un ancien indicateur global :
+        // la disponibilité du moteur V7 est vérifiée par son GET authentifié.
+        // Le serveur reste seul responsable des droits, des devis et des débits.
+        // La création de scènes reste interdite tant que son devis ne confirme
+        // pas generation_available et credits_sufficient.
+        // GET sans débit : confirme que le routeur V7 est réellement raccordé.
         const catalog = await api<{ projects?: unknown[] }>("/ai/openrouter-media/projects");
         if (!Array.isArray(catalog.projects)) {
           throw new Error("Le serveur ne fournit pas la bibliothèque de films attendue.");

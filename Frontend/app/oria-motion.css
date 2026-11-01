@@ -94,6 +94,15 @@ html.dark {
 .oria-composer-card:focus-within {
   box-shadow: 0 14px 38px -22px var(--shadow-color), 0 0 0 1px var(--border-strong);
 }
+/* Editeur de chat continu : ni trait au-dessus, ni trait sous le texte.
+   Le contour du compositeur affiche déjà l'état focus au clavier. */
+.oria-chat-page .oria-composer-card > textarea,
+.oria-chat-page .oria-composer-card > textarea:focus-visible {
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  background: transparent;
+}
 .oria-press { transition: transform 165ms var(--oria-motion-soft), opacity 160ms ease, background-color 160ms ease; }
 .oria-press:enabled:active { transform: scale(.96); }
 .oria-side-panel {

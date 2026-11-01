@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from "react";
+import Animated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
 import {
   ActivityIndicator,
   Alert,
@@ -361,10 +362,10 @@ function darkThemeNeutral(
     }
 
     if (luminance >= 0.42) {
-      return "#b7b7be";
+      return "#b7b7b7";
     }
 
-    return "#f3f3f5";
+    return "#f3f3f3";
   }
 
   if (
@@ -374,26 +375,26 @@ function darkThemeNeutral(
     property === "borderLeftColor" ||
     property === "borderRightColor"
   ) {
-    return luminance >= 0.45 ? "#303036" : "#3a3a40";
+    return luminance >= 0.45 ? "#303030" : "#3a3a3a";
   }
 
   if (luminance >= 0.94) {
-    return "#101012";
+    return "#101010";
   }
 
   if (luminance >= 0.78) {
-    return "#17171a";
+    return "#171717";
   }
 
   if (luminance >= 0.45) {
-    return "#1d1d21";
+    return "#1d1d1d";
   }
 
   if (luminance <= 0.12) {
-    return "#222226";
+    return "#222222";
   }
 
-  return "#18181b";
+  return "#181818";
 }
 
 function buildDarkStyleOverride(style: unknown) {
@@ -442,6 +443,8 @@ function getThemedStyles(theme: OriaTheme) {
     ];
   }
 
+  themed.safeArea = [themed.safeArea, { backgroundColor: "#000000" }];
+  themed.container = [themed.container, { backgroundColor: "#000000" }];
   return themed as unknown as typeof baseStyles;
 }
 
@@ -1142,7 +1145,7 @@ export default function PacksPage() {
         >
           {/* Hero */}
 
-          <View
+          <Animated.View entering={FadeInDown.duration(400).reduceMotion(ReduceMotion.System)}
             style={styles.hero}
           >
             <Text
@@ -1167,7 +1170,7 @@ export default function PacksPage() {
               {t.heroDescription}
             </Text>
 
-          </View>
+          </Animated.View>
 
           {/* Deux catégories visibles à égalité : abonnements et recharges. */}
           <View style={styles.packTabs} accessibilityRole="tablist">
@@ -1704,7 +1707,7 @@ function PackCard({
     isPaying === pack.id;
 
   return (
-    <View
+    <Animated.View entering={FadeInDown.duration(300).reduceMotion(ReduceMotion.System)}
       style={[
         styles.packCard,
         isPopular &&
@@ -2185,7 +2188,7 @@ function PackCard({
           </Text>
         )}
       </Pressable>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -2275,8 +2278,8 @@ const baseStyles = StyleSheet.create({
     marginTop: 19,
     borderWidth: 1,
     borderRadius: 16,
-    borderColor: "#e4e4e7",
-    backgroundColor: "#f4f4f5",
+    borderColor: "#e6e6e6",
+    backgroundColor: "#f5f5f5",
   },
   packTab: {
     flex: 1,
@@ -2292,7 +2295,7 @@ const baseStyles = StyleSheet.create({
   packTabActive: { backgroundColor: "#111111" },
   packTabText: {
     flexShrink: 1,
-    color: "#52525b",
+    color: "#505050",
     textAlign: "center",
     fontWeight: "700",
     fontSize: 12,
@@ -2306,28 +2309,28 @@ const baseStyles = StyleSheet.create({
     paddingVertical: 13,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#d4d4d8",
+    borderColor: "#d8d8d8",
     backgroundColor: "#ffffff",
   },
   secondaryTabButtonText: {
-    fontSize: 12, fontWeight: "700", color: "#18181b",
+    fontSize: 12, fontWeight: "700", color: "#191919",
   },
   addonSection: { gap: 13 },
-  addonHeading: { fontSize: 22, fontWeight: "700", color: "#18181b" },
+  addonHeading: { fontSize: 22, fontWeight: "700", color: "#191919" },
   safeArea: {
     flex: 1,
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
   },
 
   container: {
     flex: 1,
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
   },
 
   header: {
     minHeight: 64,
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
     paddingHorizontal: 18,
     flexDirection: "row",
     alignItems: "center",
@@ -2356,7 +2359,7 @@ const baseStyles = StyleSheet.create({
   },
 
   brandText: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 15,
     fontWeight: "700",
     letterSpacing: -0.2,
@@ -2365,9 +2368,9 @@ const baseStyles = StyleSheet.create({
   creditsButton: {
     minHeight: 40,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 12,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
@@ -2375,7 +2378,7 @@ const baseStyles = StyleSheet.create({
   },
 
   creditsButtonText: {
-    color: "#3f3f46",
+    color: "#414141",
     fontSize: 13,
     fontWeight: "500",
   },
@@ -2402,14 +2405,14 @@ const baseStyles = StyleSheet.create({
   },
 
   heroEyebrow: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
     fontWeight: "600",
   },
 
   heroTitle: {
     marginTop: 7,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 34,
     lineHeight: 40,
     fontWeight: "700",
@@ -2419,7 +2422,7 @@ const baseStyles = StyleSheet.create({
 
   heroDescription: {
     marginTop: 14,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 14,
     lineHeight: 22,
     textAlign: "center",
@@ -2428,9 +2431,9 @@ const baseStyles = StyleSheet.create({
   launchBanner: {
     marginTop: 20,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 16,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     paddingHorizontal: 16,
     paddingVertical: 12,
     alignItems: "center",
@@ -2444,13 +2447,13 @@ const baseStyles = StyleSheet.create({
   },
 
   launchBannerTitle: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 13,
     fontWeight: "700",
   },
 
   launchBannerText: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 11,
     lineHeight: 16,
     textAlign: "center",
@@ -2464,7 +2467,7 @@ const baseStyles = StyleSheet.create({
   packCard: {
     width: "100%",
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 24,
     backgroundColor: "#ffffff",
     paddingHorizontal: 21,
@@ -2501,7 +2504,7 @@ const baseStyles = StyleSheet.create({
   },
 
   packEyebrow: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
     fontWeight: "600",
   },
@@ -2513,7 +2516,7 @@ const baseStyles = StyleSheet.create({
 
   packName: {
     marginTop: 3,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 26,
     lineHeight: 32,
     fontWeight: "700",
@@ -2522,7 +2525,7 @@ const baseStyles = StyleSheet.create({
 
   packDescription: {
     marginTop: 12,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
     lineHeight: 20,
     minHeight: 60,
@@ -2533,7 +2536,7 @@ const baseStyles = StyleSheet.create({
   },
 
   launchPriceLabel: {
-    color: "#52525b",
+    color: "#505050",
     fontSize: 11,
     fontWeight: "700",
     textTransform: "uppercase",
@@ -2554,7 +2557,7 @@ const baseStyles = StyleSheet.create({
   },
 
   originalPrice: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 14,
     textDecorationLine: "line-through",
   },
@@ -2565,7 +2568,7 @@ const baseStyles = StyleSheet.create({
   },
 
   packPrice: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 30,
     lineHeight: 36,
     fontWeight: "700",
@@ -2584,13 +2587,13 @@ const baseStyles = StyleSheet.create({
   },
 
   durationText: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
   },
 
   cardDivider: {
     height: 1,
-    backgroundColor: "#e4e4e7",
+    backgroundColor: "#e6e6e6",
     marginVertical: 22,
   },
 
@@ -2600,7 +2603,7 @@ const baseStyles = StyleSheet.create({
   },
 
   subsectionLabel: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 10,
     fontWeight: "700",
     letterSpacing: 1.1,
@@ -2609,7 +2612,7 @@ const baseStyles = StyleSheet.create({
 
   creditsAmount: {
     marginTop: 4,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 30,
     lineHeight: 36,
     fontWeight: "700",
@@ -2647,11 +2650,11 @@ const baseStyles = StyleSheet.create({
   },
 
   availableText: {
-    color: "#52525b",
+    color: "#505050",
   },
 
   lockedText: {
-    color: "#a1a1aa",
+    color: "#9d9d9d",
   },
 
   popularModelText: {
@@ -2659,7 +2662,7 @@ const baseStyles = StyleSheet.create({
   },
 
   lockedLabel: {
-    color: "#a1a1aa",
+    color: "#9d9d9d",
     fontSize: 9,
     fontWeight: "700",
     letterSpacing: 0.7,
@@ -2693,14 +2696,14 @@ const baseStyles = StyleSheet.create({
 
   mediaCost: {
     marginTop: 2,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 10,
     lineHeight: 15,
   },
 
   mediaFootnote: {
     marginTop: 10,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 10,
     lineHeight: 16,
   },
@@ -2722,7 +2725,7 @@ const baseStyles = StyleSheet.create({
 
   featureText: {
     flex: 1,
-    color: "#52525b",
+    color: "#505050",
     fontSize: 13,
     lineHeight: 19,
   },
@@ -2769,9 +2772,9 @@ const baseStyles = StyleSheet.create({
   topUpSection: {
     marginTop: 14,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 24,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     padding: 21,
     gap: 20,
   },
@@ -2788,7 +2791,7 @@ const baseStyles = StyleSheet.create({
 
   sectionTitle: {
     flex: 1,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 17,
     lineHeight: 23,
     fontWeight: "700",
@@ -2796,14 +2799,14 @@ const baseStyles = StyleSheet.create({
 
   sectionDescription: {
     marginTop: 8,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
     lineHeight: 20,
   },
 
   topUpPriceText: {
     marginTop: 10,
-    color: "#3f3f46",
+    color: "#414141",
     fontSize: 13,
     fontWeight: "600",
   },
@@ -2838,14 +2841,14 @@ const baseStyles = StyleSheet.create({
   },
 
   sectionEyebrow: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
     fontWeight: "600",
   },
 
   sectionHeading: {
     marginTop: 4,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 22,
     lineHeight: 28,
     fontWeight: "700",
@@ -2860,28 +2863,28 @@ const baseStyles = StyleSheet.create({
 
   stepCard: {
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 18,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     padding: 18,
   },
 
   stepNumber: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 11,
     fontWeight: "700",
   },
 
   stepTitle: {
     marginTop: 13,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 14,
     fontWeight: "700",
   },
 
   stepDescription: {
     marginTop: 7,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
     lineHeight: 20,
   },
@@ -2889,7 +2892,7 @@ const baseStyles = StyleSheet.create({
   modelComparisonCard: {
     marginTop: 18,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 18,
     overflow: "hidden",
     backgroundColor: "#ffffff",
@@ -2903,11 +2906,11 @@ const baseStyles = StyleSheet.create({
     minHeight: 57,
     flexDirection: "row",
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
   },
 
   tableHeaderRow: {
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
   },
 
   tableHeaderCell: {
@@ -2915,7 +2918,7 @@ const baseStyles = StyleSheet.create({
   },
 
   tableHeaderText: {
-    color: "#3f3f46",
+    color: "#414141",
     fontSize: 12,
     fontWeight: "600",
   },
@@ -2927,7 +2930,7 @@ const baseStyles = StyleSheet.create({
   },
 
   modelNameText: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 13,
     fontWeight: "600",
   },
@@ -2947,7 +2950,7 @@ const baseStyles = StyleSheet.create({
   },
 
   faqHeadingText: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 17,
     fontWeight: "700",
   },
@@ -2955,7 +2958,7 @@ const baseStyles = StyleSheet.create({
   faqContainer: {
     marginTop: 18,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 18,
     overflow: "hidden",
     backgroundColor: "#ffffff",
@@ -2963,7 +2966,7 @@ const baseStyles = StyleSheet.create({
 
   faqItem: {
     borderBottomWidth: 1,
-    borderBottomColor: "#e4e4e7",
+    borderBottomColor: "#e6e6e6",
   },
 
   faqItemLast: {
@@ -2981,12 +2984,12 @@ const baseStyles = StyleSheet.create({
   },
 
   faqPressed: {
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
   },
 
   faqQuestion: {
     flex: 1,
-    color: "#27272a",
+    color: "#292929",
     fontSize: 13,
     lineHeight: 19,
     fontWeight: "600",
@@ -2999,7 +3002,7 @@ const baseStyles = StyleSheet.create({
   },
 
   faqAnswer: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
     lineHeight: 20,
   },
@@ -3033,7 +3036,7 @@ const baseStyles = StyleSheet.create({
     width: 42,
     height: 4,
     borderRadius: 99,
-    backgroundColor: "#d4d4d8",
+    backgroundColor: "#d8d8d8",
     marginBottom: 17,
   },
 
@@ -3049,14 +3052,14 @@ const baseStyles = StyleSheet.create({
   },
 
   modalEyebrow: {
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
     fontWeight: "600",
   },
 
   modalTitle: {
     marginTop: 4,
-    color: "#18181b",
+    color: "#191919",
     fontSize: 24,
     lineHeight: 30,
     fontWeight: "700",
@@ -3065,7 +3068,7 @@ const baseStyles = StyleSheet.create({
 
   modalDescription: {
     marginTop: 7,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 13,
     lineHeight: 20,
   },
@@ -3074,7 +3077,7 @@ const baseStyles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -3090,9 +3093,9 @@ const baseStyles = StyleSheet.create({
 
   topUpOption: {
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 17,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     padding: 15,
     gap: 13,
   },
@@ -3102,7 +3105,7 @@ const baseStyles = StyleSheet.create({
   },
 
   topUpCredits: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 17,
     lineHeight: 22,
     fontWeight: "700",
@@ -3110,7 +3113,7 @@ const baseStyles = StyleSheet.create({
 
   topUpDescription: {
     marginTop: 3,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 12,
     lineHeight: 18,
   },
@@ -3123,7 +3126,7 @@ const baseStyles = StyleSheet.create({
   },
 
   topUpOptionPrice: {
-    color: "#18181b",
+    color: "#191919",
     fontSize: 17,
     fontWeight: "700",
   },
@@ -3147,9 +3150,9 @@ const baseStyles = StyleSheet.create({
   paymentNotice: {
     marginTop: 14,
     borderWidth: 1,
-    borderColor: "#e4e4e7",
+    borderColor: "#e6e6e6",
     borderRadius: 15,
-    backgroundColor: "#f4f4f5",
+    backgroundColor: "#f5f5f5",
     paddingHorizontal: 13,
     paddingVertical: 11,
     flexDirection: "row",
@@ -3159,7 +3162,7 @@ const baseStyles = StyleSheet.create({
 
   paymentNoticeText: {
     flex: 1,
-    color: "#71717a",
+    color: "#717171",
     fontSize: 11,
     lineHeight: 17,
   },

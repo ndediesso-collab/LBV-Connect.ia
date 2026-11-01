@@ -7,3 +7,27 @@
   --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
 }
+
+/* ORIA MONO — variables de finition pour Expo Web uniquement.
+   Les couleurs des écrans iOS/Android sont contrôlées par React Native. */
+:root {
+  --oria-bg: #ffffff;
+  --oria-surface: #ffffff;
+  --oria-surface-secondary: #f6f6f6;
+  --oria-text: #111111;
+  --oria-muted: #666666;
+  --oria-border: #e5e5e5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --oria-bg: #000000;
+    --oria-surface: #101010;
+    --oria-surface-secondary: #181818;
+    --oria-text: #ffffff;
+    --oria-muted: #b8b8b8;
+    --oria-border: #303030;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within { scroll-behavior: auto; }
+}

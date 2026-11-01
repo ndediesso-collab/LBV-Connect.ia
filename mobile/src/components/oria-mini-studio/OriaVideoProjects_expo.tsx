@@ -8,7 +8,7 @@ type Project = { id:string; title:string; status:string; model:string;aspect_rat
   error_message?:string|null;duration_seconds:number;scenes:Scene[] };
 type Caps = { max_project_seconds:number;max_project_scenes:number;allowed_modes:string[];
   models?:{model:string;durations:number[];supports_audio:boolean;supports_first_frame?:boolean}[] };
-type Props = { language:"fr"|"en";packId:string;caps:Caps;onWalletRefresh?:()=>void };
+type Props = { language:"fr"|"en";packId:string;caps:Caps;theme?:"light"|"dark";onWalletRefresh?:()=>void };
 const API=process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/,"")||"https://lbv-connect-api.onrender.com";
 const options:Record<string,{action:string;duration:number}[]>={
   light_pack:[{action:"video_4s",duration:4},{action:"video_8s",duration:8}],
@@ -16,8 +16,6 @@ const options:Record<string,{action:string;duration:number}[]>={
   pro_pack:[{action:"video_pro_fast",duration:4},{action:"video_pro_standard",duration:8}],
   business_pack:[{action:"video_business_fast",duration:4},{action:"video_business_standard",duration:8}],
 };
-const border={borderWidth:1,borderColor:"#c0c0c9",borderRadius:10,padding:10};
-const small={fontSize:12,color:"#737382"};
 async function call<T>(path:string, options:Record<string,unknown>={}):Promise<T>{
   const {data:{session}}=await supabase.auth.getSession();
   if(!session?.access_token||!session.user?.id)throw new Error("Session ORIA expirée.");
@@ -27,7 +25,18 @@ async function call<T>(path:string, options:Record<string,unknown>={}):Promise<T
   if(!res.ok)throw new Error(typeof data.detail==="string"?data.detail:`Erreur serveur ${res.status}`);
   return data as T;
 }
-export default function OriaVideoProjectsExpo({language,packId,caps,onWalletRefresh}:Props){
+export default function OriaVideoProjectsExpo({language,packId,caps,theme="light",onWalletRefresh}:Props){
+  const dark = theme === "dark";
+  const C = dark ? {
+    bg:"#000000", card:"#121212", field:"#191919", line:"#353535", text:"#ffffff",
+    muted:"#bcbcbc", button:"#ffffff", onButton:"#000000", selected:"#ffffff",
+  } : {
+    bg:"#ffffff", card:"#ffffff", field:"#f7f7f7", line:"#e2e2e2", text:"#111111",
+    muted:"#666666", button:"#111111", onButton:"#ffffff", selected:"#111111",
+  };
+  const border={borderWidth:1,borderColor:C.line,borderRadius:16,padding:12,backgroundColor:C.card};
+  const small={fontSize:12,color:C.muted,lineHeight:18};
+  const field={...border,backgroundColor:C.field,color:C.text};
   const tr=(fr:string,en:string)=>language==="fr"?fr:en;
   const [title,setTitle]=useState("");const [brief,setBrief]=useState("");const [style,setStyle]=useState("Animation 3D cinématique");
   const [model,setModel]=useState(caps.models?.[0]?.model||"");const [ratio,setRatio]=useState("9:16");
@@ -115,10 +124,10 @@ export default function OriaVideoProjectsExpo({language,packId,caps,onWalletRefr
     setProject({...project,status:"rendering"});setNotice("Montage lancé. Reviens consulter le projet pour le MP4.");
   })}
   const Button=({label,onPress,disabled=false}:{label:string;onPress:()=>void;disabled?:boolean})=><Pressable disabled={disabled||busy}
-    onPress={onPress} style={[border,{alignSelf:"flex-start",marginTop:8,backgroundColor:"#20202c",opacity:disabled||busy?.5:1}]}>
-      <Text style={{color:"white",fontSize:12,fontWeight:"600"}}>{label}</Text></Pressable>;
-  return <View style={[border,{marginTop:16,gap:10}]}>
-    <Text style={{fontWeight:"700",fontSize:16}}>🎬 {tr("Mini-films et publicités", "Mini films and ads")}</Text>
+    onPress={onPress} style={[border,{alignSelf:"flex-start",marginTop:8,backgroundColor:C.button,borderColor:C.line,opacity:disabled||busy?.5:1,borderRadius:13,minHeight:40,justifyContent:"center"}]}>
+      <Text style={{color:C.onButton,fontSize:12,fontWeight:"700"}}>{label}</Text></Pressable>;
+  return <View style={[border,{marginTop:12,gap:12,backgroundColor:C.card}]}>
+    <Text style={{fontWeight:"700",fontSize:17,color:C.text,letterSpacing:-0.35}}>🎬 {tr("Mini-films et publicités", "Mini films and ads")}</Text>
     <Text style={small}>{tr(`Pack ${packId} · ${caps.max_project_scenes} scènes · ${caps.max_project_seconds} s maximum. Chaque clip est facturé individuellement.`,
       `Plan ${packId} · ${caps.max_project_scenes} scenes · ${caps.max_project_seconds}s max. Clips billed individually.`)}</Text>
     {!isSupported?<Text style={small}>{tr("Le montage multi-scènes n'est pas inclus dans ce pack.","Multi-scene films aren't included in this plan.")}</Text>:<>
@@ -126,19 +135,19 @@ export default function OriaVideoProjectsExpo({language,packId,caps,onWalletRefr
         <Button label={tr("Nouveau","New")} onPress={()=>setProject(null)}/>
         <Button label={tr("Mes projets","My projects")} onPress={()=>void wrapped(refresh)}/>
       </View>
-      {projects.map(p=><Pressable key={p.id} onPress={()=>void load(p.id)} style={{paddingVertical:5}}><Text style={{fontSize:12,textDecorationLine:"underline"}}>{p.title} — {p.status}</Text></Pressable>)}
+      {projects.map(p=><Pressable key={p.id} onPress={()=>void load(p.id)} style={{paddingVertical:8}}><Text style={{fontSize:12,color:C.text,textDecorationLine:"underline"}}>{p.title} — {p.status}</Text></Pressable>)}
       {!project?<View style={{gap:8}}>
-        <TextInput placeholder={tr("Titre du film","Film title")} style={border} value={title} maxLength={100} onChangeText={setTitle}/>
-        <TextInput placeholder={tr("Décris le mini-film ou la pub","Describe film or ad")} style={[border,{minHeight:76}]} multiline value={brief} maxLength={2500} onChangeText={setBrief}/>
-        <TextInput placeholder="Style" style={border} value={style} onChangeText={setStyle}/>
+        <TextInput placeholder={tr("Titre du film","Film title")} style={field} placeholderTextColor={C.muted} value={title} maxLength={100} onChangeText={setTitle}/>
+        <TextInput placeholder={tr("Décris le mini-film ou la pub","Describe film or ad")} style={[field,{minHeight:76}]} placeholderTextColor={C.muted} multiline value={brief} maxLength={2500} onChangeText={setBrief}/>
+        <TextInput placeholder="Style" style={field} placeholderTextColor={C.muted} value={style} onChangeText={setStyle}/>
         <Text style={small}>{tr("Modèles disponibles selon ton pack", "Models available for your plan")}</Text>
-        {(caps.models||[]).map(m=><Pressable key={m.model} onPress={()=>{setModel(m.model);setScenes([]);setAudio(false);setContinuity(false)}} style={{padding:5}}><Text style={{fontSize:12,color:model===m.model?"#6855b6":"#777"}}>{model===m.model?"● ":"○ "}{m.model}</Text></Pressable>)}
+        {(caps.models||[]).map(m=><Pressable key={m.model} onPress={()=>{setModel(m.model);setScenes([]);setAudio(false);setContinuity(false)}} style={{padding:8,borderRadius:10,backgroundColor:model===m.model?C.field:"transparent"}}><Text style={{fontSize:12,color:model===m.model?C.selected:C.muted}}>{model===m.model?"● ":"○ "}{m.model}</Text></Pressable>)}
         <View style={{flexDirection:"row",gap:15}}><Button label={ratio==="9:16"?"✓ 9:16":"9:16"} onPress={()=>setRatio("9:16")}/><Button label={ratio==="16:9"?"✓ 16:9":"16:9"} onPress={()=>setRatio("16:9")}/></View>
         <Button label={audio?"✓ Avec dialogues IA":"Sans audio IA"} disabled={!selected?.supports_audio} onPress={()=>setAudio(v=>!v)}/>
         <Button label={continuity?"✓ Raccord visuel":"Raccord visuel scène suivante"} disabled={!selected?.supports_first_frame} onPress={()=>setContinuity(v=>!v)}/>
         <Button label={tr("Préparer le storyboard","Prepare storyboard")} disabled={!offer} onPress={storyboard}/>
         {scenes.map((s,i)=><View key={i} style={border}><Text style={small}>Scène {i+1} · {s.duration_seconds}s</Text>
-          <TextInput multiline style={[border,{minHeight:90,marginTop:6}]} value={s.prompt} onChangeText={t=>setScenes(rows=>rows.map((r,j)=>j===i?{...r,prompt:t}:r))}/>
+          <TextInput multiline style={[field,{minHeight:90,marginTop:6}]} value={s.prompt} onChangeText={t=>setScenes(rows=>rows.map((r,j)=>j===i?{...r,prompt:t}:r))}/>
           <View style={{flexDirection:"row",gap:10,flexWrap:"wrap"}}>{durations.map(o=><Button key={o.action} label={`${o.duration}s${s.action===o.action?" ✓":""}`} onPress={()=>setScenes(rows=>rows.map((r,j)=>j===i?{...r,action:o.action,duration_seconds:o.duration}:r))}/>)}</View>
           <Button label={tr("Supprimer scène","Remove scene")} disabled={scenes.length<=2} onPress={()=>setScenes(rows=>rows.filter((_,j)=>j!==i))}/>
         </View>)}
@@ -147,13 +156,13 @@ export default function OriaVideoProjectsExpo({language,packId,caps,onWalletRefr
           {budget?<Text style={small}>Estimation : {budget.total_estimated_credits} crédits · Réservation cumulée : {budget.maximum_total_reservation_credits} · {budget.credits_sufficient_for_all?"Solde suffisant":"Solde insuffisant"}. Devis sans débit.</Text>:null}
           <Button label={tr("Enregistrer le projet","Save project")} disabled={total>caps.max_project_seconds} onPress={()=>void create()}/></>:null}
       </View>:<View style={{gap:8}}>
-        <Text style={{fontWeight:"700"}}>{project.title} · {project.status}</Text>
+        <Text style={{fontWeight:"700",color:C.text}}>{project.title} · {project.status}</Text>
         <Button label={tr("Synchroniser les scènes","Sync scenes")} onPress={()=>void sync()}/>
         {needsStatusTracking?<Text style={small}>{tr("Suivi automatique toutes les 30 secondes. Une baisse du solde peut être une réservation. Ne relance pas la scène.", "Status checked every 30 seconds. Reduced balance can be a reservation. Do not resubmit.")}</Text>:null}
         {project.scenes.some(s=>s.status==="reconcile")?<Text style={{fontSize:12,color:"#b42318"}}>{tr("Vérification de facturation ou fournisseur nécessaire. Ne relance pas cette scène.", "Provider or billing review required. Do not retry this scene.")}</Text>:null}
         {project.scenes.map(s=><View key={s.id} style={border}><Text style={small}>Scène {s.position} · {s.duration_seconds}s · {s.status}</Text>
           <TextInput key={s.id+":"+s.status} defaultValue={s.prompt} multiline editable={!s.request_id||s.status==="refunded"||s.status==="failed"}
-            style={[border,{minHeight:76,marginTop:7}]} onEndEditing={e=>{if(e.nativeEvent.text!==s.prompt)void changeScene(s,e.nativeEvent.text)}}/>
+            style={[field,{minHeight:76,marginTop:7}]} onEndEditing={e=>{if(e.nativeEvent.text!==s.prompt)void changeScene(s,e.nativeEvent.text)}}/>
           {s.media_url?<Button label={tr("Voir le clip","View clip")} onPress={()=>void Linking.openURL(s.media_url||"")}/>:null}
           {s.error_message?<Text style={small}>{s.error_message}</Text>:null}
           {(["draft","claimed","failed","refunded"].includes(s.status))?<Button label={tr("Devis + générer cette scène","Quote + generate scene")} onPress={()=>void generate(s)}/>:null}
@@ -167,7 +176,7 @@ export default function OriaVideoProjectsExpo({language,packId,caps,onWalletRefr
         {project.error_message?<Text style={small}>{project.error_message}</Text>:null}
       </View>}
     </>}
-    {busy?<ActivityIndicator/>:null}{notice?<Text style={small}>{notice}</Text>:null}{error?<Text style={{color:"#b42318",fontSize:12}}>{error}</Text>:null}
+    {busy?<ActivityIndicator color={C.text}/>:null}{notice?<Text style={small}>{notice}</Text>:null}{error?<Text style={{color:"#b42318",fontSize:12}}>{error}</Text>:null}
     <Text style={small}>{tr("Pas de nouvelle génération payante automatique. Un HTTP 429 peut persister sur OpenRouter.","No automatic paid retries. HTTP 429 may persist on OpenRouter.")}</Text>
   </View>
 }

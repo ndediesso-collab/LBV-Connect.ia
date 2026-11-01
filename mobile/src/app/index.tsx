@@ -1,15 +1,20 @@
 import { Link } from "expo-router";
+import Animated, { FadeInDown, useReducedMotion } from "react-native-reanimated";
 import {
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
+  useColorScheme,
   Text,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function Home() {
+  const isDark = useColorScheme() === "dark";
+  const styles = isDark ? darkStyles : lightStyles;
+  const reduceMotion = useReducedMotion();
   return (
     <View style={styles.main}>
       <ScrollView
@@ -106,7 +111,7 @@ export default function Home() {
                 HERO INTRO
                 ======================================================== */}
 
-            <View style={styles.heroContent}>
+            <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(360)} style={styles.heroContent}>
               {/* Badge */}
               <View style={styles.badge}>
                 <View style={styles.badgeDot} />
@@ -137,7 +142,7 @@ export default function Home() {
               </Text>
 
               {/* Boutons */}
-              <View style={styles.heroButtons}>
+              <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(370).delay(110)} style={styles.heroButtons}>
                 <Link href={"/packs" as any} asChild>
                   <Pressable
                     style={({ pressed }) => [
@@ -163,7 +168,7 @@ export default function Home() {
                     </Text>
                   </Pressable>
                 </Link>
-              </View>
+              </Animated.View>
 
               {/* Séparateur */}
               <View style={styles.technologySeparator}>
@@ -175,7 +180,7 @@ export default function Home() {
 
                 <View style={styles.separatorLine} />
               </View>
-            </View>
+            </Animated.View>
 
             {/* ========================================================
                 FEATURES
@@ -223,7 +228,7 @@ export default function Home() {
                 CREDITS SECTION
                 ======================================================== */}
 
-            <View style={styles.creditsContainer}>
+            <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(350).delay(220)} style={styles.creditsContainer}>
               <View style={styles.creditsCard}>
                 {/* Décoration */}
                 <View
@@ -247,7 +252,7 @@ export default function Home() {
                   </Text>
                 </View>
               </View>
-            </View>
+            </Animated.View>
 
             {/* ========================================================
                 FINAL DESCRIPTION
@@ -286,7 +291,11 @@ function Feature({
   title: string;
   description: string;
 }) {
+  const styles = useColorScheme() === "dark" ? darkStyles : lightStyles;
+  const reduceMotion = useReducedMotion();
+  const index = Math.max(0, Number(number) - 1);
   return (
+    <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(320).delay(70 + index * 48)} style={styles.featureMotionWrapper}>
     <Pressable
       style={({ pressed }) => [
         styles.featureCard,
@@ -303,6 +312,7 @@ function Feature({
 
       <Text style={styles.featureDescription}>{description}</Text>
     </Pressable>
+    </Animated.View>
   );
 }
 
@@ -310,7 +320,7 @@ function Feature({
    STYLES
    ===================================================================== */
 
-const styles = StyleSheet.create({
+const lightStyles = StyleSheet.create({
   /* ===================================================================
      MAIN
      =================================================================== */
@@ -737,8 +747,9 @@ const styles = StyleSheet.create({
     gap: 12,
   },
 
+  featureMotionWrapper: { width: Platform.OS === "web" ? "32%" : "100%" },
   featureCard: {
-    width: Platform.OS === "web" ? "32%" : "100%",
+    width: "100%",
     minHeight: 210,
     padding: 24,
     borderRadius: 24,
@@ -876,3 +887,32 @@ const styles = StyleSheet.create({
     color: "#999999",
   },
 });
+
+/** Adapte les couleurs d'origine de la page Web sans changer ses sections ni ses liens. */
+function darkenHomeColor(color: string, key: string, field: string): string {
+  const lookup: Record<string, string> = {
+    "#FFFFFF": key === "main" || key === "scrollView" || key === "bottomSafeArea" ? "#000000" : "#111111",
+    "#111111": "#ffffff", "#E5E5E5": "#303030", "#666666": "#bcbcbc",
+    "#999999": "#989898", "#F5F5F5": "#191919", "#F7F7F7": "#151515",
+    "#D5D5D5": "#353535", "rgba(0,0,0,0.10)": "rgba(255,255,255,0.11)",
+    "rgba(255,255,255,0.96)": "rgba(0,0,0,0.96)",
+    "rgba(255,255,255,0.94)": "rgba(0,0,0,0.94)",
+    "rgba(250,250,250,0.9)": "rgba(23,23,23,0.9)",
+    "rgba(17,17,17,0.8)": "rgba(255,255,255,0.8)",
+  };
+  if (field === "backgroundColor" && color === "#FFFFFF" && key === "secondaryHeroButton") return "#121212";
+  return lookup[color] ?? color;
+}
+
+const darkStyles = Object.fromEntries(
+  Object.entries(lightStyles).map(([key, item]) => {
+    const flattened = StyleSheet.flatten(item as any) as Record<string, any>;
+    const overrides: Record<string, string> = {};
+    for (const field of ["color", "backgroundColor", "borderColor", "borderBottomColor", "borderTopColor", "borderLeftColor", "borderRightColor"]) {
+      if (typeof flattened?.[field] === "string") {
+        overrides[field] = darkenHomeColor(flattened[field], key, field);
+      }
+    }
+    return [key, [item, overrides]];
+  }),
+) as unknown as typeof lightStyles;
