@@ -2183,11 +2183,10 @@ export default function SettingsPage() {
 
   return (
     <SafeAreaView
-      style={[
+      style={StyleSheet.flatten([
         styles.safeArea,
-        theme === "dark" &&
-          styles.safeAreaDark,
-      ]}
+        theme === "dark" && styles.safeAreaDark,
+      ])}
       edges={[
         "top",
         "left",

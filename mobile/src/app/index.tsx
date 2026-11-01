@@ -1,4 +1,4 @@
-import { Link } from "expo-router";
+import { router } from "expo-router";
 import Animated, { FadeInDown, useReducedMotion } from "react-native-reanimated";
 import {
   Platform,
@@ -33,19 +33,19 @@ export default function Home() {
 
         <SafeAreaView edges={["top"]} style={styles.navigationSafeArea}>
           <View style={styles.nav}>
-            <Link href="/" asChild>
-              <Pressable style={styles.brandContainer}>
+
+              <Pressable accessibilityRole="button" onPress={() => router.replace("/")} style={styles.brandContainer}>
                 <View style={styles.brandIcon}>
                   <Text style={styles.brandIconText}>N</Text>
                 </View>
 
                 <Text style={styles.brandText}>Oria</Text>
               </Pressable>
-            </Link>
+
 
             <View style={styles.navActions}>
-              <Link href={"/login" as any}  asChild>
-                <Pressable
+
+                <Pressable accessibilityRole="button" onPress={() => router.push("/login" as any)}
                   style={({ pressed }) => [
                     styles.loginButton,
                     pressed && styles.buttonPressed,
@@ -53,10 +53,9 @@ export default function Home() {
                 >
                   <Text style={styles.loginButtonText}>Connexion</Text>
                 </Pressable>
-              </Link>
 
-              <Link href={"/packs" as any} asChild>
-                <Pressable
+
+                <Pressable accessibilityRole="button" onPress={() => router.push("/packs" as any)}
                   style={({ pressed }) => [
                     styles.startButton,
                     pressed && styles.startButtonPressed,
@@ -64,7 +63,7 @@ export default function Home() {
                 >
                   <Text style={styles.startButtonText}>Commencer</Text>
                 </Pressable>
-              </Link>
+
             </View>
           </View>
         </SafeAreaView>
@@ -149,8 +148,8 @@ export default function Home() {
               {/* Boutons */}
               <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(370).delay(110)}
                 style={[styles.heroButtons, compact && { flexDirection: "column" }]}>
-                <Link href={"/packs" as any} asChild>
-                  <Pressable
+
+                  <Pressable accessibilityRole="button" onPress={() => router.push("/packs" as any)}
                     style={({ pressed }) => [
                       styles.primaryHeroButton,
                       compact && { width: "100%" },
@@ -161,10 +160,9 @@ export default function Home() {
                       Découvrir Oria
                     </Text>
                   </Pressable>
-                </Link>
 
-                <Link href={"/login" as any} asChild>
-                  <Pressable
+
+                  <Pressable accessibilityRole="button" onPress={() => router.push("/login" as any)}
                     style={({ pressed }) => [
                       styles.secondaryHeroButton,
                       compact && { width: "100%" },
@@ -175,7 +173,7 @@ export default function Home() {
                       Se connecter
                     </Text>
                   </Pressable>
-                </Link>
+
               </Animated.View>
 
               {/* Séparateur */}

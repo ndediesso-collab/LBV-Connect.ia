@@ -50,7 +50,7 @@ export default function ExplorePage() {
   }), [isDark]);
 
   return (
-    <SafeAreaView style={[styles.screen, { backgroundColor: C.bg }]} edges={["top", "bottom", "left", "right"]}>
+    <SafeAreaView style={StyleSheet.flatten([styles.screen, { backgroundColor: C.bg }])} edges={["top", "bottom", "left", "right"]}>
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
