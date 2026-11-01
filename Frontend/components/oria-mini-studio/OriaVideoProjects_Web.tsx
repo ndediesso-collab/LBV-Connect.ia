@@ -162,7 +162,7 @@ export default function OriaVideoProjectsWeb({ language, packId, caps, onWalletR
     setProject({...project,status:data.status});setMessage("Montage lancé. Actualise l'état du projet pour récupérer le MP4.");
   }); }
   const complete = project?.scenes?.every(s=>s.status==="completed" && s.media_url);
-  return <div className="mt-4 rounded-[25px] border border-border/75 bg-surface/85 p-4 text-sm shadow-[0_14px_38px_-31px_var(--shadow-color)] sm:p-5">
+  return <div className="mt-4 rounded-[25px] border border-border/75 bg-surface/95 p-4 text-sm shadow-[0_14px_38px_-31px_var(--shadow-color)] sm:p-5 oria-reveal oria-projects">
     <div className="flex items-center gap-2"><Clapperboard size={20}/><h3 className="font-semibold">{tr("Projets vidéo & mini-films", "Video projects & mini-films")}</h3></div>
     <p className="mt-2 text-xs leading-5 text-muted">{tr("Films verticaux, pubs et histoires en plusieurs scènes. Chaque clip est payé séparément ; l'assemblage ne déclenche aucune nouvelle IA payante.", "Vertical stories and ads, created from individually billed short clips; assembly makes no new paid AI requests.")}</p>
     <p className="mt-1 text-xs text-muted">Pack : {packId} · {caps.max_project_seconds}s · {caps.max_project_scenes} {tr("scènes max", "scenes max")}</p>
@@ -175,7 +175,7 @@ export default function OriaVideoProjectsWeb({ language, packId, caps, onWalletR
           {list.map(p=><option key={p.id} value={p.id}>{p.title} — {p.status}</option>)}
         </select>
       </div>
-      {!project ? <div className="mt-4 space-y-3">
+      {!project ? <div className="mt-4 space-y-3 oria-reveal">
         <label className="block text-xs">{tr("Titre du film", "Film title")}<input className="mt-1 w-full rounded-xl border border-border/75 bg-background/80 p-2.5 outline-none transition-[border-color,box-shadow] duration-200 focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]" value={title} maxLength={100} onChange={e=>setTitle(e.target.value)} placeholder="Les aventures d'une mangue"/></label>
         <label className="block text-xs">{tr("Histoire / publicité", "Story / advertisement")}<textarea className="mt-1 w-full rounded-xl border border-border/75 bg-background/80 p-2.5 outline-none transition-[border-color,box-shadow] duration-200 focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]" value={brief} rows={3} maxLength={2500} onChange={e=>setBrief(e.target.value)} placeholder="Une mangue parlante rencontre un ananas dans un marché coloré..."/></label>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -187,7 +187,7 @@ export default function OriaVideoProjectsWeb({ language, packId, caps, onWalletR
         </div>
         <button type="button" onClick={createStoryboard} disabled={!firstOffer} className="rounded-xl border border-border/75 px-3 py-2 text-xs"><Plus size={14} className="inline"/> {tr("Préparer les scènes", "Prepare scenes")}</button>
         {scenes.length>0 && <div className="space-y-3">
-          {scenes.map((s,i)=><div key={i} className="rounded-xl border border-border/75 p-3"><div className="flex justify-between text-xs font-semibold"><span>Scène {i+1}</span><span>{s.duration_seconds}s</span></div>
+          {scenes.map((s,i)=><div key={i} className="rounded-xl border border-border/75 bg-surface-secondary/40 p-3 oria-card-rise"><div className="flex justify-between text-xs font-semibold"><span>Scène {i+1}</span><span>{s.duration_seconds}s</span></div>
             <textarea rows={3} className="mt-2 w-full rounded-xl border border-border/75 bg-background/80 p-2 text-xs outline-none transition-[border-color,box-shadow] duration-200 focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]" value={s.prompt} onChange={e=>edit(i,"prompt",e.target.value)}/>
             <select className="mt-2 rounded-xl border border-border/75 bg-background/80 p-2 text-xs outline-none transition-[border-color,box-shadow] duration-200 focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]" value={s.action} onChange={e=>edit(i,"action",e.target.value)}>{eligibleOffers.map(o=><option key={o.action} value={o.action}>{o.label}</option>)}</select>
             <button type="button" className="ml-2 text-xs underline" disabled={scenes.length<=2} onClick={()=>setScenes(rows=>rows.filter((_,j)=>i!==j))}>{tr("Supprimer", "Remove")}</button>
@@ -203,12 +203,12 @@ export default function OriaVideoProjectsWeb({ language, packId, caps, onWalletR
           </div>}
           <button type="button" disabled={busy||total>caps.max_project_seconds||!title.trim()} onClick={()=>void saveProject()} className="rounded-xl bg-foreground px-4 py-2 text-xs font-semibold text-background">{tr("Enregistrer le projet", "Save project")}</button>
         </div>}
-      </div> : <div className="mt-4 space-y-3">
+      </div> : <div className="mt-4 space-y-3 oria-reveal">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><strong>{project.title}</strong><p className="text-xs text-muted">{project.duration_seconds}s · {project.aspect_ratio} · {project.status}</p></div>
           <button type="button" disabled={busy} className="rounded-xl border border-border/75 p-2 text-xs" onClick={()=>void sync()}><RefreshCw size={14} className="inline"/> {tr("Synchroniser scènes", "Sync scenes")}</button></div>
-        {needsStatusTracking && <p className="text-xs text-muted">{tr("Suivi automatique toutes les 30 secondes. Les crédits affichés comme débités peuvent encore correspondre à une réservation. Ne relance pas cette scène.", "Automatically checking every 30 seconds. A reduced credit balance may still be a reservation. Do not resubmit this scene.")}</p>}
+        {needsStatusTracking && <p className="text-xs text-muted oria-status-enter">{tr("Suivi automatique toutes les 30 secondes. Les crédits affichés comme débités peuvent encore correspondre à une réservation. Ne relance pas cette scène.", "Automatically checking every 30 seconds. A reduced credit balance may still be a reservation. Do not resubmit this scene.")}</p>}
         {project.scenes.some(s=>s.status==="reconcile") && <p className="text-xs text-red-600">{tr("Une scène nécessite un contrôle du fournisseur ou de la facturation. Ne relance pas cette scène tant que son statut n'est pas vérifié.", "A scene requires provider or billing reconciliation. Do not retry until it is checked.")}</p>}
-        {project.scenes.map(s=><div key={s.id} className="rounded-xl border border-border/75 p-3">
+        {project.scenes.map(s=><div key={s.id} className="rounded-xl border border-border/75 bg-surface-secondary/40 p-3 oria-card-rise">
           <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-xs">Scène {s.position} · {s.duration_seconds}s</strong><span className="text-xs">{s.status}</span></div>
           <textarea key={`${s.id}:${s.status}`} className="mt-2 w-full rounded-xl border border-border/75 bg-background/80 p-2 text-xs outline-none transition-[border-color,box-shadow] duration-200 focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]" rows={3} defaultValue={s.prompt} disabled={!!s.request_id && s.status!=="refunded" && s.status!=="failed"} onBlur={e=>{if(e.target.value!==s.prompt && (s.status==="draft"||s.status==="refunded"||s.status==="failed"))void changeScene(s.position,e.target.value)}}/>
           {project.continue_from_previous && s.position>1 && <p className="mt-1 text-[11px] text-muted">{tr("Raccord visuel activé : la scène précédente doit être terminée avant celle-ci.", "Visual continuity: complete prior scene first.")}</p>}
@@ -226,12 +226,12 @@ export default function OriaVideoProjectsWeb({ language, packId, caps, onWalletR
           <label className="flex gap-2 text-xs"><input type="checkbox" checked={rights} onChange={e=>setRights(e.target.checked)}/>{tr("Je dispose des droits sur les pistes ajoutées.", "I have rights to the added tracks.")}</label>
           <button type="button" disabled={busy} onClick={()=>void render()} className="rounded-xl bg-foreground px-4 py-2 text-xs font-semibold text-background"><Film size={14} className="inline"/> {tr("Assembler le MP4 sans nouvelle génération payante", "Assemble MP4 without new paid AI")}</button>
         </div>}
-        {project.status==="rendering" && <p className="text-xs text-muted">Montage en cours. L'état est actualisé toutes les 30 secondes. Vérifie avant une éventuelle reprise : aucun nouveau clip IA ne sera généré.</p>}
+        {project.status==="rendering" && <p className="text-xs text-muted oria-status-enter">Montage en cours. L'état est actualisé toutes les 30 secondes. Vérifie avant une éventuelle reprise : aucun nouveau clip IA ne sera généré.</p>}
         {project.status==="render_failed" && <p className="text-xs text-red-600">{project.error_message || "Le rendu a échoué. Réessaie l'assemblage sans générer de nouvelles scènes."}</p>}
         {project.output_url && <div className="space-y-2"><video src={project.output_url} controls className="w-full rounded-xl"/><a href={project.output_url} download className="inline-flex items-center gap-2 text-xs underline"><Download size={13}/> {tr("Télécharger le film", "Download film")}</a></div>}
       </div>}
     </>}
-    {busy && <p className="mt-3 flex items-center gap-2 text-xs"><RefreshCw size={13} className="animate-spin"/> {tr("Opération en cours", "Working")}</p>}
+    {busy && <p className="mt-3 flex items-center gap-2 text-xs text-muted oria-status-enter"><RefreshCw size={13} className="animate-spin oria-loader-icon"/> {tr("Opération en cours", "Working")}</p>}
     {message && <p className="mt-3 text-xs">{message}</p>}{problem && <p className="mt-3 text-xs text-red-600">{problem}</p>}
     <p className="mt-3 text-[11px] text-muted">{tr("La même identité visuelle d'une scène à l'autre n'est pas garantie. Pas de génération payante automatique ; le modèle peut renvoyer HTTP 429.", "Visual continuity is not guaranteed. No automatic paid retries; provider may return HTTP 429.")}</p>
   </div>;

@@ -376,10 +376,10 @@ export default function ConversationsPage() {
   }
 
   return (
-    <main className="min-h-dvh overflow-x-clip bg-background text-foreground">
+    <main className="min-h-dvh overflow-x-clip bg-background text-foreground oria-page-enter">
       {/* Header */}
 
-      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-md oria-header-enter">
         <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <Link
@@ -420,7 +420,7 @@ export default function ConversationsPage() {
       <section className="mx-auto w-full max-w-5xl px-5 py-8 sm:px-8 sm:py-12">
         {/* En-tête */}
 
-        <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between oria-reveal">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
               {UI[language].yourSpace}
@@ -445,7 +445,7 @@ export default function ConversationsPage() {
 
         {/* Recherche */}
 
-        <div className="relative mt-8">
+        <div className="relative mt-8 oria-reveal oria-delay-1">
           <Search
             size={18}
             className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted"
@@ -475,18 +475,22 @@ export default function ConversationsPage() {
 
         {/* Liste */}
 
-        <div className="mt-8">
+        <div className="mt-8 oria-reveal oria-delay-2">
           {isLoading ? (
-            <div className="rounded-[26px] border border-border/75 bg-surface/80 px-6 py-16 text-center shadow-[0_16px_45px_-30px_var(--shadow-color)]">
-              <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-border border-t-foreground" />
-
-              <p className="mt-4 text-sm text-muted">
-                {UI[language].loadingConversations}
-              </p>
+            <div className="rounded-[26px] border border-border/75 bg-surface/85 px-6 py-8 shadow-[0_16px_45px_-30px_var(--shadow-color)] oria-loading-panel" role="status" aria-busy="true">
+              <div className="flex items-center gap-3">
+                <span className="oria-loader-ring" aria-hidden="true" />
+                <p className="text-sm text-muted">{UI[language].loadingConversations}</p>
+              </div>
+              <div className="mt-7 space-y-3" aria-hidden="true">
+                <div className="oria-skeleton h-14 w-full rounded-2xl" />
+                <div className="oria-skeleton h-14 w-full rounded-2xl oria-skeleton-late" />
+                <div className="oria-skeleton h-14 w-[94%] rounded-2xl" />
+              </div>
             </div>
           ) : filteredConversations.length >
             0 ? (
-            <div className="overflow-hidden rounded-[26px] border border-border/75 bg-surface/80 shadow-[0_18px_50px_-32px_var(--shadow-color)]">
+            <div className="overflow-hidden rounded-[26px] border border-border/75 bg-surface/85 shadow-[0_18px_50px_-32px_var(--shadow-color)] oria-stagger-rows">
               {filteredConversations.map(
                 (
                   conversation,

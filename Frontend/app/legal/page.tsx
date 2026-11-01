@@ -622,72 +622,72 @@ export default function OriaLegalPage() {
   };
 
   return (
-    <main className="min-h-dvh overflow-x-clip bg-[#0b0d13] text-[#f5f6fa] antialiased">
+    <main className="min-h-dvh overflow-x-clip bg-background text-foreground antialiased oria-page-enter">
       <div className="mx-auto flex min-h-dvh w-full max-w-7xl flex-col px-4 pb-8 pt-5 sm:px-6 md:px-8">
-        <header className="flex items-center justify-between gap-3 border-b border-white/[0.09] pb-5">
+        <header className="flex items-center justify-between gap-3 border-b border-border/70 pb-5 oria-header-enter">
           <Link href={fromSignup ? "/register" : "/settings"}
-            className="inline-flex items-center gap-2 rounded-2xl border border-white/[0.11] bg-white/[0.045] px-4 py-2.5 text-sm font-medium text-white/90 transition-[background-color,border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/[0.075] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b7a9ff]">
+            className="inline-flex items-center gap-2 rounded-2xl border border-border/75 bg-surface/90 px-4 py-2.5 text-sm font-medium text-foreground shadow-[0_10px_30px_-25px_var(--shadow-color)] transition-[background-color,border-color,transform] duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)] oria-press">
             <ArrowLeft size={18} aria-hidden /> {fromSignup ? "Retour à l'inscription" : "Retour aux paramètres"}
           </Link>
-          <span className="text-base font-bold tracking-[.19em] text-white">ORIA<span className="text-[#aaa1ff]">.</span></span>
+          <span className="text-base font-bold tracking-[.19em] text-foreground">ORIA<span className="text-muted-strong">.</span></span>
         </header>
 
-        <section className="max-w-3xl pb-9 pt-10">
-          <p className="text-xs font-semibold uppercase tracking-[.22em] text-[#b2a7ff]">Transparence & confiance</p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-white sm:text-4xl">Informations et politiques</h1>
-          <p className="mt-4 max-w-2xl text-sm leading-7 text-[#b4bac8] sm:text-base">{content.intro}</p>
-          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-[#a5abb9]">
+        <section className="max-w-3xl pb-9 pt-10 oria-reveal">
+          <p className="text-xs font-semibold uppercase tracking-[.22em] text-muted-strong">Transparence & confiance</p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-foreground sm:text-4xl">Informations et politiques</h1>
+          <p className="mt-4 max-w-2xl text-sm leading-7 text-muted-strong sm:text-base">{content.intro}</p>
+          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted">
             <span>Mis à jour le {content.updated}</span>
           </div>
         </section>
 
         <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[286px_minmax(0,1fr)] lg:items-start">
-          <nav aria-label="Rubriques du centre d'informations" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:sticky lg:top-5 lg:flex lg:flex-col">
+          <nav aria-label="Rubriques du centre d'informations" className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:sticky lg:top-5 lg:flex lg:flex-col oria-stagger-cards">
             {content.tabs.map((item) => {
               const RowIcon = icons[item.id as TabId];
               const active = item.id === tab;
               return (
                 <button key={item.id} type="button" onClick={() => changeTab(item.id as TabId)} aria-current={active ? "page" : undefined}
-                  className={`group flex min-h-[75px] items-center gap-3 rounded-[21px] border p-3.5 text-left shadow-[0_10px_32px_-25px_rgba(0,0,0,0.9)] transition-[background-color,border-color,box-shadow,transform] duration-200 hover:-translate-y-px focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b7a9ff] lg:min-h-[67px] ${active ? "border-[#9583e3]/45 bg-[#28243c] shadow-[0_10px_35px_-24px_rgba(153,129,222,0.35)]" : "border-white/[0.08] bg-[#161a23]/90 hover:border-white/[0.17] hover:bg-[#1d222d]"}`}>
-                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[13px] ${active ? "bg-[#4d416d] text-[#ded7ff]" : "bg-white/[0.05] text-[#a6aab5]"}`}>
+                  className={`group flex min-h-[75px] items-center gap-3 rounded-[21px] border p-3.5 text-left shadow-[0_10px_32px_-25px_var(--shadow-color)] transition-[background-color,border-color,box-shadow,transform] duration-200 hover:-translate-y-px focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] lg:min-h-[67px] ${active ? "border-border-strong bg-surface-secondary shadow-[0_12px_32px_-25px_var(--shadow-color)]" : "border-border/75 bg-surface/85 hover:border-border-strong hover:bg-surface-secondary/85"}`}>
+                  <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[13px] ${active ? "bg-accent text-accent-foreground" : "bg-surface-secondary text-muted-strong"}`}>
                     <RowIcon size={17} aria-hidden />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold text-white">{item.label}</span>
-                    <span className="mt-0.5 hidden text-xs leading-4 text-[#9fa4b3] lg:block">{item.subtitle}</span>
+                    <span className="block text-sm font-semibold text-foreground">{item.label}</span>
+                    <span className="mt-0.5 hidden text-xs leading-4 text-muted lg:block">{item.subtitle}</span>
                   </span>
-                  <ChevronRight size={15} className="hidden text-[#9da0aa] lg:block" aria-hidden />
+                  <ChevronRight size={15} className="hidden text-muted lg:block" aria-hidden />
                 </button>
               );
             })}
           </nav>
 
-          <article id="oria-legal-content" className="min-w-0 scroll-mt-6 rounded-[30px] border border-white/[0.095] bg-[#161a23]/90 p-5 shadow-[0_28px_70px_-34px_rgba(0,0,0,0.78)] backdrop-blur-sm sm:p-7 lg:min-h-[680px] lg:p-9">
-            <div className="flex items-center gap-3 border-b border-white/[0.09] pb-6">
-              <span className="flex h-12 w-12 items-center justify-center rounded-[18px] border border-[#a99ce9]/15 bg-[#29233d] text-[#d4caff]"><Icon size={23} aria-hidden /></span>
+          <article id="oria-legal-content" className="min-w-0 scroll-mt-6 rounded-[30px] border border-border/75 bg-surface/90 p-5 shadow-[0_28px_70px_-34px_var(--shadow-color)] backdrop-blur-sm sm:p-7 lg:min-h-[680px] lg:p-9 oria-reveal oria-delay-1">
+            <div className="flex items-center gap-3 border-b border-border/75 pb-6">
+              <span className="flex h-12 w-12 items-center justify-center rounded-[18px] border border-border/70 bg-surface-secondary text-foreground"><Icon size={23} aria-hidden /></span>
               <div>
                 <h2 className="text-xl font-bold tracking-tight sm:text-2xl">{selected.label}</h2>
-                <p className="mt-1 text-sm text-[#9ca4b4]">{selected.subtitle}</p>
+                <p className="mt-1 text-sm text-muted">{selected.subtitle}</p>
               </div>
             </div>
-            <div className="space-y-10 py-8">
+            <div key={selected.id} className="space-y-10 py-8 oria-legal-tab-enter">
               {selected.sections.map((section, index) => (
                 <section key={`${selected.id}-${index}`} className="max-w-[75ch]">
-                  <h3 className="mb-3.5 flex flex-wrap items-center gap-2 text-base font-semibold tracking-[-0.01em] text-[#f7f7fb] sm:text-lg">
+                  <h3 className="mb-3.5 flex flex-wrap items-center gap-2 text-base font-semibold tracking-[-0.01em] text-foreground sm:text-lg">
                     {section.title}
                   </h3>
-                  {"paragraphs" in section && section.paragraphs?.map((text, i) => <p key={i} className="mb-3.5 text-sm leading-[1.9] text-[#ccd0da]">{text}</p>)}
-                  {"bullets" in section && section.bullets ? <ul className="mt-3 list-disc space-y-2.5 pl-5 text-sm leading-[1.85] text-[#ccd0da]">{section.bullets.map((value, i) => <li key={i}>{value}</li>)}</ul> : null}
+                  {"paragraphs" in section && section.paragraphs?.map((text, i) => <p key={i} className="mb-3.5 text-sm leading-[1.9] text-muted-strong">{text}</p>)}
+                  {"bullets" in section && section.bullets ? <ul className="mt-3 list-disc space-y-2.5 pl-5 text-sm leading-[1.85] text-muted-strong">{section.bullets.map((value, i) => <li key={i}>{value}</li>)}</ul> : null}
                 </section>
               ))}
             </div>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.09] pt-6 text-sm text-[#b0b6c6]">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border/75 pt-6 text-sm text-muted-strong">
               <span>Une question sur vos données ou votre compte ?</span>
-              <a href={`mailto:${content.email}`} className="inline-flex items-center gap-2 rounded-xl px-2 py-1 font-semibold text-[#ccc4ff] transition-colors hover:bg-white/[0.05] hover:text-white"><Mail size={16} aria-hidden /> {content.email} <ArrowUpRight size={14} aria-hidden /></a>
+              <a href={`mailto:${content.email}`} className="inline-flex items-center gap-2 rounded-xl px-2 py-1 font-semibold text-foreground transition-colors hover:bg-surface-secondary hover:text-foreground"><Mail size={16} aria-hidden /> {content.email} <ArrowUpRight size={14} aria-hidden /></a>
             </div>
           </article>
         </div>
-        <footer className="pt-8 text-center text-xs text-[#7e8493]">© ORIA · Informations et politiques · {content.updated}</footer>
+        <footer className="pt-8 text-center text-xs text-muted">© ORIA · Informations et politiques · {content.updated}</footer>
       </div>
     </main>
   );

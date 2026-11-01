@@ -224,7 +224,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-dvh overflow-x-clip bg-background text-foreground">
+    <main className="min-h-dvh overflow-x-clip bg-background text-foreground oria-page-enter">
       {/* Header */}
 
       <header className="absolute left-0 right-0 top-0 z-20">
@@ -244,7 +244,7 @@ export default function LoginPage() {
 
       <div className="flex min-h-dvh items-center justify-center px-5 py-24 sm:px-8">
         <div className="w-full max-w-md">
-          <div className="relative rounded-[30px] border border-border/70 bg-surface/85 p-6 shadow-[0_22px_65px_-38px_var(--shadow-color)] backdrop-blur-xl sm:p-8">
+          <div className="relative rounded-[30px] border border-border/70 bg-surface/95 p-6 shadow-[0_22px_65px_-38px_var(--shadow-color)] backdrop-blur-sm sm:p-8 oria-auth-enter">
             {/* Back */}
 
             <Link
@@ -399,13 +399,13 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground shadow-[0_13px_26px_-21px_var(--shadow-color)] transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground shadow-[0_13px_26px_-21px_var(--shadow-color)] transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 oria-press"
               >
                 {loading ? (
                   <>
                     <Loader2
                       size={17}
-                      className="animate-spin"
+                      className="animate-spin oria-loader-icon"
                     />
 
                     Connexion...

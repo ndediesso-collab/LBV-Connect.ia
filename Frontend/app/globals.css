@@ -1,49 +1,52 @@
 @import "tailwindcss";
 @import "./oria-finish.css";
+@import "./oria-motion.css";
 
 /* ORIA v2 — palette unique pour les composants existants. */
+/* ORIA MONO : véritable blanc / véritable noir. Les surfaces intermédiaires sont
+   exclusivement des gris neutres (aucun bleu dans la palette structurelle). */
 :root {
-  --background: #f7f8fb;
-  --foreground: #18202c;
+  --background: #ffffff;
+  --foreground: #111111;
   --surface: #ffffff;
-  --surface-secondary: #f1f3f7;
+  --surface-secondary: #f6f6f6;
   --surface-2: var(--surface-secondary);
-  --surface-tertiary: #e9edf3;
-  --border: #e0e5ed;
-  --border-strong: #c9d1dc;
-  --muted: #697385;
-  --muted-strong: #465265;
-  --accent: #1f2937;
+  --surface-tertiary: #eeeeee;
+  --border: #e5e5e5;
+  --border-strong: #c8c8c8;
+  --muted: #737373;
+  --muted-strong: #4b4b4b;
+  --accent: #111111;
   --accent-foreground: #ffffff;
   --danger: #c92a38;
   --danger-surface: #fff0f1;
-  --shadow-color: rgb(35 49 70 / 0.08);
-  --glass-surface: rgb(255 255 255 / 0.78);
-  --glass-border: rgb(255 255 255 / 0.85);
-  --glass-shadow: 0 16px 46px rgb(21 32 50 / 0.10);
-  --focus-ring: rgb(65 93 149 / 0.30);
+  --shadow-color: rgb(0 0 0 / 0.075);
+  --glass-surface: rgb(255 255 255 / 0.93);
+  --glass-border: rgb(0 0 0 / 0.085);
+  --glass-shadow: 0 16px 46px rgb(0 0 0 / 0.075);
+  --focus-ring: rgb(90 90 90 / 0.30);
 }
 
 .dark {
-  --background: #0b0d11;
-  --foreground: #f2f4f7;
-  --surface: #13171d;
-  --surface-secondary: #191e26;
+  --background: #000000;
+  --foreground: #ffffff;
+  --surface: #090909;
+  --surface-secondary: #131313;
   --surface-2: var(--surface-secondary);
-  --surface-tertiary: #242b35;
-  --border: #29313d;
-  --border-strong: #414c5d;
-  --muted: #9da8b8;
-  --muted-strong: #c6ceda;
-  --accent: #edf3ff;
-  --accent-foreground: #101318;
+  --surface-tertiary: #1e1e1e;
+  --border: #282828;
+  --border-strong: #484848;
+  --muted: #a5a5a5;
+  --muted-strong: #d0d0d0;
+  --accent: #ffffff;
+  --accent-foreground: #000000;
   --danger: #ff8290;
-  --danger-surface: #351c26;
-  --shadow-color: rgb(0 0 0 / 0.36);
-  --glass-surface: rgb(22 27 35 / 0.78);
-  --glass-border: rgb(220 230 245 / 0.11);
-  --glass-shadow: 0 18px 50px rgb(0 0 0 / 0.30);
-  --focus-ring: rgb(154 187 244 / 0.45);
+  --danger-surface: #321719;
+  --shadow-color: rgb(0 0 0 / 0.55);
+  --glass-surface: rgb(9 9 9 / 0.91);
+  --glass-border: rgb(255 255 255 / 0.12);
+  --glass-shadow: 0 18px 48px rgb(0 0 0 / 0.50);
+  --focus-ring: rgb(175 175 175 / 0.45);
 }
 
 @theme inline {
@@ -90,8 +93,8 @@ body {
 .oria-glass {
   background: var(--glass-surface);
   border: 1px solid var(--glass-border);
-  -webkit-backdrop-filter: blur(16px) saturate(135%);
-  backdrop-filter: blur(16px) saturate(135%);
+  -webkit-backdrop-filter: blur(10px) saturate(100%);
+  backdrop-filter: blur(10px) saturate(100%);
   box-shadow: var(--glass-shadow);
 }
 

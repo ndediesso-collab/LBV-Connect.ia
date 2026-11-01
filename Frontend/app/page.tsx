@@ -4,8 +4,8 @@ import oriaLogo from "./oria-logo.png";
 
 export default function Home() {
   return (
-    <main className="min-h-dvh overflow-x-clip bg-background text-foreground">
-      <nav className="relative z-20 flex items-center justify-between border-b border-border/65 bg-background/80 px-5 py-4 backdrop-blur-xl sm:px-8">
+    <main className="min-h-dvh overflow-x-clip bg-background text-foreground oria-page-enter">
+      <nav className="relative z-20 flex items-center justify-between border-b border-border/65 bg-background/95 px-5 py-4 backdrop-blur-md sm:px-8 oria-header-enter">
         <Link
           href="/"
           className="group flex items-center gap-3 text-lg font-semibold tracking-[-0.035em]"
@@ -56,12 +56,12 @@ export default function Home() {
 
         <div className="relative z-10 mx-auto w-full max-w-6xl">
           <div className="mx-auto max-w-5xl text-center">
-            <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-border/75 bg-surface/75 px-4 py-2 text-sm text-muted-strong shadow-[0_8px_26px_-20px_var(--shadow-color)] backdrop-blur-md">
+            <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-border/75 bg-surface/90 px-4 py-2 text-sm text-muted-strong shadow-[0_8px_26px_-20px_var(--shadow-color)] backdrop-blur-sm oria-reveal">
               <span className="h-2 w-2 rounded-full bg-foreground" />
               Une intelligence pensée depuis l&apos;Afrique
             </div>
 
-            <h1 className="text-4xl font-semibold tracking-[-0.045em] sm:text-6xl lg:text-7xl">
+            <h1 className="text-4xl font-semibold tracking-[-0.045em] sm:text-6xl lg:text-7xl oria-reveal oria-delay-1">
               L&apos;IA pour
               <br />
               <span className="relative inline-block">
@@ -73,13 +73,13 @@ export default function Home() {
               </span>
             </h1>
 
-            <p className="mx-auto mt-8 max-w-3xl text-base leading-8 text-muted-strong sm:text-lg">
+            <p className="mx-auto mt-8 max-w-3xl text-base leading-8 text-muted-strong sm:text-lg oria-reveal oria-delay-2">
               Oria réunit plusieurs modèles d&apos;intelligence artificielle
               dans un seul espace pour discuter, raisonner, rechercher sur le
               Web, analyser vos fichiers et créer des images ou des vidéos.
             </p>
 
-            <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
+            <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row oria-reveal oria-delay-3">
               <Link
                 href="/packs"
                 className="w-full rounded-2xl bg-foreground px-6 py-3.5 text-sm font-semibold text-background shadow-[0_14px_28px_-23px_var(--shadow-color)] transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 sm:w-auto"
@@ -95,14 +95,14 @@ export default function Home() {
               </Link>
             </div>
 
-            <div className="mx-auto mt-12 flex max-w-2xl items-center justify-center gap-4 text-xs uppercase tracking-[0.22em] text-muted">
+            <div className="mx-auto mt-12 flex max-w-2xl items-center justify-center gap-4 text-xs uppercase tracking-[0.22em] text-muted oria-reveal oria-delay-3">
               <span className="hidden h-px flex-1 bg-border sm:block" />
               <span>Technologie · Créativité · Afrique</span>
               <span className="hidden h-px flex-1 bg-border sm:block" />
             </div>
           </div>
 
-          <div className="mx-auto mt-16 grid max-w-5xl grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mx-auto mt-16 grid max-w-5xl grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 oria-stagger-cards">
             <Feature
               number="01"
               title="Chat multi-IA"
@@ -141,7 +141,7 @@ export default function Home() {
           </div>
 
           <div className="mx-auto mt-4 max-w-5xl">
-            <div className="relative overflow-hidden rounded-[30px] border border-border/70 bg-surface-secondary/70 p-6 shadow-[0_20px_55px_-37px_var(--shadow-color)] sm:p-8">
+            <div className="relative overflow-hidden rounded-[30px] border border-border/70 bg-surface-secondary/80 p-6 shadow-[0_20px_55px_-37px_var(--shadow-color)] sm:p-8 oria-card-rise">
               <div
                 aria-hidden="true"
                 className="absolute right-0 top-0 h-32 w-32 translate-x-8 -translate-y-8 rotate-45 border border-border/70 opacity-25"
@@ -165,7 +165,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="mx-auto mt-14 max-w-3xl text-center">
+          <div className="mx-auto mt-14 max-w-3xl text-center oria-reveal">
             <p className="text-sm leading-6 text-muted">
               Une plateforme d&apos;intelligence artificielle conçue pour
               simplifier l&apos;accès à des outils puissants, sans multiplier

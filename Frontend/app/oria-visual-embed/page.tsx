@@ -193,15 +193,21 @@ export default function OriaVisualEmbedPage() {
   }, [notifyHeight, request]);
 
   const wrapperStyles = useMemo(() => ({
-    backgroundColor: currentTheme === 'dark' ? 'rgba(19,23,29,0.94)' : 'rgba(255,255,255,0.94)',
-    color: currentTheme === 'dark' ? '#f2f4f7' : '#18202c',
+    // Couleurs neutres : chaque visualisation reprend exactement le thème mobile.
+    backgroundColor: currentTheme === 'dark' ? '#000000' : '#ffffff',
+    color: currentTheme === 'dark' ? '#ffffff' : '#111111',
   }), [currentTheme]);
 
   return (
-    <main className="w-full min-w-0 overflow-visible rounded-[20px] border border-border/50 bg-surface/90 text-foreground shadow-[0_10px_32px_-27px_var(--shadow-color)]" style={{ margin: 0, padding: '0 4px', width: '100%', minHeight: 160, ...wrapperStyles }}>
+    <main className="w-full min-w-0 overflow-visible rounded-[20px] border border-border/60 bg-background text-foreground shadow-[0_10px_32px_-27px_rgba(0,0,0,0.16)]" style={{ margin: 0, padding: '0 4px', width: '100%', minHeight: 160, ...wrapperStyles }}>
       <div ref={root} id="oria-visual-root" className="w-full min-w-0 overflow-visible">
-        {request ? <RenderVisual request={request} /> : (
-          <div className="flex min-h-[152px] items-center justify-center rounded-2xl border border-border/45 bg-surface-secondary/35 p-4 text-center text-xs font-medium tracking-[0.02em] text-muted" role="status">ORIA Visual</div>
+        {request ? (
+          <div className="oria-visual-content-enter min-w-0"><RenderVisual request={request} /></div>
+        ) : (
+          <div className="flex min-h-[152px] items-center justify-center gap-3 rounded-2xl border border-border/50 bg-surface-secondary/45 px-4 py-5 text-center text-xs font-medium tracking-[0.02em] text-muted" role="status" aria-live="polite">
+            <span className="oria-loader-ring" aria-hidden="true" />
+            <span>ORIA Visual</span>
+          </div>
         )}
       </div>
     </main>

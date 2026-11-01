@@ -2859,7 +2859,7 @@ export default function CreditsPage() {
 
 
 
-    <main className="min-h-dvh bg-background text-foreground">
+    <main className="min-h-dvh bg-background text-foreground oria-page-enter">
 
 
 
@@ -2871,7 +2871,7 @@ export default function CreditsPage() {
 
 
 
-      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/95 backdrop-blur-md oria-header-enter">
 
 
 
@@ -3031,7 +3031,7 @@ export default function CreditsPage() {
 
 
 
-        <div>
+        <div className="oria-reveal">
 
 
 
@@ -3099,27 +3099,18 @@ export default function CreditsPage() {
 
 
 
-          <div className="mt-8 rounded-[28px] border border-border/75 bg-surface/80 p-10 text-center shadow-[0_18px_44px_-30px_var(--shadow-color)]">
+          <div className="mt-8 rounded-[28px] border border-border/75 bg-surface/85 p-7 shadow-[0_18px_44px_-30px_var(--shadow-color)] oria-loading-panel" role="status" aria-busy="true">
 
 
 
-            <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-border border-t-foreground" />
-
-
-
-
-
-
-
-            <p className="mt-4 text-sm text-muted">
-
-
-
-              {UI[language].loadingWallet}
-
-
-
-            </p>
+            <div className="flex items-center gap-3">
+              <span className="oria-loader-ring" aria-hidden="true" />
+              <p className="text-sm text-muted">{UI[language].loadingWallet}</p>
+            </div>
+            <div className="mt-7 grid gap-3 sm:grid-cols-2" aria-hidden="true">
+              <div className="oria-skeleton h-32 rounded-2xl" />
+              <div className="oria-skeleton h-32 rounded-2xl oria-skeleton-late" />
+            </div>
 
 
 
@@ -3267,7 +3258,7 @@ export default function CreditsPage() {
 
 
 
-                <div className="rounded-[30px] border border-border/40 bg-accent p-6 text-accent-foreground shadow-[0_24px_60px_-34px_var(--shadow-color)] sm:p-8">
+                <div className="rounded-[30px] border border-border/40 bg-accent p-6 text-accent-foreground shadow-[0_24px_60px_-34px_var(--shadow-color)] sm:p-8 oria-reveal">
 
 
 
@@ -3648,7 +3639,7 @@ export default function CreditsPage() {
 
 
 
-                <div className="rounded-[30px] border border-border/75 bg-surface/80 p-6 shadow-[0_18px_48px_-30px_var(--shadow-color)] sm:p-8">
+                <div className="rounded-[30px] border border-border/75 bg-surface/85 p-6 shadow-[0_18px_48px_-30px_var(--shadow-color)] sm:p-8 oria-reveal oria-delay-1">
 
 
 
@@ -4198,7 +4189,7 @@ export default function CreditsPage() {
 
 
 
-                <div className="mt-5 overflow-hidden rounded-[26px] border border-border/75 bg-surface/80 shadow-[0_18px_48px_-31px_var(--shadow-color)]">
+                <div className="mt-5 overflow-hidden rounded-[26px] border border-border/75 bg-surface/85 shadow-[0_18px_48px_-31px_var(--shadow-color)] oria-stagger-rows">
 
 
 

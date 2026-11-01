@@ -1906,7 +1906,7 @@ export default function PacksPage() {
 
 
 
-      <main className="min-h-dvh bg-background text-foreground">
+      <main className="min-h-dvh bg-background text-foreground oria-page-enter">
 
 
 
@@ -1918,7 +1918,7 @@ export default function PacksPage() {
 
 
 
-      <header className="sticky top-0 z-30 border-b border-border/65 bg-background/85 backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-border/65 bg-background/95 backdrop-blur-md oria-header-enter">
 
 
 
@@ -2070,7 +2070,7 @@ export default function PacksPage() {
 
 
 
-        <div className="mx-auto max-w-2xl text-center">
+        <div className="mx-auto max-w-2xl text-center oria-reveal">
 
 
 
@@ -2163,7 +2163,7 @@ export default function PacksPage() {
 
 
         {/* Deux offres commerciales visibles au même niveau */}
-        <div className="mt-10 grid grid-cols-2 gap-2 rounded-[22px] border border-border/70 bg-surface-secondary/65 p-1.5" role="tablist" aria-label={language === "fr" ? "Catégories de crédits" : "Credit categories"}>
+        <div className="mt-10 grid grid-cols-2 gap-2 rounded-[22px] border border-border/70 bg-surface-secondary/65 p-1.5 oria-reveal oria-delay-1" role="tablist" aria-label={language === "fr" ? "Catégories de crédits" : "Credit categories"}>
           <button type="button" role="tab" aria-selected={activePackTab === "primary"} onClick={() => setActivePackTab("primary")}
             className={`rounded-[17px] px-3 py-3 text-sm font-semibold transition-colors duration-200 ${activePackTab === "primary" ? "bg-accent text-accent-foreground" : "text-muted-strong hover:bg-surface-tertiary"}`}>
             {UI[language].packsOria}
@@ -2175,8 +2175,8 @@ export default function PacksPage() {
         </div>
 
         {activePackTab === "primary" ? (
-          <section className="mt-6" role="tabpanel">
-            <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+          <section className="mt-6 oria-tab-content-enter" role="tabpanel">
+            <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4 oria-stagger-cards">
               {displayedPacks.map((pack) => (
                 <PackCard key={pack.id} pack={pack} language={language} onSelect={handlePackSelection} />
               ))}
@@ -2191,12 +2191,12 @@ export default function PacksPage() {
             </div>
           </section>
         ) : (
-          <section className="mt-6" role="tabpanel">
+          <section className="mt-6 oria-tab-content-enter" role="tabpanel">
             <div className="mb-5">
               <h2 className="text-2xl font-semibold tracking-tight">{UI[language].topUpBalance}</h2>
               <p className="mt-2 text-sm leading-6 text-muted">{UI[language].topUpDescription}</p>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 oria-stagger-cards">
               {complementaryCredits.map((topUp) => (
                 <article key={topUp.id} className="flex flex-col rounded-[27px] border border-border/70 bg-surface/75 p-6 shadow-[0_16px_42px_-32px_var(--shadow-color)] transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-[0_22px_45px_-29px_var(--shadow-color)]">
                   <Zap size={22} className="text-muted-strong" />
@@ -2205,8 +2205,13 @@ export default function PacksPage() {
                   <p className="mt-6 text-2xl font-semibold">{topUp.price}</p>
                   <p className="mt-2 flex-1 text-sm leading-6 text-muted">{getTopUpDescription(topUp.credits, language)}</p>
                   <button type="button" onClick={() => handleCreditTopUp(topUp)} disabled={isPaying !== null}
-                    className="mt-7 w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-                    {isPaying === topUp.id ? UI[language].redirecting : UI[language].buyCredits}
+                    className="mt-7 w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 oria-press">
+                    {isPaying === topUp.id ? (
+                      <span className="inline-flex items-center justify-center gap-2">
+                        <span className="oria-button-spinner" aria-hidden="true" />
+                        {UI[language].redirecting}
+                      </span>
+                    ) : UI[language].buyCredits}
                   </button>
                 </article>
               ))}
@@ -2859,7 +2864,7 @@ export default function PacksPage() {
 
 
 
-                      className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors duration-200 hover:bg-surface-secondary/75"
+                      className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors duration-200 hover:bg-surface-secondary/75 oria-press"
 
 
 
@@ -2967,7 +2972,7 @@ export default function PacksPage() {
 
 
 
-                      <div className="bg-surface px-5 pb-5">
+                      <div className="bg-surface px-5 pb-5 oria-tab-content-enter">
 
 
 
@@ -4362,7 +4367,7 @@ function PackCard({
 
 
 
-        className={`mt-8 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 ${
+        className={`mt-8 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 oria-press ${
 
 
 
@@ -4474,7 +4479,7 @@ function Step({
 
 
 
-    <div className="rounded-[24px] border border-border/70 bg-surface-secondary/65 p-5">
+    <div className="rounded-[24px] border border-border/70 bg-surface-secondary/65 p-5 oria-card-rise">
 
 
 

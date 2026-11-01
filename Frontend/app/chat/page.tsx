@@ -42,7 +42,7 @@ import { OriaMathBlock, OriaMathInline } from "@/components/oria-math/OriaMathRe
 // Le composant historique reste disponible comme solution de secours.
 const OriaVisualAdvanced = dynamic(
   () => import("@/components/oria-visual/OriaVisualAdvanced"),
-  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted">Chargement du visuel interactif…</div> },
+  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted oria-loading-panel">Chargement du visuel interactif…</div> },
 );
 
 // Chargement à la demande : aucun composant de création dans le Chat.
@@ -54,15 +54,15 @@ const OriaMiniStudio = dynamic(
 // Moteurs visuels complémentaires, chargés uniquement pour les blocs concernés.
 const OriaVisualCore = dynamic(
   () => import("@/components/oria-visual/OriaVisualCore"),
-  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted">Chargement du visuel…</div> },
+  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted oria-loading-panel">Chargement du visuel…</div> },
 );
 const OriaVisual3D = dynamic(
   () => import("@/components/oria-visual/OriaVisual3D"),
-  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted">Chargement de la scène 3D…</div> },
+  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted oria-loading-panel">Chargement de la scène 3D…</div> },
 );
 const OriaVisualMaps = dynamic(
   () => import("@/components/oria-visual/OriaVisualMaps"),
-  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted">Chargement de la carte…</div> },
+  { ssr: false, loading: () => <div role="status" className="my-4 rounded-xl border border-border p-4 text-xs text-muted oria-loading-panel">Chargement de la carte…</div> },
 );
 
 /*
@@ -2459,7 +2459,7 @@ function MarkdownMessage({
               {/^\[([ xX])\]\s+/.test(item) ? (
                 <label className="inline-flex items-start gap-2">
                   <input type="checkbox" checked={/^\[[xX]\]/.test(item)} readOnly
-                    className="mt-1.5 h-3.5 w-3.5 accent-blue-600"/>
+                    className="mt-1.5 h-3.5 w-3.5 accent-foreground"/>
                   <span>{renderInlineMarkdown(item.replace(/^\[[ xX]\]\s+/, ""))}</span>
                 </label>
               ) : renderInlineMarkdown(item)}
@@ -6720,7 +6720,7 @@ export default function ChatPage() {
    */
 
   return (
-    <main className="min-h-dvh w-full min-w-0 overflow-x-clip bg-background text-foreground">
+    <main className="min-h-dvh w-full min-w-0 overflow-x-clip bg-background text-foreground oria-chat-page">
       {creditAlert !== null && wallet?.is_pack_active && (
         <div role="status" aria-live="polite" className="fixed bottom-5 left-1/2 z-[80] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-2xl border border-border bg-surface p-4 shadow-2xl sm:left-auto sm:right-6 sm:translate-x-0">
           <div className="flex items-start justify-between gap-3">
@@ -6769,7 +6769,7 @@ export default function ChatPage() {
         <button
           type="button"
           aria-label={UI[language].closeMenu}
-          className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px]"
+          className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[2px] oria-backdrop-in"
           onClick={() =>
             setSidebarOpen(false)
           }
@@ -6781,7 +6781,7 @@ export default function ChatPage() {
           ====================================================== */}
 
       <aside
-        className={`fixed bottom-3 left-3 top-3 z-50 flex w-[min(280px,78vw)] flex-col rounded-3xl border border-border bg-surface/95 shadow-2xl backdrop-blur-xl transition-transform duration-300 ${
+        className={`fixed bottom-3 left-3 top-3 z-50 flex w-[min(280px,78vw)] flex-col rounded-3xl border border-border/80 bg-surface/95 shadow-2xl backdrop-blur-lg transition-transform duration-300 oria-side-panel ${
           sidebarOpen
             ? "translate-x-0"
             : "-translate-x-[120%]"
@@ -6835,9 +6835,14 @@ export default function ChatPage() {
           </div>
 
           {isLoadingConversations ? (
-            <p className="px-2 py-3 text-xs leading-5 text-muted">
-              {UI[language].loading}
-            </p>
+            <div className="px-2 py-3 oria-loading-panel" role="status" aria-busy="true">
+              <p className="text-xs leading-5 text-muted">{UI[language].loading}</p>
+              <div className="mt-3 space-y-2.5" aria-hidden="true">
+                <div className="oria-skeleton h-8 w-full rounded-xl" />
+                <div className="oria-skeleton h-8 w-4/5 rounded-xl oria-skeleton-late" />
+                <div className="oria-skeleton h-8 w-[92%] rounded-xl" />
+              </div>
+            </div>
           ) : conversations.length ===
             0 ? (
             <p className="px-2 py-3 text-xs leading-5 text-muted">
@@ -6949,7 +6954,7 @@ export default function ChatPage() {
           ====================================================== */}
 
       <section className="flex min-h-dvh w-full min-w-0 max-w-full flex-col">
-        <header className="relative z-20 flex h-16 min-w-0 shrink-0 items-center justify-between gap-2 bg-background/95 px-4 backdrop-blur-sm sm:sticky sm:top-0 sm:px-8">
+        <header className="relative z-20 flex h-16 min-w-0 shrink-0 items-center justify-between gap-2 border-b border-border/50 bg-background/95 px-4 backdrop-blur-sm sm:sticky sm:top-0 sm:px-8 oria-header-enter">
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
@@ -7030,7 +7035,7 @@ export default function ChatPage() {
             {messages.length ===
               0 && (
               <div className="flex flex-1 flex-col justify-center">
-                <div className="mx-auto w-full max-w-3xl">
+                <div className="mx-auto w-full max-w-3xl oria-reveal">
                   <div className="mb-6 flex items-center gap-3">
                     <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground shadow-sm">
                       <Sparkles
@@ -7087,8 +7092,8 @@ export default function ChatPage() {
                         className={
                           item.role ===
                           "user"
-                            ? "flex min-w-0 w-full flex-col items-end"
-                            : "flex min-w-0 w-full flex-col items-start"
+                            ? "flex min-w-0 w-full flex-col items-end oria-message-enter"
+                            : "flex min-w-0 w-full flex-col items-start oria-message-enter"
                         }
                       >
                         <div
@@ -7515,9 +7520,9 @@ export default function ChatPage() {
                       role="status"
                       aria-live="polite"
                       aria-atomic="true"
-                      className="flex min-w-0 max-w-full items-center gap-2 py-1 text-xs text-muted"
+                      className="flex min-w-0 max-w-full items-center gap-2 py-1 text-xs text-muted oria-status-enter"
                     >
-                      <Loader2 size={13} aria-hidden="true" className="shrink-0 animate-spin" />
+                      <Loader2 size={13} aria-hidden="true" className="shrink-0 animate-spin oria-loader-icon" />
                       <span className="min-w-0 truncate">
                         {ORIA_CHAT_STATUS_LABELS[chatStatusStep][language]}
                       </span>
@@ -7532,7 +7537,7 @@ export default function ChatPage() {
                 tandis que l'historique fait défiler la page du navigateur. */}
             <div className={activeCapability === "Cours"
               ? "relative w-full min-w-0"
-              : "sticky bottom-0 z-30 w-full min-w-0 max-w-full bg-background/95 pb-[calc(12px+env(safe-area-inset-bottom))] pt-2 backdrop-blur-sm"}>
+              : "sticky bottom-0 z-30 w-full min-w-0 max-w-full bg-background/95 pb-[calc(12px+env(safe-area-inset-bottom))] pt-2 backdrop-blur-sm oria-composer-region"}>
 
 
             {/* Raccourcis hors du flux : le menu reste au-dessus des modèles
@@ -7624,7 +7629,7 @@ export default function ChatPage() {
 
                   {modelMenuOpen && (
                     <div role="listbox" aria-label={UI[language].model}
-                      className="absolute bottom-12 left-0 z-30 w-[min(20rem,calc(100vw-2rem))] rounded-[22px] border border-border bg-surface/95 p-2 shadow-xl backdrop-blur-xl">
+                      className="absolute bottom-12 left-0 z-30 w-[min(20rem,calc(100vw-2rem))] rounded-[22px] border border-border bg-surface/95 p-2 shadow-xl backdrop-blur-lg oria-menu-enter">
                       <p className="px-3 pb-2 pt-1 text-[11px] font-medium text-muted">
                         {isLoadingChatCapabilities ? UI[language].loading :
                           chatCapabilities?.provider === "openrouter" ? "OpenRouter" : "OpenAI"}
@@ -7720,7 +7725,7 @@ export default function ChatPage() {
                   </button>
 
                   {reasoningMenuOpen && (
-                    <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl">
+                    <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl oria-menu-enter">
                       {REASONING_OPTIONS.map(
                         (option) => {
                           const active =
@@ -7851,7 +7856,7 @@ export default function ChatPage() {
 
             {activeCapability !== "Cours" ? (
             <div className="mx-auto mt-4 w-full max-w-3xl">
-              <div className="overflow-hidden rounded-[28px] border border-border-strong bg-surface shadow-[0_12px_40px_var(--shadow-color)] transition focus-within:border-muted-strong">
+              <div className="overflow-hidden rounded-[28px] border border-border/80 bg-surface/95 shadow-[0_12px_40px_var(--shadow-color)] transition-[border-color,box-shadow] duration-200 focus-within:border-border-strong oria-composer-card">
                 {recording ? (
                   <div className="mx-3 mt-3 flex items-center gap-3 rounded-2xl border border-red-500/20 bg-red-500/5 px-3 py-2.5">
                     <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500"/>
@@ -8113,7 +8118,7 @@ export default function ChatPage() {
                       isLoadingChatCapabilities || !chatCapabilities ||
                       !selectableModels.some((model) => model.id === selectedModel)
                     }
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30 oria-press"
                   >
                     <ArrowUp
                       size={18}

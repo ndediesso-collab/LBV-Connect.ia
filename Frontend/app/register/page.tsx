@@ -661,10 +661,10 @@ export default function RegisterPage() {
   }
 
   return (
-    <main className="min-h-dvh overflow-x-clip bg-background text-foreground">
+    <main className="min-h-dvh overflow-x-clip bg-background text-foreground oria-page-enter">
       {/* Header */}
 
-      <header className="absolute left-0 right-0 top-0 z-20">
+      <header className="absolute left-0 right-0 top-0 z-20 oria-header-enter">
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center px-5 sm:px-8">
           <Link
             href="/"
@@ -681,7 +681,7 @@ export default function RegisterPage() {
 
       <div className="flex min-h-dvh items-center justify-center px-5 py-24 sm:px-8">
         <div className="w-full max-w-md">
-          <div className="rounded-[30px] border border-border/70 bg-surface/85 p-6 shadow-[0_22px_65px_-38px_var(--shadow-color)] backdrop-blur-xl sm:p-8">
+          <div className="rounded-[30px] border border-border/70 bg-surface/95 p-6 shadow-[0_22px_65px_-38px_var(--shadow-color)] backdrop-blur-md sm:p-8 oria-auth-enter">
             {/* Back */}
 
             <Link
@@ -960,7 +960,7 @@ export default function RegisterPage() {
               {error && (
                 <div
                   role="alert"
-                  className="rounded-2xl border border-red-200/75 bg-danger-surface px-4 py-3 text-sm leading-6 text-danger dark:border-red-900/40"
+                  className="rounded-2xl border border-red-200/75 bg-danger-surface px-4 py-3 text-sm leading-6 text-danger dark:border-red-900/40 oria-status-enter"
                 >
                   {localizeFrontendError(
                     error,
@@ -974,7 +974,7 @@ export default function RegisterPage() {
               {message && (
                 <div
                   role="status"
-                  className="rounded-2xl border border-emerald-200/80 bg-emerald-50/90 px-4 py-3 text-sm leading-6 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400"
+                  className="rounded-2xl border border-emerald-200/80 bg-emerald-50/90 px-4 py-3 text-sm leading-6 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400 oria-status-enter"
                 >
                   {message}
                 </div>
@@ -1027,13 +1027,13 @@ export default function RegisterPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground shadow-[0_13px_26px_-21px_var(--shadow-color)] transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground shadow-[0_13px_26px_-21px_var(--shadow-color)] transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 oria-press"
               >
                 {loading ? (
                   <>
                     <Loader2
                       size={17}
-                      className="animate-spin"
+                      className="animate-spin oria-loader-icon"
                     />
 
                     {UI[language].creatingAccount}

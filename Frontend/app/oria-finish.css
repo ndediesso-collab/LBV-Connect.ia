@@ -1,31 +1,31 @@
-/* ORIA v2 · Finitions des autres pages Web (visuel uniquement)
+/* ORIA MONO · Finitions des autres pages Web (visuel uniquement)
  * Aucun endpoint, aucun événement, aucune logique React n'est modifié.
  * Le Chat (main.overflow-x-clip) et le moteur embarqué (main[style])
  * ne sont pas ciblés par la couche générale.
  */
 
 :root {
-  --oria-panel: rgb(255 255 255 / 0.88);
-  --oria-panel-raised: rgb(255 255 255 / 0.94);
-  --oria-panel-stroke: rgb(33 48 74 / 0.10);
-  --oria-panel-shadow: 0 14px 42px -25px rgb(25 39 63 / 0.22),
-                       0 2px 12px -9px rgb(25 39 63 / 0.10);
-  --oria-panel-hover-shadow: 0 20px 46px -24px rgb(25 39 63 / 0.29),
-                             0 3px 16px -10px rgb(25 39 63 / 0.14);
-  --oria-input-bg: rgb(248 250 253 / 0.82);
-  --oria-divider: rgb(46 61 87 / 0.10);
+  --oria-panel: rgb(255 255 255 / 0.95);
+  --oria-panel-raised: rgb(255 255 255 / 0.97);
+  --oria-panel-stroke: rgb(0 0 0 / 0.085);
+  --oria-panel-shadow: 0 14px 42px -25px rgb(0 0 0 / 0.13),
+                       0 2px 12px -9px rgb(0 0 0 / 0.07);
+  --oria-panel-hover-shadow: 0 20px 46px -24px rgb(0 0 0 / 0.20),
+                             0 3px 16px -10px rgb(0 0 0 / 0.09);
+  --oria-input-bg: rgb(248 248 248 / 0.94);
+  --oria-divider: rgb(0 0 0 / 0.09);
 }
 
 html.dark {
-  --oria-panel: rgb(20 25 33 / 0.88);
-  --oria-panel-raised: rgb(26 32 42 / 0.94);
-  --oria-panel-stroke: rgb(223 233 250 / 0.10);
+  --oria-panel: rgb(11 11 11 / 0.92);
+  --oria-panel-raised: rgb(17 17 17 / 0.94);
+  --oria-panel-stroke: rgb(255 255 255 / 0.12);
   --oria-panel-shadow: 0 18px 42px -22px rgb(0 0 0 / 0.63),
                        0 2px 12px -9px rgb(0 0 0 / 0.35);
   --oria-panel-hover-shadow: 0 24px 50px -23px rgb(0 0 0 / 0.70),
                              0 3px 16px -9px rgb(0 0 0 / 0.45);
-  --oria-input-bg: rgb(26 32 42 / 0.82);
-  --oria-divider: rgb(223 233 250 / 0.10);
+  --oria-input-bg: rgb(20 20 20 / 0.94);
+  --oria-divider: rgb(255 255 255 / 0.12);
 }
 
 /* Pas d'effets qui réduisent le contraste des vidéos, images, tableaux,
@@ -33,8 +33,8 @@ html.dark {
 main:not([class*="overflow-x-clip"]):not([style]) > header[class*="border-b"] {
   border-bottom-color: var(--oria-divider);
   background-color: var(--glass-surface);
-  -webkit-backdrop-filter: blur(14px) saturate(115%);
-  backdrop-filter: blur(14px) saturate(115%);
+  -webkit-backdrop-filter: blur(10px) saturate(100%);
+  backdrop-filter: blur(10px) saturate(100%);
 }
 
 /* Cartes existantes : conserver dimensions, grille, padding et variantes.
@@ -156,8 +156,12 @@ main.bg-white.text-neutral-950
   box-shadow: var(--oria-panel-shadow);
 }
 
-/* Mes créations : harmoniser la bibliothèque et les filtres avec le thème.
-   Les médias et lecteurs restent opaques pour préserver leur rendu. */
+/* Mes créations : blanc absolu en clair et noir absolu en sombre ;
+   les médias et lecteurs restent opaques pour préserver leur rendu. */
+main[class~="bg-[#f7f7f5]"] {
+  background-color: var(--background);
+  color: var(--foreground);
+}
 html.dark main[class~="bg-[#f7f7f5]"] {
   background-color: var(--background);
   color: var(--foreground);

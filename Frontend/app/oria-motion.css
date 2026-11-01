@@ -1,0 +1,178 @@
+/* ORIA MONO · micro-animations ciblées (aucune dépendance JS).
+   Les animations ne sont PAS attachées à tous les tokens du streaming :
+   elles jouent uniquement au montage d'un message, menu ou panneau.
+   Fonds : blanc #fff, noir #000 via globals.css ; aucun halo bleu. */
+:root {
+  --oria-motion-soft: cubic-bezier(.22, 1, .36, 1);
+  --oria-shimmer-light: rgb(0 0 0 / .035);
+  --oria-shimmer-highlight: rgb(255 255 255 / .68);
+}
+html.dark {
+  --oria-shimmer-light: rgb(255 255 255 / .055);
+  --oria-shimmer-highlight: rgb(255 255 255 / .105);
+}
+@keyframes oria-fade-up {
+  from { opacity: 0; transform: translate3d(0, 11px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+@keyframes oria-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes oria-menu-rise {
+  from { opacity: 0; transform: translate3d(0, 7px, 0) scale(.985); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes oria-skeleton-flow {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(110%); }
+}
+@keyframes oria-loader-turn { to { transform: rotate(360deg); } }
+@keyframes oria-soft-breathe {
+  0%, 100% { opacity: .53; }
+  50% { opacity: 1; }
+}
+/* One-time entrance. Delays apply only to the existing cards/sections,
+   never to credit transactions or SSE stream character updates. */
+.oria-page-enter { animation: oria-fade-in 250ms ease-out both; }
+.oria-header-enter { animation: oria-fade-in 380ms ease-out both; }
+.oria-auth-enter { animation: oria-fade-up 520ms var(--oria-motion-soft) both; }
+.oria-reveal { animation: oria-fade-up 460ms var(--oria-motion-soft) both; }
+.oria-delay-1 { animation-delay: 75ms; }
+.oria-delay-2 { animation-delay: 145ms; }
+.oria-delay-3 { animation-delay: 215ms; }
+/* Animate only recent visible messages; avoid animating a huge history. */
+.oria-chat-page .oria-message-enter:nth-last-child(-n+5) {
+  animation: oria-fade-up 260ms var(--oria-motion-soft) both;
+}
+.oria-status-enter { animation: oria-fade-in 180ms ease-out both; }
+.oria-menu-enter { transform-origin: bottom left; animation: oria-menu-rise 200ms var(--oria-motion-soft) both; }
+.oria-backdrop-in { animation: oria-fade-in 160ms ease-out both; }
+.oria-card-rise { animation: oria-fade-up 300ms var(--oria-motion-soft) both; }
+.oria-stagger-rows > :nth-child(-n+9),
+.oria-stagger-cards > :nth-child(-n+9) {
+  animation: oria-fade-up 300ms var(--oria-motion-soft) both;
+}
+.oria-stagger-rows > :nth-child(2), .oria-stagger-cards > :nth-child(2) { animation-delay: 35ms; }
+.oria-stagger-rows > :nth-child(3), .oria-stagger-cards > :nth-child(3) { animation-delay: 70ms; }
+.oria-stagger-rows > :nth-child(4), .oria-stagger-cards > :nth-child(4) { animation-delay: 105ms; }
+.oria-stagger-rows > :nth-child(5), .oria-stagger-cards > :nth-child(5) { animation-delay: 140ms; }
+.oria-stagger-rows > :nth-child(6), .oria-stagger-cards > :nth-child(6) { animation-delay: 175ms; }
+.oria-stagger-rows > :nth-child(7), .oria-stagger-cards > :nth-child(7) { animation-delay: 210ms; }
+.oria-stagger-rows > :nth-child(8), .oria-stagger-cards > :nth-child(8) { animation-delay: 245ms; }
+.oria-stagger-rows > :nth-child(9), .oria-stagger-cards > :nth-child(9) { animation-delay: 280ms; }
+/* Neutral shimmering skeletons: no inaccurate time estimate or percentage. */
+.oria-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--oria-shimmer-light);
+}
+.oria-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-110%);
+  background: linear-gradient(100deg, transparent, var(--oria-shimmer-highlight), transparent);
+  animation: oria-skeleton-flow 1.75s ease-in-out infinite;
+}
+.oria-skeleton-late::after { animation-delay: 240ms; }
+.oria-loader-ring {
+  display: inline-block;
+  width: 21px;
+  height: 21px;
+  flex: 0 0 21px;
+  border-radius: 9999px;
+  border: 2px solid var(--border);
+  border-top-color: var(--foreground);
+  animation: oria-loader-turn 850ms linear infinite;
+}
+.oria-loader-icon { animation-duration: 1.15s; }
+.oria-loading-panel { animation: oria-fade-in 220ms ease-out both; }
+.oria-composer-card {
+  box-shadow: 0 9px 28px -17px var(--shadow-color), 0 2px 9px -7px var(--shadow-color);
+}
+.oria-composer-card:focus-within {
+  box-shadow: 0 14px 38px -22px var(--shadow-color), 0 0 0 1px var(--border-strong);
+}
+.oria-press { transition: transform 165ms var(--oria-motion-soft), opacity 160ms ease, background-color 160ms ease; }
+.oria-press:enabled:active { transform: scale(.96); }
+.oria-side-panel {
+  box-shadow: 0 18px 55px -22px rgb(0 0 0 / .22),
+              0 2px 16px -9px rgb(0 0 0 / .1);
+}
+html.dark .oria-side-panel {
+  box-shadow: 0 25px 65px -25px rgb(0 0 0 / .7);
+}
+.oria-projects :is(button, a):not(:disabled) {
+  transition: transform 155ms var(--oria-motion-soft), background-color 160ms ease, border-color 160ms ease, opacity 160ms ease;
+}
+.oria-projects button:enabled:active { transform: scale(.98); }
+.oria-projects :is(input, textarea, select) {
+  color: var(--foreground);
+}
+.oria-projects :is(input, textarea, select):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+/* Keep actual PDF/DOCX previews, media and code colors untouched. */
+@media (hover: hover) {
+  .oria-projects button:enabled:hover { border-color: var(--border-strong); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .oria-composer-card { background: var(--surface); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.oria-page-enter,.oria-header-enter,.oria-auth-enter,.oria-reveal,.oria-message-enter,
+    .oria-status-enter,.oria-menu-enter,.oria-backdrop-in,.oria-card-rise,.oria-loading-panel),
+  .oria-stagger-rows > *, .oria-stagger-cards > *,
+  .oria-skeleton::after, .oria-loader-ring {
+    animation: none !important;
+  }
+  .oria-press, .oria-projects :is(button, a, input, textarea, select) { transition: none !important; }
+}
+
+/* ORIA MONO · suite : transitions de sections et de rubriques.
+   Styles uniquement, aucune temporisation des requêtes API ou des paiements. */
+.oria-tab-content-enter {
+  animation: oria-fade-in 235ms ease-out both;
+}
+.oria-legal-tab-enter {
+  animation: oria-fade-in 290ms ease-out both;
+}
+.oria-button-spinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: oria-loader-turn 850ms linear infinite;
+  opacity: .85;
+}
+@media (prefers-reduced-motion: reduce) {
+  .oria-tab-content-enter,
+  .oria-legal-tab-enter,
+  .oria-button-spinner { animation: none !important; }
+}
+
+/* ORIA MONO · finitions finales : aide, Mini-Studio et WebView.
+   Animations de montage uniquement, jamais sur le flux de texte ou le suivi de paiement. */
+@keyframes oria-studio-enter {
+  from { opacity: 0; transform: translate3d(0, 9px, 0) scale(.992); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+.oria-studio-panel-enter {
+  animation: oria-studio-enter 270ms var(--oria-motion-soft) both;
+}
+.oria-faq-answer-enter {
+  animation: oria-fade-in 210ms ease-out both;
+}
+.oria-visual-content-enter {
+  animation: oria-fade-in 220ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .oria-studio-panel-enter,
+  .oria-faq-answer-enter,
+  .oria-visual-content-enter { animation: none !important; }
+}

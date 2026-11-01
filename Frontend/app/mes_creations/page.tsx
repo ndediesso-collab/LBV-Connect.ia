@@ -929,9 +929,9 @@ export default function CreationsPage() {
   ];
 
   return (
-    <main className="min-h-screen overflow-x-clip bg-background text-foreground">
+    <main className="min-h-screen overflow-x-clip bg-background text-foreground oria-page-enter">
       <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
-        <header className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+        <header className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between oria-reveal">
           <div>
             <Link
               href="/chat"
@@ -1015,7 +1015,7 @@ export default function CreationsPage() {
 
         {!loading &&
           creations.length > 0 && (
-            <div className="mb-7 flex flex-wrap gap-2">
+            <div className="mb-7 flex flex-wrap gap-2 oria-reveal oria-delay-1">
               {filters.map((item) => {
                 const active =
                   filter === item.value;
@@ -1070,12 +1070,19 @@ export default function CreationsPage() {
         )}
 
         {loading && (
-          <div className="flex min-h-[360px] items-center justify-center rounded-[28px] border border-border/75 bg-surface/80 shadow-[0_18px_45px_-32px_var(--shadow-color)]">
-            <div className="flex flex-col items-center gap-3 text-muted">
-              <Loader2 className="h-7 w-7 animate-spin" />
-              <p className="text-sm">
-                {UI[language].loading}
-              </p>
+          <div className="rounded-[28px] border border-border/75 bg-surface/85 p-5 shadow-[0_18px_45px_-32px_var(--shadow-color)] oria-loading-panel" role="status" aria-busy="true">
+            <div className="mb-5 flex items-center gap-3 text-muted">
+              <span className="oria-loader-ring" aria-hidden="true" />
+              <p className="text-sm">{UI[language].loading}</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-hidden="true">
+              {[0, 1, 2].map((index) => (
+                <div key={index} className="rounded-[22px] border border-border/70 bg-surface-secondary/60 p-4">
+                  <div className="oria-skeleton aspect-[16/10] w-full rounded-2xl" />
+                  <div className="oria-skeleton mt-4 h-4 w-3/4 rounded-full" />
+                  <div className="oria-skeleton mt-3 h-3 w-2/5 rounded-full oria-skeleton-late" />
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -1119,7 +1126,7 @@ export default function CreationsPage() {
         {!loading &&
           !error &&
           filteredCreations.length > 0 && (
-            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 oria-stagger-cards">
               {filteredCreations.map(
                 (item) => {
                   const kind =
@@ -1179,7 +1186,7 @@ export default function CreationsPage() {
                             </span>
 
                             {isCourseArtifact(item) && (
-                              <span className="rounded-md bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700">
+                              <span className="rounded-md bg-surface-tertiary px-2 py-1 text-[10px] font-semibold text-muted-strong">
                                 {UI[language].course}{isCourseTranscript(item) ? ` · ${UI[language].transcript}` : ""}
                               </span>
                             )}

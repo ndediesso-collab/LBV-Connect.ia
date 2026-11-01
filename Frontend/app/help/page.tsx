@@ -239,8 +239,8 @@ export default function HelpPage() {
   });
 
   return (
-    <main className="min-h-dvh overflow-x-clip bg-background text-foreground">
-      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur-xl">
+    <main className="oria-page-enter min-h-dvh overflow-x-clip bg-background text-foreground">
+      <header className="oria-header-enter sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur-xl">
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <Link
@@ -270,7 +270,7 @@ export default function HelpPage() {
 
       <section className="mx-auto w-full max-w-5xl px-5 py-10 sm:px-8 sm:py-16">
         {/* Hero */}
-        <div className="text-center">
+        <div className="oria-reveal text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[22px] border border-border/75 bg-surface-secondary text-foreground shadow-[0_14px_38px_-28px_var(--shadow-color)]">
             <CircleHelp size={22} />
           </div>
@@ -305,7 +305,7 @@ export default function HelpPage() {
             {UI[language].exploreHelp}
           </h2>
 
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <div className="oria-stagger-cards mt-5 grid gap-3 sm:grid-cols-2">
             {currentCategories.map((category) => {
               const Icon = category.icon;
 
@@ -342,7 +342,7 @@ export default function HelpPage() {
             </h2>
           </div>
 
-          <div className="mt-5 overflow-hidden rounded-[26px] border border-border/75 bg-surface/80 shadow-[0_18px_45px_-32px_var(--shadow-color)]">
+          <div className="oria-reveal oria-delay-1 mt-5 overflow-hidden rounded-[26px] border border-border/75 bg-surface/80 shadow-[0_18px_45px_-32px_var(--shadow-color)]">
             {filteredFaqs.length > 0 ? (
               filteredFaqs.map((faq, index) => {
                 const isOpen = openFaq === index;
@@ -372,7 +372,7 @@ export default function HelpPage() {
                     </button>
 
                     {isOpen && (
-                      <div className="px-5 pb-5">
+                      <div className="oria-faq-answer-enter px-5 pb-5">
                         <p className="max-w-3xl text-sm leading-7 text-muted">
                           {faq.answer}
                         </p>
@@ -396,7 +396,7 @@ export default function HelpPage() {
         </section>
 
         {/* Support */}
-        <section className="mt-10 rounded-[28px] border border-border/75 bg-surface-secondary/75 p-6 text-center shadow-[0_20px_46px_-32px_var(--shadow-color)] sm:p-8">
+        <section className="oria-reveal oria-delay-2 mt-10 rounded-[28px] border border-border/75 bg-surface-secondary/75 p-6 text-center shadow-[0_20px_46px_-32px_var(--shadow-color)] sm:p-8">
           <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl border border-border/60 bg-surface">
             <MessageCircle size={18} className="text-muted-strong" />
           </div>

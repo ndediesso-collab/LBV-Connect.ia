@@ -1309,8 +1309,8 @@ async function reverseGeocode(
   profile?.longitude != null;
 
   return (
-    <main className="min-h-dvh bg-[var(--background)] text-[var(--foreground)]">
-      <header className="border-b border-border/65 bg-background/80 backdrop-blur-lg">
+    <main className="min-h-dvh bg-background text-foreground oria-page-enter">
+      <header className="border-b border-border/65 bg-background/95 backdrop-blur-md oria-header-enter">
         <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <Link
@@ -1340,7 +1340,7 @@ async function reverseGeocode(
       </header>
 
       <section className="mx-auto w-full max-w-3xl px-5 py-8 sm:px-8 sm:py-12">
-        <div>
+        <div className="oria-reveal">
           <p className="text-sm font-medium text-[var(--muted)]">
             {t.yourAccount}
           </p>
@@ -1355,18 +1355,20 @@ async function reverseGeocode(
         </div>
 
         {loading && (
-          <div className="mt-8 flex items-center justify-center rounded-[25px] border border-border/75 bg-surface/80 p-8 shadow-[0_14px_36px_-29px_var(--shadow-color)]">
-            <Loader2
-              size={20}
-              className="animate-spin"
-            />
+          <div className="mt-8 flex flex-col items-center justify-center rounded-[25px] border border-border/75 bg-surface/90 p-8 shadow-[0_14px_36px_-29px_var(--shadow-color)] oria-loading-panel">
+            <Loader2 size={20} className="animate-spin oria-loader-icon" />
+            <div className="mt-6 w-full max-w-md space-y-3" aria-hidden="true">
+              <div className="oria-skeleton h-12 w-full rounded-2xl" />
+              <div className="oria-skeleton h-12 w-4/5 rounded-2xl oria-skeleton-late" />
+              <div className="oria-skeleton h-12 w-full rounded-2xl" />
+            </div>
           </div>
         )}
 
         {!loading && (
           <>
             {errorMessage && (
-              <div className="mt-8 flex items-start gap-3 rounded-[20px] border border-red-200/75 bg-red-50/90 p-4 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
+              <div className="mt-8 flex items-start gap-3 rounded-[20px] border border-red-200/75 bg-red-50/90 p-4 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300 oria-status-enter">
                 <X
                   size={17}
                   className="mt-0.5 shrink-0"
@@ -1388,7 +1390,7 @@ async function reverseGeocode(
             )}
 
             {successMessage && (
-              <div className="mt-8 flex items-start gap-3 rounded-[20px] border border-emerald-200/75 bg-emerald-50/90 p-4 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300">
+              <div className="mt-8 flex items-start gap-3 rounded-[20px] border border-emerald-200/75 bg-emerald-50/90 p-4 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300 oria-status-enter">
                 <Check
                   size={17}
                   className="mt-0.5 shrink-0"
@@ -1439,7 +1441,7 @@ async function reverseGeocode(
               </button>
 
               {personalOpen && (
-                <div className="border-t border-border/65 bg-surface/70 p-5">
+                <div className="border-t border-border/65 bg-surface/85 p-5 oria-tab-content-enter">
                   <div className="grid gap-4 sm:grid-cols-2">
                     <InputField
                       label={t.firstName}
@@ -1497,12 +1499,12 @@ async function reverseGeocode(
                     type="button"
                     disabled={savingProfile}
                     onClick={savePersonalInformation}
-                    className="mt-5 flex items-center gap-2 rounded-xl bg-[var(--foreground)] px-4 py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 disabled:opacity-50"
+                    className="mt-5 flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-xs font-medium text-accent-foreground transition hover:opacity-90 disabled:opacity-50 oria-press"
                   >
                     {savingProfile && (
                       <Loader2
                         size={14}
-                        className="animate-spin"
+                        className="animate-spin oria-loader-icon"
                       />
                     )}
 
@@ -1543,7 +1545,7 @@ async function reverseGeocode(
               </button>
 
               {securityOpen && (
-                <div className="border-t border-border/65 bg-surface/70 p-5">
+                <div className="border-t border-border/65 bg-surface/85 p-5 oria-tab-content-enter">
                   <div className="rounded-[20px] border border-border/75 bg-background/65 p-4">
                     <p className="text-sm font-medium">
                       {t.accountAddress}
@@ -1585,12 +1587,12 @@ async function reverseGeocode(
                       type="button"
                       disabled={savingPassword}
                       onClick={changePassword}
-                      className="mt-4 flex items-center gap-2 rounded-xl bg-[var(--foreground)] px-4 py-2.5 text-xs font-medium text-white transition hover:bg-neutral-800 disabled:opacity-50"
+                      className="mt-4 flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-xs font-medium text-accent-foreground transition hover:opacity-90 disabled:opacity-50 oria-press"
                     >
                       {savingPassword && (
                         <Loader2
                           size={14}
-                          className="animate-spin"
+                          className="animate-spin oria-loader-icon"
                         />
                       )}
                       {savingPassword
@@ -1660,7 +1662,7 @@ async function reverseGeocode(
                   {savingLanguage && (
                     <Loader2
                       size={14}
-                      className="animate-spin text-[var(--muted)]"
+                      className="animate-spin oria-loader-icon text-[var(--muted)]"
                     />
                   )}
 
@@ -1698,7 +1700,7 @@ async function reverseGeocode(
                   {locating ? (
                     <Loader2
                       size={14}
-                      className="animate-spin"
+                      className="animate-spin oria-loader-icon"
                     />
                   ) : (
                     <MapPin size={14} />
@@ -1746,7 +1748,7 @@ async function reverseGeocode(
                   {savingTheme && (
                     <Loader2
                       size={14}
-                      className="animate-spin text-[var(--muted)]"
+                      className="animate-spin oria-loader-icon text-[var(--muted)]"
                     />
                   )}
 
@@ -1781,7 +1783,7 @@ async function reverseGeocode(
                   {savingNotifications && (
                     <Loader2
                       size={14}
-                      className="animate-spin text-[var(--muted)]"
+                      className="animate-spin oria-loader-icon text-[var(--muted)]"
                     />
                   )}
 
@@ -1896,7 +1898,7 @@ async function reverseGeocode(
                   {loggingOut ? (
                     <Loader2
                       size={17}
-                      className="animate-spin"
+                      className="animate-spin oria-loader-icon"
                     />
                   ) : (
                     <LogOut size={17} />
@@ -1943,7 +1945,7 @@ function SettingsSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="mt-8 overflow-hidden rounded-[27px] border border-border/70 bg-surface/80 shadow-[0_18px_48px_-34px_var(--shadow-color)]">
+    <section className="mt-8 overflow-hidden rounded-[27px] border border-border/70 bg-surface/90 shadow-[0_18px_48px_-34px_var(--shadow-color)] oria-card-rise">
       <div className="border-b border-border/70 bg-surface/80 p-5">
         <div className="flex items-center gap-3">
           <IconBox>{icon}</IconBox>

@@ -7,6 +7,7 @@ import {
   AlertCircle, ShieldCheck, Clapperboard,
 } from "lucide-react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { createClient } from "@/lib/supabase/client";
 
 type Language = "fr" | "en";
@@ -14,13 +15,15 @@ type Kind = "image" | "video";
 type ImageMode = "text_to_image" | "image_edit" | "multi_reference" | "advanced_edit";
 type VideoMode = "text_to_video" | "image_to_video" | "multi_scene" | "extend_video" | "first_last_frame" | "edit_video";
 type Mode = ImageMode | VideoMode;
-type Screen = Kind | "gallery";
+type Screen = Kind | "gallery" | "projects";
 
 type Wallet = { balance: number; pack_id: string | null; is_pack_active: boolean };
 type ImageModel = { model: string; resolutions: string[]; max_references_supported_now: number; aspect_ratios?: string[] };
 type VideoModel = {
   model: string;
   duration_choices_seconds: number[];
+  supports_audio?: boolean;
+  supports_first_frame?: boolean;
   billable_resolutions: string[];
   aspect_ratios: string[];
 };
@@ -98,6 +101,19 @@ type Generation = {
   status?: string;
   timed_out?: boolean;
   error_message?: string | null;
+};
+
+// Film multi-scènes : source existante, chargée uniquement sur l'onglet.
+const OriaVideoProjectsWeb = dynamic(
+  () => import("./OriaVideoProjects_Web"),
+  { ssr: false },
+);
+
+type ProjectVideoCaps = {
+  max_project_seconds: number;
+  max_project_scenes: number;
+  allowed_modes: string[];
+  models: { model: string; durations: number[]; supports_audio: boolean; supports_first_frame: boolean }[];
 };
 
 type Props = {
@@ -292,6 +308,9 @@ function asMedia(raw: unknown): Media | null {
 
 export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: Props) {
   const [screen, setScreen] = useState<Screen>("image");
+  const [projectCaps, setProjectCaps] = useState<ProjectVideoCaps | null>(null);
+  const [projectChecking, setProjectChecking] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [caps, setCaps] = useState<Capabilities | null>(null);
   const [loading, setLoading] = useState(true);
@@ -408,6 +427,73 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   }
 
   useEffect(() => { void loadCapabilities(); void loadGallery(); }, []); // ouverture du Studio uniquement
+
+  // La création de films utilise les routes OpenRouter *projects*.
+  // Un GET non facturable vérifie leur présence AVANT le montage du composant :
+  // la version actuelle de ai.py peut exposer des clips sans ces routes.
+  useEffect(() => {
+    if (screen !== "projects") return;
+    let cancelled = false;
+    setProjectChecking(true);
+    setProjectError(null);
+    setProjectCaps(null);
+    async function checkFilmProjects() {
+      try {
+        const remote = await api<Capabilities>("/ai/openrouter-media/capabilities");
+        if (!remote.success || remote.provider !== "openrouter" || !remote.pack_active ||
+            !wallet?.is_pack_active || remote.pack_id !== wallet.pack_id) {
+          throw new Error(tr("Aucun pack compatible avec les projets vidéo n'est actif.",
+            "No plan eligible for video projects is active."));
+        }
+        if (!remote.generation_available) {
+          throw new Error(tr("Les projets vidéo sont temporairement désactivés côté serveur.",
+            "Video projects are temporarily disabled on the server."));
+        }
+        // Le drapeau serveur doit autoriser les films, indépendamment des clips.
+        if (!remote.video.long_projects_generation_available) {
+          throw new Error(tr("L'outil Projets vidéo est restauré, mais les films multi-scènes ne sont pas encore activés sur le serveur. Aucun appel payant ne sera envoyé.",
+            "Video Projects is restored, but multi-scene movies are not enabled on the server yet. No paid request will be sent."));
+        }
+        // Si le routeur multi-scènes n'est pas déployé, ne pas exposer les
+        // boutons de génération qui pointeraient vers des 404.
+        const catalog = await api<{ projects?: unknown[] }>("/ai/openrouter-media/projects");
+        if (!Array.isArray(catalog.projects)) {
+          throw new Error("Le serveur ne fournit pas la bibliothèque de films attendue.");
+        }
+        const video = remote.video;
+        const supported = (video.models || [])
+          .filter(item => item && typeof item.model === "string" &&
+            item.billable_resolutions?.includes("720p") && Array.isArray(item.duration_choices_seconds))
+          .map(item => ({
+            model: item.model,
+            durations: item.duration_choices_seconds.filter(value =>
+              typeof value === "number" && Number.isFinite(value) && value > 0),
+            // L'API est seule habilitée à confirmer audio et frames de référence.
+            supports_audio: item.supports_audio === true,
+            supports_first_frame: item.supports_first_frame === true,
+          }));
+        if (cancelled) return;
+        setProjectCaps({
+          max_project_seconds: video.max_project_seconds,
+          max_project_scenes: video.max_project_scenes,
+          allowed_modes: video.allowed_modes,
+          models: supported,
+        });
+      } catch (cause) {
+        if (cancelled) return;
+        const detail = cause instanceof Error ? cause.message : "Service indisponible";
+        setProjectError(detail.includes("404") || detail.includes("Not Found") ||
+          detail.includes("non trouvé") || detail.includes("Une erreur est survenue avec le serveur")
+          ? tr("L'outil Projets vidéo est restauré dans le Chat, mais ses routes serveur /ai/openrouter-media/projects ne sont pas encore déployées. Aucun appel payant ne sera envoyé.",
+               "Video Projects is restored in Chat, but the server routes /ai/openrouter-media/projects are not deployed yet. No paid request will be sent.")
+          : detail);
+      } finally {
+        if (!cancelled) setProjectChecking(false);
+      }
+    }
+    void checkFilmProjects();
+    return () => { cancelled = true; };
+  }, [screen, wallet?.pack_id, wallet?.is_pack_active, language]);
   useEffect(() => {
     const before = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -665,10 +751,10 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
       : "";
 
   return (
-    <div className="fixed inset-0 z-[90] overflow-y-auto bg-black/60 p-2 backdrop-blur-md sm:p-5" role="presentation"
+    <div className="oria-backdrop-in fixed inset-0 z-[90] overflow-y-auto bg-black/65 p-2 backdrop-blur-sm sm:p-5" role="presentation"
       onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
       <section role="dialog" aria-modal="true" aria-labelledby="oria-studio-heading"
-        className="mx-auto my-1 w-full max-w-[1130px] overflow-hidden rounded-[30px] border border-border/80 bg-background/95 text-foreground shadow-[0_30px_90px_-33px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:my-4">
+        className="oria-studio-panel-enter mx-auto my-1 w-full max-w-[1130px] overflow-hidden rounded-[30px] border border-border/80 bg-background text-foreground shadow-[0_30px_90px_-33px_rgba(0,0,0,0.55)] sm:my-4">
         <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-7">
           <div className="flex min-w-0 items-center gap-3">
             <span className="grid h-11 w-11 shrink-0 place-items-center rounded-[17px] border border-border/60 bg-surface-secondary"><Sparkles size={22}/></span>
@@ -685,6 +771,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
           <div className="flex flex-wrap gap-2" role="tablist" aria-label={tr("Espaces du studio", "Studio tabs")}>
             {([{ id: "image", label: tr("Images & retouches", "Images & editing"), icon: ImageIcon },
               { id: "video", label: tr("Vidéo", "Video"), icon: Video },
+              { id: "projects", label: tr("Projets vidéo", "Video projects"), icon: Clapperboard },
               { id: "gallery", label: tr("Mes créations", "My creations"), icon: Images }] as const).map(item => (
               <button key={item.id} type="button" role="tab" aria-selected={screen === item.id}
                 onClick={() => changeScreen(item.id)} disabled={busy || quoting}
@@ -700,8 +787,11 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
           </div>
         </div>
 
-        <div className="p-4 sm:p-6 lg:p-7">
-          {loading && <div role="status" className="mb-4 flex items-center gap-2 text-sm text-muted"><Loader2 className="animate-spin" size={17}/>{tr("Chargement des droits de création…", "Loading creation permissions…")}</div>}
+        <div className="oria-tab-content-enter p-4 sm:p-6 lg:p-7">
+          {loading && <div role="status" className="oria-loading-panel mb-4 rounded-2xl border border-border/70 bg-surface-secondary/65 p-4 text-sm text-muted">
+            <div className="flex items-center gap-3"><span className="oria-loader-ring" aria-hidden="true" />{tr("Chargement des droits de création…", "Loading creation permissions…")}</div>
+            <div className="mt-4 grid grid-cols-2 gap-3"><span className="oria-skeleton h-9 rounded-xl" /><span className="oria-skeleton oria-skeleton-late h-9 rounded-xl" /></div>
+          </div>}
           {error && <div role="alert" className="mb-4 rounded-2xl border border-red-500/25 bg-red-500/[0.055] p-3.5 text-xs text-red-600 dark:text-red-300">{error}</div>}
           {notice && <div role="status" className="mb-4 rounded-2xl border border-border/70 bg-surface-secondary/70 p-3.5 text-xs">{notice}</div>}
            {MEDIA_PROVIDER === "openrouter" && pendingRequestId && <button type="button"
@@ -733,14 +823,35 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
              }} className="mb-4 rounded-2xl border border-border/70 bg-surface/70 px-4 py-2 text-xs font-semibold">
              {tr("Vérifier la création en attente", "Check pending creation")}
            </button>}
-          {caps && !caps.generation_available && screen !== "gallery" && (
+          {caps && !caps.generation_available && screen !== "gallery" && screen !== "projects" && (
             <div className="mb-5 flex items-start gap-2 rounded-2xl border border-border/70 bg-surface-secondary/70 px-3.5 py-3.5 text-xs leading-5 text-muted-strong">
               <ShieldCheck size={17} className="mt-0.5 shrink-0"/>
               {disabledReason}
             </div>
           )}
 
-          {screen === "gallery" ? (
+          {screen === "projects" ? (
+            <section aria-label={tr("Projets vidéo", "Video projects")}
+              className="oria-tab-content-enter rounded-[26px] border border-border/80 bg-surface p-4 shadow-[0_14px_36px_-30px_var(--shadow-color)] sm:p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <Clapperboard size={19} aria-hidden="true" />
+                <h3 className="text-base font-semibold">{tr("Création de films multi-scènes", "Multi-scene filmmaking")}</h3>
+              </div>
+              {projectChecking ? (
+                <div role="status" className="oria-loading-panel flex items-center gap-2 py-5 text-sm text-muted">
+                  <span className="oria-loader-ring" aria-hidden="true" />
+                  {tr("Vérification des projets disponibles…", "Checking available projects…")}
+                </div>
+              ) : projectError ? (
+                <p role="status" className="rounded-2xl border border-border bg-surface-secondary p-4 text-sm leading-6 text-muted-strong">{projectError}</p>
+              ) : projectCaps ? (
+                <OriaVideoProjectsWeb language={language} packId={wallet?.pack_id || ""}
+                  caps={projectCaps} onWalletRefresh={onWalletRefresh} />
+              ) : (
+                <p className="text-sm text-muted">{tr("Service de projets indisponible.", "Projects service unavailable.")}</p>
+              )}
+            </section>
+          ) : screen === "gallery" ? (
             <div>
               <div className="mb-4 flex items-center justify-between gap-3">
                 <h3 className="text-base font-semibold">{tr("Bibliothèque de créations", "Creation library")}</h3>
@@ -748,7 +859,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                   <RefreshCw size={15} className={galleryLoading ? "animate-spin" : ""}/>{tr("Actualiser", "Refresh")}
                 </button>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="oria-stagger-cards grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {gallery.map(item => (
                   <article key={item.id} className="overflow-hidden rounded-[23px] border border-border/70 bg-surface/80 shadow-[0_14px_35px_-30px_var(--shadow-color)]">
                     {item.media_type === "image" ? <img src={item.url} alt={item.prompt || "Création ORIA"} className="h-48 w-full object-cover"/> :
@@ -764,7 +875,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
               {!gallery.length && !galleryLoading && <p className="rounded-2xl border border-border p-10 text-center text-sm text-muted">{tr("Aucune création enregistrée pour le moment.", "No saved creations yet.")}</p>}
             </div>
           ) : (
-            <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div className="oria-tab-content-enter grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
               <div className="min-w-0 space-y-5">
                 <section className="rounded-[25px] border border-border/75 bg-surface/80 p-4 shadow-[0_14px_37px_-32px_var(--shadow-color)] sm:p-5">
                   <div className="mb-4 flex items-center gap-2"><Clapperboard size={18}/><h3 className="text-sm font-semibold">{tr("Votre création", "Your creation")}</h3></div>
@@ -892,7 +1003,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                 </section>
                 {screen === "video" && caps && <div className="rounded-[23px] border border-border/75 bg-surface-secondary/65 p-4 text-xs leading-6 text-muted-strong">
                   <p className="font-semibold text-foreground">{tr("Projets vidéo avancés", "Advanced video projects")}</p>
-                  <p className="mt-1">{tr(`Ton pack prévoit des projets jusqu'à ${caps.video.max_project_seconds} s (${caps.video.max_project_scenes} scène(s) maximum), mais seuls les clips courts peuvent être générés actuellement.`, `Your plan allows projects up to ${caps.video.max_project_seconds}s (${caps.video.max_project_scenes} scenes max), but only short clips can currently be generated.`)}</p>
+                  <p className="mt-1">{tr(`Ton pack prévoit des projets jusqu'à ${caps.video.max_project_seconds} s (${caps.video.max_project_scenes} scène(s) max.). Pour créer un film, ouvre l'onglet « Projets vidéo ». Sa disponibilité est vérifiée directement auprès du serveur.`, `Your plan allows projects up to ${caps.video.max_project_seconds}s (${caps.video.max_project_scenes} scenes max). To create a film, open “Video projects”. Availability is verified with the server.`)}</p>
                   <div className="mt-2 flex flex-wrap gap-2">{caps.video.allowed_modes.filter(m => !caps.video.available_now_modes.includes(m)).map(m => (
                     <span key={m} className="rounded-xl border border-border/70 bg-background/70 px-2.5 py-1.5 text-[11px]">{VIDEO_MODES.find(opt => opt.id === m)?.[language] || m} · {tr("À venir", "Coming soon")}</span>
                   ))}</div>
