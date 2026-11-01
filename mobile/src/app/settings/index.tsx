@@ -23,6 +23,7 @@ import * as Location from "expo-location";
 
 import { supabase } from "@/lib/supabase/client";
 import * as SecureStore from "expo-secure-store";
+import { polishOriaStyles } from "@/theme/oria-visual";
 
 /**
  * ============================================================
@@ -4477,7 +4478,7 @@ function LanguageOption({
  * architecture facilement modifiable et proche de la page Web.
  */
 
-const styles = StyleSheet.create({
+const styles = polishOriaStyles(StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: "#ffffff",
@@ -5335,4 +5336,4 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.72,
   },
-});
+}), "settings", false);

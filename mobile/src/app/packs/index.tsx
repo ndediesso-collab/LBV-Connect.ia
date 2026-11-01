@@ -18,6 +18,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { supabase } from "@/lib/supabase/client";
 import * as SecureStore from "expo-secure-store";
+import { polishOriaStyles } from "@/theme/oria-visual";
 
 /**
  * ============================================================
@@ -429,7 +430,7 @@ function buildDarkStyleOverride(style: unknown) {
 
 function getThemedStyles(theme: OriaTheme) {
   if (theme === "light") {
-    return baseStyles;
+    return polishOriaStyles(baseStyles, "packs", false);
   }
 
   const themed: Record<string, unknown> = {};
@@ -445,7 +446,7 @@ function getThemedStyles(theme: OriaTheme) {
 
   themed.safeArea = [themed.safeArea, { backgroundColor: "#000000" }];
   themed.container = [themed.container, { backgroundColor: "#000000" }];
-  return themed as unknown as typeof baseStyles;
+  return polishOriaStyles(themed as unknown as typeof baseStyles, "packs", true);
 }
 
 function useThemedStyles() {

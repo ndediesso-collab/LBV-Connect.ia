@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  Image,
   Linking,
   Modal,
   Platform,
@@ -30,6 +29,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
 import { supabase } from "@/lib/supabase/client";
 import * as SecureStore from "expo-secure-store";
+import { polishOriaStyles } from "@/theme/oria-visual";
+import { OriaImage, OriaSkeleton } from "@/components/oria-ui/OriaMedia";
 
 type OriaLanguage = "fr" | "en";
 type OriaTheme = "light" | "dark";
@@ -611,7 +612,7 @@ function getThemedStyles(
   theme: OriaTheme,
 ) {
   if (theme === "light") {
-    return baseStyles;
+    return polishOriaStyles(baseStyles, "creations", false);
   }
 
   const themed: Record<
@@ -639,7 +640,7 @@ function getThemedStyles(
 
   themed.safeArea = [themed.safeArea, { backgroundColor: "#000000" }];
   themed.container = [themed.container, { backgroundColor: "#000000" }];
-  return themed as unknown as typeof baseStyles;
+  return polishOriaStyles(themed as unknown as typeof baseStyles, "creations", true);
 }
 
 function useThemedStyles() {
@@ -1152,6 +1153,13 @@ export default function CreationsPage() {
           ) === filter,
       );
     }, [creations, filter]);
+
+  // Limite les vues natives créées au premier affichage : galerie plus fluide.
+  const [visibleCount, setVisibleCount] = useState(18);
+  const visibleCreations = useMemo(
+    () => filteredCreations.slice(0, visibleCount),
+    [filteredCreations, visibleCount],
+  );
 
   const resolveArtifact = useCallback(async (item: CreationItem): Promise<CreationItem> => {
     // Ne jamais réutiliser une URL signée provenant d’une ancienne session.
@@ -1725,11 +1733,10 @@ export default function CreationsPage() {
                         key={
                           item.value
                         }
-                        onPress={() =>
-                          setFilter(
-                            item.value,
-                          )
-                        }
+                        onPress={() => {
+                          setVisibleCount(18);
+                          setFilter(item.value);
+                        }}
                         style={[
                           styles.filterButton,
                           active &&
@@ -1825,20 +1832,16 @@ export default function CreationsPage() {
                 styles.loadingBox
               }
             >
-              <ActivityIndicator
-                size="large"
-                color={themedIconColor(
-                  "#17171b",
-                  isDark,
-                )}
-              />
-              <Text
-                style={
-                  styles.loadingText
-                }
-              >
-                {t.loading}
-              </Text>
+              <View style={{ width: "100%", flexDirection: "row", gap: 12, paddingHorizontal: 3 }}>
+                {[0, 1, 2].map((index) => (
+                  <View key={index} style={{ flex: 1, gap: 10 }}>
+                    <OriaSkeleton dark={isDark} style={{ height: width < 520 ? 92 : 135, borderRadius: 20 }} />
+                    <OriaSkeleton dark={isDark} style={{ height: 13, width: "89%" }} />
+                    <OriaSkeleton dark={isDark} style={{ height: 11, width: "62%" }} />
+                  </View>
+                ))}
+              </View>
+              <Text style={styles.loadingText}>{t.loading}</Text>
             </View>
           )}
 
@@ -1937,7 +1940,7 @@ export default function CreationsPage() {
                   styles.gallery
                 }
               >
-                {filteredCreations.map(
+                {visibleCreations.map(
                   (item) => {
                     const kind =
                       getCreationKind(
@@ -2203,10 +2206,9 @@ export default function CreationsPage() {
                           {url ? (
                             kind ===
                             "image" ? (
-                              <Image
-                                source={{
-                                  uri: url,
-                                }}
+                              <OriaImage
+                                uri={url}
+                                dark={isDark}
                                 style={
                                   styles.mediaContent
                                 }
@@ -2222,11 +2224,14 @@ export default function CreationsPage() {
                                   styles.videoPreview
                                 }
                               >
-                                <VideoPreview
-                                  uri={
-                                    url
-                                  }
-                                />
+                                {/* Évite de monter un décodeur vidéo par carte : le lecteur
+                                    natif ne se monte que lors de l'ouverture de l'aperçu. */}
+                                <View style={{ flex: 1, alignItems: "center", justifyContent: "center",
+                                  backgroundColor: "#080808" }}>
+                                  <Ionicons name="film-outline" size={62} color="rgba(255,255,255,0.22)" />
+                                  <Text style={{ color: "rgba(255,255,255,0.66)", fontWeight: "700",
+                                    marginTop: 16, letterSpacing: 1.5, fontSize: 11 }}>ORIA · VIDEO</Text>
+                                </View>
                                 <View
                                   style={
                                     styles.playOverlay
@@ -2485,6 +2490,20 @@ export default function CreationsPage() {
                 )}
               </View>
             )}
+          {!loading && !error && visibleCount < filteredCreations.length ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setVisibleCount(count => count + 18)}
+              style={({ pressed }) => [{ alignSelf: "center", marginTop: 24, minWidth: 180,
+                alignItems: "center", paddingVertical: 15, paddingHorizontal: 22,
+                borderRadius: 16, backgroundColor: isDark ? "#ffffff" : "#111111" },
+                pressed && { opacity: 0.78 }]}
+            >
+              <Text style={{ color: isDark ? "#111111" : "#ffffff", fontWeight: "700" }}>
+                {language === "fr" ? "Afficher plus" : "Show more"} ({filteredCreations.length - visibleCount})
+              </Text>
+            </Pressable>
+          ) : null}
         </ScrollView>
 
          <Modal
@@ -2513,7 +2532,14 @@ export default function CreationsPage() {
              </View>
              {artifactPreview?.loading ? (
                <View style={styles.artifactModalCenter}>
-                 <ActivityIndicator size="large" color="#23232b" />
+                 <View style={{ width: "90%", maxWidth: 400, gap: 16,
+                   backgroundColor: "#ffffff", padding: 26, borderRadius: 16, marginBottom: 8 }}>
+                   <OriaSkeleton style={{ height: 22, width: "75%", borderRadius: 7 }} />
+                   <OriaSkeleton style={{ height: 12, width: "100%", borderRadius: 7 }} />
+                   <OriaSkeleton style={{ height: 12, width: "95%", borderRadius: 7 }} />
+                   <OriaSkeleton style={{ height: 12, width: "82%", borderRadius: 7 }} />
+                   <OriaSkeleton style={{ height: 100, width: "100%", borderRadius: 7 }} />
+                 </View>
                  <Text style={styles.artifactModalMessage}>{t.previewLoading}</Text>
                </View>
              ) : artifactPreview?.error ? (
@@ -2523,8 +2549,17 @@ export default function CreationsPage() {
                </View>
              ) : artifactPreview?.kind === "pdf" ? (
                <View style={styles.artifactModalCenter}>
+                 <View style={{ width: 190, height: 240, borderRadius: 13, backgroundColor: "#ffffff",
+                   alignItems: "center", justifyContent: "center", marginBottom: 4 }}>
+                   <Ionicons name="document-text-outline" size={66} color="#242424" />
+                   <Text style={{ marginTop: 14, color: "#555555", fontSize: 12, fontWeight: "700" }}>PDF · ORIGINAL</Text>
+                 </View>
                  <Ionicons name="document-outline" size={64} color="#787880" />
                  <Text style={styles.artifactModalMessage}>{t.pdfNative}</Text>
+                 <Text style={[styles.artifactModalMessage, { fontSize: 11, opacity: 0.8 }]}>
+                   {language === "fr" ? "Qualité originale, zoom et navigation via le lecteur PDF de votre appareil." :
+                     "Original quality, zoom and navigation in your device's PDF viewer."}
+                 </Text>
                  <Pressable disabled={openingPdf} style={styles.artifactPrimaryButton}
                    onPress={() => void openPdfPreview(artifactPreview.item)}>
                    {openingPdf ? <ActivityIndicator color="#fff" /> :
@@ -2726,14 +2761,9 @@ export default function CreationsPage() {
                     selectedMedia,
                   ) ===
                   "image" ? (
-                    <Image
-                      source={{
-                        uri:
-                          getMediaUrl(
-                            selectedMedia,
-                          ) ||
-                          "",
-                      }}
+                    <OriaImage
+                      uri={getMediaUrl(selectedMedia) || ""}
+                      dark={isDark}
                       style={
                         styles.modalImage
                       }

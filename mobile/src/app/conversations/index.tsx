@@ -40,7 +40,8 @@ import * as SecureStore from "expo-secure-store";
 
 import { supabase } from "@/lib/supabase/client";
 
-import { AnyComponent } from "react-native-reanimated/lib/typescript/common";
+import Reanimated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
+import OriaSkeleton from "@/components/oria-design/OriaSkeleton";
 
 
 
@@ -254,19 +255,20 @@ function buildDarkStyleOverride(style: unknown) {
 }
 
 function getThemedStyles(theme: OriaTheme) {
-  if (theme === "light") {
-    return baseStyles;
-  }
-
+  // Style system shared in spirit with Frontend/app/globals.css: semantic
+  // black / white surfaces rather than converting light colors blindly.
   const themed: Record<string, unknown> = {};
 
   for (const key of Object.keys(baseStyles)) {
     const style = baseStyles[key as keyof typeof baseStyles];
 
-    themed[key] = [
+    themed[key] = theme === "dark" ? [
       style,
       buildDarkStyleOverride(style),
-      ["safe", "container", "screen", "main", "root"].includes(key) ? { backgroundColor: "#000000" } : undefined,
+      monoDarkStyles[key as keyof typeof monoDarkStyles],
+    ] : [
+      style,
+      monoLightStyles[key as keyof typeof monoLightStyles],
     ];
   }
 
@@ -1334,7 +1336,7 @@ export default function ConversationsPage() {
 
             <View>
 
-              <View style={styles.pageHeader}>
+              <Reanimated.View entering={FadeInDown.duration(390).reduceMotion(ReduceMotion.System)} style={styles.pageHeader}>
 
                 <View style={styles.pageHeaderText}>
 
@@ -1366,7 +1368,7 @@ export default function ConversationsPage() {
 
                 >
 
-                  <Ionicons name="add" size={18} color={themedIconColor("#ffffff", isDark)} />
+                  <Ionicons name="add" size={18} color={isDark ? "#000000" : "#ffffff"} />
 
                   <Text style={styles.newButtonText}>
 
@@ -1376,7 +1378,7 @@ export default function ConversationsPage() {
 
                 </Pressable>
 
-              </View>
+              </Reanimated.View>
 
 
 
@@ -1479,6 +1481,9 @@ export default function ConversationsPage() {
                     {t.loading}
 
                   </Text>
+                   <View style={{ width: "100%", paddingHorizontal: 6, marginTop: 12 }}>
+                     <OriaSkeleton dark={isDark} variant="rows" count={2} />
+                   </View>
 
                 </View>
 
@@ -2441,4 +2446,183 @@ const baseStyles = StyleSheet.create({
 
   },
 
+});
+
+// ORIA MONO V3 — explicit design parity with the Web (neutral palette only).
+const monoLightStyles = StyleSheet.create({
+  "safeArea": {
+    "backgroundColor": "#ffffff"
+  },
+  "container": {
+    "backgroundColor": "#ffffff"
+  },
+  "header": {
+    "borderBottomColor": "#e5e5e5"
+  },
+  "pageTitle": {
+    "fontSize": 35,
+    "lineHeight": 43,
+    "letterSpacing": -1.3,
+    "color": "#111111"
+  },
+  "listContent": {
+    "paddingHorizontal": 20,
+    "paddingTop": 31
+  },
+  "pageHeader": {
+    "marginBottom": 29
+  },
+  "searchContainer": {
+    "height": 54,
+    "borderRadius": 18,
+    "backgroundColor": "#f6f6f6",
+    "borderColor": "#e5e5e5"
+  },
+  "newButton": {
+    "minHeight": 48,
+    "borderRadius": 16,
+    "backgroundColor": "#111111"
+  },
+  "card": {
+    "minHeight": 116,
+    "borderRadius": 22,
+    "borderColor": "#e5e5e5",
+    "backgroundColor": "#ffffff",
+    "padding": 17
+  },
+  "cardIcon": {
+    "borderRadius": 14
+  },
+  "modelBadge": {
+    "backgroundColor": "#f6f6f6"
+  },
+  "optionsSheet": {
+    "backgroundColor": "#ffffff",
+    "borderTopLeftRadius": 27,
+    "borderTopRightRadius": 27
+  }
+});
+const monoDarkStyles = StyleSheet.create({
+  "safeArea": {
+    "backgroundColor": "#000000"
+  },
+  "container": {
+    "backgroundColor": "#000000"
+  },
+  "header": {
+    "borderBottomColor": "#282828",
+    "backgroundColor": "#000000"
+  },
+  "brandText": {
+    "color": "#ffffff"
+  },
+  "brandIcon": {
+    "backgroundColor": "#1e1e1e"
+  },
+  "creditPill": {
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "creditValue": {
+    "color": "#ffffff"
+  },
+  "pageTitle": {
+    "fontSize": 35,
+    "lineHeight": 43,
+    "letterSpacing": -1.3,
+    "color": "#ffffff"
+  },
+  "pageDescription": {
+    "color": "#a5a5a5"
+  },
+  "overline": {
+    "color": "#a5a5a5"
+  },
+  "listContent": {
+    "paddingHorizontal": 20,
+    "paddingTop": 31
+  },
+  "pageHeader": {
+    "marginBottom": 29
+  },
+  "newButton": {
+    "minHeight": 48,
+    "borderRadius": 16,
+    "backgroundColor": "#ffffff"
+  },
+  "newButtonText": {
+    "color": "#000000"
+  },
+  "searchContainer": {
+    "height": 54,
+    "borderRadius": 18,
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "searchInput": {
+    "color": "#ffffff"
+  },
+  "card": {
+    "minHeight": 116,
+    "borderRadius": 22,
+    "borderColor": "#282828",
+    "backgroundColor": "#090909",
+    "padding": 17
+  },
+  "cardTitle": {
+    "color": "#ffffff"
+  },
+  "cardDate": {
+    "color": "#a5a5a5"
+  },
+  "cardPreview": {
+    "color": "#a5a5a5"
+  },
+  "cardIcon": {
+    "backgroundColor": "#1e1e1e",
+    "borderRadius": 14
+  },
+  "modelBadge": {
+    "backgroundColor": "#1e1e1e"
+  },
+  "modelBadgeText": {
+    "color": "#d0d0d0"
+  },
+  "loadingBox": {
+    "backgroundColor": "#090909",
+    "borderColor": "#282828"
+  },
+  "optionsSheet": {
+    "backgroundColor": "#090909",
+    "borderTopLeftRadius": 27,
+    "borderTopRightRadius": 27
+  },
+  "sheetTitle": {
+    "color": "#ffffff"
+  },
+  "sheetActionText": {
+    "color": "#ffffff"
+  },
+  "cancelButton": {
+    "backgroundColor": "#1e1e1e"
+  },
+  "cancelButtonText": {
+    "color": "#ffffff"
+  },
+  "emptyBox": {
+    "backgroundColor": "#090909",
+    "borderColor": "#282828"
+  },
+  "emptyTitle": {
+    "color": "#ffffff"
+  },
+  "emptyDescription": {
+    "color": "#a5a5a5"
+  },
+  "emptyButton": {
+    "backgroundColor": "#ffffff"
+  },
+  "emptyButtonText": {
+    "color": "#000000"
+  }
 });

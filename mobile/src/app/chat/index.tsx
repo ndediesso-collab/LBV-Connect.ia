@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Reanimated, { FadeInDown, FadeInUp, FadeOutDown, ReduceMotion } from "react-native-reanimated";
 import {
   ActivityIndicator,
   Alert,
@@ -313,19 +314,20 @@ function buildDarkStyleOverride(style: unknown) {
 }
 
 function getThemedStyles(theme: OriaTheme) {
-  if (theme === "light") {
-    return baseStyles;
-  }
-
+  // Style system shared in spirit with Frontend/app/globals.css: semantic
+  // black / white surfaces rather than converting light colors blindly.
   const themed: Record<string, unknown> = {};
 
   for (const key of Object.keys(baseStyles)) {
     const style = baseStyles[key as keyof typeof baseStyles];
 
-    themed[key] = [
+    themed[key] = theme === "dark" ? [
       style,
       buildDarkStyleOverride(style),
-      ["safe", "container", "screen", "main", "root"].includes(key) ? { backgroundColor: "#000000" } : undefined,
+      monoDarkStyles[key as keyof typeof monoDarkStyles],
+    ] : [
+      style,
+      monoLightStyles[key as keyof typeof monoLightStyles],
     ];
   }
 
@@ -495,6 +497,9 @@ const CHAT_TEXT = {
       "gpt-5.6-terra": "Raisonnement avancé · Pour les problèmes complexes",
       "gpt-6-sol": "Puissance avancée · Pour les tâches les plus exigeantes",
       "gpt-6-astra": "Modèle haut de gamme · Pour les usages les plus avancés",
+      "claude-haiku-5.5": "Rapide et efficace · Pour les échanges quotidiens",
+      "claude-sonnet-5.5": "Analyse approfondie · Pour les projets complexes",
+      "claude-opus-5.5": "Raisonnement avancé · Pour les tâches les plus exigeantes",
     },
     mediaDescriptions: {
       image_480: "Génération image légère",
@@ -658,6 +663,9 @@ const CHAT_TEXT = {
       "gpt-5.6-terra": "Advanced reasoning · For complex problems",
       "gpt-6-sol": "Advanced capability · For the most demanding tasks",
       "gpt-6-astra": "High-end model · For the most advanced use cases",
+      "claude-haiku-5.5": "Fast and efficient · For everyday conversations",
+      "claude-sonnet-5.5": "Deep analysis · For complex projects",
+      "claude-opus-5.5": "Advanced reasoning · For demanding tasks",
     },
     mediaDescriptions: {
       image_480: "Lightweight image generation",
@@ -942,6 +950,45 @@ type ModelDefinition = {
   packs: string[];
 };
 
+// Source de vérité commune au Web : GET /ai/chat/capabilities.
+// Les interrupteurs Render restent PRIVÉS, jamais en EXPO_PUBLIC_*.
+type ChatCapabilities = {
+  success: true;
+  provider: "openai" | "openrouter";
+  pack_id: string;
+  models: Array<{
+    id: string;
+    label: string;
+    reasoning_modes?: ReasoningMode[];
+  }>;
+  streaming: boolean;
+  live_modify?: boolean | null;
+};
+
+function validateChatCapabilities(raw: unknown, packId: string): ChatCapabilities {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("Catalogue Chat ORIA indisponible.");
+  }
+  const data = raw as Partial<ChatCapabilities>;
+  if (data.success !== true || !["openai", "openrouter"].includes(data.provider || "") ||
+      data.pack_id !== packId || !Array.isArray(data.models)) {
+    throw new Error("Le fournisseur ou les droits du pack ne correspondent pas au Chat ORIA.");
+  }
+  const provider = data.provider as ChatCapabilities["provider"];
+  const seen = new Set<string>();
+  const list: ChatCapabilities["models"] = [];
+  for (const item of data.models) {
+    if (!item || typeof item.id !== "string" || typeof item.label !== "string") continue;
+    const id = item.id.trim();
+    if (!id || seen.has(id) || (id.startsWith("claude-") && provider !== "openrouter")) continue;
+    seen.add(id);
+    list.push({ id, label: item.label.trim() || id,
+      reasoning_modes: Array.isArray(item.reasoning_modes) ? item.reasoning_modes : undefined });
+  }
+  return { success: true, provider, pack_id: packId, models: list,
+    streaming: data.streaming === true, live_modify: data.live_modify };
+}
+
 const MAX_ATTACHMENTS = 3;
 
 // Un collage massif devient automatiquement une pièce jointe texte.
@@ -1003,6 +1050,12 @@ const models: ModelDefinition[] = [
     description: "Modèle haut de gamme · Pour les usages les plus avancés",
     packs: ["business_pack"],
   },
+  { id: "claude-haiku-5.5", name: "Claude Haiku 5.5",
+    description: "Rapide et efficace · Pour les échanges quotidiens", packs: [] },
+  { id: "claude-sonnet-5.5", name: "Claude Sonnet 5.5",
+    description: "Analyse approfondie · Pour les projets complexes", packs: [] },
+  { id: "claude-opus-5.5", name: "Claude Opus 5.5",
+    description: "Raisonnement avancé · Pour les tâches les plus exigeantes", packs: [] },
 ];
 
 const TRIAL_MODEL_BY_PACK: Record<string, string> = {
@@ -1394,33 +1447,27 @@ function formatArtifactSize(
   ).toFixed(1)} Mo`;
 }
 
-function getAvailableModels(packId: string | null) {
-  if (!packId) return [];
-  return models.filter((model) => model.packs.includes(packId));
-}
-
+// Aucune liste locale (ni cache) ne peut autoriser un modèle payant.
 function getSelectableModels(
-  packId: string | null,
+  capabilities: ChatCapabilities | null,
   trials: Record<string, TrialInfo>,
-) {
-  const normalModels = getAvailableModels(packId);
-  if (!packId) return [];
-
-  const selectable = [...normalModels];
-  const normalIds = new Set(normalModels.map((model) => model.id));
-  const trialModelId = TRIAL_MODEL_BY_PACK[packId];
-
-  if (trialModelId && !normalIds.has(trialModelId)) {
-    const trialModel = models.find((model) => model.id === trialModelId);
-    const trial = trials[trialModelId];
-
-    // Le modèle d'essai reste visible même si /ai/trials a temporairement
-    // échoué. Le backend reste l'autorité finale au moment de l'envoi.
-    if (trialModel && (!trial || trial.max > 0)) {
-      selectable.push(trialModel);
+): ModelDefinition[] {
+  if (!capabilities?.success) return [];
+  const selectable: ModelDefinition[] = capabilities.models.map((entry) => ({
+    id: entry.id, name: entry.label,
+    description: models.find((model) => model.id === entry.id)?.description || "",
+    packs: [capabilities.pack_id],
+  }));
+  const listed = new Set(selectable.map((item) => item.id));
+  // Essais historiques : seulement si /ai/trials les a explicitement fournis.
+  const trialId = TRIAL_MODEL_BY_PACK[capabilities.pack_id];
+  const trial = trialId ? trials[trialId] : undefined;
+  if (trialId && !listed.has(trialId) && trial && trial.max > 0 && trial.remaining > 0) {
+    const descriptor = models.find((model) => model.id === trialId);
+    if (descriptor && (!trialId.startsWith("claude-") || capabilities.provider === "openrouter")) {
+      selectable.push(descriptor);
     }
   }
-
   return selectable;
 }
 
@@ -2592,7 +2639,14 @@ function CodeBlock({
         nestedScrollEnabled
       >
         <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-          <Text style={styles.codeText}>{value}</Text>
+          <View style={styles.codeBody}>
+            {value.length <= 12_000 ? (
+              <HighlightedCode code={value} />
+            ) : (
+              // Evite une analyse caractère par caractère sur les très gros fichiers.
+              <Text selectable style={styles.codeText}>{value}</Text>
+            )}
+          </View>
         </ScrollView>
       </ScrollView>
     </View>
@@ -2911,15 +2965,27 @@ function PrivateVoicePlayback({
 }
 
 function HighlightedCode({ code }: { code: string }) {
-  // Coloration légère pure React Native, sans WebView distante ni paquet supplémentaire.
-  const tokens = code.match(/(\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|\b(?:const|let|var|function|return|class|import|from|export|default|async|await|if|else|for|while|try|catch|def|self|True|False|None|public|private|interface|type|new|throw|switch|case|break|SELECT|INSERT|UPDATE|DELETE|CREATE|TABLE|WHERE|JOIN)\b|\b\d+(?:\.\d+)?\b|[\s\S])/g) || [];
-  return <Text style={mobileExtras.codeText} selectable>{tokens.map((token, index) => {
-    const color = /^(?:\/\*|\/\/|#)/.test(token) ? "#8a99a9" :
-      /^["'`]/.test(token) ? "#a5e3c5" :
-      /^\d/.test(token) ? "#f6ca88" :
-      /^(?:[A-Za-z_]+)$/.test(token) && token.length > 1 ? "#99bffa" : "#e9e9e9";
-    return <Text key={index} style={{ color }}>{token}</Text>;
-  })}</Text>;
+  // Un rendu natif léger : regrouper les tokens consécutifs de même couleur
+  // plutôt que de créer un <Text> React pour chaque caractère.
+  const runs = useMemo(() => {
+    const tokens = code.match(/(\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|\b(?:const|let|var|function|return|class|import|from|export|default|async|await|if|else|for|while|try|catch|def|self|True|False|None|public|private|interface|type|new|throw|switch|case|break|SELECT|INSERT|UPDATE|DELETE|CREATE|TABLE|WHERE|JOIN)\b|\b\d+(?:\.\d+)?\b|[\s\S])/g) || [];
+    const grouped: { text: string; color: string }[] = [];
+    for (const token of tokens) {
+      const color = /^(?:\/\*|\/\/|#)/.test(token) ? "#8a99a9" :
+        /^["'`]/.test(token) ? "#a5e3c5" :
+        /^\d/.test(token) ? "#f6ca88" :
+        /^(?:[A-Za-z_]+)$/.test(token) && token.length > 1 ? "#99bffa" : "#e9e9e9";
+      const previous = grouped[grouped.length - 1];
+      if (previous?.color === color) previous.text += token;
+      else grouped.push({ text: token, color });
+    }
+    return grouped;
+  }, [code]);
+  return (
+    <Text style={mobileExtras.codeText} selectable>
+      {runs.map((run, index) => <Text key={index} style={{ color: run.color }}>{run.text}</Text>)}
+    </Text>
+  );
 }
 
 const mobileExtras = StyleSheet.create({
@@ -3886,7 +3952,8 @@ export default function ChatPage() {
   const completedEditSubmittingRef = useRef(false);
 
   const [message, setMessage] = useState("");
-  const [composerExpanded, setComposerExpanded] = useState(false);
+  // Le Web expose directement les outils : le mobile garde le composeur ouvert.
+  const [composerExpanded, setComposerExpanded] = useState(true);
   // La hauteur est mesurée par un <Text> indépendant : jamais par le TextInput redimensionné.
   // Ainsi, la saisie ne provoque aucune boucle onContentSizeChange -> height -> onContentSizeChange.
   const [composerInputHeight, setComposerInputHeight] = useState(COMPOSER_INPUT_MIN_HEIGHT);
@@ -3918,6 +3985,10 @@ export default function ChatPage() {
 
   const [trials, setTrials] =
     useState<Record<string, TrialInfo>>({});
+  const [chatCapabilities, setChatCapabilities] = useState<ChatCapabilities | null>(null);
+  const [isLoadingChatCapabilities, setIsLoadingChatCapabilities] = useState(true);
+  const chatCapabilitiesRequestRef = useRef(0);
+  const sendPreflightRef = useRef(false);
   const [isLoadingWallet, setIsLoadingWallet] = useState(true);
   const [isLoadingConversations, setIsLoadingConversations] =
     useState(true);
@@ -4095,8 +4166,8 @@ export default function ChatPage() {
   const audioBusyRef = useRef(false);
   const stoppingRecordingRef = useRef(false);
   const availableModels = useMemo(
-    () => getSelectableModels(wallet?.pack_id ?? null, trials),
-    [wallet?.pack_id, trials],
+    () => getSelectableModels(chatCapabilities, trials),
+    [chatCapabilities, trials],
   );
 
   const hasActivePack = wallet?.is_pack_active === true;
@@ -4192,6 +4263,23 @@ export default function ChatPage() {
     return () => subscription.remove();
   }, [isInitialized, currentUserId, activeConversationId, isThinking,
       voiceDraft, localVoiceDraft, voiceUploading, recorderState.isRecording]);
+
+  // Le fournisseur peut changer sur Render sans mise à jour de l'APK.
+  // Au retour dans le Chat ou au premier plan, relire les droits effectifs.
+  useFocusEffect(useCallback(() => {
+    if (wallet?.is_pack_active && wallet.pack_id && !isThinking) {
+      void refreshChatCapabilities(wallet.pack_id, trials);
+    }
+  }, [wallet?.is_pack_active, wallet?.pack_id, isThinking]));
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "active" && wallet?.is_pack_active && wallet.pack_id && !isThinking) {
+        void refreshChatCapabilities(wallet.pack_id, trials);
+      }
+    });
+    return () => sub.remove();
+  }, [wallet?.is_pack_active, wallet?.pack_id, isThinking]);
 
   const remainingDays = wallet?.pack_expires_at
     ? Math.max(
@@ -4360,39 +4448,61 @@ export default function ChatPage() {
     return () => { show.remove(); hide.remove(); };
   }, []);
 
+  async function refreshChatCapabilities(
+    packId: string,
+    trialState: Record<string, TrialInfo> = trials,
+  ): Promise<ChatCapabilities | null> {
+    const requestId = ++chatCapabilitiesRequestRef.current;
+    setIsLoadingChatCapabilities(true);
+    try {
+      const raw = await apiFetch<unknown>("/ai/chat/capabilities");
+      const next = validateChatCapabilities(raw, packId);
+      if (requestId !== chatCapabilitiesRequestRef.current) return null;
+      setChatCapabilities(next);
+      const selectable = getSelectableModels(next, trialState);
+      setSelectedModel((current) =>
+        selectable.some((model) => model.id === current) ? current : (selectable[0]?.id || ""));
+      return next;
+    } catch (cause) {
+      if (requestId === chatCapabilitiesRequestRef.current) {
+        // Fail closed : ne jamais afficher les anciens modèles OpenAI
+        // si le serveur vient de basculer vers OpenRouter (ou inversement).
+        setChatCapabilities(null);
+        setSelectedModel("");
+        setModelMenuOpen(false);
+        setError(cause instanceof Error ? cause.message : "Catalogue des modèles indisponible.");
+      }
+      return null;
+    } finally {
+      if (requestId === chatCapabilitiesRequestRef.current) {
+        setIsLoadingChatCapabilities(false);
+      }
+    }
+  }
+
   async function loadWallet(
     trialState: Record<string, TrialInfo> = trials,
   ) {
     try {
       setIsLoadingWallet(true);
-      const data = await apiFetch<{
-        success: boolean;
-        wallet: WalletData;
-      }>("/credits/me");
-
+      const data = await apiFetch<{ success: boolean; wallet: WalletData }>("/credits/me");
       setWallet(data.wallet);
-
-      const selectable = getSelectableModels(
-        data.wallet.pack_id,
-        trialState,
-      );
-
-      if (selectable.length) {
-        setSelectedModel((current) =>
-          selectable.some((item) => item.id === current)
-            ? current
-            : selectable[0].id,
-        );
+      if (data.wallet?.is_pack_active && data.wallet.pack_id) {
+        // Le même endpoint que le Web détermine le fournisseur effectif.
+        await refreshChatCapabilities(data.wallet.pack_id, trialState);
       } else {
+        ++chatCapabilitiesRequestRef.current;
+        setChatCapabilities(null);
         setSelectedModel("");
+        setIsLoadingChatCapabilities(false);
       }
     } catch (requestError) {
-      console.error("Erreur chargement wallet :", requestError);
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Impossible de charger les crédits.",
-      );
+      ++chatCapabilitiesRequestRef.current;
+      setChatCapabilities(null);
+      setSelectedModel("");
+      setIsLoadingChatCapabilities(false);
+      setError(requestError instanceof Error
+        ? requestError.message : "Impossible de charger les crédits.");
     } finally {
       setIsLoadingWallet(false);
     }
@@ -5150,7 +5260,7 @@ export default function ChatPage() {
     setMessages([]);
     setMessage("");
     setAttachments([]);
-    setComposerExpanded(false);
+    setComposerExpanded(true);
     setComposerInputHeight(COMPOSER_INPUT_MIN_HEIGHT);
     setActiveCapability(null);
     setError(null);
@@ -5805,6 +5915,30 @@ export default function ChatPage() {
       return;
     }
 
+    if (sendPreflightRef.current || !wallet?.is_pack_active || !wallet.pack_id ||
+        !chatCapabilities || isLoadingChatCapabilities ||
+        !availableModels.some((model) => model.id === selectedModel)) {
+      setError(language === "fr" ? "Modèle indisponible. Actualise le sélecteur ORIA."
+        : "Model unavailable. Refresh the ORIA model selector.");
+      return;
+    }
+    // Relecture AVANT la création du message ou tout appel facturable.
+    // Si les interrupteurs Render ont changé, refuser cet ancien modèle.
+    sendPreflightRef.current = true;
+    let freshCapabilities: ChatCapabilities | null = null;
+    try {
+      freshCapabilities = await refreshChatCapabilities(wallet.pack_id, trials);
+    } finally {
+      sendPreflightRef.current = false;
+    }
+    if (!freshCapabilities ||
+        !getSelectableModels(freshCapabilities, trials).some((model) => model.id === selectedModel)) {
+      setError(language === "fr"
+        ? "Le fournisseur ou les modèles ORIA ont changé. Sélectionne un modèle et renvoie ton message."
+        : "ORIA provider or models changed. Select a model and resend your message.");
+      return;
+    }
+
     const selectedTrial = trials[selectedModel];
 
     if (selectedTrial && selectedTrial.remaining <= 0) {
@@ -5931,7 +6065,7 @@ export default function ChatPage() {
     setMessages((current) => current.some((item) => item.id === userMessageId)
       ? current : [...current, userMessage]);
     if (options?.contentOverride === undefined) setMessage("");
-    setComposerExpanded(false);
+    setComposerExpanded(true);
     setComposerInputHeight(COMPOSER_INPUT_MIN_HEIGHT);
     setChatStatusStep("sending");
     setIsThinking(true);
@@ -6774,6 +6908,13 @@ export default function ChatPage() {
     setCompletedEditBusy(true);
     setCompletedEditError(null);
     try {
+      // Une révision peut être payante : ne pas réutiliser un ancien choix
+      // de modèle après une bascule OpenAI / OpenRouter côté Render.
+      if (!wallet?.is_pack_active || !wallet.pack_id) throw new Error("Pack ORIA inactif.");
+      const current = await refreshChatCapabilities(wallet.pack_id, trials);
+      if (!current || !getSelectableModels(current, trials).some((m) => m.id === selectedModel)) {
+        throw new Error("Fournisseur ORIA modifié. Sélectionne un modèle avant de réviser.");
+      }
       const prepared = await apiFetch<OriaPrepareRevisionResponse>(
         `/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(serverId)}/revisions`,
         { method: "POST", body: JSON.stringify({
@@ -7555,7 +7696,7 @@ export default function ChatPage() {
 
             <View style={styles.headerTitleWrap}>
               <Text style={styles.headerOverline}>
-                Workspace
+                ORIA · {chatCapabilities?.provider === "openrouter" ? "OpenRouter" : chatCapabilities?.provider === "openai" ? "OpenAI" : "Chat"}
               </Text>
               <Text
                 numberOfLines={1}
@@ -7658,21 +7799,13 @@ export default function ChatPage() {
           ) : null}
 
           {messages.length === 0 || showReturnWelcome ? (
-            <View style={styles.emptyState}>
-              <View style={styles.brandRow}>
-                <View style={styles.brandIcon}>
-                  <Ionicons
-                    name="sparkles"
-                    size={21}
-                    color="#ffffff"
-                  />
-                </View>
-                <View>
-                  <Text style={styles.brandOverline}>ORIA</Text>
-                  <Text style={styles.brandTitle}>
-                    Intelligence workspace
-                  </Text>
-                </View>
+            <Reanimated.View entering={FadeInDown.duration(440).reduceMotion(ReduceMotion.System)} style={styles.emptyState}>
+              <View style={styles.welcomeIdentity}>
+                <Text style={styles.welcomeMonogram}>ORIA</Text>
+                <View style={styles.welcomeIdentityRule} />
+                <Text style={styles.welcomeIdentityCaption}>
+                  {language === "fr" ? "VOTRE ESPACE INTELLIGENT" : "YOUR INTELLIGENT WORKSPACE"}
+                </Text>
               </View>
 
               <Text style={styles.emptyHeading}>
@@ -7703,7 +7836,7 @@ export default function ChatPage() {
                     color={themedIconColor("#555555", isDark)} />
                 </Pressable>
               ) : null}
-            </View>
+            </Reanimated.View>
           ) : (
             <View style={styles.messageViewport}>
             <FlatList
@@ -7895,8 +8028,16 @@ export default function ChatPage() {
             ) : null}
             <View style={styles.modelSelectorWrap}>
               {modelMenuOpen ? (
-                <View style={styles.modelMenu}>
-                  {availableModels.length === 0 ? (
+                <Reanimated.View entering={FadeInUp.duration(215).reduceMotion(ReduceMotion.System)} exiting={FadeOutDown.duration(140).reduceMotion(ReduceMotion.System)} style={styles.modelMenu}>
+                  <Text style={styles.chatProviderLabel}>
+                    {isLoadingChatCapabilities ? (language === "fr" ? "Vérification du fournisseur…" : "Checking provider…")
+                      : chatCapabilities?.provider === "openrouter" ? "OpenRouter · ORIA"
+                        : chatCapabilities?.provider === "openai" ? "OpenAI · ORIA"
+                        : (language === "fr" ? "Fournisseur indisponible" : "Provider unavailable")}
+                  </Text>
+                  {isLoadingChatCapabilities ? (
+                    <ActivityIndicator size="small" color={isDark ? "#ffffff" : "#111111"} />
+                  ) : availableModels.length === 0 ? (
                     <Text style={styles.emptyMenuText}>
                       {t.noModel}
                     </Text>
@@ -7922,6 +8063,8 @@ export default function ChatPage() {
                           }
                           language={language}
                           onPress={() => {
+                            if (!chatCapabilities || isLoadingChatCapabilities ||
+                                !availableModels.some((item) => item.id === model.id)) return;
                             if (
                               isTrialModel &&
                               trialInfo &&
@@ -7938,11 +8081,11 @@ export default function ChatPage() {
                       );
                     })
                   )}
-                </View>
+                </Reanimated.View>
               ) : null}
 
               {reasoningMenuOpen ? (
-                <View style={styles.reasoningMenu}>
+                <Reanimated.View entering={FadeInUp.duration(215).reduceMotion(ReduceMotion.System)} exiting={FadeOutDown.duration(140).reduceMotion(ReduceMotion.System)} style={styles.reasoningMenu}>
                   {REASONING_OPTIONS.map((option) => {
                     const active =
                       reasoningMode === option.id;
@@ -7994,7 +8137,7 @@ export default function ChatPage() {
                       </Pressable>
                     );
                   })}
-                </View>
+                </Reanimated.View>
               ) : null}
 
               <View style={styles.modelControlsRow}>
@@ -8005,11 +8148,10 @@ export default function ChatPage() {
                   ]}
                   onPress={() => {
                     setReasoningMenuOpen(false);
-
-                    if (availableModels.length > 1) {
-                      setModelMenuOpen(
-                        (current) => !current,
-                      );
+                    const opening = !modelMenuOpen;
+                    setModelMenuOpen(opening);
+                    if (opening && wallet?.is_pack_active && wallet.pack_id) {
+                      void refreshChatCapabilities(wallet.pack_id, trials);
                     }
                   }}
                 >
@@ -8022,9 +8164,10 @@ export default function ChatPage() {
                     numberOfLines={1}
                     style={styles.modelSelectorText}
                   >
-                    {models.find(
+                    {availableModels.find(
                       (model) => model.id === selectedModel,
-                    )?.name || t.model}
+                    )?.name || (isLoadingChatCapabilities
+                      ? (language === "fr" ? "Chargement…" : "Loading…") : t.model)}
                   </Text>
 
                   {wallet?.pack_id &&
@@ -8037,6 +8180,11 @@ export default function ChatPage() {
                     </Text>
                   ) : null}
 
+                  {chatCapabilities ? (
+                    <Text style={styles.chatProviderBadge}>
+                      {chatCapabilities.provider === "openrouter" ? "OpenRouter" : "OpenAI"}
+                    </Text>
+                  ) : null}
                   <Ionicons
                     name={
                       modelMenuOpen
@@ -8282,7 +8430,7 @@ export default function ChatPage() {
                         size={19}
                         color={
                           activeCapability === "Recherche Web"
-                            ? "#ffffff"
+                            ? (isDark ? "#000000" : "#ffffff")
                             : themedIconColor("#555555", isDark)
                         }
                       />
@@ -8310,7 +8458,7 @@ export default function ChatPage() {
                         size={19}
                         color={
                           miniStudioOpen
-                            ? "#ffffff"
+                            ? (isDark ? "#000000" : "#ffffff")
                             : themedIconColor("#555555", isDark)
                         }
                       />
@@ -8339,18 +8487,20 @@ export default function ChatPage() {
                     style={[
                       styles.sendButton,
                       ((!message.trim() && attachments.length === 0) ||
-                        isThinking) && styles.sendDisabled,
+                        isThinking || isLoadingChatCapabilities || !chatCapabilities ||
+                        !availableModels.some((m) => m.id === selectedModel)) && styles.sendDisabled,
                     ]}
                     disabled={
                       (!message.trim() && attachments.length === 0) ||
-                      isThinking
+                      isThinking || isLoadingChatCapabilities || !chatCapabilities ||
+                      !availableModels.some((m) => m.id === selectedModel)
                     }
                     onPress={() => void handleSendMessage()}
                   >
                     {isThinking ? (
-                      <ActivityIndicator size="small" color="#ffffff" />
+                      <ActivityIndicator size="small" color={isDark ? "#000000" : "#ffffff"} />
                     ) : (
-                      <Ionicons name="arrow-up" size={22} color="#ffffff" />
+                      <Ionicons name="arrow-up" size={22} color={isDark ? "#000000" : "#ffffff"} />
                     )}
                   </Pressable>
                 </View>
@@ -8369,21 +8519,23 @@ export default function ChatPage() {
                   style={[
                     styles.restingSendButton,
                     ((!message.trim() && attachments.length === 0) ||
-                      isThinking) && styles.sendDisabled,
+                      isThinking || isLoadingChatCapabilities || !chatCapabilities ||
+                      !availableModels.some((m) => m.id === selectedModel)) && styles.sendDisabled,
                   ]}
                   disabled={
                     (!message.trim() && attachments.length === 0) ||
-                    isThinking
+                    isThinking || isLoadingChatCapabilities || !chatCapabilities ||
+                    !availableModels.some((m) => m.id === selectedModel)
                   }
                   onPress={() => void handleSendMessage()}
                 >
                   {isThinking ? (
-                    <ActivityIndicator size="small" color="#ffffff" />
+                    <ActivityIndicator size="small" color={isDark ? "#000000" : "#ffffff"} />
                   ) : (
                     <Ionicons
                       name="arrow-up"
                       size={22}
-                      color="#ffffff"
+                      color={isDark ? "#000000" : "#ffffff"}
                     />
                   )}
                 </Pressable>
@@ -8457,7 +8609,7 @@ export default function ChatPage() {
                     <Ionicons
                       name="add"
                       size={18}
-                      color="#ffffff"
+                      color={isDark ? "#000000" : "#ffffff"}
                     />
                     <Text style={styles.newConversationText}>
                       {t.newConversation}
@@ -8763,7 +8915,36 @@ const baseStyles = StyleSheet.create({
   emptyState: {
     flex: 1,
     justifyContent: "center",
-    paddingHorizontal: 22,
+    alignItems: "center",
+    paddingHorizontal: 26,
+    paddingBottom: 22,
+    width: "100%",
+    maxWidth: 780,
+    alignSelf: "center",
+  },
+  welcomeIdentity: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+    marginBottom: 30,
+  },
+  welcomeMonogram: {
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1.7,
+    color: "#111111",
+  },
+  welcomeIdentityRule: {
+    height: 15,
+    width: 1,
+    backgroundColor: "#d6d6d6",
+  },
+  welcomeIdentityCaption: {
+    fontSize: 9,
+    letterSpacing: 1.2,
+    fontWeight: "600",
+    color: "#777777",
   },
   brandRow: {
     flexDirection: "row",
@@ -8792,18 +8973,21 @@ const baseStyles = StyleSheet.create({
     color: "#171717",
   },
   emptyHeading: {
-    fontSize: 38,
-    lineHeight: 42,
-    letterSpacing: -1.2,
-    fontWeight: "700",
+    fontSize: 36,
+    lineHeight: 44,
+    letterSpacing: -1.3,
+    fontWeight: "600",
     color: "#111111",
+    textAlign: "center",
+    maxWidth: 680,
   },
   emptyDescription: {
-    marginTop: 17,
-    maxWidth: 370,
-    fontSize: 14,
-    lineHeight: 21,
-    color: "#7b7b7b",
+    marginTop: 18,
+    maxWidth: 510,
+    fontSize: 15,
+    lineHeight: 24,
+    color: "#737373",
+    textAlign: "center",
   },
   messageViewport: {
     flex: 1,
@@ -8833,10 +9017,13 @@ const baseStyles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
   },
   messageList: {
-    paddingHorizontal: 14,
-    paddingTop: 20,
-    paddingBottom: 20,
-    gap: 18,
+    width: "100%",
+    maxWidth: 880,
+    alignSelf: "center",
+    paddingHorizontal: 16,
+    paddingTop: 22,
+    paddingBottom: 32,
+    gap: 25,
   },
   oriaStatusRow: {
     minHeight: 28,
@@ -9024,19 +9211,20 @@ const baseStyles = StyleSheet.create({
     textAlign: "right",
   },
   messageBubble: {
-    maxWidth: "85%",
-    borderRadius: 22,
-    paddingHorizontal: 15,
-    paddingVertical: 12,
+    maxWidth: "88%",
+    borderRadius: 24,
+    paddingHorizontal: 17,
+    paddingVertical: 13,
   },
   userBubble: {
     backgroundColor: "#111111",
-    borderBottomRightRadius: 7,
+    borderBottomRightRadius: 9,
   },
   assistantMessageContent: {
     width: "100%",
-    paddingHorizontal: 2,
-    paddingVertical: 2,
+    minWidth: 0,
+    paddingHorizontal: 1,
+    paddingVertical: 3,
   },
   userText: {
     color: "#ffffff",
@@ -9062,8 +9250,8 @@ const baseStyles = StyleSheet.create({
   },
   messageText: {
     color: "#1b1b1b",
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 15,
+    lineHeight: 25,
   },
   mathBlock: {
     width: "100%",
@@ -9168,16 +9356,22 @@ const baseStyles = StyleSheet.create({
     marginVertical: 8,
   },
   codeBlock: {
-    marginTop: 3,
-    borderRadius: 14,
+    marginTop: 8,
+    marginBottom: 6,
+    borderRadius: 17,
     overflow: "hidden",
-    backgroundColor: "#181818",
+    backgroundColor: "#171717",
     borderWidth: 1,
-    borderColor: "#292929",
+    borderColor: "#343434",
+  },
+  codeBody: {
+    minWidth: "100%",
+    paddingHorizontal: 15,
+    paddingVertical: 13,
   },
   codeHeader: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "#333333",
     flexDirection: "row",
@@ -9207,9 +9401,8 @@ const baseStyles = StyleSheet.create({
   },
   codeText: {
     color: "#f0f0f0",
-    fontSize: 11,
-    lineHeight: 18,
-    padding: 12,
+    fontSize: 12,
+    lineHeight: 21,
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
   mediaMessage: {
@@ -9302,9 +9495,12 @@ const baseStyles = StyleSheet.create({
     flexShrink: 0,
     zIndex: 20,
     elevation: 20,
+    width: "100%",
+    maxWidth: 900,
+    alignSelf: "center",
     paddingHorizontal: 13,
-    paddingTop: 6,
-    backgroundColor: "#f8f8f8",
+    paddingTop: 10,
+    backgroundColor: "#ffffff",
   },
   modelSelectorWrap: {
     position: "relative",
@@ -9342,9 +9538,10 @@ const baseStyles = StyleSheet.create({
   reasoningMenu: {
     position: "absolute",
     right: 0,
-    bottom: 55,
-    width: 270,
-    borderRadius: 18,
+    bottom: 57,
+    width: 280,
+    maxWidth: "95%",
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: "#dddddd",
     backgroundColor: "#ffffff",
@@ -9386,13 +9583,27 @@ const baseStyles = StyleSheet.create({
     lineHeight: 13,
     color: "#777777",
   },
+  chatProviderLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+    paddingHorizontal: 11,
+    paddingTop: 9,
+    paddingBottom: 8,
+    color: "#6a6a6a",
+  },
+  chatProviderBadge: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: "#777777",
+  },
   modelMenu: {
     position: "absolute",
     left: 0,
     right: 0,
-    bottom: 55,
-    maxHeight: 300,
-    borderRadius: 18,
+    bottom: 57,
+    maxHeight: 340,
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: "#dddddd",
     backgroundColor: "#ffffff",
@@ -9617,9 +9828,14 @@ const baseStyles = StyleSheet.create({
   },
   composer: {
     borderWidth: 1,
-    borderColor: "#d2d2d2",
+    borderColor: "#dedede",
     backgroundColor: "#ffffff",
     overflow: "hidden",
+    shadowColor: "#000000",
+    shadowOpacity: 0.045,
+    shadowRadius: 17,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
   },
   composerResting: {
     minHeight: 62,
@@ -9630,12 +9846,13 @@ const baseStyles = StyleSheet.create({
     alignItems: "center",
   },
   composerExpanded: {
-    // Ne s'étend jamais sur toute la hauteur disponible.
+    // Composeur ouvert comme sur le Web, sans panneau couvrant l'écran.
     alignSelf: "stretch",
     flexGrow: 0,
     flexShrink: 0,
-    borderRadius: 24,
-    paddingTop: 3,
+    borderRadius: 26,
+    paddingTop: 7,
+    paddingBottom: 3,
   },
   attachmentsRow: {
     paddingHorizontal: 13,
@@ -9709,8 +9926,8 @@ const baseStyles = StyleSheet.create({
     width: "100%",
     minHeight: COMPOSER_INPUT_MIN_HEIGHT,
     maxHeight: COMPOSER_INPUT_MAX_HEIGHT,
-    paddingHorizontal: 17,
-    paddingTop: 10,
+    paddingHorizontal: 19,
+    paddingTop: 12,
     paddingBottom: 8,
   },
   composerTextMeasure: {
@@ -9728,13 +9945,13 @@ const baseStyles = StyleSheet.create({
   },
   composerFooter: {
     borderTopWidth: 0,
-    minHeight: 58,
-    paddingHorizontal: 10,
+    minHeight: 56,
+    paddingHorizontal: 11,
     paddingBottom: 10,
-    paddingTop: 4,
+    paddingTop: 5,
     flexDirection: "row",
     alignItems: "flex-end",
-    gap: 8,
+    gap: 7,
   },
   capabilityRow: {
     alignItems: "center",
@@ -9743,8 +9960,8 @@ const baseStyles = StyleSheet.create({
   },
   capabilityButton: {
     minHeight: 40,
-    paddingHorizontal: 9,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    borderRadius: 13,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
@@ -9761,9 +9978,9 @@ const baseStyles = StyleSheet.create({
     color: "#ffffff",
   },
   sendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 43,
+    height: 43,
+    borderRadius: 15,
     backgroundColor: "#111111",
     alignItems: "center",
     justifyContent: "center",
@@ -9964,4 +10181,318 @@ const baseStyles = StyleSheet.create({
     fontSize: 10,
     textAlign: "center",
   },
+});
+
+// ORIA MONO V3 — explicit design parity with the Web (neutral palette only).
+const monoLightStyles = StyleSheet.create({
+  "safe": {
+    "backgroundColor": "#ffffff"
+  },
+  "container": {
+    "backgroundColor": "#ffffff"
+  },
+  "header": {
+    "backgroundColor": "#ffffff",
+    "borderBottomColor": "#eeeeee"
+  },
+  "headerOverline": {
+    "color": "#737373"
+  },
+  "headerTitle": {
+    "color": "#111111"
+  },
+  "emptyHeading": {
+    "fontSize": 38,
+    "lineHeight": 46,
+    "letterSpacing": -1.5
+  },
+  "emptyDescription": {
+    "fontSize": 15,
+    "lineHeight": 25
+  },
+  "messageList": {
+    "gap": 29,
+    "paddingTop": 25,
+    "paddingBottom": 45
+  },
+  "messageText": {
+    "color": "#111111",
+    "lineHeight": 27
+  },
+  "userBubble": {
+    "backgroundColor": "#111111",
+    "borderRadius": 24
+  },
+  "userText": {
+    "color": "#ffffff"
+  },
+  "assistantMessageContent": {
+    "backgroundColor": "#ffffff"
+  },
+  "bottomArea": {
+    "backgroundColor": "#ffffff",
+    "paddingHorizontal": 14,
+    "paddingTop": 12,
+    "paddingBottom": 7
+  },
+  "composer": {
+    "backgroundColor": "#ffffff",
+    "borderColor": "#e5e5e5",
+    "borderRadius": 25,
+    "shadowOpacity": 0.09,
+    "shadowRadius": 24,
+    "shadowOffset": {
+      "width": 0,
+      "height": 7
+    },
+    "elevation": 5
+  },
+  "composerExpanded": {
+    "borderRadius": 25,
+    "paddingTop": 9,
+    "paddingBottom": 5
+  },
+  "composerFooter": {
+    "paddingBottom": 11
+  },
+  "modelMenu": {
+    "backgroundColor": "#ffffff",
+    "borderColor": "#e5e5e5",
+    "borderRadius": 23
+  },
+  "reasoningMenu": {
+    "backgroundColor": "#ffffff",
+    "borderColor": "#e5e5e5",
+    "borderRadius": 23
+  },
+  "modelSelector": {
+    "borderRadius": 16,
+    "backgroundColor": "#f6f6f6",
+    "borderColor": "#e5e5e5"
+  },
+  "reasoningSelector": {
+    "borderRadius": 16,
+    "backgroundColor": "#f6f6f6",
+    "borderColor": "#e5e5e5"
+  },
+  "sendButton": {
+    "borderRadius": 16,
+    "backgroundColor": "#111111"
+  },
+  "drawer": {
+    "backgroundColor": "#ffffff",
+    "borderColor": "#e5e5e5",
+    "borderRadius": 29
+  },
+  "drawerBackdrop": {
+    "backgroundColor": "rgba(0,0,0,0.38)"
+  }
+});
+const monoDarkStyles = StyleSheet.create({
+  "safe": {
+    "backgroundColor": "#000000"
+  },
+  "container": {
+    "backgroundColor": "#000000"
+  },
+  "header": {
+    "backgroundColor": "#000000",
+    "borderBottomColor": "#282828"
+  },
+  "headerOverline": {
+    "color": "#a5a5a5"
+  },
+  "headerTitle": {
+    "color": "#ffffff"
+  },
+  "creditPill": {
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "emptyState": {
+    "backgroundColor": "#000000"
+  },
+  "welcomeMonogram": {
+    "color": "#ffffff"
+  },
+  "welcomeIdentityCaption": {
+    "color": "#a5a5a5"
+  },
+  "emptyHeading": {
+    "color": "#ffffff",
+    "fontSize": 38,
+    "lineHeight": 46,
+    "letterSpacing": -1.5
+  },
+  "emptyDescription": {
+    "color": "#a5a5a5",
+    "fontSize": 15,
+    "lineHeight": 25
+  },
+  "messageList": {
+    "gap": 29,
+    "paddingTop": 25,
+    "paddingBottom": 45
+  },
+  "messageText": {
+    "color": "#ffffff",
+    "lineHeight": 27
+  },
+  "userBubble": {
+    "backgroundColor": "#1e1e1e",
+    "borderColor": "#282828",
+    "borderRadius": 24
+  },
+  "userText": {
+    "color": "#ffffff"
+  },
+  "assistantMessageContent": {
+    "backgroundColor": "#000000"
+  },
+  "bottomArea": {
+    "backgroundColor": "#000000",
+    "paddingHorizontal": 14,
+    "paddingTop": 12,
+    "paddingBottom": 7
+  },
+  "composer": {
+    "backgroundColor": "#090909",
+    "borderColor": "#333333",
+    "borderRadius": 25,
+    "shadowOpacity": 0,
+    "elevation": 0
+  },
+  "composerExpanded": {
+    "borderRadius": 25,
+    "paddingTop": 9,
+    "paddingBottom": 5
+  },
+  "composerFooter": {
+    "paddingBottom": 11
+  },
+  "composerInput": {
+    "color": "#ffffff",
+    "backgroundColor": "transparent"
+  },
+  "capabilityButtonText": {
+    "color": "#d0d0d0"
+  },
+  "capabilityActive": {
+    "backgroundColor": "#ffffff"
+  },
+  "capabilityActiveText": {
+    "color": "#000000"
+  },
+  "modelMenu": {
+    "backgroundColor": "#090909",
+    "borderColor": "#333333",
+    "borderRadius": 23
+  },
+  "reasoningMenu": {
+    "backgroundColor": "#090909",
+    "borderColor": "#333333",
+    "borderRadius": 23
+  },
+  "modelSelector": {
+    "borderRadius": 16,
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "modelSelectorText": {
+    "color": "#ffffff"
+  },
+  "reasoningSelector": {
+    "borderRadius": 16,
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "reasoningSelectorText": {
+    "color": "#ffffff"
+  },
+  "modelOptionActive": {
+    "backgroundColor": "#1e1e1e"
+  },
+  "modelName": {
+    "color": "#ffffff"
+  },
+  "modelDescription": {
+    "color": "#a5a5a5"
+  },
+  "sendButton": {
+    "borderRadius": 16,
+    "backgroundColor": "#ffffff"
+  },
+  "restingSendButton": {
+    "backgroundColor": "#ffffff"
+  },
+  "codeBlock": {
+    "backgroundColor": "#131313",
+    "borderColor": "#333333"
+  },
+  "inlineCode": {
+    "backgroundColor": "#242424",
+    "color": "#ffffff"
+  },
+  "artifactCard": {
+    "backgroundColor": "#090909",
+    "borderColor": "#282828"
+  },
+  "artifactName": {
+    "color": "#ffffff"
+  },
+  "artifactMeta": {
+    "color": "#a5a5a5"
+  },
+  "drawer": {
+    "backgroundColor": "#090909",
+    "borderColor": "#282828",
+    "borderRadius": 29
+  },
+  "drawerBrand": {
+    "color": "#ffffff"
+  },
+  "drawerSubtitle": {
+    "color": "#a5a5a5"
+  },
+  "drawerBackdrop": {
+    "backgroundColor": "rgba(0,0,0,0.65)"
+  },
+  "newConversationButton": {
+    "backgroundColor": "#ffffff"
+  },
+  "newConversationText": {
+    "color": "#000000"
+  },
+  "plusText": {
+    "color": "#000000"
+  },
+  "returnConversationCard": {
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "returnConversationHeading": {
+    "color": "#ffffff"
+  },
+  "returnConversationSubtitle": {
+    "color": "#a5a5a5"
+  },
+  "walletCard": {
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "walletBalance": {
+    "color": "#ffffff"
+  },
+  "conversationTitle": {
+    "color": "#d0d0d0"
+  },
+  "h1": {
+    "color": "#ffffff"
+  },
+  "h2": {
+    "color": "#ffffff"
+  },
+  "h3": {
+    "color": "#ffffff"
+  }
 });

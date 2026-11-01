@@ -19,6 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
 import { supabase } from "../../lib/supabase/client";
 import * as SecureStore from "expo-secure-store";
+import { polishOriaStyles } from "@/theme/oria-visual";
 
 /**
  * Configuration d'un pays et de son indicatif téléphonique.
@@ -1064,6 +1065,7 @@ export default function RegisterPage() {
             styles.scrollContent
           }
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           showsVerticalScrollIndicator={
             false
           }
@@ -2552,11 +2554,11 @@ const darkStyles = StyleSheet.create({
 });
 
 function authStyles(dark: boolean): typeof lightStyles {
-  if (!dark) return lightStyles;
+  if (!dark) return polishOriaStyles(lightStyles, "register", false);
   const overrides = darkStyles as Partial<Record<keyof typeof lightStyles, object>>;
   const entries = Object.keys(lightStyles).map((key) => {
     const id = key as keyof typeof lightStyles;
     return [key, overrides[id] ? [lightStyles[id], overrides[id]] : lightStyles[id]] as const;
   });
-  return Object.fromEntries(entries) as typeof lightStyles;
+  return polishOriaStyles(Object.fromEntries(entries) as typeof lightStyles, "register", true);
 }

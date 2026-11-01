@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from "react";
-import Animated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
+import Animated, { FadeInDown, FadeInUp, ReduceMotion } from "react-native-reanimated";
 import {
   ActivityIndicator,
   Alert,
@@ -277,7 +277,7 @@ export default function LoginPage() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.header}>
+          <Animated.View entering={FadeInDown.duration(350).reduceMotion(ReduceMotion.System)} style={styles.header}>
             <Pressable
               onPress={goHome}
               style={styles.brandButton}
@@ -287,7 +287,7 @@ export default function LoginPage() {
               <Ionicons name="sparkles" size={18} color={isDark ? "#ffffff" : "#111111"} />
               <Text style={styles.brand}>Oria.</Text>
             </Pressable>
-          </View>
+          </Animated.View>
 
           <View style={styles.center}>
             <Animated.View entering={FadeInDown.duration(440).reduceMotion(ReduceMotion.System)} style={styles.card}>
@@ -305,6 +305,7 @@ export default function LoginPage() {
               </Pressable>
 
               <View style={styles.intro}>
+                <Text style={styles.eyebrow}>{language === "fr" ? "VOTRE ESPACE ORIA" : "YOUR ORIA WORKSPACE"}</Text>
                 <View style={styles.lockIcon}>
                   <Ionicons
                     name="lock-closed-outline"
@@ -480,9 +481,9 @@ export default function LoginPage() {
               </Text>
             </Animated.View>
 
-            <Text style={styles.legalText}>
+            <Animated.Text entering={FadeInUp.delay(120).duration(450).reduceMotion(ReduceMotion.System)} style={styles.legalText}>
               {t.legal}
-            </Text>
+            </Animated.Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -540,9 +541,10 @@ const lightStyles = StyleSheet.create({
     width: "100%",
     borderWidth: 1,
     borderColor: "#e6e6e6",
-    borderRadius: 27,
+    borderRadius: 29,
     backgroundColor: "#ffffff",
-    padding: 24,
+    paddingHorizontal: 26,
+    paddingVertical: 29,
     shadowColor: "#000000",
     shadowOpacity: 0.04,
     shadowRadius: 14,
@@ -568,6 +570,10 @@ const lightStyles = StyleSheet.create({
   intro: {
     alignItems: "flex-start",
   },
+  eyebrow: {
+    fontSize: 10, color: "#737373", fontWeight: "700", letterSpacing: 2,
+    marginBottom: 2,
+  },
 
   lockIcon: {
     width: 44,
@@ -581,8 +587,8 @@ const lightStyles = StyleSheet.create({
   title: {
     marginTop: 22,
     color: "#191919",
-    fontSize: 29,
-    lineHeight: 36,
+    fontSize: 32,
+    lineHeight: 40,
     fontWeight: "700",
     letterSpacing: -0.8,
   },
@@ -695,7 +701,7 @@ const lightStyles = StyleSheet.create({
   submitButton: {
     height: 50,
     borderRadius: 16,
-    backgroundColor: "#191919",
+    backgroundColor: "#111111",
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -802,12 +808,13 @@ const lightStyles = StyleSheet.create({
 const darkStyles = StyleSheet.create({
   'safeArea': {backgroundColor: '#000000'},
   'brand': {color: '#ffffff'},
-  'card': {backgroundColor: '#101010', borderColor: '#2b2b2b', shadowOpacity: 0.15, elevation: 0},
+  'card': {backgroundColor: '#090909', borderColor: '#282828', shadowOpacity: 0, elevation: 0},
   'backText': {color: '#b5b5b5'},
   'lockIcon': {backgroundColor: '#ffffff'},
   'title': {color: '#ffffff'},
   'subtitle': {color: '#b5b5b5'},
   'label': {color: '#eeeeee'},
+  'eyebrow': { color: '#a5a5a5' },
   'input': {color: '#ffffff', backgroundColor: '#171717', borderColor: '#333333'},
   'forgotText': {color: '#bdbdbd'},
   'submitButton': {backgroundColor: '#ffffff'},

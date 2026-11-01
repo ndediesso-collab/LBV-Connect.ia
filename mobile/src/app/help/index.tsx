@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from "react";
-import Animated, { FadeInDown } from "react-native-reanimated";
+import Animated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
 
 import {
 
@@ -195,19 +195,20 @@ function buildDarkStyleOverride(style: unknown) {
 }
 
 function getThemedStyles(theme: OriaTheme) {
-  if (theme === "light") {
-    return baseStyles;
-  }
-
+  // Style system shared in spirit with Frontend/app/globals.css: semantic
+  // black / white surfaces rather than converting light colors blindly.
   const themed: Record<string, unknown> = {};
 
   for (const key of Object.keys(baseStyles)) {
     const style = baseStyles[key as keyof typeof baseStyles];
 
-    themed[key] = [
+    themed[key] = theme === "dark" ? [
       style,
       buildDarkStyleOverride(style),
-      ["safe", "container", "screen", "main", "root"].includes(key) ? { backgroundColor: "#000000" } : undefined,
+      monoDarkStyles[key as keyof typeof monoDarkStyles],
+    ] : [
+      style,
+      monoLightStyles[key as keyof typeof monoLightStyles],
     ];
   }
 
@@ -245,7 +246,7 @@ const UI = {
 
     heroDescription:
 
-      "{t.heroDescription}",
+      "Retrouvez les réponses aux questions essentielles sur ORIA.",
 
     searchPlaceholder: "Rechercher une question...",
 
@@ -261,7 +262,7 @@ const UI = {
 
     supportDescription:
 
-      "{t.supportDescription}",
+      "Notre équipe vous accompagne pour vos questions sur le compte, les crédits et le service.",
 
     contactSupport: "Contacter le support",
 
@@ -696,11 +697,11 @@ export default function HelpPage() {
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
-        <View style={styles.hero}>
+        <Animated.View entering={FadeInDown.duration(400).reduceMotion(ReduceMotion.System)} style={styles.hero}>
 
           <View style={styles.heroIcon}>
 
-            <Ionicons name="help-circle-outline" size={23} color={themedIconColor("#ffffff", isDark)} />
+            <Ionicons name="help-circle-outline" size={23} color={isDark ? "#000000" : "#ffffff"} />
 
           </View>
 
@@ -744,7 +745,7 @@ export default function HelpPage() {
 
           </View>
 
-        </View>
+        </Animated.View>
 
 
 
@@ -820,7 +821,7 @@ export default function HelpPage() {
 
                   {isOpen && (
 
-                    <Animated.View entering={FadeInDown.duration(200)} style={styles.faqAnswerContainer}>
+                    <Animated.View entering={FadeInDown.duration(240).reduceMotion(ReduceMotion.System)} style={styles.faqAnswerContainer}>
 
                       <Text style={styles.faqAnswer}>{faq.answer}</Text>
 
@@ -872,9 +873,9 @@ export default function HelpPage() {
 
           </Text>
 
-          <Pressable style={({ pressed }) => [styles.supportButton, pressed && styles.supportButtonPressed]}>
+          <Pressable accessibilityState={{ disabled: true }} disabled style={[styles.supportButton, { opacity: 0.58 }]} >
 
-            <Ionicons name="chatbubble-outline" size={16} color={themedIconColor("#ffffff", isDark)} />
+            <Ionicons name="chatbubble-outline" size={16} color={isDark ? "#000000" : "#ffffff"} />
 
             <Text style={styles.supportButtonText}>{t.contactSupport}</Text>
 
@@ -984,4 +985,146 @@ const baseStyles = StyleSheet.create({
 
   supportButtonText: { color: "#ffffff", fontSize: 12.5, fontWeight: "600", marginLeft: 7 },
 
+});
+
+// ORIA MONO V3 — explicit design parity with the Web (neutral palette only).
+const monoLightStyles = StyleSheet.create({
+  "safeArea": {
+    "backgroundColor": "#ffffff"
+  },
+  "header": {
+    "backgroundColor": "#ffffff",
+    "borderBottomColor": "#e5e5e5"
+  },
+  "content": {
+    "paddingHorizontal": 20,
+    "paddingTop": 45
+  },
+  "heroTitle": {
+    "fontSize": 34,
+    "lineHeight": 42,
+    "letterSpacing": -1.2,
+    "color": "#111111"
+  },
+  "searchContainer": {
+    "height": 56,
+    "borderRadius": 19,
+    "backgroundColor": "#f6f6f6",
+    "borderColor": "#e5e5e5"
+  },
+  "categoryCard": {
+    "minHeight": 103,
+    "borderRadius": 21,
+    "backgroundColor": "#ffffff",
+    "borderColor": "#e5e5e5",
+    "padding": 18
+  },
+  "faqContainer": {
+    "borderRadius": 22,
+    "borderColor": "#e5e5e5"
+  },
+  "supportCard": {
+    "borderRadius": 25,
+    "backgroundColor": "#f6f6f6",
+    "borderColor": "#e5e5e5"
+  }
+});
+const monoDarkStyles = StyleSheet.create({
+  "safeArea": {
+    "backgroundColor": "#000000"
+  },
+  "header": {
+    "backgroundColor": "#000000",
+    "borderBottomColor": "#282828"
+  },
+  "brandText": {
+    "color": "#ffffff"
+  },
+  "headerChatButton": {
+    "backgroundColor": "#ffffff"
+  },
+  "headerChatButtonText": {
+    "color": "#000000"
+  },
+  "content": {
+    "paddingHorizontal": 20,
+    "paddingTop": 45
+  },
+  "heroIcon": {
+    "backgroundColor": "#ffffff"
+  },
+  "heroTitle": {
+    "fontSize": 34,
+    "lineHeight": 42,
+    "letterSpacing": -1.2,
+    "color": "#ffffff"
+  },
+  "heroDescription": {
+    "color": "#a5a5a5"
+  },
+  "searchContainer": {
+    "height": 56,
+    "borderRadius": 19,
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "searchInput": {
+    "color": "#ffffff"
+  },
+  "sectionTitle": {
+    "color": "#ffffff"
+  },
+  "categoryCard": {
+    "minHeight": 103,
+    "borderRadius": 21,
+    "backgroundColor": "#090909",
+    "borderColor": "#282828",
+    "padding": 18
+  },
+  "categoryTitle": {
+    "color": "#ffffff"
+  },
+  "categoryDescription": {
+    "color": "#a5a5a5"
+  },
+  "categoryIcon": {
+    "backgroundColor": "#1e1e1e"
+  },
+  "faqContainer": {
+    "borderRadius": 22,
+    "backgroundColor": "#090909",
+    "borderColor": "#282828"
+  },
+  "faqItem": {
+    "borderBottomColor": "#282828"
+  },
+  "faqQuestionText": {
+    "color": "#ffffff"
+  },
+  "faqAnswer": {
+    "color": "#a5a5a5"
+  },
+  "supportCard": {
+    "borderRadius": 25,
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "supportTitle": {
+    "color": "#ffffff"
+  },
+  "supportDescription": {
+    "color": "#a5a5a5"
+  },
+  "supportButton": {
+    "backgroundColor": "#ffffff"
+  },
+  "supportButtonText": {
+    "color": "#000000"
+  },
+  "noResultsTitle": {
+    "color": "#ffffff"
+  },
+  "noResultsText": {
+    "color": "#a5a5a5"
+  }
 });

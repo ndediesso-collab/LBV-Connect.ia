@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Image, KeyboardAvoidingView, Linking, Modal,
+  ActivityIndicator, Alert, Animated as RNAnimated, KeyboardAvoidingView, Linking, Modal,
   Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View,
+  type StyleProp, type ViewStyle,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -228,6 +229,40 @@ function normalizeMedia(raw: unknown): Media | null {
   };
 }
 
+/** Chargement progressif avec fondu et état de secours ; aucun coût réseau supplémentaire. */
+function StudioImage({ uri, style, contain = false, dark = false }: {
+  uri: string;
+  style: StyleProp<ViewStyle>;
+  contain?: boolean;
+  dark?: boolean;
+}) {
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const opacity = useRef(new RNAnimated.Value(0)).current;
+  const reduceMotion = useReducedMotion();
+  useEffect(() => {
+    setState("loading");
+    opacity.setValue(0);
+  }, [uri, opacity]);
+  return (
+    <View style={[style, { overflow: "hidden", alignItems: "center", justifyContent: "center",
+      backgroundColor: dark ? "#222222" : "#f0f0f0" }]}>
+      {state === "loading" ? <ActivityIndicator color={dark ? "#ffffff" : "#111111"} /> : null}
+      {state === "error" ? <Ionicons name="image-outline" size={29} color={dark ? "#999999" : "#777777"} /> : null}
+      <RNAnimated.Image
+        source={{ uri }}
+        resizeMode={contain ? "contain" : "cover"}
+        style={[StyleSheet.absoluteFill, { opacity }]}
+        onLoad={() => {
+          setState("ready");
+          RNAnimated.timing(opacity, { toValue: 1, duration: reduceMotion ? 0 : 250,
+            useNativeDriver: true }).start();
+        }}
+        onError={() => setState("error")}
+      />
+    </View>
+  );
+}
+
 export default function OriaMiniStudio({ visible, language, theme = "light", onClose, onWalletRefresh }: Props) {
   const [section, setSection] = useState<Section>("image");
   const [wallet, setWallet] = useState<Wallet | null>(null);
@@ -251,6 +286,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
   const [accepted, setAccepted] = useState(false);
   const [gallery, setGallery] = useState<Media[]>([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
+  const [galleryVisibleCount, setGalleryVisibleCount] = useState(12);
   const [lastResult, setLastResult] = useState<Media | null>(null);
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
   const [openrouterFilmCaps, setOpenrouterFilmCaps] = useState<Capabilities | null>(null);
@@ -264,11 +300,11 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
 
   const dark = theme === "dark";
   const palette = useMemo(() => dark ? {
-    bg: "#000000", card: "#101010", text: "#ffffff", muted: "#bcbcbc", line: "#303030",
-    chip: "#181818", active: "#ffffff", notice: "#171717", activeText: "#000000",
+    bg: "#000000", card: "rgba(255,255,255,0.055)", text: "#ffffff", muted: "#bcbcbc", line: "rgba(255,255,255,0.14)",
+    chip: "rgba(255,255,255,0.075)", active: "#ffffff", notice: "#191919", activeText: "#000000",
   } : {
-    bg: "#ffffff", card: "#ffffff", text: "#111111", muted: "#666666", line: "#e5e5e5",
-    chip: "#f6f6f6", active: "#111111", notice: "#f6f6f6", activeText: "#ffffff",
+    bg: "#ffffff", card: "#ffffff", text: "#111111", muted: "#666666", line: "#e8e8e8",
+    chip: "#f6f6f6", active: "#000000", notice: "#f6f6f6", activeText: "#ffffff",
   }, [dark]);
   const tr = (fr: string, en: string) => language === "fr" ? fr : en;
   const kind: Kind = section === "video" ? "video" : "image";
@@ -423,7 +459,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
   }
   useEffect(() => {
     mounted.current = true;
-    if (visible) { void loadCapabilities(); void loadGallery(); }
+    if (visible) { setGalleryVisibleCount(12); void loadCapabilities(); void loadGallery(); }
     return () => { mounted.current = false; quoteVersion.current += 1; };
     // Ce composant est monté uniquement pendant l'ouverture du Studio dans le Chat.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -595,6 +631,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
           <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
             <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(280)} style={[styles.topbar, { borderColor: palette.line }]}>
               <View style={{ flex: 1 }}>
+                <Text style={[styles.topEyebrow, mutedStyle]}>ORIA / ATELIER CRÉATIF</Text>
                 <Text style={[styles.h1, textStyle]}>{tr("Mini-Studio ORIA", "ORIA Mini-Studio")}</Text>
                 <Text style={[styles.subtitle, mutedStyle]}>{tr(`Images, retouches et vidéos · ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video · ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`)}</Text>
               </View>
@@ -603,8 +640,8 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                 <Ionicons name="close" size={22} color={palette.text} />
               </Pressable>
             </Animated.View>
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-              <View style={styles.tabs}>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroller} contentContainerStyle={styles.tabs}>
                 {(["image", "video", "projects", "gallery"] as Section[]).map((tab) => (
                   <Pressable key={tab} disabled={busy} onPress={() => changeSection(tab)}
                     accessibilityRole="tab" accessibilityState={{ selected: section === tab }}
@@ -616,7 +653,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                     </Text>
                   </Pressable>
                 ))}
-              </View>
+              </ScrollView>
               <View style={[styles.wallet, panelStyle]}>
                 <Ionicons name="wallet-outline" size={19} color={palette.text} />
                 <View style={{ flex: 1 }}>
@@ -689,20 +726,34 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                       {galleryLoading ? <ActivityIndicator color={palette.text}/> : <Ionicons name="refresh-outline" size={20} color={palette.text}/>}
                     </Pressable>
                   </View>
-                  {gallery.length === 0 ? <Text style={mutedStyle}>{tr("Aucune création enregistrée.", "No saved creations yet.")}</Text> : null}
-                  {gallery.map((item) => (
+                  {galleryLoading && gallery.length === 0 ? (
+                    <View style={styles.galleryLoading}>
+                      <ActivityIndicator size="small" color={palette.text} />
+                      <Text style={[styles.note, mutedStyle]}>{tr("Chargement de la galerie…", "Loading gallery…")}</Text>
+                    </View>
+                  ) : null}
+                  {!galleryLoading && gallery.length === 0 ? <Text style={[styles.note, mutedStyle]}>{tr("Aucune création enregistrée.", "No saved creations yet.")}</Text> : null}
+                  {gallery.slice(0, galleryVisibleCount).map((item) => (
                     <View key={item.id} style={[styles.galleryItem, { borderColor: palette.line }]}>
-                      {item.type === "image" ? <Image source={{ uri: item.url }} style={styles.galleryImage} resizeMode="cover" />
+                      {item.type === "image" ? <StudioImage uri={item.url} style={styles.galleryImage} dark={dark} />
                         : <View style={[styles.galleryImage, styles.videoPlaceholder]}><Ionicons name="play-circle-outline" size={42} color="#fff"/></View>}
                       <View style={{ flex: 1, gap: 4 }}>
                         <Text numberOfLines={2} style={[styles.label, textStyle]}>{item.prompt || (item.type === "image" ? tr("Image", "Image") : tr("Vidéo", "Video"))}</Text>
                         <Text numberOfLines={1} style={[styles.note, mutedStyle]}>{item.model || item.action || "ORIA"}</Text>
-                        <Pressable onPress={() => void Linking.openURL(item.url).catch(() => setError(tr("Lien inaccessible.", "Link unavailable.")))}>
-                          <Text style={styles.link}>{tr("Ouvrir / enregistrer", "Open / save")}</Text>
+                        <Pressable accessibilityRole="button" accessibilityLabel={tr("Ouvrir la création", "Open creation")}
+                          onPress={() => void Linking.openURL(item.url).catch(() => setError(tr("Lien inaccessible.", "Link unavailable.")))}>
+                          <Text style={[styles.link, { color: palette.text }]}>{tr("Ouvrir / enregistrer", "Open / save")}  ↗</Text>
                         </Pressable>
                       </View>
                     </View>
                   ))}
+                  {gallery.length > galleryVisibleCount ? (
+                    <Pressable accessibilityRole="button" onPress={() => setGalleryVisibleCount(n => n + 12)}
+                      style={[styles.moreButton, chipStyle]}>
+                      <Text style={[styles.label, textStyle]}>{tr("Afficher plus de créations", "Show more creations")}</Text>
+                      <Ionicons name="chevron-down-outline" size={16} color={palette.text} />
+                    </Pressable>
+                  ) : null}
                 </View>
               ) : (
                 <>
@@ -737,7 +788,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                           <Text style={[styles.label, textStyle]}>{photo ? tr("Remplacer la photo", "Replace photo") : tr("Choisir une photo", "Select photo")}</Text>
                         </Pressable>
                         {photo ? (
-                          <View style={styles.photoPreview}><Image source={{ uri: photo.uri }} style={styles.refImage}/>
+                          <View style={styles.photoPreview}><StudioImage uri={photo.uri} style={styles.refImage} contain dark={dark}/>
                             <Pressable onPress={() => { invalidateQuote(); setPhoto(null); }} disabled={busy}><Ionicons name="trash-outline" size={20} color="#bf434d"/></Pressable>
                           </View>
                         ) : null}
@@ -786,9 +837,10 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                     <Text style={[styles.note, mutedStyle]}>{tr("Le devis ne débite aucun crédit. Confirmez son plafond avant la génération.",
                       "A quote doesn't debit credits. Approve its cap before generating.")}</Text>
                     <Pressable accessibilityRole="button" disabled={!canQuote} onPress={() => void prepareQuote()}
-                      style={[styles.primaryButton, { backgroundColor: "#111111" }, !canQuote && styles.unavailable]}>
-                      {quoting ? <ActivityIndicator color="#fff"/> : <Ionicons name="calculator-outline" size={18} color="#ffffff"/>}
-                      <Text style={styles.primaryText}>{tr("Calculer mon devis", "Calculate quote")}</Text>
+                      style={({ pressed }) => [styles.primaryButton, { backgroundColor: palette.active,
+                        opacity: pressed ? 0.83 : 1 }, !canQuote && styles.unavailable]}>
+                      {quoting ? <ActivityIndicator color={palette.activeText}/> : <Ionicons name="calculator-outline" size={18} color={palette.activeText}/>}
+                      <Text style={[styles.primaryText, { color: palette.activeText }]}>{tr("Calculer mon devis", "Calculate quote")}</Text>
                     </Pressable>
                     {quote && quoteReady ? (
                       <View style={[styles.quoteBox, { backgroundColor: palette.notice }]}>
@@ -798,28 +850,29 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                           ? tr("Solde suffisant", "Sufficient balance") : tr("Solde insuffisant", "Insufficient balance")}</Text>
                         <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: accepted }} disabled={busy || !quote.credits_sufficient}
                           onPress={() => setAccepted((v) => !v)} style={styles.acceptRow}>
-                          <Ionicons name={accepted ? "checkbox" : "square-outline"} size={22} color="#ffffff" />
-                          <Text style={[styles.note, { flex: 1, color: palette.text }]}>{tr("J'accepte la réservation maximale indiquée avant l'appel Google.",
-                            "I approve the maximum reservation shown before the Google call.")}</Text>
+                          <Ionicons name={accepted ? "checkbox" : "square-outline"} size={22} color={palette.text} />
+                          <Text style={[styles.note, { flex: 1, color: palette.text }]}>{tr(`J'accepte le plafond indiqué avant l'appel ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}.`,
+                            `I approve the indicated cap before the ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"} call.`)}</Text>
                         </Pressable>
                         {!quote.generation_available ? <Text style={[styles.note, mutedStyle]}>{tr("Devis seulement : génération non disponible actuellement.",
                           "Quote only: generation is not currently available.")}</Text> : null}
                       </View>
                     ) : null}
                     <Pressable accessibilityRole="button" disabled={!canGenerate || busy} onPress={() => void generate()}
-                      style={[styles.primaryButton, { backgroundColor: "#111111" }, (!canGenerate || busy) && styles.unavailable]}>
-                      {busy ? <ActivityIndicator color="#fff"/> : <Ionicons name="sparkles" size={18} color="#ffffff" />}
-                      <Text style={styles.primaryText}>{kind === "image" ? tr("Générer l'image", "Generate image") : tr("Créer la vidéo", "Generate video")}</Text>
+                      style={({ pressed }) => [styles.primaryButton, { backgroundColor: palette.active,
+                        opacity: pressed ? 0.83 : 1 }, (!canGenerate || busy) && styles.unavailable]}>
+                      {busy ? <ActivityIndicator color={palette.activeText}/> : <Ionicons name="sparkles" size={18} color={palette.activeText} />}
+                      <Text style={[styles.primaryText, { color: palette.activeText }]}>{kind === "image" ? tr("Générer l'image", "Generate image") : tr("Créer la vidéo", "Generate video")}</Text>
                     </Pressable>
                     {!caps?.generation_available ? <Text style={[styles.note, mutedStyle]}>{tr("Bouton bloqué jusqu'à l'activation sécurisée du backend.",
                       "Button locked until the backend is safely enabled.")}</Text> : null}
                   </View>
                   {lastResult ? <View style={[styles.card, panelStyle]}>
                     <Text style={[styles.h2, textStyle]}>{tr("Dernière création", "Latest creation")}</Text>
-                    {lastResult.type === "image" ? <Image source={{ uri: lastResult.url }} resizeMode="contain" style={styles.lastImage}/>
+                    {lastResult.type === "image" ? <StudioImage uri={lastResult.url} contain dark={dark} style={styles.lastImage}/>
                       : <Text style={[styles.note, mutedStyle]}>{tr("Votre vidéo est prête.", "Your video is ready.")}</Text>}
                     <Pressable onPress={() => void Linking.openURL(lastResult.url).catch(() => setError("Lien indisponible."))}>
-                      <Text style={styles.link}>{tr("Ouvrir la création", "Open creation")}</Text>
+                      <Text style={[styles.link, { color: palette.text }]}>{tr("Ouvrir la création", "Open creation")} ↗</Text>
                     </Pressable>
                   </View> : null}
                 </>
@@ -833,22 +886,24 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
 }
 
 const styles = StyleSheet.create({
-  topbar: { paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 10 },
-  h1: { fontSize: 21, fontWeight: "800", letterSpacing: -0.5 },
+  topbar: { paddingHorizontal: 20, paddingVertical: 18, borderBottomWidth: 1, flexDirection: "row", alignItems: "center", gap: 10 },
+  topEyebrow: { fontSize: 9, fontWeight: "800", letterSpacing: 1.5, marginBottom: 5 },
+  h1: { fontSize: 23, fontWeight: "800", letterSpacing: -0.75 },
   subtitle: { fontSize: 11, lineHeight: 17, marginTop: 3 },
-  close: { width: 40, height: 40, borderRadius: 12, borderWidth: 1, alignItems: "center", justifyContent: "center" },
-  content: { paddingHorizontal: 14, paddingTop: 16, paddingBottom: 44, gap: 14, width: "100%", maxWidth: 750, alignSelf: "center" },
-  tabs: { flexDirection: "row", gap: 8 },
-  tab: { flex: 1, minHeight: 48, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 4, paddingHorizontal: 5 },
+  close: { width: 44, height: 44, borderRadius: 15, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  content: { paddingHorizontal: 18, paddingTop: 20, paddingBottom: 70, gap: 16, width: "100%", maxWidth: 750, alignSelf: "center" },
+  tabScroller: { flexGrow: 0, marginHorizontal: -2 },
+  tabs: { flexDirection: "row", gap: 9, paddingHorizontal: 2, paddingVertical: 3 },
+  tab: { minWidth: 112, minHeight: 47, borderWidth: 1, borderRadius: 16, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 6, paddingHorizontal: 12 },
   tabSelected: { backgroundColor: "transparent", borderColor: "transparent" },
   tabText: { fontSize: 11, fontWeight: "700" },
-  wallet: { borderWidth: 1, borderRadius: 15, padding: 14, flexDirection: "row", gap: 11, alignItems: "center" },
-  card: { borderWidth: 1, borderRadius: 19, padding: 15, gap: 13 },
+  wallet: { borderWidth: 1, borderRadius: 20, padding: 17, flexDirection: "row", gap: 11, alignItems: "center" },
+  card: { borderWidth: 1, borderRadius: 25, padding: 20, gap: 16 },
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  h2: { fontSize: 16, fontWeight: "800" },
+  h2: { fontSize: 18, fontWeight: "800", letterSpacing: -0.45 },
   fieldLabel: { fontSize: 12, fontWeight: "700", marginTop: 5 },
   flexWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  choice: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 40, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderRadius: 12 },
+  choice: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 43, paddingHorizontal: 13, paddingVertical: 8, borderWidth: 1, borderRadius: 14 },
   choiceText: { fontSize: 11, fontWeight: "600" },
   unavailable: { opacity: 0.38 },
   label: { fontSize: 12, lineHeight: 18, fontWeight: "700" },
@@ -857,17 +912,19 @@ const styles = StyleSheet.create({
   info: { padding: 12, borderRadius: 13 },
   error: { borderWidth: 1, borderColor: "#f2b8bd", backgroundColor: "#fff3f3", borderRadius: 12, padding: 12 },
   errorText: { color: "#ae263a", fontSize: 12, lineHeight: 18 },
-  prompt: { borderWidth: 1, borderRadius: 12, padding: 12, minHeight: 125, fontSize: 13, lineHeight: 20, textAlignVertical: "top" },
-  photoPicker: { borderWidth: 1, borderRadius: 13, minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  prompt: { borderWidth: 1, borderRadius: 19, padding: 17, minHeight: 150, fontSize: 14, lineHeight: 22, textAlignVertical: "top" },
+  photoPicker: { borderWidth: 1, borderRadius: 17, minHeight: 54, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
   photoPreview: { flexDirection: "row", alignItems: "center", gap: 14, marginVertical: 9 },
-  refImage: { height: 90, width: 120, borderRadius: 12 },
-  primaryButton: { minHeight: 48, borderRadius: 13, paddingHorizontal: 12, backgroundColor: "#111111", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9 },
+  refImage: { height: 100, width: 130, borderRadius: 16 },
+  primaryButton: { minHeight: 54, borderRadius: 17, paddingHorizontal: 12, backgroundColor: "#111111", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9 },
   primaryText: { color: "#fff", fontSize: 13, fontWeight: "800" },
-  quoteBox: { borderRadius: 12, padding: 13, gap: 8 },
+  quoteBox: { borderRadius: 19, padding: 18, gap: 10 },
   acceptRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 7 },
   link: { fontSize: 12, color: "#777777", fontWeight: "700", paddingVertical: 8 },
-  galleryItem: { borderTopWidth: 1, paddingTop: 12, flexDirection: "row", gap: 11 },
-  galleryImage: { width: 104, height: 102, borderRadius: 11 },
+  galleryItem: { borderTopWidth: 1, paddingTop: 14, flexDirection: "row", alignItems: "center", gap: 14 },
+  galleryImage: { width: 112, height: 112, borderRadius: 16 },
+  galleryLoading: { minHeight: 100, alignItems: "center", justifyContent: "center", gap: 12 },
+  moreButton: { minHeight: 47, borderWidth: 1, borderRadius: 15, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8 },
   videoPlaceholder: { alignItems: "center", justifyContent: "center", backgroundColor: "#171717" },
-  lastImage: { width: "100%", height: 240, borderRadius: 13, backgroundColor: "#161616" },
+  lastImage: { width: "100%", height: 270, borderRadius: 19, backgroundColor: "#161616" },
 });

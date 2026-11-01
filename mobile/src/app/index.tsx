@@ -5,18 +5,23 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  useColorScheme,
+  StatusBar,
+  useWindowDimensions,
   Text,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { polishOriaStyles } from "@/theme/oria-visual";
 
 export default function Home() {
-  const isDark = useColorScheme() === "dark";
-  const styles = isDark ? darkStyles : lightStyles;
+  // L'accueil public reste noir, indépendamment du thème système.
+  const styles = ORIA_HOME_STYLES;
+  const { width } = useWindowDimensions();
+  const compact = width < 480;
   const reduceMotion = useReducedMotion();
   return (
     <View style={styles.main}>
+      <StatusBar barStyle="light-content" />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -142,11 +147,13 @@ export default function Home() {
               </Text>
 
               {/* Boutons */}
-              <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(370).delay(110)} style={styles.heroButtons}>
+              <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(370).delay(110)}
+                style={[styles.heroButtons, compact && { flexDirection: "column" }]}>
                 <Link href={"/packs" as any} asChild>
                   <Pressable
                     style={({ pressed }) => [
                       styles.primaryHeroButton,
+                      compact && { width: "100%" },
                       pressed && styles.primaryHeroButtonPressed,
                     ]}
                   >
@@ -160,6 +167,7 @@ export default function Home() {
                   <Pressable
                     style={({ pressed }) => [
                       styles.secondaryHeroButton,
+                      compact && { width: "100%" },
                       pressed && styles.secondaryHeroButtonPressed,
                     ]}
                   >
@@ -291,7 +299,7 @@ function Feature({
   title: string;
   description: string;
 }) {
-  const styles = useColorScheme() === "dark" ? darkStyles : lightStyles;
+  const styles = ORIA_HOME_STYLES;
   const reduceMotion = useReducedMotion();
   const index = Math.max(0, Number(number) - 1);
   return (
@@ -916,3 +924,6 @@ const darkStyles = Object.fromEntries(
     return [key, [item, overrides]];
   }),
 ) as unknown as typeof lightStyles;
+
+// Styles calculés une seule fois : pas de re-création à chaque scroll / animation.
+const ORIA_HOME_STYLES = polishOriaStyles(darkStyles, "home", true);

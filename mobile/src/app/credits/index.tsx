@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import Reanimated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
+import OriaSkeleton from "@/components/oria-design/OriaSkeleton";
 
 
 
@@ -464,19 +466,20 @@ function buildDarkStyleOverride(style: unknown) {
 }
 
 function getThemedStyles(theme: OriaTheme) {
-  if (theme === "light") {
-    return baseStyles;
-  }
-
+  // Style system shared in spirit with Frontend/app/globals.css: semantic
+  // black / white surfaces rather than converting light colors blindly.
   const themed: Record<string, unknown> = {};
 
   for (const key of Object.keys(baseStyles)) {
     const style = baseStyles[key as keyof typeof baseStyles];
 
-    themed[key] = [
+    themed[key] = theme === "dark" ? [
       style,
       buildDarkStyleOverride(style),
-      ["safe", "container", "screen", "main", "root"].includes(key) ? { backgroundColor: "#000000" } : undefined,
+      monoDarkStyles[key as keyof typeof monoDarkStyles],
+    ] : [
+      style,
+      monoLightStyles[key as keyof typeof monoLightStyles],
     ];
   }
 
@@ -2564,7 +2567,7 @@ export default function CreditsPage() {
 
 
 
-          <Ionicons name="add" size={17} color="#ffffff" />
+          <Ionicons name="add" size={17} color={isDark ? "#000000" : "#ffffff"} />
 
 
 
@@ -2628,7 +2631,7 @@ export default function CreditsPage() {
 
 
 
-        <View style={styles.intro}>
+        <Reanimated.View entering={FadeInDown.duration(380).reduceMotion(ReduceMotion.System)} style={styles.intro}>
 
 
 
@@ -2652,7 +2655,7 @@ export default function CreditsPage() {
 
 
 
-        </View>
+        </Reanimated.View>
 
 
 
@@ -2681,6 +2684,7 @@ export default function CreditsPage() {
 
 
             </Text>
+                <View style={{ width: "100%", marginTop: 16 }}><OriaSkeleton dark={isDark} variant="wallet" /></View>
 
 
 
@@ -5225,4 +5229,178 @@ const baseStyles = StyleSheet.create({
 
 
 
+});
+
+// ORIA MONO V3 — explicit design parity with the Web (neutral palette only).
+const monoLightStyles = StyleSheet.create({
+  "safeArea": {
+    "backgroundColor": "#ffffff"
+  },
+  "header": {
+    "backgroundColor": "#ffffff",
+    "borderBottomColor": "#e5e5e5"
+  },
+  "scrollContent": {
+    "paddingHorizontal": 20,
+    "paddingTop": 35
+  },
+  "pageTitle": {
+    "color": "#111111",
+    "fontSize": 35,
+    "lineHeight": 43,
+    "letterSpacing": -1.3
+  },
+  "balanceCard": {
+    "borderRadius": 27,
+    "backgroundColor": "#111111",
+    "borderColor": "#111111",
+    "padding": 24
+  },
+  "balanceLabel": {
+    "color": "#dedede"
+  },
+  "balanceValue": {
+    "color": "#ffffff"
+  },
+  "balanceUnit": {
+    "color": "#d0d0d0"
+  },
+  "progressText": {
+    "color": "#d0d0d0"
+  },
+  "progressTrack": {
+    "backgroundColor": "#424242"
+  },
+  "progressFill": {
+    "backgroundColor": "#ffffff"
+  },
+  "statCard": {
+    "borderRadius": 22,
+    "backgroundColor": "#f6f6f6",
+    "borderColor": "#e5e5e5"
+  },
+  "packStatusCard": {
+    "borderRadius": 24
+  },
+  "transactionsBox": {
+    "borderRadius": 22
+  }
+});
+const monoDarkStyles = StyleSheet.create({
+  "safeArea": {
+    "backgroundColor": "#000000"
+  },
+  "header": {
+    "backgroundColor": "#000000",
+    "borderBottomColor": "#282828"
+  },
+  "brandText": {
+    "color": "#ffffff"
+  },
+  "buyButton": {
+    "backgroundColor": "#ffffff"
+  },
+  "buyButtonText": {
+    "color": "#000000"
+  },
+  "scrollContent": {
+    "paddingHorizontal": 20,
+    "paddingTop": 35
+  },
+  "pageTitle": {
+    "color": "#ffffff",
+    "fontSize": 35,
+    "lineHeight": 43,
+    "letterSpacing": -1.3
+  },
+  "pageDescription": {
+    "color": "#a5a5a5"
+  },
+  "overline": {
+    "color": "#a5a5a5"
+  },
+  "balanceCard": {
+    "borderRadius": 27,
+    "backgroundColor": "#ffffff",
+    "borderColor": "#ffffff",
+    "padding": 24
+  },
+  "balanceLabel": {
+    "color": "#5d5d5d"
+  },
+  "balanceValue": {
+    "color": "#000000"
+  },
+  "balanceUnit": {
+    "color": "#5d5d5d"
+  },
+  "balanceIcon": {
+    "backgroundColor": "#111111"
+  },
+  "packInfo": {
+    "backgroundColor": "#f0f0f0"
+  },
+  "packInfoLabel": {
+    "color": "#a5a5a5"
+  },
+  "packInfoValue": {
+    "color": "#ffffff"
+  },
+  "progressText": {
+    "color": "#555555"
+  },
+  "progressTrack": {
+    "backgroundColor": "#e5e5e5"
+  },
+  "progressFill": {
+    "backgroundColor": "#111111"
+  },
+  "statCard": {
+    "borderRadius": 22,
+    "backgroundColor": "#131313",
+    "borderColor": "#282828"
+  },
+  "statLabel": {
+    "color": "#a5a5a5"
+  },
+  "statValue": {
+    "color": "#ffffff"
+  },
+  "statDescription": {
+    "color": "#a5a5a5"
+  },
+  "packStatusCard": {
+    "borderRadius": 24,
+    "backgroundColor": "#090909",
+    "borderColor": "#282828"
+  },
+  "packTitle": {
+    "color": "#ffffff"
+  },
+  "packDescription": {
+    "color": "#a5a5a5"
+  },
+  "transactionsBox": {
+    "borderRadius": 22,
+    "backgroundColor": "#090909",
+    "borderColor": "#282828"
+  },
+  "transactionItem": {
+    "borderBottomColor": "#282828"
+  },
+  "transactionTitle": {
+    "color": "#ffffff"
+  },
+  "transactionDescription": {
+    "color": "#a5a5a5"
+  },
+  "transactionAmount": {
+    "color": "#ffffff"
+  },
+  "historyTitle": {
+    "color": "#ffffff"
+  },
+  "historyDescription": {
+    "color": "#a5a5a5"
+  }
 });
