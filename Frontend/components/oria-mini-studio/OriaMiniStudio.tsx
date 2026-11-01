@@ -17,7 +17,13 @@ type Mode = ImageMode | VideoMode;
 type Screen = Kind | "gallery";
 
 type Wallet = { balance: number; pack_id: string | null; is_pack_active: boolean };
-type ImageModel = { model: string; resolutions: string[]; max_references_supported_now: number };
+type ImageModel = { model: string; resolutions: string[]; max_references_supported_now: number; aspect_ratios?: string[] };
+type VideoModel = {
+  model: string;
+  duration_choices_seconds: number[];
+  billable_resolutions: string[];
+  aspect_ratios: string[];
+};
 type Capabilities = {
   success: boolean;
   provider: "google" | "openrouter";
@@ -36,6 +42,9 @@ type Capabilities = {
   };
   video: {
     model: string;
+    // OpenRouter renvoie la liste des modèles autorisés par le backend.
+    // Google peut encore renvoyer uniquement video.model (compatibilité historique).
+    models?: VideoModel[];
     allowed_modes: VideoMode[];
     available_now_modes: VideoMode[];
     duration_choices_seconds: number[];
@@ -113,6 +122,19 @@ const VIDEO_RATIOS = ["16:9", "9:16"] as const;
 const LABEL_PACK: Record<string, string> = {
   light_pack: "Léger", intermediate_pack: "Intermédiaire", pro_pack: "Pro", business_pack: "Business",
 };
+const MEDIA_MODEL_LABELS: Record<string, string> = {
+  "bytedance-seed/seedream-5-0-flash": "Seedream 5.0 Flash",
+  "google/gemini-3.1-flash-image": "Nano Banana 2",
+  "black-forest-labs/flux-3-image": "FLUX.3 Image",
+  "openai/gpt-image-2.5-sunburst": "GPT Image 2.5 Sunburst",
+  "alibaba/wan-3.0": "Wan 3.0",
+  "google/veo-3.1-lite": "Veo 3.1 Lite",
+  "bytedance/seedance-2.5": "Seedance 2.5",
+  "kwaivgi/kling-v3.0-pro": "Kling 3.0 Pro",
+};
+function modelLabel(model: string): string {
+  return MEDIA_MODEL_LABELS[model] || model.replace(/^google\//, "").replace(/^gemini-/, "");
+}
 // Les actions sont les identifiants historiques du backend ORIA.
 // Ce mapping n'accorde AUCUN droit : /capabilities et les RPC le vérifient toujours.
 const IMAGE_OFFERS: Record<string, { action: string; label: string; maxResolution: string }[]> = {
@@ -214,6 +236,45 @@ function availableImageResolutions(
 function cheapestCompatibleOffer(offers: typeof IMAGE_OFFERS[string], resolution: string) {
   return offers.find(offer => resolutionRank(resolution) <= resolutionRank(offer.maxResolution));
 }
+// Ne jamais déduire les droits des noms affichés : seules les capacités
+// authentifiées du backend ouvrent les modèles et leurs paramètres.
+function videoModelsFromCapabilities(caps: Capabilities | null): VideoModel[] {
+  if (!caps) return [];
+  if (MEDIA_PROVIDER === "openrouter") {
+    return (caps.video.models || []).filter(model =>
+      !!model && typeof model.model === "string" && !!model.model.trim() &&
+      Array.isArray(model.duration_choices_seconds) &&
+      Array.isArray(model.billable_resolutions) &&
+      Array.isArray(model.aspect_ratios),
+    );
+  }
+  if (!caps.video.model) return [];
+  // Rétrocompatibilité avec le contrat Google à modèle unique.
+  return [{
+    model: caps.video.model,
+    duration_choices_seconds: caps.video.duration_choices_seconds,
+    billable_resolutions: caps.video.billable_resolutions,
+    aspect_ratios: [...VIDEO_RATIOS],
+  }];
+}
+
+function offersForVideoModel(
+  model: VideoModel | undefined,
+  offers: typeof VIDEO_OFFERS[string],
+  capabilities: Capabilities | null,
+) {
+  if (!model || !model.billable_resolutions.includes("720p")) return [];
+  return offers.filter(offer =>
+    model.duration_choices_seconds.includes(offer.seconds) &&
+    capabilities?.video.duration_choices_seconds.includes(offer.seconds),
+  );
+}
+
+function ratiosForVideoModel(model: VideoModel | undefined): string[] {
+  if (!model) return [];
+  return VIDEO_RATIOS.filter(ratio => model.aspect_ratios.includes(ratio));
+}
+
 function asMedia(raw: unknown): Media | null {
   if (!raw || typeof raw !== "object") return null;
   const m = raw as Record<string, unknown>;
@@ -242,6 +303,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const [modeImage, setModeImage] = useState<ImageMode>("text_to_image");
   const [modeVideo, setModeVideo] = useState<VideoMode>("text_to_video");
   const [imageModel, setImageModel] = useState("");
+  const [videoModel, setVideoModel] = useState("");
   const [resolution, setResolution] = useState("1K");
   const [ratioImage, setRatioImage] = useState("1:1");
   const [ratioVideo, setRatioVideo] = useState("16:9");
@@ -264,7 +326,14 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const videoOffers = useMemo(() => VIDEO_OFFERS[wallet?.pack_id || ""] || [], [wallet?.pack_id]);
   const selectedImageOffer = imageOffers.find(o => o.action === imageAction) || imageOffers[0];
   const packImageResolutions = availableImageResolutions(caps?.images, imageOffers);
-  const selectedVideoOffer = videoOffers.find(o => o.action === videoAction) || videoOffers[0];
+  const availableImageRatios: string[] = MEDIA_PROVIDER === "openrouter"
+    ? IMAGE_RATIOS.filter(ratio => caps?.images.models.find(model => model.model === imageModel)?.aspect_ratios?.includes(ratio))
+    : [...IMAGE_RATIOS];
+  const videoModels = useMemo(() => videoModelsFromCapabilities(caps), [caps]);
+  const selectedVideoModel = videoModels.find(model => model.model === videoModel);
+  const compatibleVideoOffers = offersForVideoModel(selectedVideoModel, videoOffers, caps);
+  const availableVideoRatios = ratiosForVideoModel(selectedVideoModel);
+  const selectedVideoOffer = compatibleVideoOffers.find(offer => offer.action === videoAction);
   const activeKind: Kind = screen === "video" ? "video" : "image";
   const mode: Mode = activeKind === "image" ? modeImage : modeVideo;
   const needsReference = mode === "image_edit" || mode === "image_to_video";
@@ -276,11 +345,15 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const modeAvailableNow = technicallyQuoted && (screen === "image"
     ? caps?.images.allowed_modes.includes(modeImage) === true
     : caps?.video.allowed_modes.includes(modeVideo) === true);
-  const quoteReady = Boolean(quote && quote.success && quote.media_type === activeKind && quote.pack_id === wallet?.pack_id);
+  const quoteReady = Boolean(
+    quote && quote.success && quote.media_type === activeKind && quote.pack_id === wallet?.pack_id &&
+    (MEDIA_PROVIDER !== "openrouter" ||
+      (quote.model === (activeKind === "image" ? imageModel : videoModel) && quote.mode === mode)),
+  );
   const generationReady = Boolean(caps?.generation_available && wallet?.is_pack_active && modeAvailableNow);
 
   function invalidateQuote() { setQuote(null); setAccepted(false); setNotice(null); }
-  function changeScreen(next: Screen) { if (busy) return; setScreen(next); invalidateQuote(); setError(null); }
+  function changeScreen(next: Screen) { if (busy || quoting) return; setScreen(next); invalidateQuote(); setError(null); }
 
   async function loadCapabilities() {
     setLoading(true);
@@ -305,10 +378,21 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         } catch { /* La galerie reste accessible si la table de jobs est indisponible. */ }
       }
       const firstModel = remote.images.models[0];
-      if (firstModel) setImageModel(firstModel.model);
+      if (firstModel) {
+        setImageModel(firstModel.model);
+        if (MEDIA_PROVIDER === "openrouter") setRatioImage(firstModel.aspect_ratios?.[0] || "1:1");
+      }
       if (remote.images.resolutions.length) setResolution(remote.images.resolutions[0]);
       setImageAction(IMAGE_OFFERS[remote.pack_id]?.[0]?.action || "");
-      setVideoAction(VIDEO_OFFERS[remote.pack_id]?.[0]?.action || "");
+      const models = videoModelsFromCapabilities(remote);
+      const offers = VIDEO_OFFERS[remote.pack_id] || [];
+      const firstUsable = models.find(model =>
+        offersForVideoModel(model, offers, remote).length > 0 && ratiosForVideoModel(model).length > 0,
+      );
+      const firstVideo = firstUsable || models[0];
+      setVideoModel(firstVideo?.model || "");
+      setVideoAction(offersForVideoModel(firstVideo, offers, remote)[0]?.action || "");
+      setRatioVideo(ratiosForVideoModel(firstVideo)[0] || "16:9");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Connexion au Mini-Studio impossible."); }
     finally { setLoading(false); }
   }
@@ -346,7 +430,10 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     if (model && !model.resolutions.includes(resolution)) {
       setResolution(model.resolutions[0] || "1K"); invalidateQuote();
     }
-  }, [imageModel, caps]);
+    if (MEDIA_PROVIDER === "openrouter" && model && !model.aspect_ratios?.includes(ratioImage)) {
+      setRatioImage(model.aspect_ratios?.[0] || "1:1"); invalidateQuote();
+    }
+  }, [imageModel, caps, resolution, ratioImage]);
 
   function selectReference(file: File | undefined) {
     invalidateQuote(); setError(null);
@@ -366,7 +453,10 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   // Choisir une offre sélectionne aussi sa résolution et un modèle compatible.
   // Si le catalogue OpenRouter ne contient pas cette résolution, on ne simule pas le droit.
   function selectOffer(next: string) {
-    if (screen !== "image") { invalidateQuote(); setVideoAction(next); return; }
+    if (screen !== "image") {
+      if (!compatibleVideoOffers.some(offer => offer.action === next)) return;
+      invalidateQuote(); setVideoAction(next); setError(null); return;
+    }
     const offer = imageOffers.find(o => o.action === next);
     if (!offer) return;
     const target = offer.maxResolution;
@@ -379,6 +469,9 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     }
     invalidateQuote(); setError(null);
     setImageAction(offer.action); setImageModel(model.model); setResolution(target);
+    if (MEDIA_PROVIDER === "openrouter" && !model.aspect_ratios?.includes(ratioImage)) {
+      setRatioImage(model.aspect_ratios?.[0] || "1:1");
+    }
   }
 
   // Sélectionner 2K ou 4K ajuste en une seule opération l'offre ET le modèle.
@@ -390,9 +483,23 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     if (!offer || !model) return;
     invalidateQuote(); setError(null);
     setResolution(target); setImageModel(model.model); setImageAction(offer.action);
+    if (MEDIA_PROVIDER === "openrouter" && !model.aspect_ratios?.includes(ratioImage)) {
+      setRatioImage(model.aspect_ratios?.[0] || "1:1");
+    }
   }
 
-  // Changer de modèle ne doit jamais conserver une action Ultra pour une sortie 1K.
+  function selectVideoModel(next: string) {
+    const model = videoModels.find(item => item.model === next);
+    if (!model) return;
+    invalidateQuote(); setError(null);
+    setVideoModel(next);
+    const nextOffers = offersForVideoModel(model, videoOffers, caps);
+    setVideoAction(nextOffers.some(offer => offer.action === videoAction)
+      ? videoAction : nextOffers[0]?.action || "");
+    const ratios = ratiosForVideoModel(model);
+    if (!ratios.includes(ratioVideo)) setRatioVideo(ratios[0] || "16:9");
+  }
+
   function selectImageModel(next: string) {
     const model = caps?.images.models.find(m => m.model === next);
     if (!model) return;
@@ -403,6 +510,9 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     if (!offer) return;
     invalidateQuote(); setError(null);
     setImageModel(next); setResolution(target); setImageAction(offer.action);
+    if (MEDIA_PROVIDER === "openrouter" && !model.aspect_ratios?.includes(ratioImage)) {
+      setRatioImage(model.aspect_ratios?.[0] || "1:1");
+    }
   }
 
   const optionsForModel = caps?.images.models.find(model => model.model === imageModel)?.resolutions || [];
@@ -411,7 +521,10 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     wallet?.is_pack_active && caps?.quote_available && !loading && !busy && !quoting &&
     prompt.trim() && prompt.length <= 8000 && modeAvailableNow &&
     (!needsReference || reference) &&
-    (activeKind === "image" ? imageModel && selectedImageOffer && optionsForModel.includes(resolution) && resolutionRank(resolution) <= resolutionRank(selectedImageOffer.maxResolution) : selectedVideoOffer),
+    (activeKind === "image"
+      ? imageModel && selectedImageOffer && optionsForModel.includes(resolution) &&
+        availableImageRatios.includes(ratioImage) && resolutionRank(resolution) <= resolutionRank(selectedImageOffer.maxResolution)
+      : videoModel && selectedVideoModel && selectedVideoOffer && availableVideoRatios.includes(ratioVideo)),
   );
 
   async function prepareQuote() {
@@ -422,13 +535,20 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         media_type: "image", mode: modeImage, model: imageModel, resolution,
         reference_count: needsReference ? 1 : 0, count: 1,
       } : {
-        media_type: "video", mode: modeVideo, reference_count: needsReference ? 1 : 0,
-        resolution: "720p", count: 1, final_duration_seconds: selectedVideoOffer.seconds,
-        scene_durations_seconds: [selectedVideoOffer.seconds],
+        media_type: "video", mode: modeVideo,
+        ...(MEDIA_PROVIDER === "openrouter" ? { model: videoModel } : {}),
+        reference_count: needsReference ? 1 : 0,
+        resolution: "720p", count: 1, final_duration_seconds: selectedVideoOffer!.seconds,
+        scene_durations_seconds: [selectedVideoOffer!.seconds],
       };
       const calculated = await api<Quote>(`${MEDIA_API}/quote`, { method: "POST", body: JSON.stringify(payload) });
-      if (calculated.pack_id !== wallet?.pack_id || calculated.media_type !== activeKind) {
-        throw new Error("Le devis ne correspond pas à la configuration actuelle.");
+      if (calculated.pack_id !== wallet?.pack_id || calculated.media_type !== activeKind ||
+          (MEDIA_PROVIDER === "openrouter" &&
+            (calculated.model !== (activeKind === "image" ? imageModel : videoModel) || calculated.mode !== mode))) {
+        throw new Error("Le devis ne correspond pas au modèle ou au mode sélectionné.");
+      }
+      if (!Number.isSafeInteger(calculated.reservation_credits) || calculated.reservation_credits <= 0) {
+        throw new Error("Réservation de crédits non confirmée par le serveur.");
       }
       setQuote(calculated);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Devis indisponible."); }
@@ -437,8 +557,9 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
 
   async function generate() {
     if (!canQuote || quoting || !quoteReady || !quote || !accepted || !generationReady || !quote.generation_available || !quote.credits_sufficient) return;
-    if (activeKind === "video" && !caps?.video.short_clip_actions_available_now.includes(selectedVideoOffer.action)) return;
-    const action = activeKind === "image" ? selectedImageOffer.action : selectedVideoOffer.action;
+    if (activeKind === "video" &&
+        (!selectedVideoOffer || !caps?.video.short_clip_actions_available_now.includes(selectedVideoOffer.action))) return;
+    const action = activeKind === "image" ? selectedImageOffer?.action : selectedVideoOffer?.action;
     if (!action) return;
     setBusy(true); setError(null); setNotice(null);
     try {
@@ -450,7 +571,8 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         ...shared, mode: modeImage, model: imageModel, resolution, aspect_ratio: ratioImage,
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
       } : {
-        ...shared, mode: modeVideo, requested_seconds: selectedVideoOffer.seconds, aspect_ratio: ratioVideo,
+        ...shared, mode: modeVideo, requested_seconds: selectedVideoOffer!.seconds, aspect_ratio: ratioVideo,
+        ...(MEDIA_PROVIDER === "openrouter" ? { model: videoModel } : {}),
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
       };
       // Retenir l'identifiant AVANT le POST : si le réseau coupe, rechercher
@@ -543,20 +665,20 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
       : "";
 
   return (
-    <div className="fixed inset-0 z-[90] overflow-y-auto bg-black/65 p-2 backdrop-blur-sm sm:p-5" role="presentation"
+    <div className="fixed inset-0 z-[90] overflow-y-auto bg-black/60 p-2 backdrop-blur-md sm:p-5" role="presentation"
       onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
       <section role="dialog" aria-modal="true" aria-labelledby="oria-studio-heading"
-        className="mx-auto my-1 w-full max-w-[1130px] rounded-[26px] border border-border bg-background text-foreground shadow-2xl sm:my-4">
+        className="mx-auto my-1 w-full max-w-[1130px] overflow-hidden rounded-[30px] border border-border/80 bg-background/95 text-foreground shadow-[0_30px_90px_-33px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:my-4">
         <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-7">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-surface-tertiary"><Sparkles size={22}/></span>
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-[17px] border border-border/60 bg-surface-secondary"><Sparkles size={22}/></span>
             <div className="min-w-0">
               <h2 id="oria-studio-heading" className="truncate text-lg font-bold tracking-tight sm:text-2xl">Mini-Studio ORIA</h2>
               <p className="text-xs text-muted">{tr(`Images, retouches et vidéos — ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video — ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`)}</p>
             </div>
           </div>
           <button type="button" disabled={busy} onClick={onClose} aria-label={tr("Fermer", "Close")}
-            className="rounded-xl border border-border p-2.5 text-muted hover:bg-surface-secondary disabled:opacity-40"><X size={19}/></button>
+            className="rounded-2xl border border-border/70 p-2.5 text-muted transition-colors duration-200 hover:bg-surface-secondary disabled:opacity-40"><X size={19}/></button>
         </header>
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-7">
@@ -565,8 +687,8 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
               { id: "video", label: tr("Vidéo", "Video"), icon: Video },
               { id: "gallery", label: tr("Mes créations", "My creations"), icon: Images }] as const).map(item => (
               <button key={item.id} type="button" role="tab" aria-selected={screen === item.id}
-                onClick={() => changeScreen(item.id)} disabled={busy}
-                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold sm:text-sm ${screen === item.id ? "bg-accent text-accent-foreground" : "bg-surface-secondary text-muted-strong hover:bg-surface-tertiary"}`}>
+                onClick={() => changeScreen(item.id)} disabled={busy || quoting}
+                className={`inline-flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs font-semibold transition-colors duration-200 sm:text-sm ${screen === item.id ? "bg-accent text-accent-foreground" : "bg-surface-secondary/75 text-muted-strong hover:bg-surface-tertiary"}`}>
                 <item.icon size={16}/>{item.label}
               </button>
             ))}
@@ -580,8 +702,8 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
 
         <div className="p-4 sm:p-6 lg:p-7">
           {loading && <div role="status" className="mb-4 flex items-center gap-2 text-sm text-muted"><Loader2 className="animate-spin" size={17}/>{tr("Chargement des droits de création…", "Loading creation permissions…")}</div>}
-          {error && <div role="alert" className="mb-4 rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs text-red-600">{error}</div>}
-          {notice && <div role="status" className="mb-4 rounded-xl border border-border bg-surface-secondary p-3 text-xs">{notice}</div>}
+          {error && <div role="alert" className="mb-4 rounded-2xl border border-red-500/25 bg-red-500/[0.055] p-3.5 text-xs text-red-600 dark:text-red-300">{error}</div>}
+          {notice && <div role="status" className="mb-4 rounded-2xl border border-border/70 bg-surface-secondary/70 p-3.5 text-xs">{notice}</div>}
            {MEDIA_PROVIDER === "openrouter" && pendingRequestId && <button type="button"
              disabled={busy} onClick={async () => {
                try {
@@ -608,11 +730,11 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                    ? tr("Délai dépassé : rapprochement financier en cours. Vous pouvez demander un autre devis avec votre solde disponible.", "Timeout: billing review pending. You may request another quote using your available balance.")
                    : tr("Vous pouvez continuer à créer sans renvoyer cette même demande.", "You may keep creating without resubmitting this request."))}`);
                } catch (e) { setError(e instanceof Error ? e.message : "Statut indisponible."); }
-             }} className="mb-4 rounded-xl border border-border px-4 py-2 text-xs font-semibold">
+             }} className="mb-4 rounded-2xl border border-border/70 bg-surface/70 px-4 py-2 text-xs font-semibold">
              {tr("Vérifier la création en attente", "Check pending creation")}
            </button>}
           {caps && !caps.generation_available && screen !== "gallery" && (
-            <div className="mb-5 flex items-start gap-2 rounded-xl border border-border bg-surface-secondary px-3 py-3 text-xs leading-5 text-muted-strong">
+            <div className="mb-5 flex items-start gap-2 rounded-2xl border border-border/70 bg-surface-secondary/70 px-3.5 py-3.5 text-xs leading-5 text-muted-strong">
               <ShieldCheck size={17} className="mt-0.5 shrink-0"/>
               {disabledReason}
             </div>
@@ -622,13 +744,13 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
             <div>
               <div className="mb-4 flex items-center justify-between gap-3">
                 <h3 className="text-base font-semibold">{tr("Bibliothèque de créations", "Creation library")}</h3>
-                <button type="button" onClick={() => void loadGallery()} disabled={galleryLoading} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs">
+                <button type="button" onClick={() => void loadGallery()} disabled={galleryLoading} className="inline-flex items-center gap-2 rounded-2xl border border-border/70 bg-surface/75 px-3 py-2 text-xs transition-colors duration-200 hover:bg-surface-secondary">
                   <RefreshCw size={15} className={galleryLoading ? "animate-spin" : ""}/>{tr("Actualiser", "Refresh")}
                 </button>
               </div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {gallery.map(item => (
-                  <article key={item.id} className="overflow-hidden rounded-2xl border border-border bg-surface">
+                  <article key={item.id} className="overflow-hidden rounded-[23px] border border-border/70 bg-surface/80 shadow-[0_14px_35px_-30px_var(--shadow-color)]">
                     {item.media_type === "image" ? <img src={item.url} alt={item.prompt || "Création ORIA"} className="h-48 w-full object-cover"/> :
                       <video src={item.url} controls playsInline preload="metadata" className="h-48 w-full bg-black object-contain"/>}
                     <div className="space-y-2 p-3">
@@ -644,13 +766,13 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
           ) : (
             <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
               <div className="min-w-0 space-y-5">
-                <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+                <section className="rounded-[25px] border border-border/75 bg-surface/80 p-4 shadow-[0_14px_37px_-32px_var(--shadow-color)] sm:p-5">
                   <div className="mb-4 flex items-center gap-2"><Clapperboard size={18}/><h3 className="text-sm font-semibold">{tr("Votre création", "Your creation")}</h3></div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div>
                       <label className="mb-1 block text-xs font-medium">{tr("Type de création", "Creation mode")}</label>
                       <select value={mode} disabled={busy || quoting || loading || !caps} onChange={e => selectMode(e.target.value as Mode)}
-                        className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-xs outline-none focus:border-muted-strong">
+                        className="w-full rounded-2xl border border-border/75 bg-background/80 px-3 py-2.5 text-xs outline-none transition-[border-color,box-shadow] duration-200 focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]">
                         {modes.map(item => {
                           const permitted = (screen === "image" ? caps?.images.allowed_modes : caps?.video.allowed_modes)?.includes(item.id as never) || false;
                           const active = screen === "image"
@@ -666,8 +788,13 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                       <label className="mb-1 block text-xs font-medium">{tr("Offre de création", "Creation offer")}</label>
                       <div className="relative">
                         <select value={activeOffer || ""} disabled={busy || quoting || loading || !caps} onChange={e => selectOffer(e.target.value)}
-                          className="w-full appearance-none rounded-xl border border-border bg-background px-3 py-2.5 pr-8 text-xs outline-none focus:border-muted-strong">
-                          {offers.map(o => <option value={o.action} key={o.action}>{o.label}</option>)}
+                          className="w-full appearance-none rounded-2xl border border-border/75 bg-background/80 px-3 py-2.5 pr-8 text-xs outline-none transition-[border-color,box-shadow] duration-200 focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]">
+                          {screen === "video" && !compatibleVideoOffers.length && <option value="">{tr("Aucune durée compatible", "No compatible duration")}</option>}
+                          {offers.map(o => <option value={o.action} key={o.action}
+                            disabled={screen === "video" && !compatibleVideoOffers.some(valid => valid.action === o.action)}>
+                            {o.label}{screen === "video" && !compatibleVideoOffers.some(valid => valid.action === o.action)
+                              ? ` — ${tr("indisponible", "unavailable")}` : ""}
+                          </option>)}
                         </select><ChevronDown className="pointer-events-none absolute right-3 top-3 text-muted" size={15}/>
                       </div>
                     </div>
@@ -677,21 +804,22 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                       <div>
                         <label className="mb-1 block text-xs font-medium">{tr("Modèle", "Model")}</label>
                         <select value={imageModel} disabled={busy || quoting || loading} onChange={e => selectImageModel(e.target.value)}
-                          className="w-full rounded-xl border border-border bg-background p-2.5 text-xs">
-                          {caps?.images.models.map(m => <option key={m.model} value={m.model}>{m.model.replace(/^gemini-/, "")}</option>)}
+                          className="w-full rounded-2xl border border-border/75 bg-background/80 p-2.5 text-xs transition-colors duration-200">
+                          {caps?.images.models.map(m => <option key={m.model} value={m.model}>{modelLabel(m.model)}</option>)}
                         </select>
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-medium">{tr("Résolution", "Resolution")}</label>
                         <select value={resolution} disabled={busy || quoting || loading} onChange={e => selectImageResolution(e.target.value)}
-                          className="w-full rounded-xl border border-border bg-background p-2.5 text-xs">
+                          className="w-full rounded-2xl border border-border/75 bg-background/80 p-2.5 text-xs transition-colors duration-200">
                           {packImageResolutions.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-medium">{tr("Format", "Aspect ratio")}</label>
-                        <select value={ratioImage} disabled={busy || quoting} onChange={e => { setRatioImage(e.target.value); invalidateQuote(); }} className="w-full rounded-xl border border-border bg-background p-2.5 text-xs">
-                          {IMAGE_RATIOS.map(r => <option key={r} value={r}>{r}</option>)}
+                        <select value={ratioImage} disabled={busy || quoting} onChange={e => { setRatioImage(e.target.value); invalidateQuote(); }} className="w-full rounded-2xl border border-border/75 bg-background/80 p-2.5 text-xs transition-colors duration-200">
+                          {availableImageRatios.map(r => <option key={r} value={r}>{r}</option>)}
+                          {!availableImageRatios.length && <option value="">{tr("Format non disponible", "Aspect ratio unavailable")}</option>}
                         </select>
                       </div>
                       <p className="sm:col-span-3 text-[11px] leading-5 text-muted">
@@ -704,54 +832,82 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                       </p>
                     </div>
                   ) : (
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-medium">{tr("Durée de l'offre", "Offer duration")}</label>
-                        <div className="rounded-xl border border-border bg-background p-2.5 text-xs">{selectedVideoOffer?.seconds ?? "—"} s · 720p</div>
-                        <p className="mt-1 text-[10px] leading-4 text-muted">{tr("Durée demandée, non garantie au rendu Google.", "Requested duration, not guaranteed in the Google output.")}</p>
+                    <div className="mt-4 space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div>
+                          <label className="mb-1 block text-xs font-medium">{tr("Modèle vidéo", "Video model")}</label>
+                          <select value={videoModel} disabled={busy || quoting || loading || !caps}
+                            onChange={e => selectVideoModel(e.target.value)}
+                            className="w-full rounded-2xl border border-border/75 bg-background/80 p-2.5 text-xs transition-[border-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+                            {!videoModels.length && <option value="">{tr("Aucun modèle disponible", "No model available")}</option>}
+                            {videoModels.map(model => {
+                              const usable = offersForVideoModel(model, videoOffers, caps).length > 0 &&
+                                ratiosForVideoModel(model).length > 0;
+                              return <option key={model.model} value={model.model} disabled={!usable}>
+                                {modelLabel(model.model)}{!usable ? ` — ${tr("paramètres indisponibles", "parameters unavailable")}` : ""}
+                              </option>;
+                            })}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium">{tr("Durée de l'offre", "Offer duration")}</label>
+                          <div className="rounded-2xl border border-border/75 bg-background/80 p-2.5 text-xs">{selectedVideoOffer?.seconds ?? "—"} s · 720p</div>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium">{tr("Format", "Aspect ratio")}</label>
+                          <select value={ratioVideo} disabled={busy || quoting || !availableVideoRatios.length}
+                            onChange={e => { setRatioVideo(e.target.value); invalidateQuote(); }}
+                            className="w-full rounded-2xl border border-border/75 bg-background/80 p-2.5 text-xs transition-[border-color,box-shadow] duration-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+                            {availableVideoRatios.map(r => <option key={r} value={r}>{r}</option>)}
+                            {!availableVideoRatios.length && <option value="">{tr("Format indisponible", "Format unavailable")}</option>}
+                          </select>
+                        </div>
                       </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-medium">{tr("Format", "Aspect ratio")}</label>
-                        <select value={ratioVideo} disabled={busy || quoting} onChange={e => { setRatioVideo(e.target.value); invalidateQuote(); }} className="w-full rounded-xl border border-border bg-background p-2.5 text-xs">
-                          {VIDEO_RATIOS.map(r => <option key={r} value={r}>{r}</option>)}
-                        </select>
-                      </div>
+                      {videoModels.length > 0 && !compatibleVideoOffers.length &&
+                        <p className="rounded-2xl border border-border/70 bg-surface-secondary/65 p-3 text-xs text-muted-strong">
+                          {tr("Ce modèle ne propose actuellement aucune durée compatible avec ton pack en 720p. Aucun appel payant ne sera lancé.",
+                            "This model currently offers no duration compatible with your plan at 720p. No paid request will be sent.")}
+                        </p>}
+                      <p className="text-[11px] leading-5 text-muted">
+                        {tr("Seuls les modèles et paramètres confirmés par le backend sont sélectionnables. Changer de modèle annule le devis précédent.",
+                          "Only models and parameters confirmed by the backend are selectable. Changing the model invalidates the previous quote.")}
+                      </p>
                     </div>
                   )}
                   <div className="mt-4">
                     <label className="mb-1.5 block text-xs font-medium" htmlFor="oria-mini-prompt">{tr("Décrivez le résultat souhaité", "Describe your desired result")}</label>
                     <textarea id="oria-mini-prompt" rows={5} maxLength={8000} value={prompt} disabled={busy || quoting}
                       onChange={e => { setPrompt(e.target.value); invalidateQuote(); }} placeholder={tr("Ex. : Une scène réaliste dans les rues de Libreville, éclairage cinématographique…", "E.g. A realistic cinematic scene in Libreville…")}
-                      className="w-full resize-y rounded-xl border border-border bg-background px-3 py-3 text-sm leading-6 outline-none placeholder:text-muted focus:border-muted-strong"/>
+                      className="w-full resize-y rounded-2xl border border-border/75 bg-background/80 px-3.5 py-3 text-sm leading-6 outline-none transition-[border-color,box-shadow] duration-200 placeholder:text-muted focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]"/>
                   </div>
-                  {needsReference && <div className="mt-4 rounded-xl border border-dashed border-border bg-surface-secondary p-3">
+                  {needsReference && <div className="mt-4 rounded-2xl border border-dashed border-border/75 bg-surface-secondary/70 p-3.5">
                     <div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-semibold">{tr("Photo de référence", "Reference image")}</span><span className="text-[10px] text-muted">JPEG, PNG, WebP · 10 Mo max.</span></div>
                     <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" disabled={busy || quoting}
                       onChange={e => selectReference(e.currentTarget.files?.[0])} className="sr-only"/>
                     <button type="button" disabled={busy || quoting} onClick={() => fileRef.current?.click()}
-                      className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-xs font-medium"><Upload size={16}/>{reference?.name || tr("Choisir une photo", "Select an image")}</button>
-                    {referenceUrl && <img src={referenceUrl} alt={tr("Photo à retoucher", "Reference photo")} className="mt-3 max-h-48 rounded-xl object-contain"/>}
+                      className="inline-flex items-center gap-2 rounded-2xl border border-border/75 bg-background/75 px-3 py-2 text-xs font-medium transition-colors duration-200 hover:bg-surface-secondary"><Upload size={16}/>{reference?.name || tr("Choisir une photo", "Select an image")}</button>
+                    {referenceUrl && <img src={referenceUrl} alt={tr("Photo à retoucher", "Reference photo")} className="mt-3 max-h-48 rounded-2xl object-contain"/>}
                     <p className="mt-2 text-[11px] text-muted">{tr(`Votre pack prévoit jusqu'à ${caps?.images.max_reference_images_in_pack ?? 1} références pour les images. Une seule est actuellement prise en charge par génération.`, `Your plan allows up to ${caps?.images.max_reference_images_in_pack ?? 1} image references. Only one is currently supported per generation.`)}</p>
                   </div>}
                 </section>
-                {screen === "video" && caps && <div className="rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-5 text-muted-strong">
+                {screen === "video" && caps && <div className="rounded-[23px] border border-border/75 bg-surface-secondary/65 p-4 text-xs leading-6 text-muted-strong">
                   <p className="font-semibold text-foreground">{tr("Projets vidéo avancés", "Advanced video projects")}</p>
                   <p className="mt-1">{tr(`Ton pack prévoit des projets jusqu'à ${caps.video.max_project_seconds} s (${caps.video.max_project_scenes} scène(s) maximum), mais seuls les clips courts peuvent être générés actuellement.`, `Your plan allows projects up to ${caps.video.max_project_seconds}s (${caps.video.max_project_scenes} scenes max), but only short clips can currently be generated.`)}</p>
                   <div className="mt-2 flex flex-wrap gap-2">{caps.video.allowed_modes.filter(m => !caps.video.available_now_modes.includes(m)).map(m => (
-                    <span key={m} className="rounded-lg border border-border bg-background px-2 py-1 text-[11px]">{VIDEO_MODES.find(opt => opt.id === m)?.[language] || m} · {tr("À venir", "Coming soon")}</span>
+                    <span key={m} className="rounded-xl border border-border/70 bg-background/70 px-2.5 py-1.5 text-[11px]">{VIDEO_MODES.find(opt => opt.id === m)?.[language] || m} · {tr("À venir", "Coming soon")}</span>
                   ))}</div>
                 </div>}
               </div>
 
               <aside className="min-w-0 space-y-4">
-                <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+                <section className="rounded-[25px] border border-border/75 bg-surface/80 p-4 shadow-[0_14px_37px_-32px_var(--shadow-color)] sm:p-5">
                   <div className="mb-3 flex items-center gap-2"><Wallet size={18}/><h3 className="text-sm font-semibold">{tr("Devis et crédits", "Quote & credits")}</h3></div>
                   <p className="text-xs leading-5 text-muted">{tr("Le devis est calculé côté serveur. Aucun crédit n'est réservé avant la confirmation.", "The quote is calculated on the server. No credits are reserved until confirmation.")}</p>
                   <button type="button" disabled={!canQuote} onClick={() => void prepareQuote()}
-                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 text-sm font-semibold hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-40">
+                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-border/75 bg-surface/75 px-4 py-3 text-sm font-semibold transition-[border-color,background-color] duration-200 hover:border-border-strong hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-40">
                     {quoting ? <Loader2 size={17} className="animate-spin"/> : <RefreshCw size={16}/>}{tr("Obtenir le devis", "Get quote")}
                   </button>
-                  {quoteReady && quote && <div className="mt-4 space-y-3 rounded-xl bg-surface-secondary p-4">
+                  {quoteReady && quote && <div className="mt-4 space-y-3 rounded-2xl border border-border/60 bg-surface-secondary/70 p-4">
                     <p className="text-xs text-muted">{tr("Coût estimé", "Estimated cost")} : <strong className="text-foreground">{formatted(quote.estimated_credits, language)} {tr("crédits", "credits")}</strong></p>
                     <p className="text-xs text-muted">{tr("Réservation maximale acceptée", "Maximum accepted reservation")} :</p>
                     <p className="text-2xl font-bold tracking-tight">{formatted(quote.reservation_credits, language)} <span className="text-sm font-normal text-muted">{tr("crédits", "credits")}</span></p>
@@ -764,16 +920,16 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                   </div>}
                   {disabledReason && <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-muted"><AlertCircle size={15} className="mt-0.5 shrink-0"/>{disabledReason}</p>}
                   <button type="button" onClick={() => void generate()} disabled={!canQuote || quoting || !quoteReady || !accepted || !quote?.generation_available || !quote?.credits_sufficient || !generationReady || busy || (screen === "video" && !caps?.video.short_clip_actions_available_now.includes(selectedVideoOffer?.action || ""))}
-                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
+                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground shadow-[0_12px_28px_-24px_var(--shadow-color)] transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
                     {busy ? <Loader2 size={17} className="animate-spin"/> : <Sparkles size={17}/>}{busy ? tr("Génération en cours…", "Generating…") : tr("Confirmer et créer", "Confirm and create")}
                   </button>
                   <p className="mt-2 text-center text-[11px] text-muted">{tr("Aucun appel payant n'est lancé tant que la création est désactivée côté backend.", "No paid API call is made while creation is disabled by the backend.")}</p>
                 </section>
 
-                {lastResult && <section className="rounded-2xl border border-border bg-surface p-4">
+                {lastResult && <section className="rounded-[24px] border border-border/75 bg-surface/80 p-4 shadow-[0_14px_37px_-32px_var(--shadow-color)]">
                   <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Check size={17}/>{tr("Dernière création", "Latest creation")}</h3>
-                  {lastResult.media_type === "image" ? <img src={lastResult.url} alt={lastResult.prompt} className="max-h-72 w-full rounded-xl object-contain"/> :
-                    <video src={lastResult.url} controls playsInline className="max-h-72 w-full rounded-xl bg-black"/>}
+                  {lastResult.media_type === "image" ? <img src={lastResult.url} alt={lastResult.prompt} className="max-h-72 w-full rounded-2xl object-contain"/> :
+                    <video src={lastResult.url} controls playsInline className="max-h-72 w-full rounded-2xl bg-black"/>}
                   <p className="mt-2 text-xs text-muted">{tr("Coût confirmé", "Confirmed charge")} : {formatted(lastResult.credits_cost || 0, language)} {tr("crédits", "credits")}</p>
                   <a href={lastResult.url} download target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-2 text-xs font-semibold underline"><Download size={15}/>{tr("Ouvrir / télécharger", "Open / download")}</a>
                 </section>}

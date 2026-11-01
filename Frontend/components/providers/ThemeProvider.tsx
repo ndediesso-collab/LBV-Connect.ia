@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -18,171 +19,161 @@ type ThemeContextType = {
   toggleTheme: () => Promise<void>;
 };
 
-const ThemeContext =
-  createContext<ThemeContextType | undefined>(
-    undefined,
-  );
+const THEME_STORAGE_KEY = "oria_theme";
+const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-export function ThemeProvider({
-  children,
-}: {
-  children: ReactNode;
-}) {
-  const [theme, setThemeState] =
-    useState<Theme>("light");
+function validTheme(value: unknown): value is Theme {
+  return value === "light" || value === "dark";
+}
 
-  const [supabase] = useState(() =>
-    createClient(),
-  );
+function applyTheme(theme: Theme): void {
+  const root = document.documentElement;
+  root.classList.toggle("dark", theme === "dark");
+  root.style.colorScheme = theme;
+}
 
-  /*
-   * Application réelle du thème au document.
-   */
+function readInitialTheme(): Theme {
+  try {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (validTheme(saved)) return saved;
+  } catch {
+    // Mode prive : on applique simplement la preference systeme.
+  }
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+function cacheTheme(theme: Theme): void {
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Le profil Supabase reste l'autorite persistante du compte.
+  }
+}
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  // La valeur SSR ne change pas : evite une divergence d'hydratation.
+  // Le script avant hydration dans app/layout.tsx applique le visuel initial.
+  const [theme, setThemeState] = useState<Theme>("light");
+  const [ready, setReady] = useState(false);
+  const [supabase] = useState(() => createClient());
+  const themeRef = useRef<Theme>("light");
+  const versionRef = useRef(0);
+  const savingRef = useRef(false);
+
   useEffect(() => {
-    const root =
-      document.documentElement;
+    const initial = readInitialTheme();
+    themeRef.current = initial;
+    setThemeState(initial);
+    applyTheme(initial);
+    setReady(true);
+  }, []);
 
-    root.classList.toggle(
-      "dark",
-      theme === "dark",
-    );
-
-    root.style.colorScheme = theme;
-  }, [theme]);
-
-  /*
-   * Chargement du thème depuis Supabase.
-   */
   useEffect(() => {
-    let mounted = true;
+    if (!ready) return;
+    applyTheme(theme);
+  }, [ready, theme]);
+
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    const versionWhenStarted = versionRef.current;
 
     async function loadTheme() {
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError) throw authError;
+        if (!user || cancelled) return;
 
-        if (!user || !mounted) {
-          return;
-        }
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("theme")
+          .eq("id", user.id)
+          .maybeSingle();
+        if (error) throw error;
 
-        const { data, error } =
-          await supabase
-            .from("profiles")
-            .select("theme")
-            .eq("id", user.id)
-            .maybeSingle();
-
-        if (error) {
-          console.error(
-            "THEME LOAD ERROR:",
-            error,
-          );
-          return;
-        }
-
-        if (
-          mounted &&
-          (data?.theme === "light" ||
-            data?.theme === "dark")
-        ) {
+        // Ne jamais ecraser un choix fait pendant le chargement du profil.
+        if (cancelled || versionWhenStarted !== versionRef.current) return;
+        if (validTheme(data?.theme)) {
+          themeRef.current = data.theme;
           setThemeState(data.theme);
+          cacheTheme(data.theme);
         }
       } catch (error) {
-        console.error(
-          "THEME INITIALIZATION ERROR:",
-          error,
-        );
+        // L'interface reste utilisable avec le cache local / theme systeme.
+        console.error("THEME LOAD ERROR:", error);
       }
     }
 
-    loadTheme();
+    void loadTheme();
+    return () => { cancelled = true; };
+  }, [ready, supabase]);
 
-    return () => {
-      mounted = false;
-    };
-  }, [supabase]);
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (event.key !== THEME_STORAGE_KEY || !validTheme(event.newValue)) return;
+      versionRef.current += 1;
+      themeRef.current = event.newValue;
+      setThemeState(event.newValue);
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
-  /*
-   * Modification du thème :
-   * 1. interface immédiatement mise à jour
-   * 2. préférence sauvegardée dans Supabase
-   */
-  async function setTheme(
-    nextTheme: Theme,
-  ) {
-    const previousTheme = theme;
+  async function setTheme(nextTheme: Theme): Promise<void> {
+    if (!validTheme(nextTheme)) throw new Error("Theme ORIA invalide.");
+    if (savingRef.current) throw new Error("Une sauvegarde de theme est deja en cours.");
+    const previousTheme = themeRef.current;
+    if (previousTheme === nextTheme) return;
 
+    savingRef.current = true;
+    const version = ++versionRef.current;
+    // Mise a jour immediate, avant le retour reseau.
+    themeRef.current = nextTheme;
     setThemeState(nextTheme);
+    applyTheme(nextTheme);
 
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      if (!user) throw new Error("Utilisateur non connecte.");
 
-      if (userError) {
-        throw userError;
-      }
-
-      if (!user) {
-        throw new Error(
-          "Utilisateur non connecté.",
-        );
-      }
-
-      const { error } =
-        await supabase
-          .from("profiles")
-          .update({
-            theme: nextTheme,
-          })
-          .eq("id", user.id);
-
-      if (error) {
-        throw error;
-      }
+      const { error } = await supabase
+        .from("profiles")
+        .update({ theme: nextTheme })
+        .eq("id", user.id);
+      if (error) throw error;
+      if (version === versionRef.current) cacheTheme(nextTheme);
     } catch (error) {
-      console.error(
-        "THEME UPDATE ERROR:",
-        error,
-      );
-
-      // Retour à l'ancien thème si Supabase échoue.
-      setThemeState(previousTheme);
+      // La page Settings doit recevoir l'erreur et afficher le vrai resultat.
+      if (version === versionRef.current) {
+        themeRef.current = previousTheme;
+        setThemeState(previousTheme);
+        applyTheme(previousTheme);
+      }
+      console.error("THEME UPDATE ERROR:", error);
+      throw error;
+    } finally {
+      savingRef.current = false;
     }
   }
 
-  async function toggleTheme() {
-    await setTheme(
-      theme === "light"
-        ? "dark"
-        : "light",
-    );
+  async function toggleTheme(): Promise<void> {
+    await setTheme(themeRef.current === "light" ? "dark" : "light");
   }
 
   return (
-    <ThemeContext.Provider
-      value={{
-        theme,
-        setTheme,
-        toggleTheme,
-      }}
-    >
+    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       {children}
     </ThemeContext.Provider>
   );
 }
 
 export function useTheme() {
-  const context =
-    useContext(ThemeContext);
-
+  const context = useContext(ThemeContext);
   if (!context) {
-    throw new Error(
-      "useTheme doit être utilisé à l'intérieur de ThemeProvider.",
-    );
+    throw new Error("useTheme doit etre utilise a l'interieur de ThemeProvider.");
   }
-
   return context;
 }

@@ -1,11 +1,5 @@
 "use client";
 
-
-
-
-
-
-
 import {
 
 
@@ -2877,7 +2871,7 @@ export default function CreditsPage() {
 
 
 
-      <header className="border-b border-border">
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur-xl">
 
 
 
@@ -2901,7 +2895,7 @@ export default function CreditsPage() {
 
 
 
-              className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
+              className="rounded-2xl p-2.5 text-muted-strong transition-colors duration-200 hover:bg-surface-secondary hover:text-foreground"
 
 
 
@@ -2965,7 +2959,7 @@ export default function CreditsPage() {
 
 
 
-            className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground transition hover:opacity-85"
+            className="inline-flex items-center gap-2 rounded-2xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground shadow-[0_12px_28px_-20px_var(--shadow-color)] transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90"
 
 
 
@@ -3041,7 +3035,7 @@ export default function CreditsPage() {
 
 
 
-          <p className="text-sm font-medium text-muted">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
 
 
 
@@ -3057,7 +3051,7 @@ export default function CreditsPage() {
 
 
 
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">
+          <h1 className="mt-2 text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">
 
 
 
@@ -3073,7 +3067,7 @@ export default function CreditsPage() {
 
 
 
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
+          <p className="mt-3 max-w-2xl text-sm leading-7 text-muted">
 
 
 
@@ -3105,7 +3099,7 @@ export default function CreditsPage() {
 
 
 
-          <div className="mt-8 rounded-3xl border border-border bg-surface-secondary p-10 text-center">
+          <div className="mt-8 rounded-[28px] border border-border/75 bg-surface/80 p-10 text-center shadow-[0_18px_44px_-30px_var(--shadow-color)]">
 
 
 
@@ -3153,7 +3147,7 @@ export default function CreditsPage() {
 
 
 
-          <div className="mt-8 rounded-3xl border border-border bg-surface-secondary p-6">
+          <div className="mt-8 rounded-[28px] border border-border/75 bg-surface-secondary/80 p-6 shadow-[0_15px_42px_-30px_var(--shadow-color)]">
 
 
 
@@ -3201,7 +3195,7 @@ export default function CreditsPage() {
 
 
 
-              className="mt-5 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-foreground"
+              className="mt-5 rounded-2xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition-opacity hover:opacity-90"
 
 
 
@@ -3273,7 +3267,7 @@ export default function CreditsPage() {
 
 
 
-                <div className="rounded-3xl border border-border bg-accent p-6 text-accent-foreground sm:p-8">
+                <div className="rounded-[30px] border border-border/40 bg-accent p-6 text-accent-foreground shadow-[0_24px_60px_-34px_var(--shadow-color)] sm:p-8">
 
 
 
@@ -3357,7 +3351,7 @@ export default function CreditsPage() {
 
 
 
-                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent-foreground/10">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-accent-foreground/15 bg-accent-foreground/10">
 
 
 
@@ -3445,7 +3439,7 @@ export default function CreditsPage() {
 
 
 
-                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-accent-foreground/10">
+                    <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-accent-foreground/15">
 
 
 
@@ -3497,7 +3491,7 @@ export default function CreditsPage() {
 
 
 
-                    <div className="rounded-xl bg-accent-foreground/10 px-3 py-2">
+                    <div className="rounded-2xl border border-accent-foreground/10 bg-accent-foreground/[0.07] px-3.5 py-2.5">
 
 
 
@@ -3537,7 +3531,7 @@ export default function CreditsPage() {
 
 
 
-                    <div className="rounded-xl bg-accent-foreground/10 px-3 py-2">
+                    <div className="rounded-2xl border border-accent-foreground/10 bg-accent-foreground/[0.07] px-3.5 py-2.5">
 
 
 
@@ -3589,7 +3583,7 @@ export default function CreditsPage() {
 
 
 
-                    <div className="rounded-xl bg-accent-foreground/10 px-3 py-2">
+                    <div className="rounded-2xl border border-accent-foreground/10 bg-accent-foreground/[0.07] px-3.5 py-2.5">
 
 
 
@@ -3654,7 +3648,7 @@ export default function CreditsPage() {
 
 
 
-                <div className="rounded-3xl border border-border bg-surface-secondary p-6 sm:p-8">
+                <div className="rounded-[30px] border border-border/75 bg-surface/80 p-6 shadow-[0_18px_48px_-30px_var(--shadow-color)] sm:p-8">
 
 
 
@@ -3662,7 +3656,7 @@ export default function CreditsPage() {
 
 
 
-                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-surface">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-border/65 bg-surface-secondary">
 
 
 
@@ -4204,7 +4198,7 @@ export default function CreditsPage() {
 
 
 
-                <div className="mt-5 overflow-hidden rounded-2xl border border-border">
+                <div className="mt-5 overflow-hidden rounded-[26px] border border-border/75 bg-surface/80 shadow-[0_18px_48px_-31px_var(--shadow-color)]">
 
 
 
@@ -4472,11 +4466,11 @@ function StatCard({
 
 
 
-    <div className="rounded-2xl border border-border bg-surface-secondary p-5">
+    <div className="rounded-[24px] border border-border/75 bg-surface/80 p-5 shadow-[0_14px_40px_-31px_var(--shadow-color)]">
 
 
 
-      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-surface">
+      <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-border/60 bg-surface-secondary">
 
 
 
@@ -4632,7 +4626,7 @@ function TransactionItem({
 
 
 
-      className={`flex items-center gap-4 bg-surface p-4 sm:p-5 ${
+      className={`flex items-center gap-4 bg-surface/75 p-4 transition-colors duration-200 hover:bg-surface-secondary/75 sm:p-5 ${
 
 
 
@@ -4656,7 +4650,7 @@ function TransactionItem({
 
 
 
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-tertiary">
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-border/60 bg-surface-secondary">
 
 
 

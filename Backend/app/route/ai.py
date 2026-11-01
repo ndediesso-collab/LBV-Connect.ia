@@ -74,6 +74,18 @@ from app.repositories.supabase_artifact_repository import (
 
 
 from app.services.openai_service import OpenAIService
+from app.services.chat_provider_router import (
+    ChatProvider, active_chat_provider, select_chat_model,
+    ChatProviderConfigurationError, ChatModelNotAvailableError,
+)
+from app.services.openrouter_chat_service import (
+    OpenRouterChatService, OpenRouterChatError,
+    OpenRouterBillingUncertainError, OpenRouterUnsupportedFeatureError,
+)
+from app.services.token_billing_service import OpenRouterTokenBillingService
+from app.config.credit_costs import (
+    OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK, OPENROUTER_CHAT_MODEL_IDS,
+)
 from app.services.oria_chat_revision_projection import (
     active_revision_pairs, project_active_messages,
 )
@@ -330,6 +342,8 @@ class ChatResponse(BaseModel):
 
     artifact_errors: list[str] | None = None
     web_images: list[dict[str, Any]] | None = None
+    web_sources: list[dict[str, str]] | None = None
+    provider: str = "openai"
     visual_mode: bool = False  # Indique si les sorties visuelles ont été demandées
 
 
@@ -1971,6 +1985,19 @@ MODEL_ACTIONS = {
 
     },
 
+    # Actions OpenRouter : jamais facturées à un autre modèle par erreur.
+    "claude-haiku-5.5": {
+        "normal": CreditAction.CHAT_CLAUDE_HAIKU,
+        "web": CreditAction.CHAT_CLAUDE_HAIKU_WEB,
+    },
+    "claude-sonnet-5.5": {
+        "normal": CreditAction.CHAT_CLAUDE_SONNET,
+        "web": CreditAction.CHAT_CLAUDE_SONNET_WEB,
+    },
+    "claude-opus-5.5": {
+        "normal": CreditAction.CHAT_CLAUDE_OPUS,
+        "web": CreditAction.CHAT_CLAUDE_OPUS_WEB,
+    },
 }
 
 
@@ -3733,10 +3760,16 @@ def _prepare_chat(
             detail=INSUFFICIENT_ACTION_CREDITS_MESSAGE,
         )
 
-    allowed_models = PACK_ALLOWED_MODELS.get(
-        wallet.pack_id,
-        set(),
-    )
+    # Le fournisseur actif détermine les droits du pack, jamais le frontend.
+    # Par défaut et tant qu'aucun flag n'est activé : comportement OpenAI intact.
+    try:
+        active_provider = active_chat_provider()
+    except ChatProviderConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    allowed_models = (
+        PACK_ALLOWED_MODELS if active_provider is ChatProvider.OPENAI
+        else OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK
+    ).get(wallet.pack_id, set())
 
     is_normal_model = (
         model in allowed_models
@@ -3857,10 +3890,11 @@ def _reserve_chat_credits(
     )
 
     try:
-        reserved_amount = TokenBillingService.estimate_reservation(
+        reserved_amount, estimated_api_xaf = TokenBillingService.estimate_reservation(
             model=model,
             estimated_input_tokens=estimated_input_tokens,
             web_enabled=web,
+            include_api_cost=True,
         )
     except TokenBillingError as error:
         raise HTTPException(
@@ -3878,6 +3912,7 @@ def _reserve_chat_credits(
             amount=reserved_amount,
             action=action,
             reference_id=reservation_id,
+            api_reservation_xaf=estimated_api_xaf,
         )
     except Exception as error:
         raise _billing_reservation_failure(error) from error
@@ -3922,6 +3957,7 @@ def _settle_chat_reservation(
             user_id=authenticated_user_id,
             reference_id=reservation_id,
             actual_amount=cost,
+            actual_api_cost_xaf=api_cost_xaf,
         )
     except Exception as error:
         raise RuntimeError(
@@ -3965,6 +4001,683 @@ def _settle_chat_reservation(
         )
 
     return result, trials_remaining
+
+
+# ============================================================
+# OPENROUTER CHAT — RACCORDEMENT SANS CHANGER LE CHAT OPENAI
+# ============================================================
+# Affichage dynamique pour Web/React Native : Claude n'est jamais proposé
+# tant que l'interrupteur Chat OpenRouter n'est pas actif.
+_ORIA_CHAT_DISPLAY_NAMES = {
+    "luna": "GPT-6 Luna",
+    "gpt-5": "GPT-5",
+    "gpt-5.6-terra": "Terra",
+    "gpt-6-sol": "Sol",
+    "gpt-6-astra": "Astra",
+    "claude-haiku-5.5": "Claude Haiku 5.5",
+    "claude-sonnet-5.5": "Claude Sonnet 5.5",
+    "claude-opus-5.5": "Claude Opus 5.5",
+}
+
+
+@router.get("/chat/capabilities")
+def get_chat_capabilities(
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Catalogue effectif du pack et du fournisseur : destiné au sélecteur UI."""
+    uid = _authenticate_chat_user(user_id=user_id, authorization=authorization)
+    wallet = SupabaseCreditRepository(supabase).get_wallet(uid)
+    if wallet is None or not wallet.is_pack_active:
+        raise HTTPException(status_code=403, detail="Pack ORIA inactif ou absent.")
+    try:
+        provider = active_chat_provider()
+    except ChatProviderConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    rights = (PACK_ALLOWED_MODELS if provider is ChatProvider.OPENAI
+              else OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK)
+    models = rights.get(wallet.pack_id)
+    if models is None:
+        raise HTTPException(status_code=403, detail="Pack ORIA non reconnu.")
+    catalog = (MODEL_OPENAI_IDS if provider is ChatProvider.OPENAI
+               else OPENROUTER_CHAT_MODEL_IDS)
+    return {
+        "success": True,
+        "provider": provider.value,
+        "pack_id": wallet.pack_id,
+        "models": [
+            {"id": key, "label": _ORIA_CHAT_DISPLAY_NAMES[key],
+             "reasoning_modes": ["fast", "balanced", "deep"]}
+            for key in _ORIA_CHAT_DISPLAY_NAMES
+            if key in models and key in catalog
+        ],
+        "streaming": True,
+        "live_modify": True if provider is ChatProvider.OPENROUTER else None,
+        "live_modify_strategy": (
+            "deferred_restart" if provider is ChatProvider.OPENROUTER else None
+        ),
+        "document_generation": True,
+    }
+
+
+
+
+def _oria_chat_selection(model: str, wallet, is_trial_model: bool):
+    """Fige le fournisseur et le modèle à l'entrée de chaque opération."""
+    try:
+        active = active_chat_provider()
+        # La sélection reste immuable, même si un environnement de test
+        # change ses flags entre deux lectures.
+        switches = ({"ORIA_OPENAI_ENABLED": "1", "ORIA_OPENROUTER_ENABLED": "0"}
+                    if active is ChatProvider.OPENAI else
+                    {"ORIA_OPENAI_ENABLED": "0", "ORIA_OPENROUTER_ENABLED": "1"})
+        return select_chat_model(
+            oria_model=model,
+            environ=switches,
+            pack_id=wallet.pack_id,
+            allowed_models_by_pack=(
+                PACK_ALLOWED_MODELS if active is ChatProvider.OPENAI
+                else OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK
+            ),
+            openai_model_ids=MODEL_OPENAI_IDS,
+            openrouter_model_ids=OPENROUTER_CHAT_MODEL_IDS,
+            trial_model=ModelTrialService.get_trial_model(wallet.pack_id),
+            trial_authorized=is_trial_model,
+        )
+    except ChatModelNotAvailableError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ChatProviderConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _oria_openrouter_service() -> OpenRouterChatService:
+    """Les capacités sont une ALLOWLIST et ne viennent jamais du navigateur.
+
+    Elles restent soumises au devis bloquant de la phase 2 : aucun modèle
+    nouveau ne peut être facturé sans taux maximum administrateur vérifié.
+    """
+    capabilities = {}
+    for key, api_model in OPENROUTER_CHAT_MODEL_IDS.items():
+        if key == "gpt-6-astra":
+            efforts = {"fast": "low", "balanced": "medium", "deep": "high"}
+        elif key.startswith("claude-"):
+            efforts = {"fast": "low", "balanced": "medium", "deep": "high"}
+        else:
+            efforts = {"fast": None, "balanced": "medium", "deep": "high"}
+        capabilities[api_model] = {
+            "reasoning_efforts": efforts,
+            "web_search": True,
+            "images": True,
+        }
+    return OpenRouterChatService(capabilities_by_model=capabilities)
+
+
+def _oria_openrouter_preflight(*, service: OpenRouterChatService,
+                               selection, message: str, history,
+                               attachments: list[ChatAttachment], web: bool,
+                               reasoning_mode: str, visual_mode: bool,
+                               document_types: tuple[str, ...], stream: bool):
+    """Bloque les fonctions non validées AVANT toute réservation payante."""
+    payload_attachments = _attachments_for_openai(attachments)
+    try:
+        service.build_request(
+            model=selection.api_model,
+            message=message, history=history, attachments=payload_attachments,
+            web=web, reasoning_mode=reasoning_mode, visual_mode=visual_mode,
+            artifact_types=document_types, stream=stream,
+        )
+        quote = OpenRouterTokenBillingService.estimate_reservation(
+            provider_model=selection.api_model,
+            estimated_input_tokens=_estimate_chat_input_tokens(
+                message=message, history=history, attachments=attachments,
+            ),
+            web_enabled=web,
+        )
+    except (OpenRouterUnsupportedFeatureError, ValueError, TokenBillingError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return quote, payload_attachments
+
+
+def _oria_openrouter_reserve(*, repository, uid: str, action: CreditAction, quote):
+    reference_id = str(uuid4())
+    try:
+        repository.reserve_credits(
+            user_id=uid, amount=quote.reserved_credits,
+            action=action, reference_id=reference_id,
+            api_reservation_xaf=quote.reserved_api_cost_xaf,
+        )
+    except Exception as exc:
+        raise _billing_reservation_failure(exc) from exc
+    return reference_id
+
+
+def _oria_openrouter_reconcile_error(exc: Exception, *, repository, uid: str,
+                                     reservation_id: str) -> HTTPException:
+    """HTTP 4xx définitif : libérer ; résultat réseau incertain : conserver."""
+    definitive = (isinstance(exc, OpenRouterChatError)
+                  and not isinstance(exc, OpenRouterBillingUncertainError)
+                  and exc.status_code in {400, 401, 402, 403, 404, 429})
+    if definitive:
+        try:
+            _release_chat_reservation(
+                repository=repository, authenticated_user_id=uid,
+                reservation_id=reservation_id,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "ORIA_OR_RECONCILIATION release_failed reservation_id=%s", reservation_id,
+            )
+    else:
+        logging.getLogger(__name__).error(
+            "ORIA_OR_RECONCILIATION hold_retained reservation_id=%s error_type=%s",
+            reservation_id, type(exc).__name__,
+        )
+    return HTTPException(
+        status_code=502 if definitive else 503,
+        detail=("Appel OpenRouter refusé avant exécution."
+                if definitive else
+                "Résultat fournisseur incertain : réservation conservée pour rapprochement."),
+    )
+
+
+def _oria_openrouter_citation_text(citations: Any) -> str:
+    """URLs seulement issues du validateur HTTPS de l'adaptateur OpenRouter."""
+    if not isinstance(citations, (list, tuple)):
+        return ""
+    lines, seen = [], set()
+    for item in citations[:25]:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "")
+        if not url.startswith("https://") or url in seen:
+            continue
+        seen.add(url)
+        # Protection des délimiteurs Markdown et des retours à la ligne.
+        title = str(item.get("title") or "Source Web").replace("[", "\\[").replace("]", "\\]")
+        title = title.replace("\n", " ").replace("\r", " ")[:160]
+        lines.append(f"- [{title}]({url})")
+    return "\n\nSources :\n" + "\n".join(lines) if lines else ""
+
+
+async def _oria_openrouter_execute_classic(*, service, selection, repository,
+                                            wallet, uid: str, action: CreditAction,
+                                            quote, attachments, message: str,
+                                            history, web: bool, reasoning_mode: str,
+                                            visual_mode: bool, is_trial_model: bool,
+                                            reservation_id: str | None = None,
+                                            document_types: tuple[str, ...] = ()):
+    """Une seule tentative, une seule réservation ; aucun retry payant caché."""
+    reservation_id = reservation_id or _oria_openrouter_reserve(
+        repository=repository, uid=uid, action=action, quote=quote,
+    )
+    try:
+        response = await asyncio.to_thread(
+            service.chat, model=selection.api_model, message=message,
+            web=web, attachments=attachments, history=history,
+            reasoning_mode=reasoning_mode, visual_mode=visual_mode,
+            artifact_types=document_types,
+        )
+    except Exception as exc:
+        raise _oria_openrouter_reconcile_error(
+            exc, repository=repository, uid=uid, reservation_id=reservation_id,
+        ) from exc
+    try:
+        billing = OpenRouterTokenBillingService.calculate(response)
+    except (TokenBillingError, ValueError) as exc:
+        # API possiblement facturée ; ne pas rendre la réservation.
+        raise HTTPException(status_code=503, detail=(
+            "Usage ou coût OpenRouter manquant : rapprochement financier nécessaire."
+        )) from exc
+    if billing.credits > quote.reserved_credits:
+        # On ne déclenche pas un débit non autorisé par le devis.
+        raise HTTPException(status_code=503, detail=(
+            "Coût fournisseur supérieur à la provision : rapprochement financier nécessaire."
+        ))
+    try:
+        result, remaining = _settle_chat_reservation(
+            repository=repository, wallet_before_reservation=wallet,
+            authenticated_user_id=uid, reservation_id=reservation_id,
+            action=action, cost=billing.credits, api_cost_xaf=billing.total_cost_xaf,
+            is_trial_model=is_trial_model, model_id=selection.oria_model,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=(
+            "Réponse générée, mais le règlement des crédits doit être rapproché."
+        )) from exc
+    return response, result, remaining
+
+
+def _oria_next_stream_event(stream):
+    """Sentinelle sûre pour asyncio.to_thread : StopIteration ne traverse pas Future."""
+    try:
+        return True, next(stream)
+    except StopIteration:
+        return False, None
+
+
+async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: str,
+                                        action: CreditAction, model: str,
+                                        message: str, history, attachments,
+                                        web: bool, visual_mode: bool,
+                                        reasoning_mode: str, generation_id: str,
+                                        artifact_requests, document_types,
+                                        source_message_id, conversation_id,
+                                        route_started_at: float,
+                                        is_trial_model: bool):
+    """SSE OpenRouter : smart restart différé, sans dette fournisseur masquée.
+
+    À la différence de response.steer chez OpenAI, OpenRouter ne modifie pas
+    un appel Chat Completions déjà lancé. Une édition est donc mise en file,
+    l'usage de la tentative en cours est confirmé et réglé, puis une NOUVELLE
+    tentative est pré-autorisée avant d'effacer la réponse affichée.
+
+    Jamais de restart implicite, ni de tentative gratuite, ni de pièce jointe
+   /document créée pendant une tentative qui doit être remplacée.
+    """
+    live_modify = not bool(document_types) and not is_trial_model
+    try:
+        service = _oria_openrouter_service()
+        generation_message = (message if document_types else
+                              _code_output_instruction(message, attachments))
+        quote, provider_attachments = _oria_openrouter_preflight(
+            service=service, selection=selection, message=generation_message,
+            history=history, attachments=attachments, web=web,
+            reasoning_mode=reasoning_mode, visual_mode=visual_mode,
+            document_types=document_types, stream=True,
+        )
+    except OpenRouterChatError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    reservation_id = _oria_openrouter_reserve(
+        repository=repository, uid=uid, action=action, quote=quote,
+    )
+    try:
+        state = _register_active_generation(
+            generation_id=generation_id, user_id=uid, model=model,
+            openai_model=selection.api_model, reasoning_mode=reasoning_mode,
+            transport="openrouter-http",
+        )
+        state.openrouter_live_modify = live_modify
+    except Exception:
+        _release_chat_reservation(
+            repository=repository, authenticated_user_id=uid,
+            reservation_id=reservation_id,
+        )
+        raise
+
+    async def events():
+        nonlocal artifact_requests, provider_attachments
+        current_message = generation_message
+        current_mode = reasoning_mode
+        current_quote = quote
+        current_reservation_id = reservation_id
+        current_wallet = wallet
+        first_balance = getattr(wallet, "balance", None)
+        attempt_id = str(uuid4())
+        attempt_number = 1
+        restart_count = 0
+        total_credits = 0
+        modifications: list[str] = []
+        stream = None
+        started = False
+        settled = False
+        state.active_attempt_id = attempt_id
+        try:
+            yield _sse("start", {
+                "success": True, "model": model,
+                "openai_model": selection.api_model, "provider": "openrouter",
+                "web": web, "visual_mode": visual_mode,
+                "attachments": len(provider_attachments),
+                "generation_id": generation_id, "attempt_id": attempt_id,
+                "reasoning_mode": reasoning_mode, "reservation_id": reservation_id,
+                "reserved_credits": quote.reserved_credits, "transport": "http",
+                "live_modify": live_modify,
+                "live_modify_strategy": "deferred_restart" if live_modify else None,
+                "artifact_requests": artifact_requests,
+            })
+            received_step, processing_step = _oria_attachment_status_stages(attachments)
+
+            while True:
+                state.active_attempt_id = attempt_id
+                state.reasoning_mode = current_mode
+                full_response = ""
+                sources = []
+                usage_result = None
+                finish_reason = None
+                artifact_payload = None
+                document_error = None
+                started = False
+                settled = False
+                stream = None
+                yield _oria_chat_status(received_step if attempt_number == 1 else "restarting",
+                                        generation_id=generation_id, attempt_id=attempt_id)
+                stream = service.chat_stream(
+                    model=selection.api_model, message=current_message,
+                    web=web, attachments=provider_attachments, history=history,
+                    reasoning_mode=current_mode, visual_mode=visual_mode,
+                    artifact_types=document_types, generation_id=attempt_id,
+                )
+                while True:
+                    started = True  # L'appel fournisseur peut avoir eu lieu.
+                    has_item, data = await asyncio.to_thread(_oria_next_stream_event, stream)
+                    if not has_item:
+                        break
+                    payload = _as_mapping(data) or {}
+                    kind = str(payload.get("type") or "")
+                    if kind == "response_meta":
+                        yield _oria_chat_status(processing_step, generation_id=generation_id,
+                                                attempt_id=attempt_id)
+                        forwarded = dict(payload)
+                        forwarded.update({"generation_id": generation_id, "attempt_id": attempt_id})
+                        yield _sse("response_meta", forwarded)
+                    elif kind == "delta":
+                        delta = str(payload.get("content") or "")
+                        if delta:
+                            full_response += delta
+                            yield _oria_chat_status("clear", generation_id=generation_id,
+                                                    attempt_id=attempt_id)
+                            yield _sse("delta", {
+                                "content": delta, "generation_id": generation_id,
+                                "attempt_id": attempt_id,
+                                "response_id": payload.get("response_id"),
+                            })
+                    elif kind == "citations":
+                        sources = payload.get("citations") or []
+                    elif kind == "artifact_payload" and document_types:
+                        artifact_payload = payload.get("artifact_payload")
+                    elif kind == "artifact_error" and document_types:
+                        document_error = str(payload.get("detail") or "Document invalide.")
+                    elif kind == "usage":
+                        usage_result = payload
+                        finish_reason = payload.get("finish_reason")
+
+                # Un appel lancé n'est jamais remboursé sur une simple coupure :
+                # sans facture confirmée, sa provision est gardée pour rapprochement.
+                if usage_result is None or (not document_types and not full_response.strip()):
+                    raise OpenRouterBillingUncertainError("Résultat OpenRouter incomplet.")
+                billing = OpenRouterTokenBillingService.calculate(usage_result)
+                if billing.credits > current_quote.reserved_credits:
+                    raise OpenRouterBillingUncertainError("Coût supérieur à la provision autorisée.")
+                result, remaining = _settle_chat_reservation(
+                    repository=repository, wallet_before_reservation=current_wallet,
+                    authenticated_user_id=uid, reservation_id=current_reservation_id,
+                    action=action, cost=billing.credits, api_cost_xaf=billing.total_cost_xaf,
+                    is_trial_model=False, model_id=model,
+                )
+                settled = True
+                total_credits += result.cost
+                yield _sse("attempt_settled", {
+                    "generation_id": generation_id,
+                    "attempt_id": attempt_id,
+                    "attempt_number": attempt_number,
+                    "attempt_credits": result.cost,
+                    "total_credits": total_credits,
+                    "credits_remaining": result.new_balance,
+                })
+
+                # Une demande de modification ne peut s'appliquer qu'APRÈS
+                # règlement de l'ancienne tentative et préautorisation de la
+                # nouvelle. Aucun artefact provisoire ne doit être fabriqué.
+                commands = []
+                if live_modify and getattr(state, "control_queue", None) is not None:
+                    while not state.control_queue.empty():
+                        try:
+                            commands.append(state.control_queue.get_nowait())
+                        except asyncio.QueueEmpty:
+                            break
+                if commands:
+                    if restart_count >= MAX_SMART_RESTARTS:
+                        state.closed = True
+                        yield _sse("modify_rejected", {
+                            "generation_id": generation_id, "attempt_id": attempt_id,
+                            "reason": "restart_limit_reached",
+                            "detail": "Limite de modifications atteinte pour cette réponse.",
+                        })
+                    else:
+                        candidate_modifications = modifications + [
+                            str(item.get("instruction") or "").strip()
+                            for item in commands if str(item.get("instruction") or "").strip()
+                        ]
+                        requested_modes = [item.get("reasoning_mode")
+                                           for item in commands if item.get("reasoning_mode")]
+                        requested_mode = requested_modes[-1] if requested_modes else current_mode
+                        candidate_message = _restart_message(
+                            original_message=generation_message,
+                            modification_instructions=candidate_modifications,
+                        )
+                        try:
+                            next_quote, next_attachments = _oria_openrouter_preflight(
+                                service=service, selection=selection,
+                                message=candidate_message, history=history,
+                                attachments=attachments, web=web,
+                                reasoning_mode=requested_mode,
+                                visual_mode=visual_mode, document_types=document_types,
+                                stream=True,
+                            )
+                            # Réservation indépendante : chaque tentative payante
+                            # possède sa propre ligne Supabase et son coût final.
+                            next_wallet = repository.get_wallet(uid)
+                            if next_wallet is None:
+                                raise RuntimeError("Portefeuille introuvable pour la modification.")
+                            next_reservation_id = _oria_openrouter_reserve(
+                                repository=repository, uid=uid, action=action,
+                                quote=next_quote,
+                            )
+                        except Exception as exc:
+                            logging.getLogger(__name__).warning(
+                                "ORIA_OR_MODIFY_PREAUTH_FAILED type=%s", type(exc).__name__)
+                            yield _sse("modify_rejected", {
+                                "generation_id": generation_id, "attempt_id": attempt_id,
+                                "reason": "insufficient_authorization",
+                                "detail": "Modification non lancée : crédits ou devis indisponibles.",
+                            })
+                        else:
+                            # Fermer explicitement le transport de la tentative
+                            # terminée avant de réutiliser le service.
+                            if stream is not None and callable(getattr(stream, "close", None)):
+                                try:
+                                    stream.close()
+                                except (RuntimeError, ValueError, OSError):
+                                    logging.getLogger(__name__).warning(
+                                        "ORIA_OR_STREAM_CLOSE_FAILED attempt=%s", attempt_id,
+                                    )
+                            stream = None
+                            previous_attempt_id = attempt_id
+                            attempt_id = str(uuid4())
+                            attempt_number += 1
+                            restart_count += 1
+                            modifications = candidate_modifications
+                            current_message = candidate_message
+                            current_mode = requested_mode
+                            current_quote = next_quote
+                            current_reservation_id = next_reservation_id
+                            provider_attachments = next_attachments
+                            # Le portefeuille ne doit pas prendre comme solde
+                            # de référence un état antérieur aux autres débits.
+                            current_wallet = next_wallet
+                            # Dès que la nouvelle réservation existe, traiter
+                            # une déconnexion avant le prochain appel comme un
+                            # échec AVANT génération : libérer seulement celle-ci.
+                            started = False
+                            settled = False
+                            state.active_attempt_id = attempt_id
+                            state.reasoning_mode = current_mode
+                            yield _sse("generation_restarted", {
+                                "generation_id": generation_id,
+                                "old_attempt_id": previous_attempt_id,
+                                "attempt_id": attempt_id,
+                                "attempt_number": attempt_number,
+                                "reasoning_mode": current_mode,
+                                "reason": "user_modification",
+                                "replace_content": True,
+                            })
+                            yield _oria_chat_status("restarting",
+                                                    generation_id=generation_id,
+                                                    attempt_id=attempt_id)
+                            continue
+
+                # Il n'y aura plus de génération nouvelle : refuser toute
+                # commande concurrente avant d'envoyer le résultat final.
+                state.closed = True
+                if sources and web and not document_types:
+                    yield _sse("web_sources", {
+                        "generation_id": generation_id, "attempt_id": attempt_id,
+                        "sources": sources,
+                    })
+                    citation_text = _oria_openrouter_citation_text(sources)
+                    if citation_text:
+                        full_response += citation_text
+                        yield _sse("delta", {
+                            "content": citation_text, "generation_id": generation_id,
+                            "attempt_id": attempt_id,
+                        })
+                generated_artifacts, artifact_errors = [], []
+                if document_types:
+                    if artifact_payload is not None and not document_error:
+                        yield _oria_chat_status("creating_artifact", generation_id=generation_id,
+                                                attempt_id=attempt_id)
+                        try:
+                            prepared = _render_document_results(
+                                artifact_payload=artifact_payload,
+                                artifact_requests=artifact_requests,
+                                generation_id=generation_id, attempt_id=attempt_id,
+                                reasoning_mode=current_mode, model=model,
+                                openai_model=selection.api_model,
+                            )
+                            for produced in prepared:
+                                persisted = _persist_document_result(
+                                    generated=produced, authenticated_user_id=uid,
+                                    conversation_id=conversation_id,
+                                    source_message_id=source_message_id,
+                                    model=model,
+                                )
+                                generated_artifacts.append(persisted)
+                                yield _sse("artifact", {
+                                    **persisted, "generation_id": generation_id,
+                                    "attempt_id": attempt_id,
+                                })
+                        except Exception as exc:
+                            artifact_errors.append(_document_failure_diagnostic("conversion", exc))
+                    else:
+                        artifact_errors.append(document_error or "Contrat documentaire absent.")
+                    full_response = _document_result_message(
+                        len(artifact_requests), len(generated_artifacts),
+                        failure_hint=artifact_errors[0] if artifact_errors else None,
+                    )
+                    yield _sse("delta", {
+                        "content": full_response, "generation_id": generation_id,
+                        "attempt_id": attempt_id,
+                    })
+                elif finish_reason in {"stop", "end_turn", None}:
+                    try:
+                        artifact_requests = _code_artifact_requests_after_response(
+                            message=message, attachments=attachments,
+                            response_text=full_response, existing=artifact_requests,
+                        )
+                    except ValueError as exc:
+                        artifact_errors.append(str(exc))
+                    for spec in artifact_requests:
+                        try:
+                            yield _sse("artifact_processing", {
+                                "generation_id": generation_id, "attempt_id": attempt_id,
+                                "file_type": spec.get("file_type"), "filename": spec.get("filename"),
+                            })
+                            artifact = _create_and_persist_artifact(
+                                authenticated_user_id=uid, artifact_request=spec,
+                                response_text=full_response, conversation_id=conversation_id,
+                                source_message_id=source_message_id, model=model,
+                                openai_model=selection.api_model,
+                                generation_id=generation_id, attempt_id=attempt_id,
+                                reasoning_mode=current_mode, user_message=message,
+                                user_attachments=attachments,
+                            )
+                            generated_artifacts.append(artifact)
+                            yield _sse("artifact", {
+                                **artifact, "generation_id": generation_id,
+                                "attempt_id": attempt_id,
+                            })
+                        except Exception as exc:
+                            artifact_errors.append(str(exc))
+                            yield _sse("artifact_error", {
+                                "generation_id": generation_id, "attempt_id": attempt_id,
+                                "detail": "Fichier non créé : contenu ou stockage invalide.",
+                            })
+                else:
+                    artifact_errors.append("Réponse incomplète : aucun fichier exporté.")
+                if is_trial_model:
+                    trial = ModelTrialService.consume_trial(uid, model)
+                    remaining = max(0, trial["max_trials"] - trial["used_trials"])
+                yield _oria_chat_status("clear", generation_id=generation_id,
+                                        attempt_id=attempt_id)
+                yield _sse("done", {
+                    "success": bool(generated_artifacts) if document_types else True,
+                    "message": full_response,
+                    "model": model, "openai_model": selection.api_model,
+                    "provider": "openrouter", "action": action.value,
+                    "visual_mode": visual_mode, "cost": total_credits,
+                    "previous_balance": (first_balance if first_balance is not None
+                                         else result.previous_balance),
+                    "credits_remaining": result.new_balance,
+                    "consumed_percentage": result.consumed_percentage,
+                    "remaining_percentage": result.remaining_percentage,
+                    "requires_warning": result.requires_warning,
+                    "requires_critical_warning": result.requires_critical_warning,
+                    "trial": is_trial_model, "trials_remaining": remaining,
+                    "generation_id": generation_id, "attempt_id": attempt_id,
+                    "attempts": attempt_number, "smart_restarts": restart_count,
+                    "reasoning_mode": current_mode, "transport": "http",
+                    "artifacts": generated_artifacts, "artifact_errors": artifact_errors,
+                    "web_images": [], "web_sources": sources,
+                    "timing": {"server_total_ms": (perf_counter() - route_started_at) * 1000},
+                })
+                break
+        except asyncio.CancelledError:
+            # Le bloc finally rembourse les réservations non consommées,
+            # notamment si le navigateur se déconnecte entre deux tentatives.
+            raise
+        except Exception as exc:
+            if not settled and isinstance(exc, OpenRouterChatError) and started:
+                _oria_openrouter_reconcile_error(
+                    exc, repository=repository, uid=uid,
+                    reservation_id=current_reservation_id,
+                )
+            logging.getLogger(__name__).error(
+                "ORIA_OR_STREAM reconcile=%s exception=%s",
+                current_reservation_id, type(exc).__name__,
+            )
+            yield _oria_chat_status("clear", generation_id=generation_id,
+                                    attempt_id=attempt_id)
+            yield _sse("error", {
+                "detail": "Streaming OpenRouter interrompu ; vérification des crédits nécessaire.",
+                "generation_id": generation_id, "attempt_id": attempt_id,
+            })
+        finally:
+            # Même GeneratorExit (aclose après un SSE) passe par finally.
+            # Dès lors qu'aucun appel fournisseur de cette réservation n'a
+            # démarré, son blocage financier doit être levé.
+            if not started and not settled:
+                try:
+                    _release_chat_reservation(
+                        repository=repository, authenticated_user_id=uid,
+                        reservation_id=current_reservation_id,
+                    )
+                except Exception:
+                    logging.getLogger(__name__).error(
+                        "ORIA_OR_RELEASE_FAILED reservation=%s", current_reservation_id,
+                    )
+            if stream is not None:
+                closer = getattr(stream, "close", None)
+                if callable(closer):
+                    try:
+                        closer()
+                    except (RuntimeError, ValueError, OSError):
+                        pass
+            _close_active_generation(generation_id, state)
+
+    return StreamingResponse(
+        events(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform",
+                 "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 # ============================================================
@@ -4021,71 +4734,102 @@ async def chat(
         artifact_requests
     )
 
-    reservation_id, _reserved_amount = _reserve_chat_credits(
-        repository=repository,
-        authenticated_user_id=authenticated_user_id,
-        action=action,
-        model=model,
-        message=message,
-        history=history,
-        attachments=attachments,
-        web=web,
-    )
-
-    openai_service = OpenAIService()
-
-    try:
-        openai_response = openai_service.chat(
-            model=MODEL_OPENAI_IDS[model],
-            message=(message if document_types else _code_output_instruction(message, attachments)),
-            web=web,
-            attachments=_attachments_for_openai(attachments),
-            history=history,
-            reasoning_mode=reasoning_mode,
-            visual_mode=visual_mode,
-            artifact_types=document_types,
-        )
-    except Exception as error:
+    selection = _oria_chat_selection(model, wallet, is_trial_model)
+    provider_api_model = selection.api_model
+    if selection.provider is ChatProvider.OPENROUTER:
+        generation_message = (message if document_types else
+                              _code_output_instruction(message, attachments))
         try:
-            _release_chat_reservation(
-                repository=repository,
-                authenticated_user_id=authenticated_user_id,
-                reservation_id=reservation_id,
+            or_service = _oria_openrouter_service()
+            quote, provider_attachments = _oria_openrouter_preflight(
+                service=or_service, selection=selection,
+                message=generation_message, history=history,
+                attachments=attachments, web=web,
+                reasoning_mode=reasoning_mode, visual_mode=visual_mode,
+                document_types=document_types, stream=False,
             )
-        except Exception:
-            pass
-
-        raise HTTPException(
-            status_code=502,
-            detail=f"Impossible de contacter le service IA : {error}",
-        ) from error
-
-    try:
-        response_text, cost, real_api_xaf = _extract_classic_chat_result(
-            response=openai_response,
-            model=model,
-            web=web,
+        except OpenRouterChatError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        openai_response, result, trials_remaining = await _oria_openrouter_execute_classic(
+            service=or_service, selection=selection, repository=repository,
+            wallet=wallet, uid=authenticated_user_id, action=action, quote=quote,
+            attachments=provider_attachments, message=generation_message,
+            history=history, web=web, reasoning_mode=reasoning_mode,
+            visual_mode=visual_mode, is_trial_model=is_trial_model,
             document_types=document_types,
         )
-    except RuntimeError as error:
-        # L'appel fournisseur a déjà abouti. On ne libère pas aveuglément une
-        # réservation si l'usage final est inexploitable : l'API a pu facturer.
-        raise HTTPException(status_code=502, detail=str(error)) from error
-
-    try:
-        result, trials_remaining = _settle_chat_reservation(
+        if openai_response.get("finish_reason") not in {"stop", "end_turn", None}:
+            openai_response["status"] = "incomplete"
+        response_text = str(openai_response.get("message") or "")
+        citation_text = _oria_openrouter_citation_text(openai_response.get("citations")) if web else ""
+        if citation_text:
+            response_text += citation_text
+    else:
+        reservation_id, _reserved_amount = _reserve_chat_credits(
             repository=repository,
-            wallet_before_reservation=wallet,
             authenticated_user_id=authenticated_user_id,
-            reservation_id=reservation_id,
             action=action,
-            cost=cost,
-            api_cost_xaf=real_api_xaf,
-            is_trial_model=is_trial_model,
-            model_id=model,
+            model=model,
+            message=message,
+            history=history,
+            attachments=attachments,
+            web=web,
         )
-    except RuntimeError as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
+
+        openai_service = OpenAIService()
+
+        try:
+            openai_response = openai_service.chat(
+                model=MODEL_OPENAI_IDS[model],
+                message=(message if document_types else _code_output_instruction(message, attachments)),
+                web=web,
+                attachments=_attachments_for_openai(attachments),
+                history=history,
+                reasoning_mode=reasoning_mode,
+                visual_mode=visual_mode,
+                artifact_types=document_types,
+            )
+        except Exception as error:
+            try:
+                _release_chat_reservation(
+                    repository=repository,
+                    authenticated_user_id=authenticated_user_id,
+                    reservation_id=reservation_id,
+                )
+            except Exception:
+                pass
+
+            raise HTTPException(
+                status_code=502,
+                detail=f"Impossible de contacter le service IA : {error}",
+            ) from error
+
+        try:
+            response_text, cost, real_api_xaf = _extract_classic_chat_result(
+                response=openai_response,
+                model=model,
+                web=web,
+                document_types=document_types,
+            )
+        except RuntimeError as error:
+            # L'appel fournisseur a déjà abouti. On ne libère pas aveuglément une
+            # réservation si l'usage final est inexploitable : l'API a pu facturer.
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+        try:
+            result, trials_remaining = _settle_chat_reservation(
+                repository=repository,
+                wallet_before_reservation=wallet,
+                authenticated_user_id=authenticated_user_id,
+                reservation_id=reservation_id,
+                action=action,
+                cost=cost,
+                api_cost_xaf=real_api_xaf,
+                is_trial_model=is_trial_model,
+                model_id=model,
+            )
+        except RuntimeError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
 
     generated_artifacts: list[dict[str, Any]] = []
     artifact_errors: list[str] = []
@@ -4101,7 +4845,7 @@ async def chat(
                 attempt_id=None,
                 reasoning_mode=reasoning_mode,
                 model=model,
-                openai_model=MODEL_OPENAI_IDS[model],
+                openai_model=provider_api_model,
             )
             for generated in prepared:
                 try:
@@ -4125,6 +4869,9 @@ async def chat(
     else:
         # Le mécanisme de génération de code existant reste inchangé.
         provider_status = str(provider_payload.get("status") or "").lower()
+        if selection.provider is ChatProvider.OPENROUTER and provider_status == "incomplete":
+            artifact_errors.append("Réponse OpenRouter incomplète : aucun fichier exporté.")
+            artifact_requests = []
         if provider_status and provider_status != "completed" and _is_code_task(message, attachments):
             artifact_errors.append(
                 f"Réponse IA non terminée ({provider_status}) : "
@@ -4152,7 +4899,7 @@ async def chat(
                     conversation_id=conversation_id,
                     source_message_id=source_message_id,
                     model=model,
-                    openai_model=MODEL_OPENAI_IDS[model],
+                    openai_model=provider_api_model,
                     generation_id=None,
                     attempt_id=None,
                     reasoning_mode=reasoning_mode,
@@ -4179,6 +4926,9 @@ async def chat(
         artifacts=generated_artifacts or None,
         artifact_errors=artifact_errors or None,
         web_images=web_images or None,
+        web_sources=(provider_payload.get("citations") or None)
+                    if selection.provider is ChatProvider.OPENROUTER and web else None,
+        provider=selection.provider.value,
         visual_mode=visual_mode,
     )
 
@@ -4324,6 +5074,24 @@ async def generate_chat_revision(
     if confirmed_owner != owner:
         raise HTTPException(status_code=403, detail="Identite incoherente.")
 
+    selection = _oria_chat_selection(model, wallet, is_trial_model)
+    provider_api_model = selection.api_model
+    or_service, or_quote, provider_attachments = None, None, None
+    revision_message = (message if document_types else
+                        _code_output_instruction(message, attachments))
+    if selection.provider is ChatProvider.OPENROUTER:
+        try:
+            or_service = _oria_openrouter_service()
+            or_quote, provider_attachments = _oria_openrouter_preflight(
+                service=or_service, selection=selection,
+                message=revision_message, history=history,
+                attachments=attachments, web=web,
+                reasoning_mode=reasoning_mode, visual_mode=visual_mode,
+                document_types=document_types, stream=False,
+            )
+        except OpenRouterChatError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     generation_id = str(uuid4())
     _edit_revision_update(revision, owner, expected_status="queued", fields={
         "status": "generating", "generation_id": generation_id,
@@ -4333,11 +5101,16 @@ async def generate_chat_revision(
     # Si un process s'arrete apres cette etape, status=generating est un
     # garde-fou : reconciliation necessaire, jamais auto-rejeu facture.
     try:
-        reservation_id, _ = _reserve_chat_credits(
-            repository=repository, authenticated_user_id=owner,
-            action=action, model=model, message=message, history=history,
-            attachments=attachments, web=web,
-        )
+        if selection.provider is ChatProvider.OPENROUTER:
+            reservation_id = _oria_openrouter_reserve(
+                repository=repository, uid=owner, action=action, quote=or_quote,
+            )
+        else:
+            reservation_id, _ = _reserve_chat_credits(
+                repository=repository, authenticated_user_id=owner,
+                action=action, model=model, message=message, history=history,
+                attachments=attachments, web=web,
+            )
     except Exception:
         _edit_revision_update(revision, owner, expected_status="generating", fields={
             "status": "failed", "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -4355,45 +5128,67 @@ async def generate_chat_revision(
                                   reservation_id=reservation_id)
         raise
 
-    try:
-        provider = OpenAIService().chat(
-            model=MODEL_OPENAI_IDS[model],
-            message=(message if document_types else _code_output_instruction(message, attachments)),
-            web=web, attachments=_attachments_for_openai(attachments),
-            history=history, reasoning_mode=reasoning_mode,
-            visual_mode=visual_mode, artifact_types=document_types,
-        )
-    except Exception as error:
+    if selection.provider is ChatProvider.OPENROUTER:
         try:
-            _release_chat_reservation(repository=repository,
-                                      authenticated_user_id=owner,
-                                      reservation_id=reservation_id)
+            provider, result, trials_remaining = await _oria_openrouter_execute_classic(
+                service=or_service, selection=selection, repository=repository,
+                wallet=wallet, uid=owner, action=action, quote=or_quote,
+                attachments=provider_attachments, message=revision_message,
+                history=history, web=web, reasoning_mode=reasoning_mode,
+                visual_mode=visual_mode, is_trial_model=is_trial_model,
+                reservation_id=reservation_id, document_types=document_types,
+            )
+        except Exception:
+            # En cas de fournisseur incertain, ne pas relancer cette révision.
             _edit_revision_update(revision, owner, expected_status="generating", fields={
                 "status": "failed", "updated_at": datetime.now(timezone.utc).isoformat(),
             })
-        except Exception:
-            logging.getLogger(__name__).exception("ORIA_REVISION_RELEASE_RECONCILIATION %s", revision_id)
-        raise HTTPException(status_code=502,
-                            detail="La generation a echoue ; ancienne reponse conservee.") from error
+            raise
+        if provider.get("finish_reason") not in {"stop", "end_turn", None}:
+            provider["status"] = "incomplete"
+        response_text = str(provider.get("message") or "")
+        if web:
+            response_text += _oria_openrouter_citation_text(provider.get("citations"))
+    else:
+        try:
+            provider = OpenAIService().chat(
+                model=MODEL_OPENAI_IDS[model],
+                message=(message if document_types else _code_output_instruction(message, attachments)),
+                web=web, attachments=_attachments_for_openai(attachments),
+                history=history, reasoning_mode=reasoning_mode,
+                visual_mode=visual_mode, artifact_types=document_types,
+            )
+        except Exception as error:
+            try:
+                _release_chat_reservation(repository=repository,
+                                          authenticated_user_id=owner,
+                                          reservation_id=reservation_id)
+                _edit_revision_update(revision, owner, expected_status="generating", fields={
+                    "status": "failed", "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                logging.getLogger(__name__).exception("ORIA_REVISION_RELEASE_RECONCILIATION %s", revision_id)
+            raise HTTPException(status_code=502,
+                                detail="La generation a echoue ; ancienne reponse conservee.") from error
 
-    # A PARTIR D'ICI l'appel fournisseur peut avoir ete facture : aucun
-    # release ni re-generation aveugles, meme si le settlement echoue.
-    try:
-        response_text, cost, real_api_xaf = _extract_classic_chat_result(
-            response=provider, model=model, web=web, document_types=document_types,
-        )
-        result, trials_remaining = _settle_chat_reservation(
-            repository=repository, wallet_before_reservation=wallet,
-            authenticated_user_id=owner, reservation_id=reservation_id,
-            action=action, cost=cost, api_cost_xaf=real_api_xaf,
-            is_trial_model=is_trial_model, model_id=model,
-        )
-    except Exception as error:
-        logging.getLogger(__name__).exception("ORIA_REVISION_BILLING_RECONCILIATION %s", revision_id)
-        raise HTTPException(status_code=503, detail=(
-            "Generation effectuee mais facturation non confirmee. "
-            "Revision verrouillee pour reconciliation ; ne pas relancer."
-        )) from error
+        # A PARTIR D'ICI l'appel fournisseur peut avoir ete facture : aucun
+        # release ni re-generation aveugles, meme si le settlement echoue.
+        try:
+            response_text, cost, real_api_xaf = _extract_classic_chat_result(
+                response=provider, model=model, web=web, document_types=document_types,
+            )
+            result, trials_remaining = _settle_chat_reservation(
+                repository=repository, wallet_before_reservation=wallet,
+                authenticated_user_id=owner, reservation_id=reservation_id,
+                action=action, cost=cost, api_cost_xaf=real_api_xaf,
+                is_trial_model=is_trial_model, model_id=model,
+            )
+        except Exception as error:
+            logging.getLogger(__name__).exception("ORIA_REVISION_BILLING_RECONCILIATION %s", revision_id)
+            raise HTTPException(status_code=503, detail=(
+                "Generation effectuee mais facturation non confirmee. "
+                "Revision verrouillee pour reconciliation ; ne pas relancer."
+            )) from error
 
     generated_artifacts: list[dict[str, Any]] = []
     artifact_errors: list[str] = []
@@ -4405,7 +5200,7 @@ async def generate_chat_revision(
                 artifact_requests=artifact_requests,
                 generation_id=generation_id, attempt_id=None,
                 reasoning_mode=reasoning_mode, model=model,
-                openai_model=MODEL_OPENAI_IDS[model],
+                openai_model=provider_api_model,
             )
             for generated in prepared:
                 generated_artifacts.append(_persist_document_result(
@@ -4431,6 +5226,9 @@ async def generate_chat_revision(
             ))
     else:
         provider_status = str(payload.get("status") or "").lower()
+        if selection.provider is ChatProvider.OPENROUTER and provider_status == "incomplete":
+            artifact_errors.append("Réponse OpenRouter incomplète : aucun fichier exporté.")
+            artifact_requests = []
         if not (provider_status and provider_status != "completed" and
                 _is_code_task(message, attachments)):
             try:
@@ -4446,7 +5244,7 @@ async def generate_chat_revision(
                     authenticated_user_id=owner, artifact_request=artifact_request,
                     response_text=response_text, conversation_id=conversation_id,
                     source_message_id=str(thread["assistant_message_id"]),
-                    model=model, openai_model=MODEL_OPENAI_IDS[model],
+                    model=model, openai_model=provider_api_model,
                     generation_id=generation_id, attempt_id=None,
                     reasoning_mode=reasoning_mode, user_message=message,
                     user_attachments=attachments,
@@ -4477,6 +5275,9 @@ async def generate_chat_revision(
         "artifacts": generated_artifacts,
         "artifact_errors": artifact_errors,
         "web_images": _public_web_images(payload.get("web_images"), enabled=web),
+        "web_sources": (payload.get("citations") or [])
+            if selection.provider is ChatProvider.OPENROUTER and web else [],
+        "provider": selection.provider.value,
         "visual_mode": visual_mode,
         "generation_started": True,
     }
@@ -6197,6 +6998,33 @@ async def control_chat_generation(
             "reasoning_mode": state.reasoning_mode,
         }
 
+    if state.transport == "openrouter-http":
+        # Pas de steering en temps réel des tokens : l'édition déclenche un
+        # redémarrage APRÈS règlement de la tentative courante. Pas d'essai
+        # supplémentaire ni d'artefact généré dans une réponse remplacée.
+        if not getattr(state, "openrouter_live_modify", False):
+            raise HTTPException(
+                status_code=409,
+                detail="Modification non disponible pour cette génération ORIA.",
+            )
+        if state.control_queue.full():
+            raise HTTPException(
+                status_code=429,
+                detail="Trop de modifications en attente pour cette réponse.",
+            )
+        state.control_queue.put_nowait({
+            "type": "modify",
+            "instruction": instruction,
+            "reasoning_mode": requested_reasoning,
+        })
+        return {
+            "success": True, "accepted": True,
+            "generation_id": generation_id,
+            "attempt_id": state.active_attempt_id,
+            "strategy": "deferred_restart",
+            "reasoning_mode": requested_reasoning or state.reasoning_mode,
+        }
+
     # Le contrôle bidirectionnel pendant une réponse nécessite Responses
     # WebSocket. Avec l'ancien SDK, le chat continue normalement en HTTP.
     if state.transport != "websocket":
@@ -6317,6 +7145,19 @@ async def chat_stream(
     )
 
     prepare_ms = (perf_counter() - prepare_started_at) * 1000
+
+    selection = _oria_chat_selection(model, wallet, is_trial_model)
+    if selection.provider is ChatProvider.OPENROUTER:
+        return await _oria_openrouter_stream_route(
+            selection=selection, repository=repository, wallet=wallet,
+            uid=authenticated_user_id, action=action, model=model,
+            message=message, history=history, attachments=attachments,
+            web=web, visual_mode=visual_mode, reasoning_mode=reasoning_mode,
+            generation_id=generation_id, artifact_requests=artifact_requests,
+            document_types=document_types, source_message_id=source_message_id,
+            conversation_id=conversation_id, route_started_at=route_started_at,
+            is_trial_model=is_trial_model,
+        )
 
     reserve_started_at = perf_counter()
 
@@ -7650,16 +8491,45 @@ from app.services.openrouter_media_service import (
     OpenRouterMediaError as _ORError,
 )
 
-_OR_MODEL_MAPPING = {
-    "gemini-3.1-flash-lite-image": "google/gemini-3.1-flash-lite-image",
-    "gemini-nano-banana-2.1": "google/gemini-3.1-flash-image",
-    "gemini-3-pro-image": "google/gemini-3-pro-image",
+_OR_IMAGE_BY_PACK = {
+    "light_pack": (
+        "bytedance-seed/seedream-5-0-flash",
+    ),
+    "intermediate_pack": (
+        "bytedance-seed/seedream-5-0-flash",
+        "google/gemini-3.1-flash-image",
+    ),
+    "pro_pack": (
+        "bytedance-seed/seedream-5-0-flash",
+        "google/gemini-3.1-flash-image",
+        "black-forest-labs/flux-3-image",
+    ),
+    "business_pack": (
+        "bytedance-seed/seedream-5-0-flash",
+        "google/gemini-3.1-flash-image",
+        "black-forest-labs/flux-3-image",
+        "openai/gpt-image-2.5-sunburst",
+    ),
 }
 _OR_VIDEO_BY_PACK = {
-    "light_pack": "google/veo-3.1-lite",
-    "intermediate_pack": "google/veo-3.1-lite",
-    "pro_pack": "google/veo-3.1-fast",
-    "business_pack": "google/veo-3.1",
+    "light_pack": (
+        "alibaba/wan-3.0",
+    ),
+    "intermediate_pack": (
+        "alibaba/wan-3.0",
+        "google/veo-3.1-lite",
+    ),
+    "pro_pack": (
+        "alibaba/wan-3.0",
+        "google/veo-3.1-lite",
+        "bytedance/seedance-2.5",
+    ),
+    "business_pack": (
+        "alibaba/wan-3.0",
+        "google/veo-3.1-lite",
+        "bytedance/seedance-2.5",
+        "kwaivgi/kling-v3.0-pro",
+    ),
 }
 _OR_SHORT_ACTIONS = {
     "light_pack": ("video_4s", "video_8s"),
@@ -7675,7 +8545,6 @@ _OR_VIDEO_TIMEOUT_SECONDS = 15 * 60
 # Rejets HTTP explicites du POST : aucune création payante n'a été acceptée.
 # 5xx, timeout, JSON corrompu et panne réseau restent INCERTAINS.
 _OR_NO_CHARGE_HTTP = frozenset({400, 401, 402, 403, 404, 422, 429})
-
 
 
 def _or_limit(kind: str) -> Decimal:
@@ -7720,15 +8589,20 @@ def _or_catalog(service: _ORService, kind: str) -> list[dict[str, Any]]:
         raise HTTPException(502, f"Catalogue {kind} OpenRouter indisponible.") from e
 
 
-def _or_video_model(pack_id: str, catalog: list[dict[str, Any]]) -> dict[str, Any] | None:
-    key = _OR_VIDEO_BY_PACK.get(pack_id)
-    return next((row for row in catalog if row.get("id") == key), None)
+def _or_allowed_video_models(pack_id: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    accepted = set(_OR_VIDEO_BY_PACK.get(pack_id, ()))
+    return [x for x in catalog if x.get("id") in accepted]
+
+
+def _or_video_model(pack_id: str, catalog: list[dict[str, Any]], model_id: str | None = None) -> dict[str, Any] | None:
+    rows = _or_allowed_video_models(pack_id, catalog)
+    if model_id:
+        return next((row for row in rows if row.get("id") == model_id), None)
+    return rows[0] if rows else None
 
 
 def _or_allowed_images(pack_id: str, catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    cfg = _google_pricing_config()
-    direct = cfg.GOOGLE_IMAGE_MODELS_ALLOWED_BY_PACK.get(pack_id, ())
-    accepted = {_OR_MODEL_MAPPING[m] for m in direct if m in _OR_MODEL_MAPPING}
+    accepted = set(_OR_IMAGE_BY_PACK.get(pack_id, ()))
     return [x for x in catalog if x.get("id") in accepted]
 
 
@@ -7761,14 +8635,17 @@ def _or_verify_config(kind: str, *, pack_id: str, action: CreditAction | None,
         chosen = next((x for x in rows if x.get("id") == model), None)
         if chosen is None:
             raise HTTPException(403, "Modèle OpenRouter non disponible dans ce pack.")
-        if resolution not in _or_image_choices(chosen, "resolution"):
+        provider_resolutions = _or_image_choices(chosen, "resolution")
+        if provider_resolutions and resolution not in provider_resolutions:
             raise HTTPException(400, "Résolution non acceptée par ce modèle OpenRouter.")
+        if not provider_resolutions and resolution != "1K":
+            raise HTTPException(400, "Ce modèle ne permet pas de choisir une résolution supérieure.")
         if action is not None:
             _google_action_resolution(pack_id, action, resolution)
         if ref_count and "input_references" not in (chosen.get("supported_parameters") or {}):
             raise HTTPException(400, "Ce modèle ne prend pas en charge les retouches.")
         return chosen
-    chosen = _or_video_model(pack_id, catalog)
+    chosen = _or_video_model(pack_id, catalog, model)
     if chosen is None:
         raise HTTPException(403, "Modèle vidéo OpenRouter non disponible pour ce pack.")
     if action is not None:
@@ -7930,39 +8807,54 @@ def _or_caps_for(wallet) -> dict[str, Any]:
     rights = cfg.google_media_capabilities_for_pack(wallet.pack_id)
     service = _or_service()
     images = _or_allowed_images(wallet.pack_id, _or_catalog(service, "image"))
-    videos = _or_catalog(service, "video")
-    video = _or_video_model(wallet.pack_id, videos)
-    options = []
+    videos = _or_allowed_video_models(wallet.pack_id, _or_catalog(service, "video"))
+    image_options = []
     for item in images:
-        resolutions = [x for x in _or_image_choices(item, "resolution")
-                       if x in rights["image_resolutions"]]
+        provider_res = _or_image_choices(item, "resolution")
+        resolutions = [x for x in rights["image_resolutions"] if x in (provider_res or ["1K"])]
+        aspect_ratios = _or_image_choices(item, "aspect_ratio") or ["1:1"]
         if resolutions:
-            options.append({"model": item["id"], "resolutions": resolutions,
-                            "max_references_supported_now": 1 if "input_references" in
-                            (item.get("supported_parameters") or {}) else 0})
-    duration = [n for n in rights["video_duration_choices"]
-                if video and n in (video.get("supported_durations") or [])]
-    allowed_actions = [a for a in _OR_SHORT_ACTIONS.get(wallet.pack_id, ())
-                       if any(credit_costs_config.VIDEO_ACTION_DURATION_SECONDS.get(
-                           CreditAction(a)) == n for n in duration)]
+            image_options.append({
+                "model": item["id"],
+                "resolutions": resolutions,
+                "aspect_ratios": aspect_ratios,
+                "max_references_supported_now": 1 if "input_references" in (item.get("supported_parameters") or {}) else 0,
+            })
+    video_options = []
+    all_durations = set()
+    for item in videos:
+        durations = [n for n in rights["video_duration_choices"] if n in (item.get("supported_durations") or [])]
+        if durations:
+            all_durations.update(durations)
+        video_options.append({
+            "model": item["id"],
+            "duration_choices_seconds": durations,
+            "billable_resolutions": [r for r in (item.get("supported_resolutions") or []) if r == "720p"],
+            "aspect_ratios": list(item.get("supported_aspect_ratios") or []),
+        })
+    allowed_actions = [
+        a for a in _OR_SHORT_ACTIONS.get(wallet.pack_id, ())
+        if any(credit_costs_config.VIDEO_ACTION_DURATION_SECONDS.get(CreditAction(a)) == n for n in all_durations)
+    ]
     active = _or_switch()
+    primary_video = video_options[0]["model"] if video_options else ""
+    duration = sorted(all_durations)
     return {"success": True, "provider": "openrouter", "pack_id": wallet.pack_id,
-            "pack_active": True, "quote_available": bool(options or duration) and
+            "pack_active": True, "quote_available": bool(image_options or video_options) and
             _or_limit("image") > 0 and _or_limit("video") > 0,
             "generation_available": active, "images": {
-                "models": options, "resolutions": list(rights["image_resolutions"]),
+                "models": image_options, "resolutions": list(rights["image_resolutions"]),
                 "allowed_modes": list(rights["image_modes"]),
-                "available_now_modes": list(_OR_SAFE_MODES["image"]) if active and options else [],
+                "available_now_modes": list(_OR_SAFE_MODES["image"]) if active and image_options else [],
                 "max_reference_images_in_pack": rights["max_reference_images"],
                 "max_reference_images_per_call_now": 1, "max_images_per_call_now": 1},
-            "video": {"model": video["id"] if video else "",
+            "video": {"model": primary_video, "models": video_options,
                 "allowed_modes": list(rights["video_modes"]),
                 "available_now_modes": list(_OR_SAFE_MODES["video"]) if active and duration else [],
                 "duration_choices_seconds": duration,
                 "max_project_seconds": rights["max_video_project_seconds"],
                 "max_project_scenes": rights["max_video_scenes"],
-                "billable_resolutions": ["720p"] if video and "720p" in
-                     (video.get("supported_resolutions") or []) else [],
+                "billable_resolutions": ["720p"] if video_options else [],
                 "provider_per_call_seconds": {"min": min(duration) if duration else 0,
                                                "max": max(duration) if duration else 0},
                 "short_clip_actions_available_now": allowed_actions if active else [],
@@ -8005,7 +8897,7 @@ async def openrouter_media_quote(
             raise HTTPException(400, "Devis vidéo réservé aux clips courts d'une seule scène.")
         resolution = str(payload.resolution or "720p")
         chosen = await asyncio.to_thread(_or_verify_config, kind, pack_id=wallet.pack_id,
-            action=None, model=None, resolution=resolution, mode=mode,
+            action=None, model=str(payload.model or "") or None, resolution=resolution, mode=mode,
             ref_count=payload.reference_count, duration=payload.final_duration_seconds)
         model = chosen["id"]
     estimated, reserved, _ = _or_reservation(kind)
@@ -8025,6 +8917,7 @@ class OpenRouterImageGenerationRequest(GoogleImageGenerationRequest):
 
 class OpenRouterVideoGenerationRequest(GoogleVideoGenerationRequest):
     request_id: str
+    model: str | None = None
 
 
 def _or_decode_preflight_reference(raw_b64: str | None, mime: str | None) -> bytes | None:
@@ -8165,7 +9058,8 @@ async def openrouter_media_image(
     model_capabilities = await asyncio.to_thread(_or_verify_config, "image", pack_id=wallet.pack_id,
         action=action, model=model, resolution=payload.resolution, mode=mode,
         ref_count=ref_count)
-    if payload.aspect_ratio not in _or_image_choices(model_capabilities, "aspect_ratio"):
+    ratios = _or_image_choices(model_capabilities, "aspect_ratio") or ["1:1"]
+    if payload.aspect_ratio not in ratios:
         raise HTTPException(400, "Format image non accepté par OpenRouter.")
     ref_bytes = _or_decode_preflight_reference(payload.reference_image_b64, payload.reference_mime_type)
     reserved_est, reserve, reserved_usd = _or_reservation("image")
@@ -8220,7 +9114,7 @@ async def openrouter_media_video(
         raise HTTPException(400, "Action vidéo ou description invalide.")
     mode = payload.mode or ("image_to_video" if payload.reference_image_b64 else "text_to_video")
     chosen = await asyncio.to_thread(_or_verify_config, "video", pack_id=wallet.pack_id,
-        action=action, model=None, resolution="720p", mode=mode,
+        action=action, model=str(payload.model or "") or None, resolution="720p", mode=mode,
         ref_count=int(bool(payload.reference_image_b64)), duration=payload.requested_seconds)
     if payload.aspect_ratio not in (chosen.get("supported_aspect_ratios") or []):
         raise HTTPException(400, "Format vidéo indisponible pour ce modèle.")

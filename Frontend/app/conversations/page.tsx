@@ -376,16 +376,16 @@ export default function ConversationsPage() {
   }
 
   return (
-    <main className="min-h-dvh bg-white text-neutral-950">
+    <main className="min-h-dvh overflow-x-clip bg-background text-foreground">
       {/* Header */}
 
-      <header className="border-b border-neutral-200">
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur-xl">
         <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <Link
               href="/chat"
               aria-label={UI[language].backToChat}
-              className="rounded-xl p-2 text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+              className="rounded-2xl p-2.5 text-muted-strong transition-colors duration-200 hover:bg-surface-secondary hover:text-foreground"
             >
               <ArrowLeft size={19} />
             </Link>
@@ -399,8 +399,8 @@ export default function ConversationsPage() {
             </div>
           </div>
 
-          <div className="rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1.5">
-            <span className="text-xs text-neutral-500">
+          <div className="rounded-full border border-border/75 bg-surface/85 px-4 py-2 shadow-[0_5px_20px_-14px_var(--shadow-color)]">
+            <span className="text-xs text-muted">
               {UI[language].credits}
             </span>
 
@@ -422,22 +422,22 @@ export default function ConversationsPage() {
 
         <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-sm font-medium text-neutral-500">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">
               {UI[language].yourSpace}
             </p>
 
-            <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">
+            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">
               Conversations
             </h1>
 
-            <p className="mt-2 max-w-xl text-sm leading-6 text-neutral-500">
+            <p className="mt-3 max-w-xl text-sm leading-7 text-muted">
               {UI[language].conversationsDescription}
             </p>
           </div>
 
           <Link
             href="/chat"
-            className="inline-flex items-center justify-center rounded-xl bg-neutral-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-neutral-800"
+            className="inline-flex items-center justify-center rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground shadow-[0_12px_28px_-18px_var(--shadow-color)] transition-[transform,box-shadow,opacity] duration-200 hover:-translate-y-0.5 hover:shadow-[0_17px_32px_-18px_var(--shadow-color)] active:translate-y-0"
           >
             {UI[language].newConversation}
           </Link>
@@ -448,7 +448,7 @@ export default function ConversationsPage() {
         <div className="relative mt-8">
           <Search
             size={18}
-            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400"
+            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted"
           />
 
           <input
@@ -461,14 +461,14 @@ export default function ConversationsPage() {
             }
             placeholder={UI[language].searchConversation}
             disabled={isLoading}
-            className="h-12 w-full rounded-xl border border-neutral-200 bg-neutral-50 pl-11 pr-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+            className="h-12 w-full rounded-[20px] border border-border/75 bg-surface/80 pl-11 pr-4 text-sm text-foreground shadow-[0_12px_35px_-29px_var(--shadow-color)] outline-none backdrop-blur-sm transition-[border-color,box-shadow,background-color] duration-200 placeholder:text-muted focus:border-border-strong focus:bg-surface focus:ring-4 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
 
         {/* Erreur */}
 
         {error && (
-          <div className="mt-6 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-600">
+          <div className="mt-6 rounded-[20px] border border-border/75 bg-surface-secondary/80 px-4 py-3 text-sm text-muted-strong">
             {localizeFrontendError(error, language)}
           </div>
         )}
@@ -477,16 +477,16 @@ export default function ConversationsPage() {
 
         <div className="mt-8">
           {isLoading ? (
-            <div className="rounded-2xl border border-neutral-200 px-6 py-16 text-center">
-              <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-neutral-200 border-t-neutral-950" />
+            <div className="rounded-[26px] border border-border/75 bg-surface/80 px-6 py-16 text-center shadow-[0_16px_45px_-30px_var(--shadow-color)]">
+              <div className="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-border border-t-foreground" />
 
-              <p className="mt-4 text-sm text-neutral-500">
+              <p className="mt-4 text-sm text-muted">
                 {UI[language].loadingConversations}
               </p>
             </div>
           ) : filteredConversations.length >
             0 ? (
-            <div className="overflow-hidden rounded-2xl border border-neutral-200">
+            <div className="overflow-hidden rounded-[26px] border border-border/75 bg-surface/80 shadow-[0_18px_50px_-32px_var(--shadow-color)]">
               {filteredConversations.map(
                 (
                   conversation,
@@ -517,11 +517,11 @@ export default function ConversationsPage() {
               )}
             </div>
           ) : (
-            <div className="rounded-2xl border border-dashed border-neutral-300 px-6 py-16 text-center">
-              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-neutral-100">
+            <div className="rounded-[26px] border border-dashed border-border-strong bg-surface/65 px-6 py-16 text-center">
+              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-surface-secondary">
                 <MessageSquare
                   size={19}
-                  className="text-neutral-500"
+                  className="text-muted"
                 />
               </div>
 
@@ -531,7 +531,7 @@ export default function ConversationsPage() {
                   : UI[language].noConversation}
               </h2>
 
-              <p className="mt-1 text-sm text-neutral-500">
+              <p className="mt-1 text-sm text-muted">
                 {search.trim()
                   ? UI[language].tryAnotherSearch
                   : UI[language].conversationsWillAppear}
@@ -540,7 +540,7 @@ export default function ConversationsPage() {
               {!search.trim() && (
                 <Link
                   href="/chat"
-                  className="mt-5 inline-flex rounded-xl bg-neutral-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-neutral-800"
+                  className="mt-5 inline-flex rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground transition-[transform,opacity] duration-200 hover:-translate-y-0.5 hover:opacity-90"
                 >
                   {UI[language].startConversation}
                 </Link>
@@ -576,18 +576,18 @@ function ConversationItem({
 }) {
   return (
     <div
-      className={`group flex items-start gap-4 p-4 transition hover:bg-neutral-50 sm:p-5 ${
+      className={`group flex items-start gap-4 p-4 transition-colors duration-200 hover:bg-surface-secondary/75 sm:p-5 ${
         !isLast
-          ? "border-b border-neutral-200"
+          ? "border-b border-border/65"
           : ""
       }`}
     >
       {/* Icône */}
 
-      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-neutral-100">
+      <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border/60 bg-surface-secondary/85">
         <MessageSquare
           size={17}
-          className="text-neutral-600"
+          className="text-muted-strong"
         />
       </div>
 
@@ -605,17 +605,17 @@ function ConversationItem({
             )}
           </h2>
 
-          <span className="shrink-0 text-xs text-neutral-400">
+          <span className="shrink-0 text-xs text-muted">
             {conversation.date}
           </span>
         </div>
 
-        <p className="mt-1 line-clamp-2 text-sm leading-5 text-neutral-500">
+        <p className="mt-1.5 line-clamp-2 text-sm leading-6 text-muted">
           {conversation.preview ||
             UI[language].noPreview}
         </p>
 
-        <span className="mt-2 inline-flex rounded-full bg-neutral-100 px-2.5 py-1 text-[11px] font-medium text-neutral-500">
+        <span className="mt-2.5 inline-flex rounded-full border border-border/65 bg-surface-secondary px-2.5 py-1 text-[11px] font-medium text-muted-strong">
           {conversation.model}
         </span>
       </Link>
@@ -626,7 +626,7 @@ function ConversationItem({
         <button
           type="button"
           aria-label={`${UI[language].optionsFor} ${getDisplayedConversationTitle(conversation.title, language)}`}
-          className="rounded-lg p-2 text-neutral-400 opacity-100 transition hover:bg-neutral-100 hover:text-neutral-950 sm:opacity-0 sm:group-hover:opacity-100"
+          className="rounded-xl p-2 text-muted transition-colors hover:bg-surface-tertiary hover:text-foreground focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
         >
           <MoreHorizontal size={18} />
         </button>
@@ -640,10 +640,10 @@ function ConversationItem({
               conversation.id,
             )
           }
-          className="rounded-lg p-2 text-neutral-400 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30 sm:opacity-0 sm:group-hover:opacity-100"
+          className="rounded-xl p-2 text-muted transition-colors hover:bg-danger-surface hover:text-danger focus-visible:opacity-100 disabled:cursor-not-allowed disabled:opacity-30 sm:opacity-0 sm:group-hover:opacity-100"
         >
           {isDeleting ? (
-            <span className="block h-4 w-4 animate-spin rounded-full border-2 border-neutral-200 border-t-neutral-600" />
+            <span className="block h-4 w-4 animate-spin rounded-full border-2 border-border border-t-muted-strong" />
           ) : (
             <Trash2 size={17} />
           )}

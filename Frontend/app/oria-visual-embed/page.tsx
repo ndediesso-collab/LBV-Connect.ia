@@ -137,7 +137,7 @@ function installMobileClipboard(): () => void {
 
 function RenderVisual({ request }: { request: VisualRequest }): ReactNode {
   const { kind, raw, language } = request;
-  const fallback = <pre role="alert" className="whitespace-pre-wrap break-words p-4 text-sm text-red-700">{language === 'fr' ? 'Format de visualisation non reconnu.' : 'Unsupported visualization format.'}</pre>;
+  const fallback = <pre role="alert" className="m-2 whitespace-pre-wrap break-words rounded-2xl border border-red-200/60 bg-red-50/70 p-4 text-sm leading-6 text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">{language === 'fr' ? 'Format de visualisation non reconnu.' : 'Unsupported visualization format.'}</pre>;
   if (ADVANCED_KINDS.has(kind)) return <OriaVisualAdvanced kind={kind} raw={raw} language={language} fallback={fallback} />;
   if (CORE_KINDS.has(kind)) return <OriaVisualCore kind={kind} raw={raw} language={language} fallback={fallback} />;
   if (kind === 'oria-3d') return <OriaVisual3D kind={kind} raw={raw} language={language} fallback={fallback} />;
@@ -193,15 +193,15 @@ export default function OriaVisualEmbedPage() {
   }, [notifyHeight, request]);
 
   const wrapperStyles = useMemo(() => ({
-    backgroundColor: currentTheme === 'dark' ? '#0f172a' : '#ffffff',
-    color: currentTheme === 'dark' ? '#f8fafc' : '#0f172a',
+    backgroundColor: currentTheme === 'dark' ? 'rgba(19,23,29,0.94)' : 'rgba(255,255,255,0.94)',
+    color: currentTheme === 'dark' ? '#f2f4f7' : '#18202c',
   }), [currentTheme]);
 
   return (
-    <main style={{ margin: 0, padding: '0 4px', width: '100%', minHeight: 160, ...wrapperStyles }}>
+    <main className="w-full min-w-0 overflow-visible rounded-[20px] border border-border/50 bg-surface/90 text-foreground shadow-[0_10px_32px_-27px_var(--shadow-color)]" style={{ margin: 0, padding: '0 4px', width: '100%', minHeight: 160, ...wrapperStyles }}>
       <div ref={root} id="oria-visual-root" className="w-full min-w-0 overflow-visible">
         {request ? <RenderVisual request={request} /> : (
-          <div className="p-4 text-sm text-slate-500" role="status">ORIA Visual</div>
+          <div className="flex min-h-[152px] items-center justify-center rounded-2xl border border-border/45 bg-surface-secondary/35 p-4 text-center text-xs font-medium tracking-[0.02em] text-muted" role="status">ORIA Visual</div>
         )}
       </div>
     </main>

@@ -52,6 +52,13 @@ from app.services.token_billing_service import (
     CourseBillingService,
     CourseWritingStep,
 )
+from app.services.course_plan_contract import validate_pinned_course_provider, CoursePlanProviderError
+from app.services.course_provider_selection import select_course_provider, CourseProviderConfigurationError
+from app.services.course_openrouter_billing import (
+    estimate_transcription_reservation, estimate_writing_reservation,
+    calculate_transcription_actual, calculate_writing_actual, CourseProviderCostUncertain,
+)
+
 
 
 class CourseError(RuntimeError):
@@ -273,6 +280,20 @@ class CoursePlan:
     estimated_total_credits: int
     transcription_reservation_id: str
     document_reservation_id: str
+    # Optional fields only for NEW plans. Legacy asdict() serialization must
+    # stay byte-for-byte compatible with existing job JSON and quote hashes.
+    provider: str | None = None
+    transcription_model: str | None = None
+    pricing_version: str | None = None
+    transcription_quote_usd_per_minute_ceiling: str | None = None
+
+    def storage_plan(self) -> dict[str, Any]:
+        data = asdict(self)
+        if self.provider is None:
+            for key in ("provider", "transcription_model", "pricing_version",
+                        "transcription_quote_usd_per_minute_ceiling"):
+                data.pop(key, None)
+        return data
 
     def public_quote(self) -> dict[str, Any]:
         """Aucun identifiant de modele interne / cout fournisseur expose."""
@@ -488,6 +509,7 @@ class CourseService:
         openai_service: Any,
         renderer: CourseDocumentRenderer | None = None,
         model_resolver: Callable[[str], str] | None = None,
+        course_ai_factory: Callable[[Any], Any] | None = None,
     ) -> None:
         self.courses = course_repository
         self.jobs = job_store
@@ -495,6 +517,36 @@ class CourseService:
         self.ai = openai_service
         self.renderer = renderer
         self.model_resolver = model_resolver or COURSE_PROVIDER_MODELS.__getitem__
+        # Service factory receives ONLY a validated pinned plan provider.
+        # It must never consult the CURRENT switch for an already paid course.
+        self.course_ai_factory = course_ai_factory
+
+    def _ai_for_plan(self, plan: CoursePlan) -> Any:
+        try:
+            pinned = validate_pinned_course_provider(plan.storage_plan())
+        except CoursePlanProviderError as exc:
+            raise CourseUnavailable("Fournisseur enregistré du cours invalide.") from exc
+        if self.course_ai_factory is not None:
+            result = self.course_ai_factory(pinned)
+        elif pinned.provider == "openai":
+            # A legacy OpenAI course must keep its original provider, even
+            # after the global switch moves to OpenRouter. Lazy construction
+            # avoids requiring an OpenAI client for an OpenRouter-only course.
+            if self.ai is None:
+                from app.services.openai_service import OpenAIService
+                result = OpenAIService()
+            else:
+                result = self.ai
+        else:
+            from app.services.course_openrouter_adapter import (OpenRouterCourseAdapter, CourseOpenRouterModels)
+            result = OpenRouterCourseAdapter(models=CourseOpenRouterModels(
+                writing_model=pinned.writing_model, transcription_model=pinned.transcription_model,
+            ))
+        if not callable(getattr(result, "transcribe_course_segment", None)) or not callable(
+            getattr(result, "compose_course_section", None)
+        ) or not callable(getattr(result, "_validate_course_html_fragment", None)):
+            raise CourseUnavailable("Client pédagogique ORIA Cours incompatible.")
+        return result
 
     @staticmethod
     def _require_credits_only() -> None:
@@ -533,7 +585,12 @@ class CourseService:
         # Cet appel depend du credit_costs.py version Luna-pour-tous-les-packs.
         # Ne pas passer en production avant mise a jour de cette configuration.
         selected = validate_course_writing_model(pack_id, COURSE_WRITING_MODEL)
-        provider_model = str(self.model_resolver(selected))
+        try:
+            provider_choice = select_course_provider()
+        except CourseProviderConfigurationError as exc:
+            raise CourseUnavailable("Configuration fournisseur ORIA Cours invalide.") from exc
+        provider_model = (str(self.model_resolver(selected)) if provider_choice.provider == "openai"
+                          else provider_choice.writing_model)
         if not provider_model or provider_model == COURSE_TRANSCRIPTION_DEFAULT_MODEL:
             raise CourseUnavailable("Le modele de redaction ne peut pas etre utilise.")
         if wallet.pack_activated_at is None:
@@ -551,30 +608,58 @@ class CourseService:
             estimated_input_tokens=INPUT_TOKENS_QUOTE_PER_SECTION,
             max_output_tokens=OUTPUT_TOKENS_QUOTE_PER_SECTION,
         ) for _ in range(sections)]
-        document_estimate = CourseBillingService.estimate_document(
-            pack_id=pack_id, writing_model=selected, steps=writing_steps,
-        )
-        quote = CourseBillingService.quote_course(
-            pack_id=pack_id, writing_model=selected, duration_ms=duration_ms,
-            steps=writing_steps, document_format=fmt,
-        )
+        provider_fields: dict[str, str] = {}
+        if provider_choice.provider == "openrouter":
+            # NO OpenAI direct prices or budgets on the OpenRouter path.
+            # Missing provider price CAP -> no quote, no reservation, no paid call.
+            cap = os.getenv("ORIA_COURSE_OPENROUTER_TRANSCRIPTION_CEILING_USD_PER_MINUTE", "").strip()
+            try:
+                audio_quote = estimate_transcription_reservation(
+                    durations_ms=[s["duration_ms"] for s in segments],
+                    admin_usd_per_minute_ceiling=cap or None,
+                )
+                document_quote = estimate_writing_reservation(
+                    model=provider_model, count=sections,
+                    max_input_tokens_per_section=INPUT_TOKENS_QUOTE_PER_SECTION,
+                )
+            except (ValueError, KeyError) as exc:
+                raise CourseUnavailable("Tarifs de réservation OpenRouter non validés.") from exc
+            audio_reserved_xaf = audio_quote.cost_xaf
+            audio_reserved_credits = audio_quote.credits
+            doc_reserved_xaf = document_quote.cost_xaf
+            doc_reserved_credits = document_quote.credits
+            estimated_total = audio_reserved_credits + doc_reserved_credits
+            provider_fields = {
+                "provider": "openrouter",
+                "transcription_model": provider_choice.transcription_model,
+                "pricing_version": "openrouter-v1",
+                "transcription_quote_usd_per_minute_ceiling": cap,
+            }
+        else:
+            # Historical OpenAI direct path preserved as-is.
+            document_estimate = CourseBillingService.estimate_document(
+                pack_id=pack_id, writing_model=selected, steps=writing_steps,
+            )
+            quote = CourseBillingService.quote_course(
+                pack_id=pack_id, writing_model=selected, duration_ms=duration_ms,
+                steps=writing_steps, document_format=fmt,
+            )
+            # Reserve per-segment rounding, not the average duration.
+            rate = _decimal(COURSE_TRANSCRIPTION_USD_PER_MINUTE[COURSE_TRANSCRIPTION_DEFAULT_MODEL], "tarif_audio")
+            segment_minutes = sum((s["duration_ms"] + 59_999) // 60_000 for s in segments)
+            audio_provider_xaf = Decimal(segment_minutes) * rate * _decimal(ACCOUNTING_USD_XAF, "usd_xaf")
+            audio_reserved_xaf = _reserve_xaf(audio_provider_xaf)
+            audio_reserved_credits = max(quote.transcription_reservation_credits,
+                                         _credits_for_xaf(audio_reserved_xaf))
 
-        # Le devis audio couvre aussi le cas de la facturation par fragment
-        # arrondi a la minute, afin de ne pas sous-provisionner 120 appels.
-        rate = _decimal(COURSE_TRANSCRIPTION_USD_PER_MINUTE[COURSE_TRANSCRIPTION_DEFAULT_MODEL], "tarif_audio")
-        segment_minutes = sum((s["duration_ms"] + 59_999) // 60_000 for s in segments)
-        audio_provider_xaf = Decimal(segment_minutes) * rate * _decimal(ACCOUNTING_USD_XAF, "usd_xaf")
-        audio_reserved_xaf = _reserve_xaf(audio_provider_xaf)
-        audio_reserved_credits = max(quote.transcription_reservation_credits,
-                                     _credits_for_xaf(audio_reserved_xaf))
-
-        doc_reserved_xaf = _reserve_xaf(
-            document_estimate.document_estimated_cost_usd
-            * _decimal(ACCOUNTING_USD_XAF, "usd_xaf")
-        )
-        doc_reserved_credits = max(quote.document_reservation_credits,
-                                   _credits_for_xaf(doc_reserved_xaf))
-        return CoursePlan(
+            doc_reserved_xaf = _reserve_xaf(
+                document_estimate.document_estimated_cost_usd
+                * _decimal(ACCOUNTING_USD_XAF, "usd_xaf")
+            )
+            doc_reserved_credits = max(quote.document_reservation_credits,
+                                       _credits_for_xaf(doc_reserved_xaf))
+            estimated_total = quote.total_estimated_credits
+        prepared = CoursePlan(
             user_id=uid, course_id=cid, pack_id=pack_id,
             pack_activated_at=wallet.pack_activated_at.isoformat(),
             writing_model=selected, provider_model=provider_model,
@@ -585,10 +670,18 @@ class CourseService:
             transcription_reservation_api_xaf=str(audio_reserved_xaf),
             document_reservation_credits=doc_reserved_credits,
             document_reservation_api_xaf=str(doc_reserved_xaf),
-            estimated_total_credits=quote.total_estimated_credits,
+            estimated_total_credits=estimated_total,
             transcription_reservation_id=_deterministic_reference(cid, "transcription"),
             document_reservation_id=_deterministic_reference(cid, "document"),
+            **provider_fields,
         )
+        # The contract used by PostgreSQL must be validated already at quote
+        # time, BEFORE signing the quote or locking any wallet credits.
+        try:
+            validate_pinned_course_provider(prepared.storage_plan())
+        except CoursePlanProviderError as exc:
+            raise CourseUnavailable("Devis fournisseur incompatible avec les règles SQL.") from exc
+        return prepared
 
     @staticmethod
     def _reserve_stage(
@@ -604,7 +697,7 @@ class CourseService:
         if stage not in ("transcription", "document"):
             raise CourseInvalid("Etape de reservation inconnue.")
         state = jobs.get_job(user_id=uid, course_id=cid)
-        if state is None or state.get("plan") != asdict(plan):
+        if state is None or state.get("plan") != plan.storage_plan():
             raise CourseNeedsReconciliation("Plan confirme absent ou modifie.")
         status = state.get(f"{stage}_reservation_status")
         if status in ("reserved", "settled"):
@@ -668,7 +761,7 @@ class CourseService:
         if fresh != plan:
             raise CourseInvalid("Le devis a change ; nouvelle confirmation requise.")
         existing = self.jobs.get_job(user_id=plan.user_id, course_id=plan.course_id)
-        if existing is not None and existing.get("plan") != asdict(plan):
+        if existing is not None and existing.get("plan") != plan.storage_plan():
             raise CourseInvalid("Conflit de devis pour ce cours.")
         if existing and existing.get("status") == "completed":
             return existing
@@ -682,7 +775,7 @@ class CourseService:
                 wallet.balance < plan.transcription_reservation_credits):
             raise CourseInsufficientCredits()
         job = existing or self.jobs.ensure_job(
-            user_id=plan.user_id, course_id=plan.course_id, plan=asdict(plan),
+            user_id=plan.user_id, course_id=plan.course_id, plan=plan.storage_plan(),
         )
         if job.get("status") == "completed":
             return job
@@ -698,8 +791,10 @@ class CourseService:
         plan = CoursePlan(**state["plan"])
         if plan.user_id != uid or plan.course_id != cid:
             raise CourseUnavailable("Plan de cours incoherent.")
-        if plan.writing_model != COURSE_WRITING_MODEL or plan.provider_model != COURSE_PROVIDER_MODELS[COURSE_WRITING_MODEL]:
-            raise CourseUnavailable("Ancien devis multi-modeles incompatible.")
+        try:
+            validate_pinned_course_provider(state["plan"])
+        except CoursePlanProviderError as exc:
+            raise CourseUnavailable("Devis de fournisseur du cours invalide.") from exc
         if state.get("transcription_reservation_status") not in ("reserved", "settled"):
             raise CourseUnavailable("Reservation de transcription non confirmee.")
         if stage == "document" and (
@@ -743,6 +838,7 @@ class CourseService:
         segments = self.courses.list_segments(user_id=uid, course_id=cid)
         if _fingerprint(segments) != plan.segment_manifest_sha256:
             raise CourseNeedsReconciliation("Le manifeste des segments a change.")
+        pinned_ai = self._ai_for_plan(plan)
         results: list[dict[str, Any]] = []
         for index, segment in enumerate(segments):
             def perform(seg: dict[str, Any] = segment, i: int = index) -> dict[str, Any]:
@@ -750,7 +846,7 @@ class CourseService:
                     user_id=uid, course_id=cid, index=i,
                 )
                 filename = str(seg["storage_path"]).rsplit("/", 1)[-1]
-                result = self.ai.transcribe_course_segment(
+                result = pinned_ai.transcribe_course_segment(
                     data=content, filename=filename, mime_type=seg["mime_type"],
                 )
                 text = str(result.get("text") or "").strip()
@@ -758,20 +854,40 @@ class CourseService:
                     raise CourseInvalid("Transcription audio vide.")
                 if len(text) > 100_000:
                     raise CourseInvalid("Transcription du segment trop longue.")
-                return {"text": text, "usage": result.get("usage"),
-                        "duration_ms": seg["duration_ms"]}
+                checkpoint = {"text": text, "usage": result.get("usage"),
+                              "duration_ms": seg["duration_ms"]}
+                if plan.provider == "openrouter":
+                    checkpoint.update({
+                        "provider": result.get("provider"),
+                        "response_id": result.get("response_id"),
+                        "provider_cost_usd": result.get("provider_cost_usd"),
+                        "reconciliation_required": result.get("reconciliation_required"),
+                    })
+                return checkpoint
             results.append(self._step_result(
                 uid=uid, cid=cid, stage="transcription", index=index, invoke=perform,
             ))
         transcription = "\n\n".join(item["text"] for item in results)
         if not transcription.strip():
             raise CourseNeedsReconciliation("Transcription totale vide.")
-        # La plupart des SDK ne renvoient pas d'usage audio en dollars. Le
-        # cout budgete est une ESTIMATION sur la duree serveur, non une facture.
-        unit = _decimal(COURSE_TRANSCRIPTION_USD_PER_MINUTE[COURSE_TRANSCRIPTION_DEFAULT_MODEL], "tarif_audio")
-        minutes = sum(Decimal(s["duration_ms"]) / Decimal(60_000) for s in segments)
-        xaf = minutes * unit * _decimal(ACCOUNTING_USD_XAF, "usd_xaf")
-        credits = _credits_for_xaf(xaf)
+        if plan.provider == "openrouter":
+            try:
+                amount = calculate_transcription_actual(results)
+            except (ValueError, CourseProviderCostUncertain) as exc:
+                self.jobs.flag_reconciliation(user_id=uid, course_id=cid,
+                                              detail="Coût OpenRouter de transcription incertain")
+                raise CourseNeedsReconciliation("Coût de transcription à rapprocher.") from exc
+            xaf, credits = amount.cost_xaf, amount.credits
+            if credits > plan.transcription_reservation_credits:
+                self.jobs.flag_reconciliation(user_id=uid, course_id=cid,
+                                              detail="Coût audio OpenRouter supérieur au devis")
+                raise CourseNeedsReconciliation("Dépense audio au-delà de la réserve.")
+        else:
+            # Historical OpenAI direct billing: known price per minute.
+            unit = _decimal(COURSE_TRANSCRIPTION_USD_PER_MINUTE[COURSE_TRANSCRIPTION_DEFAULT_MODEL], "tarif_audio")
+            minutes = sum(Decimal(s["duration_ms"]) / Decimal(60_000) for s in segments)
+            xaf = minutes * unit * _decimal(ACCOUNTING_USD_XAF, "usd_xaf")
+            credits = _credits_for_xaf(xaf)
         state = self.jobs.get_job(user_id=uid, course_id=cid) or {}
         if state.get("transcription_reservation_status") != "settled":
             self.credits.settle_credit_reservation(
@@ -797,9 +913,10 @@ class CourseService:
             getattr(self.renderer, "render_course_code_first", None)
         ):
             raise CourseUnavailable("Renderiseur Code-First ORIA Cours non configure.")
-        validate_html = getattr(self.ai, "_validate_course_html_fragment", None)
+        pinned_ai = self._ai_for_plan(plan)
+        validate_html = getattr(pinned_ai, "_validate_course_html_fragment", None)
         if not callable(validate_html):
-            raise CourseUnavailable("OpenAIService Code-First ORIA Cours non deploye.")
+            raise CourseUnavailable("Validateur HTML ORIA Cours non déployé.")
         transcripts = []
         for i in range(plan.segment_count):
             saved = self.jobs.get_call(user_id=uid, course_id=cid,
@@ -823,28 +940,46 @@ class CourseService:
             # Les consommations reelles constatees sur les sections precedentes
             # ne doivent jamais permettre un appel de plus que le devis accepte.
             if results:
-                spent = CourseBillingService.calculate_document_actual(
-                    pack_id=plan.pack_id, writing_model=plan.writing_model,
-                    usages=[entry["usage"] for entry in results],
-                )
+                try:
+                    if plan.provider == "openrouter":
+                        spent = calculate_writing_actual(results, model=plan.provider_model)
+                    else:
+                        spent = CourseBillingService.calculate_document_actual(
+                            pack_id=plan.pack_id, writing_model=plan.writing_model,
+                            usages=[entry["usage"] for entry in results],
+                        )
+                except (ValueError, CourseProviderCostUncertain) as exc:
+                    self.jobs.flag_reconciliation(user_id=uid, course_id=cid,
+                                                  detail="Coût précédent de rédaction incertain")
+                    raise CourseNeedsReconciliation("Rédaction précédente à rapprocher.") from exc
                 prior = self.jobs.get_call(
                     user_id=uid, course_id=cid, stage="document", index=index,
                 )
-                next_quote = CourseBillingService.estimate_document(
-                    pack_id=plan.pack_id, writing_model=plan.writing_model,
-                    steps=[CourseWritingStep(
-                        estimated_input_tokens=INPUT_TOKENS_QUOTE_PER_SECTION,
-                        max_output_tokens=OUTPUT_TOKENS_QUOTE_PER_SECTION,
-                    )],
-                )
-                if (prior is None and spent.credits + next_quote.reservation_credits
+                if plan.provider == "openrouter":
+                    try:
+                        next_reserved = estimate_writing_reservation(
+                            model=plan.provider_model, count=1,
+                            max_input_tokens_per_section=INPUT_TOKENS_QUOTE_PER_SECTION,
+                        ).credits
+                    except ValueError as exc:
+                        raise CourseUnavailable("Tarif OpenRouter indisponible.") from exc
+                else:
+                    next_quote = CourseBillingService.estimate_document(
+                        pack_id=plan.pack_id, writing_model=plan.writing_model,
+                        steps=[CourseWritingStep(
+                            estimated_input_tokens=INPUT_TOKENS_QUOTE_PER_SECTION,
+                            max_output_tokens=OUTPUT_TOKENS_QUOTE_PER_SECTION,
+                        )],
+                    )
+                    next_reserved = next_quote.reservation_credits
+                if (prior is None and spent.credits + next_reserved
                         > plan.document_reservation_credits):
                     raise CourseUnavailable(
                         "Budget de redaction autorise atteint : nouvelle approbation requise."
                     )
             context = _course_previous_context(results)
             def perform(part: str = chunk, i: int = index, ctx: str = context) -> dict[str, Any]:
-                answer = self.ai.compose_course_section(
+                answer = pinned_ai.compose_course_section(
                     model=plan.provider_model, transcript=part, section_index=i + 1,
                     total_sections=len(parts), previous_context=ctx,
                     output_format="html_fragment",
@@ -853,13 +988,22 @@ class CourseService:
                     raise CourseInvalid("Usage de redaction absent.")
                 # Checkpoint du RESULTAT et de l'USAGE, meme si la sortie est
                 # incomplete : aucune relance aveugle d'un appel deja facture.
-                return {
+                checkpoint = {
                     "output_format": str(answer.get("output_format") or ""),
                     "html_fragment": str(answer.get("html_fragment") or ""),
                     "usage": answer["usage"],
                     "complete": bool(answer.get("complete")),
                     "incomplete_reason": str(answer.get("incomplete_reason") or ""),
                 }
+                if plan.provider == "openrouter":
+                    checkpoint.update({
+                        "provider": answer.get("provider"),
+                        "model": answer.get("model"),
+                        "response_id": answer.get("response_id"),
+                        "provider_cost_usd": answer.get("provider_cost_usd"),
+                        "reconciliation_required": answer.get("reconciliation_required"),
+                    })
+                return checkpoint
             saved = self._step_result(uid=uid, cid=cid, stage="document",
                                       index=index, invoke=perform)
             results.append(saved)
@@ -882,10 +1026,18 @@ class CourseService:
             title=plan.title,
             fragments=[item["html_fragment"] for item in results],
         )
-        actual = CourseBillingService.calculate_document_actual(
-            pack_id=plan.pack_id, writing_model=plan.writing_model,
-            usages=[part["usage"] for part in results],
-        )
+        if plan.provider == "openrouter":
+            try:
+                actual = calculate_writing_actual(results, model=plan.provider_model)
+            except (ValueError, CourseProviderCostUncertain) as exc:
+                self.jobs.flag_reconciliation(user_id=uid, course_id=cid,
+                                              detail="Facture OpenRouter rédaction incertaine")
+                raise CourseNeedsReconciliation("Coût de rédaction à rapprocher.") from exc
+        else:
+            actual = CourseBillingService.calculate_document_actual(
+                pack_id=plan.pack_id, writing_model=plan.writing_model,
+                usages=[part["usage"] for part in results],
+            )
         if actual.credits > plan.document_reservation_credits:
             self.jobs.flag_reconciliation(
                 user_id=uid, course_id=cid,
@@ -896,11 +1048,11 @@ class CourseService:
         if state.get("document_reservation_status") != "settled":
             self.credits.settle_credit_reservation(
                 uid, plan.document_reservation_id, actual.credits,
-                actual_api_cost_xaf=str(actual.total_cost_xaf),
+                actual_api_cost_xaf=str((actual.cost_xaf if plan.provider == "openrouter" else actual.total_cost_xaf)),
             )
             self.jobs.set_settled(user_id=uid, course_id=cid,
                                   stage="document", credits=actual.credits,
-                                  api_cost_xaf=str(actual.total_cost_xaf))
+                                  api_cost_xaf=str((actual.cost_xaf if plan.provider == "openrouter" else actual.total_cost_xaf)))
         # Aucun Markdown intermediaire : composition deja faite et validee.
         transcript = "\n\n".join(transcripts)
         try:

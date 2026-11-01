@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
 import { createClient } from "@/lib/supabase/client";
@@ -543,6 +543,18 @@ function getModelDescription(modelId: string, language: OriaLanguage): string {
       fr: "Modèle haut de gamme · Pour les usages les plus avancés",
       en: "High-end model · For the most advanced use cases",
     },
+    "claude-haiku-5.5": {
+      fr: "Rapide et efficace · Pour les échanges quotidiens",
+      en: "Fast and efficient · For everyday tasks",
+    },
+    "claude-sonnet-5.5": {
+      fr: "Analyse approfondie · Pour les projets complexes",
+      en: "Deep analysis · For complex projects",
+    },
+    "claude-opus-5.5": {
+      fr: "Raisonnement avancé · Pour les tâches les plus exigeantes",
+      en: "Advanced reasoning · For demanding work",
+    },
   };
 
   return descriptions[modelId]?.[language] ?? "";
@@ -1031,6 +1043,18 @@ type TrialResponse = {
   trials: Record<string, TrialInfo>;
 };
 
+// Source de vérité du sélecteur : GET /ai/chat/capabilities (authentifié).
+// Les interrupteurs ORIA_OPENAI_ENABLED / ORIA_OPENROUTER_ENABLED
+// restent exclusivement côté backend, jamais en NEXT_PUBLIC_*.
+type ChatCapabilities = {
+  success: boolean;
+  provider: "openai" | "openrouter";
+  pack_id: string;
+  models: Array<{ id: string; label: string; reasoning_modes?: ReasoningMode[] }>;
+  streaming: boolean;
+  live_modify?: boolean | null;
+};
+
 const models: ModelDefinition[] = [
   {
     id: "luna",
@@ -1064,18 +1088,8 @@ const models: ModelDefinition[] = [
   },
 ];
 
-function getAvailableModels(
-  packId: string | null,
-): ModelDefinition[] {
-  if (!packId) {
-    return [];
-  }
-
-  return models.filter((model) =>
-    model.packs.includes(packId),
-  );
-}
-
+// Les intitulés et descriptions locaux ne donnent aucun droit d'accès.
+// Seule la réponse authentifiée du backend décide quels modèles sont visibles.
 const TRIAL_MODEL_BY_PACK: Record<string, string> = {
   light_pack: "gpt-5",
   intermediate_pack: "gpt-5.6-terra",
@@ -1083,41 +1097,36 @@ const TRIAL_MODEL_BY_PACK: Record<string, string> = {
 };
 
 function getSelectableModels(
-  packId: string | null,
+  capabilities: ChatCapabilities | null,
   trials: Record<string, TrialInfo>,
 ): ModelDefinition[] {
-  const normalModels =
-    getAvailableModels(packId);
-
-  if (!packId) {
-    return [];
+  if (!capabilities?.success || !Array.isArray(capabilities.models)) return [];
+  const selectable: ModelDefinition[] = [];
+  const included = new Set<string>();
+  for (const item of capabilities.models) {
+    if (!item || typeof item.id !== "string" || typeof item.label !== "string") continue;
+    const id = item.id.trim();
+    if (!id || included.has(id)) continue;
+    // Défense supplémentaire : Claude n'est JAMAIS visible avec OpenAI direct.
+    if (id.startsWith("claude-") && capabilities.provider !== "openrouter") continue;
+    included.add(id);
+    selectable.push({
+      id,
+      name: item.label.trim() || id,
+      description: models.find((model) => model.id === id)?.description || "",
+      packs: [capabilities.pack_id],
+    });
   }
 
-  const selectable = [...normalModels];
-  const normalIds = new Set(
-    normalModels.map(
-      (model) => model.id,
-    ),
-  );
-
-  // Un seul modèle supérieur est proposé en essai pour
-  // chaque pack inférieur : 5 essais maximum.
-  const trialModelId =
-    TRIAL_MODEL_BY_PACK[packId];
-
-  if (trialModelId && !normalIds.has(trialModelId)) {
-    const trialModel = models.find(
-      (model) =>
-        model.id === trialModelId,
-    );
-
-    const trial = trials[trialModelId];
-
-    if (trialModel && trial) {
-      selectable.push(trialModel);
+  // Les 5 essais historiques restent accessibles UNIQUEMENT si /ai/trials
+  // les a effectivement renvoyés. Ils ne créent pas de droits par eux-mêmes.
+  const trialId = TRIAL_MODEL_BY_PACK[capabilities.pack_id];
+  if (trialId && !included.has(trialId) && trials[trialId]) {
+    const descriptor = models.find((model) => model.id === trialId);
+    if (descriptor && (!trialId.startsWith("claude-") || capabilities.provider === "openrouter")) {
+      selectable.push(descriptor);
     }
   }
-
   return selectable;
 }
 
@@ -3874,6 +3883,15 @@ export default function ChatPage() {
   const [trials, setTrials] =
     useState<Record<string, TrialInfo>>({});
 
+  const [chatCapabilities, setChatCapabilities] = useState<ChatCapabilities | null>(null);
+  const [isLoadingChatCapabilities, setIsLoadingChatCapabilities] = useState(true);
+  // Chaque nouvelle lecture invalide les plus anciennes réponses réseau.
+  const chatCapabilitiesRequestRef = useRef(0);
+  const selectableModels = useMemo(
+    () => getSelectableModels(chatCapabilities, trials),
+    [chatCapabilities, trials],
+  );
+
   const [isLoadingTrials, setIsLoadingTrials] =
     useState(true);
 
@@ -4044,63 +4062,104 @@ export default function ChatPage() {
    * ==========================================================
    */
 
+  async function refreshChatCapabilities(
+    packId: string,
+    trialState: Record<string, TrialInfo> = trials,
+  ): Promise<ChatCapabilities | null> {
+    const requestId = ++chatCapabilitiesRequestRef.current;
+    setIsLoadingChatCapabilities(true);
+    try {
+      const data = await apiFetch<ChatCapabilities>("/ai/chat/capabilities");
+      if (
+        !data?.success ||
+        (data.provider !== "openai" && data.provider !== "openrouter") ||
+        data.pack_id !== packId ||
+        !Array.isArray(data.models) ||
+        data.streaming !== true
+      ) {
+        throw new Error("Le catalogue des modèles ne correspond pas au fournisseur ou au pack actif.");
+      }
+      if (requestId !== chatCapabilitiesRequestRef.current) return null;
+      // Filtrage défensif avant toute présentation. Les droits restent côté serveur.
+      const verified: ChatCapabilities = {
+        ...data,
+        models: data.models.filter((item) =>
+          item && typeof item.id === "string" && typeof item.label === "string" &&
+          (data.provider === "openrouter" || !item.id.startsWith("claude-"))
+        ).slice(0, 24),
+      };
+      setChatCapabilities(verified);
+      const available = getSelectableModels(verified, trialState);
+      setSelectedModel((current) =>
+        available.some((model) => model.id === current) ? current : (available[0]?.id ?? ""),
+      );
+      return verified;
+    } catch (requestError) {
+      if (requestId !== chatCapabilitiesRequestRef.current) return null;
+      // Fail closed : ne jamais deviner un fournisseur à partir d'un cache
+      // local, d'une variable NEXT_PUBLIC ou des modèles vus auparavant.
+      setChatCapabilities(null);
+      setSelectedModel("");
+      setModelMenuOpen(false);
+      setError(requestError instanceof Error ? requestError.message :
+        "Impossible de vérifier le fournisseur de Chat actif.");
+      return null;
+    } finally {
+      if (requestId === chatCapabilitiesRequestRef.current) setIsLoadingChatCapabilities(false);
+    }
+  }
+
   async function loadWallet(
     trialState: Record<string, TrialInfo> = trials,
   ) {
     try {
       setIsLoadingWallet(true);
       setError(null);
-
-      const data =
-        await apiFetch<{
-          success: boolean;
-          wallet: WalletData;
-        }>("/credits/me");
-
-      const walletData =
-        data.wallet;
-
+      const data = await apiFetch<{ success: boolean; wallet: WalletData }>("/credits/me");
+      const walletData = data.wallet;
       setWallet(walletData);
-
-      const availableModels =
-        getSelectableModels(
-          walletData.pack_id,
-          trialState,
-        );
-
-      if (
-        availableModels.length > 0
-      ) {
-        setSelectedModel(
-          (current) =>
-            availableModels.some(
-              (model) =>
-                model.id === current,
-            )
-              ? current
-              : availableModels[0].id,
-        );
+      if (walletData?.is_pack_active && walletData.pack_id) {
+        // Le backend choisit exclusivement OpenAI OU OpenRouter.
+        await refreshChatCapabilities(walletData.pack_id, trialState);
       } else {
+        ++chatCapabilitiesRequestRef.current;
+        setChatCapabilities(null);
+        setIsLoadingChatCapabilities(false);
         setSelectedModel("");
       }
     } catch (requestError) {
-      console.error(
-        "Erreur chargement wallet :",
-        requestError,
-      );
-
-      // Une session sans wallet vérifié ne doit pas réutiliser des droits périmés.
+      console.error("Erreur chargement wallet :", requestError);
+      ++chatCapabilitiesRequestRef.current;
       setWallet(null);
-
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "Impossible de charger les crédits.",
-      );
+      setChatCapabilities(null);
+      setIsLoadingChatCapabilities(false);
+      setSelectedModel("");
+      setError(requestError instanceof Error ? requestError.message : "Impossible de charger les crédits.");
     } finally {
       setIsLoadingWallet(false);
     }
   }
+
+  // À la reprise de l'onglet et périodiquement : une bascule Render
+  // doit faire disparaître/apparaître Claude sans recharger la page.
+  // Aucun POST payant n'est déclenché par cette vérification.
+  useEffect(() => {
+    if (!wallet?.is_pack_active || !wallet.pack_id) return;
+    const packId = wallet.pack_id;
+    const sync = () => {
+      if (document.visibilityState === "visible" && !isThinking) {
+        void refreshChatCapabilities(packId, trials);
+      }
+    };
+    window.addEventListener("focus", sync);
+    document.addEventListener("visibilitychange", sync);
+    const interval = window.setInterval(sync, 60_000);
+    return () => {
+      window.removeEventListener("focus", sync);
+      document.removeEventListener("visibilitychange", sync);
+      window.clearInterval(interval);
+    };
+  }, [wallet?.pack_id, wallet?.is_pack_active, isThinking, trials]);
 
   /*
    * ==========================================================
@@ -5580,6 +5639,21 @@ export default function ChatPage() {
       (!content && attachments.length === 0) ||
       isThinking
     ) {
+      return;
+    }
+
+    // Un modèle issu du cache n'est jamais envoyé sans catalogue vérifié.
+    // Le serveur revérifie encore fournisseur, pack et essai à la génération.
+    if (
+      !wallet?.is_pack_active ||
+      !chatCapabilities ||
+      chatCapabilities.pack_id !== wallet.pack_id ||
+      isLoadingChatCapabilities ||
+      !selectableModels.some((model) => model.id === selectedModel)
+    ) {
+      setError(language === "fr"
+        ? "Modèle indisponible ou fournisseur non vérifié. Actualisez le catalogue avant d'envoyer."
+        : "Model unavailable or provider not verified. Refresh the catalog before sending.");
       return;
     }
 
@@ -7504,32 +7578,31 @@ export default function ChatPage() {
                 <div className="relative inline-block">
                   <button
                     type="button"
-                    className={`flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium shadow-sm transition ${
+                    className={`flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-sm font-medium shadow-sm transition-[background-color,border-color,box-shadow] duration-200 disabled:cursor-not-allowed disabled:opacity-60 ${
                       modelMenuOpen
                         ? "border-border-strong bg-surface-tertiary"
                         : "border-border bg-surface hover:bg-surface-secondary"
                     }`}
+                    disabled={isLoadingChatCapabilities || selectableModels.length === 0}
+                    aria-haspopup="listbox"
+                    aria-expanded={modelMenuOpen}
                     onClick={() => {
                       setReasoningMenuOpen(false);
-
-                      if (
-                        getSelectableModels(
-                          wallet?.pack_id ?? null,
-                          trials,
-                        ).length > 1
-                      ) {
-                        setModelMenuOpen(
-                          (current) => !current,
-                        );
+                      if (selectableModels.length > 1) {
+                        const opening = !modelMenuOpen;
+                        setModelMenuOpen(opening);
+                        if (opening && wallet?.pack_id) {
+                          // Les interrupteurs Render ne sont jamais copiés côté navigateur.
+                          void refreshChatCapabilities(wallet.pack_id, trials);
+                        }
                       }
                     }}
                   >
                     <Sparkles size={16} />
 
-                    {models.find(
-                      (model) =>
-                        model.id === selectedModel,
-                    )?.name || "Modèle"}
+                    {selectableModels.find(
+                      (model) => model.id === selectedModel,
+                    )?.name || (isLoadingChatCapabilities ? UI[language].loading : UI[language].model)}
 
                     {trials[selectedModel] && (
                       <span className="rounded-full bg-accent px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.08em] text-accent-foreground">
@@ -7550,11 +7623,13 @@ export default function ChatPage() {
                   </button>
 
                   {modelMenuOpen && (
-                    <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl">
-                      {getSelectableModels(
-                        wallet?.pack_id ?? null,
-                        trials,
-                      ).map((model) => (
+                    <div role="listbox" aria-label={UI[language].model}
+                      className="absolute bottom-12 left-0 z-30 w-[min(20rem,calc(100vw-2rem))] rounded-[22px] border border-border bg-surface/95 p-2 shadow-xl backdrop-blur-xl">
+                      <p className="px-3 pb-2 pt-1 text-[11px] font-medium text-muted">
+                        {isLoadingChatCapabilities ? UI[language].loading :
+                          chatCapabilities?.provider === "openrouter" ? "OpenRouter" : "OpenAI"}
+                      </p>
+                      {!isLoadingChatCapabilities && selectableModels.map((model) => (
                         <ModelOption
                           language={language}
                           key={model.id}
@@ -7575,13 +7650,11 @@ export default function ChatPage() {
                             trials[model.id].remaining <= 0
                           }
                           onClick={() => {
-                            if (
-                              trials[model.id] &&
-                              trials[model.id].remaining <= 0
-                            ) {
+                            if (isLoadingChatCapabilities || !chatCapabilities ||
+                              !selectableModels.some((item) => item.id === model.id) ||
+                              (trials[model.id] && trials[model.id].remaining <= 0)) {
                               return;
                             }
-
                             setSelectedModel(model.id);
                             setModelMenuOpen(false);
                             setReasoningMenuOpen(false);
@@ -7589,10 +7662,7 @@ export default function ChatPage() {
                         />
                       ))}
 
-                      {getSelectableModels(
-                        wallet?.pack_id ?? null,
-                        trials,
-                      ).length === 0 && (
+                      {!isLoadingChatCapabilities && selectableModels.length === 0 && (
                         <p className="px-3 py-2 text-xs text-muted">
                           {UI[language].noModel}
                         </p>
@@ -8039,7 +8109,9 @@ export default function ChatPage() {
                     disabled={
                       (!message.trim() &&
                         attachments.length === 0) ||
-                      isThinking || editBusy || editingMessageId !== null
+                      isThinking || editBusy || editingMessageId !== null ||
+                      isLoadingChatCapabilities || !chatCapabilities ||
+                      !selectableModels.some((model) => model.id === selectedModel)
                     }
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30"
                   >

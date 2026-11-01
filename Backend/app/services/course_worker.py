@@ -350,9 +350,13 @@ class CourseWorker:
         if (not isinstance(plan, dict)
                 or not plan.get("transcription_reservation_id")
                 or not plan.get("document_reservation_id")
-                or plan.get("writing_model") != "luna"
-                or plan.get("provider_model") != "gpt-6-luna"):
+                or plan.get("writing_model") != "luna"):
             raise CourseWorkerNotReady("Devis Luna du cours absent ou incompatible.")
+        from app.services.course_plan_contract import validate_pinned_course_provider, CoursePlanProviderError
+        try:
+            validate_pinned_course_provider(plan)
+        except CoursePlanProviderError as exc:
+            raise CourseWorkerNotReady("Fournisseur de rédaction Luna non autorisé.") from exc
         # Le devis accepté ne bloque QUE l'audio avant de commencer.
         # La provision documentaire peut encore être absente/pending :
         # CourseService la créera seulement lorsque l'audio sera réglé.
@@ -410,12 +414,21 @@ class CourseWorker:
                 ) from exc
         if not callable(getattr(service.renderer, "render_course_code_first", None)):
             raise CourseWorkerNotReady("Renderer sans méthode render_course_code_first().")
-        # Verifier les dependances Code-First AVANT le premier appel fournisseur.
-        ai = getattr(service, "ai", None)
-        if not callable(getattr(ai, "compose_course_section", None)) or not callable(
-            getattr(ai, "_validate_course_html_fragment", None)
-        ):
-            raise CourseWorkerNotReady("OpenAIService Code-First ORIA Cours absent.")
+        # Provider is selected from the PERSISTED plan, not from current
+        # Render switches. A missing credential fails before worker lease.
+        # Legacy test doubles can still provide service.ai directly.
+        if callable(getattr(service, "_ai_for_plan", None)):
+            from app.services.course_service import CoursePlan
+            try:
+                ai = service._ai_for_plan(CoursePlan(**first["plan"]))
+            except Exception as exc:
+                raise CourseWorkerNotReady("Fournisseur du cours indisponible.") from exc
+        else:
+            ai = getattr(service, "ai", None)
+        if (not callable(getattr(ai, "transcribe_course_segment", None))
+                or not callable(getattr(ai, "compose_course_section", None))
+                or not callable(getattr(ai, "_validate_course_html_fragment", None))):
+            raise CourseWorkerNotReady("Fournisseur ORIA Cours Code-First indisponible.")
 
         lease_acquired = False
         heartbeat_started = False

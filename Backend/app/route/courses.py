@@ -172,7 +172,7 @@ def _quote_key() -> bytes:
 
 
 def _plan_hash(plan: CoursePlan) -> str:
-    normalized = json.dumps(asdict(plan), sort_keys=True, ensure_ascii=False,
+    normalized = json.dumps(plan.storage_plan(), sort_keys=True, ensure_ascii=False,
                             separators=(",", ":"))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
@@ -542,12 +542,22 @@ def course_artifacts(
         artifact = output.get("artifact") if isinstance(output, dict) else None
         if not isinstance(artifact, dict):
             raise HTTPException(409, "Resultat du cours incoherent.")
-        transcript = artifact.get("transcript_artifact")
-        if not isinstance(transcript, dict):
-            raise HTTPException(409, "Transcription finale manquante.")
+        # Phase 6B.1 recognizes both the Code-First private references and
+        # historical jobs. Never mix a new document with an old transcript.
+        if isinstance(artifact.get("document"), dict) and isinstance(artifact.get("transcription"), dict):
+            references = (("document", artifact["document"], "artifact_id"),
+                          ("transcript", artifact["transcription"], "artifact_id"))
+        elif "document" not in artifact and "transcription" not in artifact:
+            transcript = artifact.get("transcript_artifact")
+            if not isinstance(transcript, dict):
+                raise HTTPException(409, "Transcription finale manquante.")
+            references = (("document", artifact, "id"),
+                          ("transcript", transcript, "id"))
+        else:
+            raise HTTPException(409, "Références documentaires incomplètes.")
         items = []
-        for kind, item in (("document", artifact), ("transcript", transcript)):
-            ident = str(item.get("id", ""))
+        for kind, item, identifier_field in references:
+            ident = str(item.get(identifier_field, ""))
             try:
                 UUID(ident)
             except (ValueError, TypeError, AttributeError):

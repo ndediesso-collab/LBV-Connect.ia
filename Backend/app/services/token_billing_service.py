@@ -14,9 +14,12 @@ from app.config.credit_costs import (
     IMAGE_REFERENCE_OUTPUT_COST_USD_1024_SQUARE,
     IMAGE_TOKEN_PRICING_USD_PER_MILLION,
     LONG_CONTEXT_THRESHOLD_TOKENS,
+    MAX_CHAT_INPUT_TOKENS,
     MAX_CHAT_OUTPUT_TOKENS,
     MAX_WEB_SEARCH_CALLS_PER_ACTION,
     MODEL_TOKEN_PRICING_USD_PER_MILLION,
+    OPENROUTER_CHAT_RESERVATION_RATES_USD_PER_MILLION,
+    OPENROUTER_WEB_SEARCH_RESERVATION_USD_PER_CALL,
     ORIA_CREDIT_VALUE_XAF,
     VIDEO_ACTION_DURATION_SECONDS,
     VIDEO_MODEL_BY_PACK,
@@ -865,7 +868,9 @@ class TokenBillingService:
 
         web_enabled: bool = False,
 
-    ) -> int:
+        include_api_cost: bool = False,
+
+    ) -> int | tuple[int, Decimal]:
 
         """
 
@@ -1071,6 +1076,10 @@ class TokenBillingService:
 
         )
 
+        # La réserve API en FCFA est calculée DEPUIS les taux fournisseur,
+        # avant l'arrondi du wallet : jamais reconstituée depuis les crédits.
+        if include_api_cost:
+            return max(1, credits), estimated_total_cost_xaf
         return max(1, credits)
 
     @classmethod
@@ -1112,6 +1121,232 @@ class TokenBillingService:
                 f"de {MAX_WEB_SEARCH_CALLS_PER_ACTION} par action."
 
             )
+
+# ============================================================
+# OPENROUTER CHAT — VOIE SEPAREE, SANS MODIFIER LE TARIF OPENAI
+# ============================================================
+# Calcul à partir du coût fournisseur TOTAL déclaré par l'API OpenRouter.
+# Les frais web éventuels sont déjà dans ce total : ne jamais les rajouter.
+# Le wallet/les RPC ne sont PAS appelés depuis cette couche pure.
+
+
+class OpenRouterCostUnavailableError(TokenBillingError):
+    """Aucune mesure fiable : conserver la réservation et réconcilier."""
+
+
+@dataclass(frozen=True)
+class OpenRouterBillingResult:
+    provider: str
+    model: str
+    request_ids: tuple[str, ...]
+    input_tokens: int
+    output_tokens: int
+    cached_input_tokens: int
+    cache_write_tokens: int
+    reasoning_tokens: int
+    total_tokens: int
+    web_search_calls: int | None
+    total_cost_usd: Decimal
+    total_cost_xaf: Decimal
+    credits: int
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["total_cost_usd"] = str(self.total_cost_usd)
+        payload["total_cost_xaf"] = str(self.total_cost_xaf)
+        return payload
+
+
+@dataclass(frozen=True)
+class OpenRouterReservationQuote:
+    provider_model: str
+    estimated_input_tokens: int
+    max_output_tokens: int
+    web_search_calls_budgeted: int
+    estimated_cost_usd: Decimal
+    reserved_cost_usd: Decimal
+    reserved_api_cost_xaf: Decimal
+    reserved_credits: int
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        for key in ("estimated_cost_usd", "reserved_cost_usd", "reserved_api_cost_xaf"):
+            payload[key] = str(payload[key])
+        return payload
+
+
+class OpenRouterTokenBillingService:
+    """Calculs OpenRouter indépendants de l'ancien calculateur OpenAI.
+
+    `calculate()` reçoit uniquement le résultat serveur renvoyé par
+    OpenRouterChatService.chat(), jamais un coût communiqué par le navigateur.
+
+    `estimate_reservation()` exige des tarifs administrateur conservateurs
+    vérifiés AVANT l'appel payant. Aucune estimation inventée en secours.
+    """
+
+    @staticmethod
+    def _money(value: Any, field: str, *, allow_zero: bool = False) -> Decimal:
+        if value is None or isinstance(value, bool):
+            raise TokenBillingError(f"Valeur décimale obligatoire : {field}.")
+        try:
+            parsed = Decimal(str(value))
+        except (ValueError, TypeError, ArithmeticError) as error:
+            raise TokenBillingError(f"Valeur décimale invalide : {field}.") from error
+        if not parsed.is_finite() or parsed < 0 or (parsed == 0 and not allow_zero):
+            raise TokenBillingError(f"Montant non positif ou non fini : {field}.")
+        return parsed
+
+    @staticmethod
+    def _count(value: Any, field: str, *, allow_zero: bool = True) -> int:
+        if value is None or isinstance(value, bool):
+            raise InvalidUsageError(f"Compteur obligatoire : {field}.")
+        try:
+            number = Decimal(str(value))
+        except (ValueError, TypeError, ArithmeticError) as error:
+            raise InvalidUsageError(f"Compteur invalide : {field}.") from error
+        if not number.is_finite() or number != number.to_integral_value() or number < 0:
+            raise InvalidUsageError(f"Compteur non entier ou négatif : {field}.")
+        result = int(number)
+        if result == 0 and not allow_zero:
+            raise InvalidUsageError(f"Compteur nul interdit : {field}.")
+        return result
+
+    @classmethod
+    def calculate(cls, result: Mapping[str, Any]) -> OpenRouterBillingResult:
+        """Une requête facturée, sans double compter le raisonnement ou le Web."""
+        if not isinstance(result, Mapping):
+            raise TokenBillingError("Résultat OpenRouter invalide.")
+        usage = result.get("provider_usage")
+        if not isinstance(usage, Mapping) or usage.get("provider") != "openrouter":
+            raise InvalidUsageError("Usage OpenRouter normalisé obligatoire.")
+        if usage.get("reconciliation_required") is True:
+            raise OpenRouterCostUnavailableError("Coût non réconcilié : conserver la réservation.")
+        supplied_cost = usage.get("reported_cost_usd")
+        if supplied_cost is None or result.get("provider_cost_usd") is None:
+            raise OpenRouterCostUnavailableError("Coût OpenRouter absent : conserver la réservation.")
+        cost = cls._money(supplied_cost, "reported_cost_usd")
+        if cost != cls._money(result["provider_cost_usd"], "provider_cost_usd"):
+            raise InvalidUsageError("Coût OpenRouter contradictoire.")
+        inp = cls._count(usage.get("input_tokens"), "input_tokens")
+        out = cls._count(usage.get("output_tokens"), "output_tokens")
+        cached = cls._count(usage.get("cached_input_tokens", 0), "cached_input_tokens")
+        writes = cls._count(usage.get("cache_write_tokens", 0), "cache_write_tokens")
+        reasoning = cls._count(usage.get("reasoning_tokens", 0), "reasoning_tokens")
+        total = cls._count(usage.get("total_tokens"), "total_tokens")
+        if cached + writes > inp or reasoning > out or total != inp + out:
+            raise InvalidUsageError("Total ou détail de tokens incohérent.")
+        model = str(result.get("model") or "").strip()
+        if not model or not model.startswith(("openai/", "anthropic/")):
+            raise TokenBillingError("Slug OpenRouter non valide ou non autorisé.")
+        if usage.get("model") and str(usage["model"]) != model:
+            raise InvalidUsageError("Modèle d'exécution et usage contradictoires.")
+        request_id = str(result.get("response_id") or usage.get("request_id") or "").strip()
+        if result.get("response_id") and usage.get("request_id") and str(result["response_id"]) != str(usage["request_id"]):
+            raise InvalidUsageError("Identifiants fournisseur contradictoires.")
+        web = usage.get("web_search_requests")
+        web_count = None if web is None else cls._count(web, "web_search_requests")
+        if result.get("web_search_calls") is not None:
+            observed_web = cls._count(result["web_search_calls"], "web_search_calls")
+            if web_count is not None and observed_web != web_count:
+                raise InvalidUsageError("Compteurs de recherche Web contradictoires.")
+            web_count = observed_web
+        fx = cls._money(ACCOUNTING_USD_XAF, "ACCOUNTING_USD_XAF")
+        unit = cls._money(ORIA_CREDIT_VALUE_XAF, "ORIA_CREDIT_VALUE_XAF")
+        total_xaf = cost * fx
+        credits = int((total_xaf / unit).to_integral_value(rounding=ROUND_CEILING))
+        return OpenRouterBillingResult(
+            provider="openrouter", model=model,
+            request_ids=(request_id,) if request_id else (),
+            input_tokens=inp, output_tokens=out, cached_input_tokens=cached,
+            cache_write_tokens=writes, reasoning_tokens=reasoning,
+            total_tokens=total, web_search_calls=web_count,
+            total_cost_usd=cost, total_cost_xaf=total_xaf, credits=max(1, credits),
+        )
+
+    @classmethod
+    def calculate_many(cls, results: list[Mapping[str, Any]]) -> OpenRouterBillingResult:
+        """Additionne les TENTATIVES payantes puis arrondit UNE SEULE fois.
+
+        Les request IDs manquants interdisent le cumul : pas de risque de
+        recompter silencieusement deux fois un événement SSE terminal.
+        """
+        if not results:
+            raise TokenBillingError("Aucune tentative OpenRouter à comptabiliser.")
+        parts = [cls.calculate(item) for item in results]
+        seen: set[str] = set()
+        model = parts[0].model
+        for part in parts:
+            if part.model != model or len(part.request_ids) != 1 or part.request_ids[0] in seen:
+                raise InvalidUsageError("Tentatives OpenRouter non identifiables ou dupliquées.")
+            seen.add(part.request_ids[0])
+        total_cost = sum((item.total_cost_usd for item in parts), Decimal("0"))
+        total_xaf = total_cost * cls._money(ACCOUNTING_USD_XAF, "ACCOUNTING_USD_XAF")
+        credits = max(1, int((total_xaf / cls._money(ORIA_CREDIT_VALUE_XAF, "ORIA_CREDIT_VALUE_XAF")).to_integral_value(rounding=ROUND_CEILING)))
+        web_counts = None if any(p.web_search_calls is None for p in parts) else sum(p.web_search_calls or 0 for p in parts)
+        return OpenRouterBillingResult(
+            provider="openrouter", model=model,
+            request_ids=tuple(p.request_ids[0] for p in parts),
+            input_tokens=sum(p.input_tokens for p in parts),
+            output_tokens=sum(p.output_tokens for p in parts),
+            cached_input_tokens=sum(p.cached_input_tokens for p in parts),
+            cache_write_tokens=sum(p.cache_write_tokens for p in parts),
+            reasoning_tokens=sum(p.reasoning_tokens for p in parts),
+            total_tokens=sum(p.total_tokens for p in parts),
+            web_search_calls=web_counts,
+            total_cost_usd=total_cost, total_cost_xaf=total_xaf, credits=credits,
+        )
+
+    @classmethod
+    def estimate_reservation(
+        cls, *, provider_model: str, estimated_input_tokens: int,
+        max_output_tokens: int = MAX_CHAT_OUTPUT_TOKENS, web_enabled: bool = False,
+        rates: Mapping[str, Mapping[str, Any]] | None = None,
+        web_search_usd_per_call: Any = None,
+    ) -> OpenRouterReservationQuote:
+        """Réserve le coût maximum estimé (tokens + Web) et 20 % de marge.
+
+        Tarif = PLAFOND administrateur, pas prévision de facturation finale.
+        Le caller doit conserver deux réserves: `reserved_credits` et
+        `reserved_api_cost_xaf` (si le mode budget fournisseur est actif).
+        """
+        if not isinstance(provider_model, str) or not provider_model.startswith(("openai/", "anthropic/")):
+            raise TokenBillingError("Slug OpenRouter inconnu.")
+        configured = OPENROUTER_CHAT_RESERVATION_RATES_USD_PER_MILLION if rates is None else rates
+        rate = configured.get(provider_model) if isinstance(configured, Mapping) else None
+        if not isinstance(rate, Mapping):
+            raise TokenBillingError("Tarif plafond OpenRouter absent : réservation interdite.")
+        input_rate = cls._money(rate.get("input"), "plafond_input_usd_per_million")
+        output_rate = cls._money(rate.get("output"), "plafond_output_usd_per_million")
+        cache_write = rate.get("cache_write", rate.get("input"))
+        cache_write_rate = cls._money(cache_write, "plafond_cache_write_usd_per_million")
+        n_input = cls._count(estimated_input_tokens, "estimated_input_tokens", allow_zero=False)
+        n_output = cls._count(max_output_tokens, "max_output_tokens", allow_zero=False)
+        if n_input > MAX_CHAT_INPUT_TOKENS:
+            raise TokenBillingError("Devis OpenRouter : plafond d'entrée ORIA dépassé.")
+        if n_output > MAX_CHAT_OUTPUT_TOKENS:
+            raise TokenBillingError("Devis OpenRouter : plafond de sortie ORIA dépassé.")
+        estimated = (Decimal(n_input) * max(input_rate, cache_write_rate) + Decimal(n_output) * output_rate) / _ONE_MILLION
+        web_budget = 0
+        if web_enabled:
+            if web_search_usd_per_call is None:
+                web_search_usd_per_call = OPENROUTER_WEB_SEARCH_RESERVATION_USD_PER_CALL
+            web_rate = cls._money(web_search_usd_per_call, "plafond_web_usd_per_call")
+            web_budget = MAX_WEB_SEARCH_CALLS_PER_ACTION
+            estimated += Decimal(web_budget) * web_rate
+        safety = cls._money(PACK_API_SAFETY_RESERVE_RATIO, "PACK_API_SAFETY_RESERVE_RATIO", allow_zero=True)
+        if safety > 1:
+            raise TokenBillingError("Marge de sécurité OpenRouter supérieure à 100 %.")
+        reserved_usd = estimated * (Decimal(1) + safety)
+        reserved_xaf = reserved_usd * cls._money(ACCOUNTING_USD_XAF, "ACCOUNTING_USD_XAF")
+        credits = max(1, int((reserved_xaf / cls._money(ORIA_CREDIT_VALUE_XAF, "ORIA_CREDIT_VALUE_XAF")).to_integral_value(rounding=ROUND_CEILING)))
+        return OpenRouterReservationQuote(
+            provider_model=provider_model, estimated_input_tokens=n_input,
+            max_output_tokens=n_output, web_search_calls_budgeted=web_budget,
+            estimated_cost_usd=estimated, reserved_cost_usd=reserved_usd,
+            reserved_api_cost_xaf=reserved_xaf, reserved_credits=credits,
+        )
+
 
 # ============================================================
 # FACTURATION MÉDIA

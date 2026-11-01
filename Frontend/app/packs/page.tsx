@@ -1,11 +1,5 @@
 "use client";
 
-
-
-
-
-
-
 import {
 
 
@@ -1924,7 +1918,7 @@ export default function PacksPage() {
 
 
 
-      <header className="border-b border-border">
+      <header className="sticky top-0 z-30 border-b border-border/65 bg-background/85 backdrop-blur-xl">
 
 
 
@@ -1948,7 +1942,7 @@ export default function PacksPage() {
 
 
 
-              className="rounded-xl p-2 text-muted-strong transition hover:bg-surface-secondary hover:text-foreground"
+              className="rounded-2xl p-2.5 text-muted-strong transition-colors duration-200 hover:bg-surface-secondary hover:text-foreground"
 
 
 
@@ -2012,7 +2006,7 @@ export default function PacksPage() {
 
 
 
-            className="flex items-center gap-2 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-sm transition hover:bg-surface-tertiary"
+            className="flex items-center gap-2 rounded-2xl border border-border/75 bg-surface/75 px-3.5 py-2.5 text-sm transition-colors duration-200 hover:bg-surface-secondary"
 
 
 
@@ -2096,7 +2090,7 @@ export default function PacksPage() {
 
 
 
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-5xl">
+          <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em] sm:text-5xl">
 
 
 
@@ -2112,7 +2106,7 @@ export default function PacksPage() {
 
 
 
-          <p className="mt-4 text-sm leading-6 text-muted sm:text-base">
+          <p className="mt-4 text-sm leading-7 text-muted sm:text-base">
 
 
 
@@ -2124,7 +2118,7 @@ export default function PacksPage() {
 
 
 
-          <div className="mt-6 inline-flex flex-col items-center gap-1 rounded-2xl border border-border bg-surface-secondary px-5 py-3 sm:flex-row sm:gap-2">
+          <div className="mt-6 inline-flex flex-col items-center gap-1 rounded-[22px] border border-border/70 bg-surface/75 px-5 py-3 shadow-[0_12px_32px_-25px_var(--shadow-color)] sm:flex-row sm:gap-2">
 
 
 
@@ -2169,13 +2163,13 @@ export default function PacksPage() {
 
 
         {/* Deux offres commerciales visibles au même niveau */}
-        <div className="mt-10 grid grid-cols-2 gap-2 rounded-2xl border border-border bg-surface-secondary p-1.5" role="tablist" aria-label={language === "fr" ? "Catégories de crédits" : "Credit categories"}>
+        <div className="mt-10 grid grid-cols-2 gap-2 rounded-[22px] border border-border/70 bg-surface-secondary/65 p-1.5" role="tablist" aria-label={language === "fr" ? "Catégories de crédits" : "Credit categories"}>
           <button type="button" role="tab" aria-selected={activePackTab === "primary"} onClick={() => setActivePackTab("primary")}
-            className={`rounded-xl px-3 py-3 text-sm font-semibold transition ${activePackTab === "primary" ? "bg-accent text-accent-foreground" : "text-muted-strong hover:bg-surface-tertiary"}`}>
+            className={`rounded-[17px] px-3 py-3 text-sm font-semibold transition-colors duration-200 ${activePackTab === "primary" ? "bg-accent text-accent-foreground" : "text-muted-strong hover:bg-surface-tertiary"}`}>
             {UI[language].packsOria}
           </button>
           <button type="button" role="tab" aria-selected={activePackTab === "addon"} onClick={() => setActivePackTab("addon")}
-            className={`rounded-xl px-3 py-3 text-sm font-semibold transition ${activePackTab === "addon" ? "bg-accent text-accent-foreground" : "text-muted-strong hover:bg-surface-tertiary"}`}>
+            className={`rounded-[17px] px-3 py-3 text-sm font-semibold transition-colors duration-200 ${activePackTab === "addon" ? "bg-accent text-accent-foreground" : "text-muted-strong hover:bg-surface-tertiary"}`}>
             {UI[language].complementaryCredits}
           </button>
         </div>
@@ -2187,7 +2181,7 @@ export default function PacksPage() {
                 <PackCard key={pack.id} pack={pack} language={language} onSelect={handlePackSelection} />
               ))}
             </div>
-            <div className="mt-6 rounded-2xl border border-border bg-surface-secondary p-5 sm:p-6">
+            <div className="mt-6 rounded-[25px] border border-border/70 bg-surface-secondary/65 p-5 sm:p-6">
               <div className="flex items-center gap-2 font-semibold"><HelpCircle size={18} />{language === "fr" ? "À savoir avant de créer des vidéos" : "Before creating videos"}</div>
               <p className="mt-2 text-sm leading-6 text-muted">
                 {language === "fr"
@@ -2204,20 +2198,20 @@ export default function PacksPage() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {complementaryCredits.map((topUp) => (
-                <article key={topUp.id} className="flex flex-col rounded-3xl border border-border bg-surface p-6 transition hover:border-border-strong">
+                <article key={topUp.id} className="flex flex-col rounded-[27px] border border-border/70 bg-surface/75 p-6 shadow-[0_16px_42px_-32px_var(--shadow-color)] transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-[0_22px_45px_-29px_var(--shadow-color)]">
                   <Zap size={22} className="text-muted-strong" />
                   <p className="mt-5 text-3xl font-semibold tracking-tight">{topUp.credits.toLocaleString(language === "en" ? "en-US" : "fr-FR")}</p>
                   <p className="mt-1 text-sm text-muted">{UI[language].credits}</p>
                   <p className="mt-6 text-2xl font-semibold">{topUp.price}</p>
                   <p className="mt-2 flex-1 text-sm leading-6 text-muted">{getTopUpDescription(topUp.credits, language)}</p>
                   <button type="button" onClick={() => handleCreditTopUp(topUp)} disabled={isPaying !== null}
-                    className="mt-7 w-full rounded-xl bg-accent px-4 py-3 text-sm font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50">
+                    className="mt-7 w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
                     {isPaying === topUp.id ? UI[language].redirecting : UI[language].buyCredits}
                   </button>
                 </article>
               ))}
             </div>
-            <p className="mt-5 rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-5 text-muted">{UI[language].paymentNotice}</p>
+            <p className="mt-5 rounded-[20px] border border-border/70 bg-surface-secondary/65 p-4 text-xs leading-6 text-muted">{UI[language].paymentNotice}</p>
           </section>
         )}
 
@@ -2409,7 +2403,7 @@ export default function PacksPage() {
 
 
 
-          <div className="mt-6 overflow-hidden rounded-2xl border border-border">
+          <div className="mt-6 overflow-hidden rounded-[26px] border border-border/70 bg-surface/75 shadow-[0_18px_42px_-32px_var(--shadow-color)]">
 
 
 
@@ -2813,7 +2807,7 @@ export default function PacksPage() {
 
 
 
-          <div className="mx-auto mt-5 max-w-3xl overflow-hidden rounded-2xl border border-border">
+          <div className="mx-auto mt-5 max-w-3xl overflow-hidden rounded-[26px] border border-border/70 bg-surface/75 shadow-[0_18px_42px_-32px_var(--shadow-color)]">
 
 
 
@@ -2865,7 +2859,7 @@ export default function PacksPage() {
 
 
 
-                      className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-surface-secondary"
+                      className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors duration-200 hover:bg-surface-secondary/75"
 
 
 
@@ -3129,7 +3123,7 @@ function PackCard({
 
 
 
-      className={`relative flex flex-col rounded-3xl border p-6 transition sm:p-7 ${
+      className={`relative flex flex-col rounded-[29px] border p-6 transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 sm:p-7 ${
 
 
 
@@ -3137,11 +3131,11 @@ function PackCard({
 
 
 
-          ? "border-accent bg-accent text-accent-foreground shadow-xl"
+          ? "border-accent bg-accent text-accent-foreground shadow-[0_24px_56px_-34px_var(--shadow-color)]"
 
 
 
-          : "border-border bg-surface hover:border-border-strong"
+          : "border-border/75 bg-surface/80 shadow-[0_16px_42px_-32px_var(--shadow-color)] hover:border-border-strong hover:shadow-[0_23px_50px_-33px_var(--shadow-color)]"
 
 
 
@@ -4368,7 +4362,7 @@ function PackCard({
 
 
 
-        className={`mt-8 w-full rounded-xl px-4 py-3 text-sm font-medium transition hover:opacity-85 ${
+        className={`mt-8 w-full rounded-2xl px-4 py-3 text-sm font-semibold transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 ${
 
 
 
@@ -4480,7 +4474,7 @@ function Step({
 
 
 
-    <div className="rounded-2xl border border-border bg-surface-secondary p-5">
+    <div className="rounded-[24px] border border-border/70 bg-surface-secondary/65 p-5">
 
 
 

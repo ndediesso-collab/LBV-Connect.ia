@@ -40,6 +40,33 @@ MAX_IMAGE_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_VIDEO_BYTES = 150 * 1024 * 1024
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
 _IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp"}
+
+# ORIA v2 media selection. These are real OpenRouter API model IDs, not display
+# names. The public provider catalogue is still checked before every paid POST.
+# Pack allowances are intentionally cumulative (the higher pack keeps lower tiers).
+ORIA_V2_IMAGE_MODELS = (
+    "bytedance-seed/seedream-5-0-flash",
+    "google/gemini-3.1-flash-image",
+    "black-forest-labs/flux-3-image",
+    "openai/gpt-image-2.5-sunburst",
+)
+ORIA_V2_VIDEO_MODELS = (
+    "alibaba/wan-3.0",
+    "google/veo-3.1-lite",
+    "bytedance/seedance-2.5",
+    "kwaivgi/kling-v3.0-pro",
+)
+ORIA_V2_PACK_MODEL_COUNT = {
+    "light": 1,
+    "intermediate": 2,
+    "pro": 3,
+    "business": 4,
+}
+_ORIA_V2_PACK_ALIASES = {
+    "light": "light", "léger": "light", "leger": "light",
+    "intermediate": "intermediate", "intermédiaire": "intermediate",
+    "intermediaire": "intermediate", "pro": "pro", "business": "business",
+}
 _RECOVERY_LOG = logging.getLogger("oria.openrouter.recovery")
 # One heavy OpenRouter media operation at a time per Python worker.
 # Across multiple Gunicorn/Uvicorn workers, set WEB_CONCURRENCY=1 on small Render plans.
@@ -86,24 +113,52 @@ class OpenRouterMediaService:
             raise OpenRouterMediaError("OPENROUTER_API_KEY absente du serveur.")
 
     @staticmethod
-    def _allowlist(env_var: str, defaults: tuple[str, ...]) -> tuple[str, ...]:
+    def _allowlist(env_var: str, official: tuple[str, ...]) -> tuple[str, ...]:
+        """An ENV override can disable v2 models, never silently add others.
+
+        On a rolling deployment, stale Render variables must fail closed instead
+        of re-enabling the previous media catalogue or expensive unknown models.
+        """
         raw = os.getenv(env_var, "").strip()
-        selected = tuple(x.strip() for x in raw.split(",") if x.strip()) if raw else defaults
-        return tuple(dict.fromkeys(selected))
+        if not raw:
+            return official
+        selected = tuple(dict.fromkeys(x.strip() for x in raw.split(",") if x.strip()))
+        unknown = set(selected) - set(official)
+        if unknown or not selected:
+            raise OpenRouterMediaError(
+                f"{env_var} contient un modèle non autorisé par le catalogue ORIA v2 "
+                "ou une liste vide. Mettre à jour la configuration serveur."
+            )
+        return tuple(model for model in official if model in selected)
+
+    @staticmethod
+    def models_for_pack(pack_tier: str, media_type: str) -> tuple[str, ...]:
+        """Canonical ORIA v2 model entitlements for the route's pack guard.
+
+        The authenticated API route must resolve its actual wallet/pack ID to a
+        tier and enforce this before quote and reservation. This provider-only
+        adapter does NOT have user identity and cannot itself enforce a pack.
+        """
+        if not isinstance(pack_tier, str):
+            raise OpenRouterMediaError("Niveau de pack ORIA invalide.")
+        tier = _ORIA_V2_PACK_ALIASES.get(pack_tier.strip().casefold())
+        if tier is None:
+            raise OpenRouterMediaError("Niveau de pack ORIA inconnu ou inactif.")
+        if media_type == "image":
+            models = ORIA_V2_IMAGE_MODELS
+        elif media_type == "video":
+            models = ORIA_V2_VIDEO_MODELS
+        else:
+            raise OpenRouterMediaError("Catégorie média ORIA invalide.")
+        return models[:ORIA_V2_PACK_MODEL_COUNT[tier]]
 
     @property
     def image_models_allowed(self) -> tuple[str, ...]:
-        return self._allowlist(
-            "ORIA_OPENROUTER_IMAGE_MODELS",
-            ("google/gemini-3.1-flash-lite-image", "google/gemini-3.1-flash-image", "google/gemini-3-pro-image"),
-        )
+        return self._allowlist("ORIA_OPENROUTER_IMAGE_MODELS", ORIA_V2_IMAGE_MODELS)
 
     @property
     def video_models_allowed(self) -> tuple[str, ...]:
-        return self._allowlist(
-            "ORIA_OPENROUTER_VIDEO_MODELS",
-            ("google/veo-3.1-lite", "google/veo-3.1-fast", "google/veo-3.1"),
-        )
+        return self._allowlist("ORIA_OPENROUTER_VIDEO_MODELS", ORIA_V2_VIDEO_MODELS)
 
     @staticmethod
     def _retry_after(exc: urllib.error.HTTPError) -> int | None:
@@ -265,7 +320,10 @@ class OpenRouterMediaService:
         rows = raw.get("data")
         if not isinstance(rows, list):
             raise OpenRouterMediaError("Catalogue OpenRouter invalide.")
-        return [row for row in rows if isinstance(row, dict) and row.get("id") in allowed]
+        # Preserve ORIA pack order, not the provider's changing catalogue order.
+        available = {row.get("id"): row for row in rows
+                     if isinstance(row, dict) and isinstance(row.get("id"), str)}
+        return [available[model] for model in allowed if model in available]
 
     def list_image_models(self) -> list[dict[str, Any]]:
         return self._catalog_entries(self._json("GET", "/images/models"), self.image_models_allowed)
@@ -407,10 +465,21 @@ class OpenRouterMediaService:
         if not 1 <= len(prompt.strip()) <= 8000:
             raise OpenRouterMediaError("Description image invalide.")
         model_entry = self._require_model(model, self.list_image_models())
-        self._assert_choice(resolution, self._image_choices(model_entry, "resolution"), "Résolution")
-        self._assert_choice(aspect_ratio, self._image_choices(model_entry, "aspect_ratio"), "Format")
-        payload: dict[str, Any] = {"model": model, "prompt": prompt.strip(),
-                                   "resolution": resolution, "aspect_ratio": aspect_ratio}
+        payload: dict[str, Any] = {"model": model, "prompt": prompt.strip()}
+        # GPT Image 2.5 Sunburst exposes aspect_ratio and quality, but NO
+        # resolution field on the Images API. Sending the generic 1K default
+        # would reject a valid paid request. Omit unsupported default options;
+        # reject explicit non-default unsupported choices instead.
+        if self._parameter(model_entry, "resolution") is not None:
+            self._assert_choice(resolution, self._image_choices(model_entry, "resolution"), "Résolution")
+            payload["resolution"] = resolution
+        elif resolution not in ("1K", "auto"):
+            raise OpenRouterMediaError("Ce modèle ne permet pas de choisir une résolution.")
+        if self._parameter(model_entry, "aspect_ratio") is not None:
+            self._assert_choice(aspect_ratio, self._image_choices(model_entry, "aspect_ratio"), "Format")
+            payload["aspect_ratio"] = aspect_ratio
+        elif aspect_ratio != "1:1":
+            raise OpenRouterMediaError("Ce modèle ne permet pas de choisir un format.")
         if reference_bytes is not None:
             if self._parameter(model_entry, "input_references") is None:
                 raise OpenRouterMediaError("Ce modèle ne prend pas en charge la retouche avec référence.")

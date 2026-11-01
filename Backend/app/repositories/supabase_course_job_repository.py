@@ -25,6 +25,10 @@ import re
 from typing import Any, Mapping
 from uuid import UUID, uuid4, uuid5
 
+from app.services.course_plan_contract import (
+    CoursePlanProviderError, validate_pinned_course_provider,
+)
+
 
 class CourseJobStoreError(RuntimeError):
     """Erreur persistante ; ne jamais afficher les détails SQL au client."""
@@ -137,7 +141,7 @@ class SupabaseCourseJobRepository:
         error = (response.get("error") if isinstance(response, dict)
                  else getattr(response, "error", None))
         if error:
-            raise CourseJobStoreError("RPC ORIA Cours refusée.")
+            SupabaseCourseJobRepository._raise_rpc_error(error)
         data = response.get("data") if isinstance(response, dict) else getattr(response, "data", None)
         if isinstance(data, list):
             if len(data) > 1:
@@ -149,18 +153,26 @@ class SupabaseCourseJobRepository:
             raise CourseJobStoreError("Résultat Supabase inattendu.")
         return data
 
+    @staticmethod
+    def _raise_rpc_error(error: Any) -> None:
+        # Les contenus bruts des erreurs Supabase ne sont jamais exposés.
+        msg = str(error).lower()
+        if "oria_course_job_lease" in msg:
+            raise CourseJobLeaseError("Bail du worker indisponible ou expiré.")
+        if "oria_course_job_call_started" in msg or "oria_course_job_conflict" in msg:
+            raise CourseJobConflict("Opération déjà engagée ou état incompatible.")
+        if "oria_course_job_reconciliation" in msg:
+            raise CourseJobNeedsReconciliation("Rapprochement du cours nécessaire.")
+        raise CourseJobStoreError("Opération du registre ORIA Cours non confirmée.")
+
     def _rpc(self, rpc_name: str, payload: dict[str, Any], *, allow_null: bool = False) -> dict[str, Any] | None:
         try:
             result = self.client.rpc(rpc_name, payload).execute()
         except Exception as exc:
-            # Les codes remontés par PostgreSQL n'exposent aucune donnée privée.
-            msg = str(exc).lower()
-            if "oria_course_job_lease" in msg:
-                raise CourseJobLeaseError("Bail du worker indisponible ou expiré.") from exc
-            if "oria_course_job_call_started" in msg or "oria_course_job_conflict" in msg:
-                raise CourseJobConflict("Opération déjà engagée ou état incompatible.") from exc
-            if "oria_course_job_reconciliation" in msg:
-                raise CourseJobNeedsReconciliation("Rapprochement du cours nécessaire.") from exc
+            try:
+                self._raise_rpc_error(exc)
+            except CourseJobStoreError as typed:
+                raise typed from exc
             raise CourseJobStoreError("Opération du registre ORIA Cours non confirmée.") from exc
         return self._response_data(result, allow_null=allow_null)
 
@@ -189,12 +201,14 @@ class SupabaseCourseJobRepository:
         validated = self._json_object(plan, limit=40_000)
         if validated.get("user_id") != uid or validated.get("course_id") != cid:
             raise ValueError("Le plan ne correspond pas au cours et à son propriétaire.")
-        # Cette validation est LOCALE et ne remplace pas le contrôle atomique
-        # du pack, du devis et des réservations dans les RPC SQL. Elle empêche
-        # surtout de persister les anciens plans multi-modèles par accident.
-        if (validated.get("writing_model") != "luna"
-                or validated.get("provider_model") != "gpt-6-luna"):
-            raise ValueError("ORIA Cours accepte uniquement GPT-6 Luna.")
+        # Le plan verrouille le fournisseur et les deux modèles AVANT la
+        # réservation. SQL doit refaire exactement cette validation sous verrou.
+        # Une ancienne ligne sans champ provider reste OpenAI direct, sans
+        # être réécrite ni migrée implicitement.
+        try:
+            validate_pinned_course_provider(validated)
+        except CoursePlanProviderError as exc:
+            raise ValueError("Fournisseur ou modèles de cours incompatibles.") from exc
         for stage in ("transcription", "document"):
             amount = validated.get(f"{stage}_reservation_credits")
             if type(amount) is not int or amount <= 0:

@@ -929,33 +929,33 @@ export default function CreationsPage() {
   ];
 
   return (
-    <main className="min-h-screen bg-[#f7f7f5] text-[#111111]">
+    <main className="min-h-screen overflow-x-clip bg-background text-foreground">
       <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
         <header className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <Link
               href="/chat"
-              className="mb-5 inline-flex items-center text-sm font-medium text-black/55 transition hover:text-black"
+              className="mb-5 inline-flex items-center rounded-lg py-1 text-sm font-medium text-muted-strong transition-colors duration-200 hover:text-foreground"
             >
               ← {UI[language].backToChat}
             </Link>
 
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-black text-sm font-black tracking-tight text-white">
+              <div className="flex h-12 w-12 items-center justify-center rounded-[19px] border border-border/40 bg-accent text-sm font-bold tracking-tight text-accent-foreground shadow-[0_12px_28px_-22px_var(--shadow-color)]">
                 N
               </div>
 
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-black/40">
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-muted">
                   Oria
                 </p>
-                <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+                <h1 className="text-3xl font-semibold tracking-[-0.04em] sm:text-4xl">
                   {UI[language].myCreations}
                 </h1>
               </div>
             </div>
 
-            <p className="mt-3 max-w-xl text-sm leading-6 text-black/55">
+            <p className="mt-3 max-w-xl text-sm leading-7 text-muted">
               {UI[language].description}
             </p>
           </div>
@@ -966,7 +966,7 @@ export default function CreationsPage() {
               void loadCreations(true)
             }
             disabled={loading || refreshing}
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-black/10 bg-white px-4 text-sm font-semibold shadow-sm transition hover:border-black/20 hover:bg-black/[0.02] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-2xl border border-border/75 bg-surface/75 px-4 text-sm font-semibold shadow-[0_12px_28px_-22px_var(--shadow-color)] transition-[background-color,border-color] duration-200 hover:border-border-strong hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-50"
           >
             <RefreshCw
               className={`h-4 w-4 ${
@@ -983,28 +983,28 @@ export default function CreationsPage() {
           !error &&
           creations.length > 0 && (
             <div className="mb-6 flex flex-wrap gap-2 text-sm">
-              <span className="rounded-full bg-black px-3 py-1.5 font-medium text-white">
+              <span className="rounded-full bg-accent px-3 py-1.5 font-medium text-accent-foreground">
                 {creations.length}{" "}
                 {creations.length === 1
                   ? UI[language].creation
                   : UI[language].creations}
               </span>
 
-              <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
+              <span className="rounded-full border border-border/70 bg-surface/75 px-3 py-1.5 text-muted-strong">
                 {counts.image}{" "}
                 {counts.image === 1
                   ? UI[language].image
                   : UI[language].images.toLowerCase()}
               </span>
 
-              <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
+              <span className="rounded-full border border-border/70 bg-surface/75 px-3 py-1.5 text-muted-strong">
                 {counts.video}{" "}
                 {counts.video === 1
                   ? UI[language].video
                   : UI[language].videos.toLowerCase()}
               </span>
 
-              <span className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-black/60">
+              <span className="rounded-full border border-border/70 bg-surface/75 px-3 py-1.5 text-muted-strong">
                 {counts.artifact}{" "}
                 {counts.artifact === 1
                   ? UI[language].file
@@ -1027,10 +1027,10 @@ export default function CreationsPage() {
                     onClick={() =>
                       setFilter(item.value)
                     }
-                    className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                    className={`rounded-[16px] px-4 py-2 text-sm font-semibold transition-colors duration-200 ${
                       active
-                        ? "bg-black text-white"
-                        : "border border-black/10 bg-white text-black/60 hover:border-black/20 hover:text-black"
+                        ? "bg-accent text-accent-foreground"
+                        : "border border-border/70 bg-surface/70 text-muted-strong hover:border-border-strong hover:text-foreground"
                     }`}
                   >
                     {item.label}
@@ -1050,7 +1050,7 @@ export default function CreationsPage() {
           )}
 
         {error && (
-          <div className="mb-6 flex items-start justify-between gap-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
+          <div className="mb-6 flex items-start justify-between gap-4 rounded-[21px] border border-red-200/70 bg-red-50/80 px-4 py-4 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
             <p>{error}</p>
             <button
               type="button"
@@ -1064,14 +1064,14 @@ export default function CreationsPage() {
         )}
 
         {syncWarning && !loading && (
-          <p role="status" className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <p role="status" className="mb-5 rounded-2xl border border-amber-200/70 bg-amber-50/85 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/35 dark:bg-amber-950/20 dark:text-amber-200">
             {syncWarning}
           </p>
         )}
 
         {loading && (
-          <div className="flex min-h-[360px] items-center justify-center rounded-3xl border border-black/10 bg-white">
-            <div className="flex flex-col items-center gap-3 text-black/45">
+          <div className="flex min-h-[360px] items-center justify-center rounded-[28px] border border-border/75 bg-surface/80 shadow-[0_18px_45px_-32px_var(--shadow-color)]">
+            <div className="flex flex-col items-center gap-3 text-muted">
               <Loader2 className="h-7 w-7 animate-spin" />
               <p className="text-sm">
                 {UI[language].loading}
@@ -1083,22 +1083,22 @@ export default function CreationsPage() {
         {!loading &&
           !error &&
           creations.length === 0 && (
-            <div className="flex min-h-[420px] flex-col items-center justify-center rounded-3xl border border-dashed border-black/15 bg-white px-6 text-center">
-              <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-black/[0.04]">
-                <FileText className="h-7 w-7 text-black/40" />
+            <div className="flex min-h-[420px] flex-col items-center justify-center rounded-[28px] border border-dashed border-border-strong bg-surface/75 px-6 text-center">
+              <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-[21px] border border-border/60 bg-surface-secondary">
+                <FileText className="h-7 w-7 text-muted" />
               </div>
 
               <h2 className="text-xl font-semibold">
                 {UI[language].emptyTitle}
               </h2>
 
-              <p className="mt-2 max-w-md text-sm leading-6 text-black/50">
+              <p className="mt-2 max-w-md text-sm leading-7 text-muted">
                 {UI[language].emptyDescription}
               </p>
 
               <Link
                 href="/chat"
-                className="mt-6 inline-flex h-11 items-center rounded-xl bg-black px-5 text-sm font-semibold text-white transition hover:bg-black/85"
+                className="mt-6 inline-flex h-11 items-center rounded-2xl bg-accent px-5 text-sm font-semibold text-accent-foreground transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90"
               >
                 {UI[language].createSomething}
               </Link>
@@ -1109,8 +1109,8 @@ export default function CreationsPage() {
           !error &&
           creations.length > 0 &&
           filteredCreations.length === 0 && (
-            <div className="rounded-3xl border border-black/10 bg-white px-6 py-16 text-center">
-              <p className="text-sm text-black/50">
+            <div className="rounded-[28px] border border-border/75 bg-surface/80 px-6 py-16 text-center">
+              <p className="text-sm text-muted">
                 {UI[language].emptyFilter}
               </p>
             </div>
@@ -1142,7 +1142,7 @@ export default function CreationsPage() {
                     return (
                       <article
                         key={item.id}
-                        className="flex min-h-[245px] flex-col rounded-2xl border border-black/10 bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition hover:border-black/15 hover:shadow-md"
+                        className="flex min-h-[245px] flex-col rounded-[25px] border border-border/75 bg-surface/80 p-5 shadow-[0_14px_40px_-32px_var(--shadow-color)] transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-[0_22px_43px_-30px_var(--shadow-color)]"
                       >
                         <button
                           type="button"
@@ -1153,7 +1153,7 @@ export default function CreationsPage() {
                           }
                           className="flex flex-1 flex-col items-start text-left"
                         >
-                          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-black/[0.05] text-black/60">
+                          <div className="flex h-14 w-14 items-center justify-center rounded-[20px] border border-border/60 bg-surface-secondary text-muted-strong">
                             <FileText className="h-7 w-7" />
                           </div>
 
@@ -1163,7 +1163,7 @@ export default function CreationsPage() {
                             )}
                           </p>
 
-                          <p className="mt-2 text-xs text-black/40">
+                          <p className="mt-2 text-xs text-muted">
                             {formatDate(
                               item.created_at,
                               language,
@@ -1171,7 +1171,7 @@ export default function CreationsPage() {
                           </p>
 
                           <div className="mt-4 flex flex-wrap gap-1.5">
-                            <span className="rounded-md bg-black/[0.05] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-black/55">
+                            <span className="rounded-lg bg-surface-secondary px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-strong">
                               {getFileLabel(
                                 item,
                                 language,
@@ -1184,14 +1184,14 @@ export default function CreationsPage() {
                               </span>
                             )}
                             {size && (
-                              <span className="rounded-md bg-black/[0.04] px-2 py-1 text-[10px] font-medium text-black/45">
+                              <span className="rounded-lg bg-surface-secondary px-2 py-1 text-[10px] font-medium text-muted">
                                 {size}
                               </span>
                             )}
                           </div>
                         </button>
 
-                        <div className="mt-5 flex items-center justify-end gap-1 border-t border-black/5 pt-3">
+                        <div className="mt-5 flex items-center justify-end gap-1 border-t border-border/65 pt-3">
                           <button
                             type="button"
                             onClick={() =>
@@ -1199,7 +1199,7 @@ export default function CreationsPage() {
                                 item,
                               )
                             }
-                            className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black"
+                            className="rounded-xl p-2 text-muted-strong transition-colors duration-200 hover:bg-surface-secondary hover:text-foreground"
                             aria-label={
                               UI[language].preview
                             }
@@ -1214,7 +1214,7 @@ export default function CreationsPage() {
                                 item,
                               )
                             }
-                            className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black"
+                            className="rounded-xl p-2 text-muted-strong transition-colors duration-200 hover:bg-surface-secondary hover:text-foreground"
                             aria-label={
                               UI[language]
                                 .download
@@ -1226,7 +1226,7 @@ export default function CreationsPage() {
                           {!isCourseArtifact(item) && (
                             <button type="button" onClick={() => void handleDelete(item)}
                               disabled={deletingId === item.id}
-                              className="rounded-lg p-2 text-black/35 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                              className="rounded-xl p-2 text-muted transition-colors duration-200 hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={UI[language].delete}>
                               {deletingId === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                             </button>
@@ -1239,7 +1239,7 @@ export default function CreationsPage() {
                   return (
                     <article
                       key={item.id}
-                      className="group overflow-hidden rounded-2xl border border-black/10 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition hover:border-black/15 hover:shadow-md"
+                      className="group overflow-hidden rounded-[25px] border border-border/75 bg-surface/80 shadow-[0_14px_40px_-32px_var(--shadow-color)] transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-[0_22px_43px_-30px_var(--shadow-color)]"
                     >
                       <button
                         type="button"
@@ -1248,7 +1248,7 @@ export default function CreationsPage() {
                             item,
                           )
                         }
-                        className="relative block aspect-square w-full overflow-hidden bg-black/[0.04] text-left"
+                        className="relative block aspect-square w-full overflow-hidden bg-surface-secondary text-left"
                         aria-label={
                           UI[language].open
                         }
@@ -1289,9 +1289,9 @@ export default function CreationsPage() {
                           <div className="flex h-full items-center justify-center">
                             {kind ===
                             "image" ? (
-                              <ImageIcon className="h-8 w-8 text-black/25" />
+                              <ImageIcon className="h-8 w-8 text-muted" />
                             ) : (
-                              <Video className="h-8 w-8 text-black/25" />
+                              <Video className="h-8 w-8 text-muted" />
                             )}
                           </div>
                         )}
@@ -1315,13 +1315,13 @@ export default function CreationsPage() {
 
                       <div className="p-4">
                         <div className="min-h-[46px]">
-                          <p className="line-clamp-2 text-sm font-medium leading-5 text-black/80">
+                          <p className="line-clamp-2 text-sm font-medium leading-6 text-foreground">
                             {item.prompt ||
                               UI[language]
                                 .noDescription}
                           </p>
 
-                          <p className="mt-1 text-xs text-black/40">
+                          <p className="mt-1 text-xs text-muted">
                             {formatDate(
                               item.created_at,
                               language,
@@ -1329,16 +1329,16 @@ export default function CreationsPage() {
                           </p>
                         </div>
 
-                        <div className="mt-4 flex items-center justify-between gap-2 border-t border-black/5 pt-3">
+                        <div className="mt-4 flex items-center justify-between gap-2 border-t border-border/65 pt-3">
                           <div className="flex min-w-0 flex-wrap gap-1.5">
                             {action && (
-                              <span className="max-w-[150px] truncate rounded-md bg-black/[0.04] px-2 py-1 text-[10px] font-medium text-black/50">
+                              <span className="max-w-[150px] truncate rounded-lg bg-surface-secondary px-2 py-1 text-[10px] font-medium text-muted-strong">
                                 {action}
                               </span>
                             )}
 
                             {size && (
-                              <span className="rounded-md bg-black/[0.04] px-2 py-1 text-[10px] font-medium text-black/40">
+                              <span className="rounded-lg bg-surface-secondary px-2 py-1 text-[10px] font-medium text-muted">
                                 {size}
                               </span>
                             )}
@@ -1352,7 +1352,7 @@ export default function CreationsPage() {
                                   item,
                                 )
                               }
-                              className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black"
+                              className="rounded-xl p-2 text-muted-strong transition-colors duration-200 hover:bg-surface-secondary hover:text-foreground"
                               aria-label={
                                 UI[language]
                                   .open
@@ -1376,7 +1376,7 @@ export default function CreationsPage() {
                               disabled={
                                 !mediaUrl
                               }
-                              className="rounded-lg p-2 text-black/45 transition hover:bg-black/[0.05] hover:text-black disabled:cursor-not-allowed disabled:opacity-30"
+                              className="rounded-xl p-2 text-muted-strong transition-colors duration-200 hover:bg-surface-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
                               aria-label={
                                 UI[language]
                                   .download
@@ -1396,7 +1396,7 @@ export default function CreationsPage() {
                                 deletingId ===
                                 item.id
                               }
-                              className="rounded-lg p-2 text-black/35 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                              className="rounded-xl p-2 text-muted transition-colors duration-200 hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={
                                 UI[language]
                                   .delete
@@ -1424,26 +1424,26 @@ export default function CreationsPage() {
          <div role="dialog" aria-modal="true" aria-label={`${UI[language].preview} : ${safeFilename(selectedArtifact.item)}`}
            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-3 backdrop-blur-sm sm:p-6"
            onMouseDown={(event) => { if (event.target === event.currentTarget) closeArtifactPreview(); }}>
-           <div className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-             <header className="flex shrink-0 items-center justify-between gap-3 border-b border-black/10 px-4 py-3 sm:px-5">
+           <div className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-[27px] border border-border/65 bg-surface text-foreground shadow-2xl">
+             <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-3 sm:px-5">
                <div className="min-w-0">
-                 <p className="truncate text-sm font-semibold">{safeFilename(selectedArtifact.item)}</p>
-                 <p className="mt-0.5 text-xs text-black/45">{UI[language].preview} · {getFileLabel(selectedArtifact.item, language)}
+                 <p className="truncate text-sm font-semibold tracking-[-0.01em]">{safeFilename(selectedArtifact.item)}</p>
+                 <p className="mt-0.5 text-xs text-muted">{UI[language].preview} · {getFileLabel(selectedArtifact.item, language)}
                    {isCourseArtifact(selectedArtifact.item) ? ` · ${UI[language].course}` : ""}
                  </p>
                </div>
                <div className="flex shrink-0 items-center gap-1">
                  <button type="button" onClick={() => void handleDownload(selectedArtifact.item)}
-                   className="rounded-lg p-2 text-black/55 transition hover:bg-black/5 hover:text-black" aria-label={UI[language].download}>
+                   className="rounded-xl p-2 text-muted-strong transition-colors hover:bg-surface-secondary hover:text-foreground" aria-label={UI[language].download}>
                    <Download className="h-5 w-5" />
                  </button>
                  <button type="button" onClick={closeArtifactPreview}
-                   className="rounded-lg p-2 text-black/55 transition hover:bg-black/5 hover:text-black" aria-label={UI[language].close}>
+                   className="rounded-xl p-2 text-muted-strong transition-colors hover:bg-surface-secondary hover:text-foreground" aria-label={UI[language].close}>
                    <X className="h-5 w-5" />
                  </button>
                </div>
              </header>
-             <section className="min-h-0 flex-1 overflow-auto bg-[#f7f7f5]" aria-live="polite">
+             <section className="min-h-0 flex-1 overflow-auto bg-surface-secondary/65" aria-live="polite">
                {selectedArtifact.loading ? (
                  <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 text-black/45">
                    <Loader2 className="h-7 w-7 animate-spin" /><p className="text-sm">{UI[language].loading}</p>
@@ -1451,13 +1451,13 @@ export default function CreationsPage() {
                ) : selectedArtifact.error ? (
                  <div className="mx-auto flex min-h-[260px] max-w-lg flex-col items-center justify-center gap-3 px-6 text-center">
                    <FileText className="h-9 w-9 text-black/30" />
-                   <p className="text-sm text-black/65">{selectedArtifact.error}</p>
+                   <p className="text-sm text-muted-strong">{selectedArtifact.error}</p>
                  </div>
                ) : selectedArtifact.kind === "pdf" && selectedArtifact.pdfUrl ? (
                  <iframe title={`${UI[language].preview} PDF`} src={selectedArtifact.pdfUrl}
                    className="h-[76vh] min-h-[360px] w-full border-0 bg-white" referrerPolicy="no-referrer" />
                ) : selectedArtifact.kind === "text" ? (
-                 <pre className="mx-auto max-w-5xl whitespace-pre-wrap break-words bg-white p-5 font-mono text-xs leading-6 text-black/80 sm:my-5 sm:rounded-xl sm:p-8">
+                 <pre className="mx-auto max-w-5xl whitespace-pre-wrap break-words bg-white p-5 font-mono text-xs leading-6 text-[#18202c] sm:my-5 sm:rounded-xl sm:p-8">
                    {selectedArtifact.text || UI[language].noPreviewContent}
                    {selectedArtifact.text && selectedArtifact.text.length >= MAX_INLINE_TEXT_CHARS
                      ? `\n\n[${UI[language].truncated}]` : ""}
@@ -1465,7 +1465,7 @@ export default function CreationsPage() {
                ) : selectedArtifact.kind === "xlsx" ? (
                  <div className="space-y-6 p-4 sm:p-6">
                    {selectedArtifact.spreadsheet?.sheets?.length ? selectedArtifact.spreadsheet.sheets.map((sheet, sheetIndex) => (
-                     <div key={`${sheet.name || "sheet"}-${sheetIndex}`} className="overflow-hidden rounded-xl border border-black/10 bg-white">
+                     <div key={`${sheet.name || "sheet"}-${sheetIndex}`} className="overflow-hidden rounded-xl border border-black/10 bg-white text-[#18202c]">
                        <h3 className="border-b border-black/10 px-4 py-3 text-sm font-semibold">{sheet.name || `Feuille ${sheetIndex + 1}`}</h3>
                        <div className="max-h-[480px] overflow-auto">
                          <table className="w-max min-w-full border-collapse text-left text-xs">
@@ -1484,7 +1484,7 @@ export default function CreationsPage() {
                    {selectedArtifact.spreadsheet?.truncated && <p className="text-xs text-black/50">{UI[language].truncated}</p>}
                  </div>
                ) : selectedArtifact.kind === "docx" ? (
-                 <div className="mx-auto my-4 min-h-[70vh] max-w-[810px] rounded-xl bg-white px-5 py-8 shadow-sm sm:my-7 sm:px-12 sm:py-12">
+                 <div className="mx-auto my-4 min-h-[70vh] max-w-[810px] rounded-2xl bg-white px-5 py-8 text-[#18202c] shadow-[0_12px_38px_rgba(0,0,0,0.08)] sm:my-7 sm:px-12 sm:py-12">
                    {(() => {
                      const documentData = selectedArtifact.document;
                      const blocks = documentData?.blocks || documentData?.content?.blocks || documentData?.paragraphs || [];
@@ -1516,7 +1516,7 @@ export default function CreationsPage() {
                ) : (
                  <div className="flex min-h-[260px] flex-col items-center justify-center gap-3 px-6 text-center">
                    <ExternalLink className="h-8 w-8 text-black/35" />
-                   <p className="max-w-md text-sm text-black/60">{UI[language].previewUnsupported}</p>
+                   <p className="max-w-md text-sm text-muted-strong">{UI[language].previewUnsupported}</p>
                  </div>
                )}
              </section>
@@ -1539,8 +1539,8 @@ export default function CreationsPage() {
               }
             }}
           >
-            <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-              <div className="flex items-center justify-between border-b border-black/10 px-4 py-3">
+            <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[27px] border border-border/65 bg-surface text-foreground shadow-2xl">
+              <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">
                     {getCreationKind(
@@ -1568,7 +1568,7 @@ export default function CreationsPage() {
                         selectedMedia,
                       )
                     }
-                    className="rounded-lg p-2 text-black/50 transition hover:bg-black/[0.05] hover:text-black"
+                    className="rounded-xl p-2 text-muted-strong transition-colors hover:bg-surface-secondary hover:text-foreground"
                     aria-label={
                       UI[language].download
                     }
@@ -1583,7 +1583,7 @@ export default function CreationsPage() {
                         null,
                       )
                     }
-                    className="rounded-lg p-2 text-black/50 transition hover:bg-black/[0.05] hover:text-black"
+                    className="rounded-xl p-2 text-muted-strong transition-colors hover:bg-surface-secondary hover:text-foreground"
                     aria-label={
                       UI[language].close
                     }
@@ -1637,8 +1637,8 @@ export default function CreationsPage() {
               </div>
 
               {selectedMedia.prompt && (
-                <div className="max-h-28 overflow-y-auto border-t border-black/10 px-4 py-3">
-                  <p className="text-xs leading-5 text-black/55">
+                <div className="max-h-28 overflow-y-auto border-t border-border/70 px-4 py-3">
+                  <p className="text-xs leading-5 text-muted">
                     {selectedMedia.prompt}
                   </p>
                 </div>

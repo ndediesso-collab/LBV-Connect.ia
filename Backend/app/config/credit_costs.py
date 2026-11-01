@@ -62,6 +62,14 @@ class CreditAction(str, Enum):
 
     CHAT_ASTRA_WEB = "chat_astra_web"
 
+    # ORIA Chat OpenRouter : nouveaux identifiants pour les transactions Claude.
+    CHAT_CLAUDE_HAIKU = "chat_claude_haiku"
+    CHAT_CLAUDE_HAIKU_WEB = "chat_claude_haiku_web"
+    CHAT_CLAUDE_SONNET = "chat_claude_sonnet"
+    CHAT_CLAUDE_SONNET_WEB = "chat_claude_sonnet_web"
+    CHAT_CLAUDE_OPUS = "chat_claude_opus"
+    CHAT_CLAUDE_OPUS_WEB = "chat_claude_opus_web"
+
     # ========================================================
 
     # IMAGES — PACK LÉGER
@@ -234,6 +242,74 @@ MODEL_TOKEN_PRICING_USD_PER_MILLION = {
         "long_cache_write": 25.00, "long_output": 75.00,
     },
 }
+
+# ============================================================
+# OPENROUTER CHAT — NOUVEAU CATALOGUE (NON ACTIF PAR DEFAUT)
+# ============================================================
+# Ces noms sont des identifiants ORIA, PAS des slugs API confirmés.
+# La liste OpenAI et tous les tarifs historiques ci-dessus restent INCHANGES.
+# Les droits ci-dessous s'appliquent UNIQUEMENT avec le fournisseur OpenRouter.
+# La découverte (5 essais) est gérée séparément par model_trials.py.
+OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK: dict[str, frozenset[str]] = {
+    "light_pack": frozenset({"luna", "claude-haiku-5.5"}),
+    "intermediate_pack": frozenset({"luna", "gpt-5", "claude-haiku-5.5"}),
+    "pro_pack": frozenset({
+        "luna", "gpt-5.6-terra", "gpt-6-sol",
+        "claude-haiku-5.5", "claude-sonnet-5.5",
+    }),
+    "business_pack": frozenset({
+        "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra",
+        "claude-haiku-5.5", "claude-sonnet-5.5", "claude-opus-5.5",
+    }),
+}
+
+# A RENSEIGNER seulement après vérification via le catalogue OpenRouter.
+# Exemple de forme, PAS un modèle présumé disponible :
+#   "identifiant-logique-oria": "provider/slug-verifie"
+# Slugs référencés dans le catalogue public OpenRouter le 31/10/2026.
+# Ils restent à revalider via /models et par une requête de test AVANT bascule.
+# Le fournisseur OpenAI direct conserve son mapping différent dans ai.py.
+OPENROUTER_CHAT_MODEL_IDS: dict[str, str] = {
+    "luna": "openai/gpt-6-luna",
+    "gpt-5": "openai/gpt-5",
+    "gpt-5.6-terra": "openai/gpt-5.6-terra",
+    "gpt-6-sol": "openai/gpt-6-sol",
+    "gpt-6-astra": "openai/gpt-6-astra",
+    "claude-haiku-5.5": "anthropic/claude-haiku-5.5",
+    "claude-sonnet-5.5": "anthropic/claude-sonnet-5.5",
+    "claude-opus-5.5": "anthropic/claude-opus-5.5",
+}
+
+# Plafonds de PRÉAUTORISATION administrateur, en USD/1M tokens.
+# Clés = slugs réels OpenRouter vérifiés, valeurs = taux plafonds fiables
+# couvrant les éventuels tarifs long-contexte, cache-write et autres variantes.
+# Exemple de STRUCTURE (ne pas copier les chiffres sans les vérifier) :
+#   "provider/slug-verifie": {"input": "...", "output": "...", "cache_write": "..."}
+# Un tarif absent BLOQUE la réservation : jamais de devis fictif.
+# PLAFONDS DE DEVIS pour l'environnement d'essai, volontairement
+# plus hauts que les prix listes au 31/10/2026. Ne constituent PAS des
+# garanties de tarifs maximum par endpoint (routing, long context, etc.).
+# Le reglement definitif utilise exclusivement usage.cost du fournisseur.
+# Revalider avant lancement public et refuser les depassements de provision.
+OPENROUTER_CHAT_RESERVATION_RATES_USD_PER_MILLION: dict[str, dict[str, str]] = {
+    "openai/gpt-6-luna": {"input": "0.5", "output": "2", "cache_write": "1"},
+    "openai/gpt-5": {"input": "2.5", "output": "15", "cache_write": "3"},
+    "openai/gpt-5.6-terra": {"input": "5", "output": "25", "cache_write": "8"},
+    "openai/gpt-6-sol": {"input": "5", "output": "25", "cache_write": "8"},
+    "openai/gpt-6-astra": {"input": "25", "output": "85", "cache_write": "40"},
+    "anthropic/claude-haiku-5.5": {"input": "1", "output": "2", "cache_write": "2"},
+    "anthropic/claude-sonnet-5.5": {"input": "5", "output": "25", "cache_write": "10"},
+    "anthropic/claude-opus-5.5": {"input": "10", "output": "50", "cache_write": "20"},
+}
+
+# Montant plafond par appel Web OpenRouter. None signifie : recherches
+# désactivées pour les devis OpenRouter tant que le coût plafond n'est pas
+# vérifié. Ce plafond ne s'ajoute JAMAIS au coût réel retourné par OpenRouter.
+# Exa fast: 0,007 USD/recherche (31/10/2026). Plafond explicite
+# max_uses=3, max_results=5 et max_total_results=15 dans le Chat.
+# Provision unitaire prudente 0,01 USD, puis marge de 20% déjà appliquée.
+# Facturation réelle = usage.cost, jamais prix estimé ni 2e débit Web.
+OPENROUTER_WEB_SEARCH_RESERVATION_USD_PER_CALL: str | None = "0.01"
 
 # Soldes cibles à activer UNIQUEMENT avec la facturation dynamique.
 

@@ -1310,13 +1310,13 @@ async function reverseGeocode(
 
   return (
     <main className="min-h-dvh bg-[var(--background)] text-[var(--foreground)]">
-      <header className="border-b border-[var(--border)]">
+      <header className="border-b border-border/65 bg-background/80 backdrop-blur-lg">
         <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <Link
               href="/chat"
               aria-label={t.backToChat}
-              className="rounded-xl p-2 text-[var(--muted)] transition hover:bg-[var(--surface-2)] hover:text-[var(--foreground)]"
+              className="rounded-2xl p-2.5 text-[var(--muted)] transition-colors duration-200 hover:bg-surface-secondary hover:text-[var(--foreground)]"
             >
               <ArrowLeft size={19} />
             </Link>
@@ -1345,17 +1345,17 @@ async function reverseGeocode(
             {t.yourAccount}
           </p>
 
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">
+          <h1 className="mt-1 text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">
             {t.settings}
           </h1>
 
-          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+          <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
             {t.settingsDescription}
           </p>
         </div>
 
         {loading && (
-          <div className="mt-8 flex items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-8">
+          <div className="mt-8 flex items-center justify-center rounded-[25px] border border-border/75 bg-surface/80 p-8 shadow-[0_14px_36px_-29px_var(--shadow-color)]">
             <Loader2
               size={20}
               className="animate-spin"
@@ -1366,7 +1366,7 @@ async function reverseGeocode(
         {!loading && (
           <>
             {errorMessage && (
-              <div className="mt-8 flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              <div className="mt-8 flex items-start gap-3 rounded-[20px] border border-red-200/75 bg-red-50/90 p-4 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
                 <X
                   size={17}
                   className="mt-0.5 shrink-0"
@@ -1388,7 +1388,7 @@ async function reverseGeocode(
             )}
 
             {successMessage && (
-              <div className="mt-8 flex items-start gap-3 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+              <div className="mt-8 flex items-start gap-3 rounded-[20px] border border-emerald-200/75 bg-emerald-50/90 p-4 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300">
                 <Check
                   size={17}
                   className="mt-0.5 shrink-0"
@@ -1412,7 +1412,7 @@ async function reverseGeocode(
                 onClick={() =>
                   setPersonalOpen(!personalOpen)
                 }
-                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)]"
+                className="flex w-full items-center gap-4 p-4 text-left transition-colors duration-200 hover:bg-surface-secondary/65"
               >
                 <IconBox>
                   <UserRound size={17} />
@@ -1439,7 +1439,7 @@ async function reverseGeocode(
               </button>
 
               {personalOpen && (
-                <div className="border-t border-[var(--border)] bg-[var(--surface)] p-5">
+                <div className="border-t border-border/65 bg-surface/70 p-5">
                   <div className="grid gap-4 sm:grid-cols-2">
                     <InputField
                       label={t.firstName}
@@ -1516,7 +1516,7 @@ async function reverseGeocode(
                 onClick={() =>
                   setSecurityOpen(!securityOpen)
                 }
-                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)]"
+                className="flex w-full items-center gap-4 p-4 text-left transition-colors duration-200 hover:bg-surface-secondary/65"
               >
                 <IconBox>
                   <Shield size={17} />
@@ -1543,8 +1543,8 @@ async function reverseGeocode(
               </button>
 
               {securityOpen && (
-                <div className="border-t border-[var(--border)] bg-[var(--surface)] p-5">
-                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
+                <div className="border-t border-border/65 bg-surface/70 p-5">
+                  <div className="rounded-[20px] border border-border/75 bg-background/65 p-4">
                     <p className="text-sm font-medium">
                       {t.accountAddress}
                     </p>
@@ -1554,7 +1554,7 @@ async function reverseGeocode(
                     </p>
                   </div>
 
-                  <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
+                  <div className="mt-4 rounded-[20px] border border-border/75 bg-background/65 p-4">
                     <p className="text-sm font-medium">
                       {t.password}
                     </p>
@@ -1616,7 +1616,7 @@ async function reverseGeocode(
                     </div>
                   </div>
 
-                  <div className="mt-4 rounded-2xl border border-[var(--border)] bg-[var(--background)] p-4">
+                  <div className="mt-4 rounded-[20px] border border-border/75 bg-background/65 p-4">
                     <p className="text-sm font-medium">
                       {t.sessions}
                     </p>
@@ -1671,7 +1671,7 @@ async function reverseGeocode(
                         event.target.value as Language,
                       )
                     }
-                    className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm outline-none focus:border-neutral-400"
+                    className="rounded-xl border border-border/75 bg-background/80 px-3.5 py-2.5 text-sm outline-none transition-[border-color,box-shadow] duration-200 focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]"
                   >
                     <option value="fr">
                       Français
@@ -1693,7 +1693,7 @@ async function reverseGeocode(
                   type="button"
                   disabled={locating}
                   onClick={detectLocation}
-                  className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm transition hover:bg-[var(--surface-2)] disabled:opacity-50"
+                  className="flex items-center gap-2 rounded-xl border border-border/75 bg-background/80 px-3.5 py-2.5 text-sm transition-colors duration-200 hover:bg-surface-secondary disabled:opacity-50"
                 >
                   {locating ? (
                     <Loader2
@@ -1846,7 +1846,7 @@ async function reverseGeocode(
             >
               <Link
                 href="/legal?tab=about"
-                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--foreground)]"
+                className="flex w-full items-center gap-4 p-4 text-left transition-colors duration-200 hover:bg-surface-secondary/65 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--foreground)]"
               >
                 <IconBox><BookOpen size={17} /></IconBox>
                 <div className="min-w-0 flex-1">
@@ -1858,7 +1858,7 @@ async function reverseGeocode(
 
               <Link
                 href="/legal?tab=privacy"
-                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--foreground)]"
+                className="flex w-full items-center gap-4 p-4 text-left transition-colors duration-200 hover:bg-surface-secondary/65 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--foreground)]"
               >
                 <IconBox><Shield size={17} /></IconBox>
                 <div className="min-w-0 flex-1">
@@ -1870,7 +1870,7 @@ async function reverseGeocode(
 
               <Link
                 href="/legal?tab=terms"
-                className="flex w-full items-center gap-4 p-4 text-left transition hover:bg-[var(--surface-2)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--foreground)]"
+                className="flex w-full items-center gap-4 p-4 text-left transition-colors duration-200 hover:bg-surface-secondary/65 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--foreground)]"
               >
                 <IconBox><ScrollText size={17} /></IconBox>
                 <div className="min-w-0 flex-1">
@@ -1943,8 +1943,8 @@ function SettingsSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="mt-8 overflow-hidden rounded-2xl border border-[var(--border)]">
-      <div className="border-b border-[var(--border)] bg-[var(--surface)] p-5">
+    <section className="mt-8 overflow-hidden rounded-[27px] border border-border/70 bg-surface/80 shadow-[0_18px_48px_-34px_var(--shadow-color)]">
+      <div className="border-b border-border/70 bg-surface/80 p-5">
         <div className="flex items-center gap-3">
           <IconBox>{icon}</IconBox>
 
@@ -1960,7 +1960,7 @@ function SettingsSection({
         </div>
       </div>
 
-      <div className="divide-y divide-neutral-200 bg-[var(--background)]">
+      <div className="divide-y divide-border/75 bg-background/60">
         {children}
       </div>
     </section>
@@ -2033,7 +2033,7 @@ function InputField({
         onChange={(event) =>
           onChange(event.target.value)
         }
-        className="h-11 w-full rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 text-sm outline-none transition focus:border-neutral-400"
+        className="h-11 w-full rounded-2xl border border-border/75 bg-background/75 px-3.5 text-sm outline-none transition-[border-color,box-shadow] duration-200 focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]"
       />
     </div>
   );
@@ -2056,7 +2056,7 @@ function InfoField({
         {label}
       </p>
 
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--background)] px-3 py-3 text-sm text-[var(--foreground)]">
+      <div className="rounded-2xl border border-border/70 bg-background/70 px-3.5 py-3 text-sm text-[var(--foreground)]">
         {value}
       </div>
     </div>
@@ -2073,7 +2073,7 @@ function IconBox({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--muted)]">
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border/60 bg-surface-secondary/70 text-[var(--muted)]">
       {children}
     </div>
   );
@@ -2099,14 +2099,14 @@ function Toggle({
       aria-checked={checked}
       aria-label={label}
       onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 rounded-full transition ${
+      className={`relative h-6 w-11 rounded-full ring-1 ring-border/60 transition-colors duration-200 ${
         checked
           ? "bg-[var(--foreground)]"
-          : "bg-neutral-300"
+          : "bg-surface-tertiary"
       }`}
     >
       <span
-        className={`absolute top-1 h-4 w-4 rounded-full bg-[var(--background)] transition ${
+        className={`absolute top-1 h-4 w-4 rounded-full bg-background shadow-sm transition-[left] duration-200 ${
           checked
             ? "left-6"
             : "left-1"

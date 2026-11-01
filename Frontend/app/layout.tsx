@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
@@ -24,9 +25,25 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
-  children,
-}: LayoutProps<"/">) {
+// Charge avant l'hydratation : le mode sombre ne commence plus par un flash blanc.
+// Aucune preference tierce n'est envoyee au serveur par ce script.
+const initialThemeScript = `
+(function () {
+  var theme = null;
+  try {
+    var stored = localStorage.getItem("oria_theme");
+    if (stored === "light" || stored === "dark") theme = stored;
+  } catch (_) {}
+  if (!theme) {
+    theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark" : "light";
+  }
+  document.documentElement.classList.toggle("dark", theme === "dark");
+  document.documentElement.style.colorScheme = theme;
+})();
+`;
+
+export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="fr"
@@ -34,9 +51,10 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <ThemeProvider>
-          {children}
-        </ThemeProvider>
+        <ThemeProvider>{children}</ThemeProvider>
+        <Script id="oria-initial-theme" strategy="beforeInteractive">
+          {initialThemeScript}
+        </Script>
       </body>
     </html>
   );

@@ -239,14 +239,14 @@ export default function HelpPage() {
   });
 
   return (
-    <main className="min-h-dvh bg-white text-neutral-950">
-      <header className="border-b border-neutral-200">
+    <main className="min-h-dvh overflow-x-clip bg-background text-foreground">
+      <header className="sticky top-0 z-30 border-b border-border/70 bg-background/85 backdrop-blur-xl">
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-3">
             <Link
               href="/chat"
               aria-label={UI[language].backToChat}
-              className="rounded-xl p-2 text-neutral-600 transition hover:bg-neutral-100 hover:text-neutral-950"
+              className="rounded-2xl p-2.5 text-muted-strong transition-colors duration-200 hover:bg-surface-secondary hover:text-foreground"
             >
               <ArrowLeft size={19} />
             </Link>
@@ -261,7 +261,7 @@ export default function HelpPage() {
 
           <Link
             href="/chat"
-            className="hidden rounded-xl bg-neutral-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-neutral-800 sm:inline-flex"
+            className="hidden rounded-2xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition-[transform,opacity] duration-200 hover:-translate-y-0.5 hover:opacity-90 sm:inline-flex"
           >
             {UI[language].backToChat}
           </Link>
@@ -271,22 +271,22 @@ export default function HelpPage() {
       <section className="mx-auto w-full max-w-5xl px-5 py-10 sm:px-8 sm:py-16">
         {/* Hero */}
         <div className="text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-neutral-950 text-white">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[22px] border border-border/75 bg-surface-secondary text-foreground shadow-[0_14px_38px_-28px_var(--shadow-color)]">
             <CircleHelp size={22} />
           </div>
 
-          <h1 className="mt-5 text-3xl font-semibold tracking-tight sm:text-4xl">
+          <h1 className="mt-6 text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">
             {UI[language].helpTitle}
           </h1>
 
-          <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-neutral-500 sm:text-base">
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-muted sm:text-base">
             {UI[language].helpDescription}
           </p>
 
           <div className="relative mx-auto mt-7 max-w-2xl">
             <Search
               size={19}
-              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400"
+              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-muted"
             />
 
             <input
@@ -294,7 +294,7 @@ export default function HelpPage() {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder={UI[language].searchPlaceholder}
-              className="h-13 w-full rounded-2xl border border-neutral-200 bg-neutral-50 pl-11 pr-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-neutral-400 focus:bg-white"
+              className="h-13 w-full rounded-[22px] border border-border/75 bg-surface/80 pl-11 pr-4 text-sm text-foreground shadow-[0_15px_42px_-30px_var(--shadow-color)] outline-none backdrop-blur-sm transition-[background-color,border-color,box-shadow] duration-200 placeholder:text-muted focus:border-border-strong focus:bg-surface focus:ring-4 focus:ring-[var(--focus-ring)]"
             />
           </div>
         </div>
@@ -312,10 +312,10 @@ export default function HelpPage() {
               return (
                 <button
                   key={category.title}
-                  className="group flex items-start gap-4 rounded-2xl border border-neutral-200 p-5 text-left transition hover:border-neutral-300 hover:bg-neutral-50"
+                  className="group flex items-start gap-4 rounded-[24px] border border-border/75 bg-surface/80 p-5 text-left shadow-[0_14px_40px_-31px_var(--shadow-color)] transition-[background-color,border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface hover:shadow-[0_18px_44px_-27px_var(--shadow-color)] active:translate-y-0"
                 >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-neutral-100 transition group-hover:bg-white">
-                    <Icon size={18} className="text-neutral-600" />
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-border/60 bg-surface-secondary text-muted-strong transition-colors group-hover:bg-surface-tertiary">
+                    <Icon size={18} className="text-muted-strong" />
                   </div>
 
                   <div>
@@ -323,7 +323,7 @@ export default function HelpPage() {
                       {category.title}
                     </h3>
 
-                    <p className="mt-1 text-sm leading-5 text-neutral-500">
+                    <p className="mt-1.5 text-sm leading-6 text-muted">
                       {category.description}
                     </p>
                   </div>
@@ -342,7 +342,7 @@ export default function HelpPage() {
             </h2>
           </div>
 
-          <div className="mt-5 overflow-hidden rounded-2xl border border-neutral-200">
+          <div className="mt-5 overflow-hidden rounded-[26px] border border-border/75 bg-surface/80 shadow-[0_18px_45px_-32px_var(--shadow-color)]">
             {filteredFaqs.length > 0 ? (
               filteredFaqs.map((faq, index) => {
                 const isOpen = openFaq === index;
@@ -350,10 +350,10 @@ export default function HelpPage() {
                 return (
                   <div
                     key={faq.question}
-                    className="border-b border-neutral-200 last:border-b-0"
+                    className="border-b border-border/65 last:border-b-0"
                   >
                     <button
-                      className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-neutral-50"
+                      className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors duration-200 hover:bg-surface-secondary/70"
                       onClick={() =>
                         setOpenFaq(isOpen ? null : index)
                       }
@@ -365,7 +365,7 @@ export default function HelpPage() {
 
                       <ChevronDown
                         size={17}
-                        className={`shrink-0 text-neutral-400 transition-transform ${
+                        className={`shrink-0 text-muted transition-transform ${
                           isOpen ? "rotate-180" : ""
                         }`}
                       />
@@ -373,7 +373,7 @@ export default function HelpPage() {
 
                     {isOpen && (
                       <div className="px-5 pb-5">
-                        <p className="max-w-3xl text-sm leading-6 text-neutral-500">
+                        <p className="max-w-3xl text-sm leading-7 text-muted">
                           {faq.answer}
                         </p>
                       </div>
@@ -387,7 +387,7 @@ export default function HelpPage() {
                   {UI[language].noResult}
                 </p>
 
-                <p className="mt-1 text-sm text-neutral-500">
+                <p className="mt-1 text-sm text-muted">
                   {UI[language].tryOtherKeywords}
                 </p>
               </div>
@@ -396,20 +396,20 @@ export default function HelpPage() {
         </section>
 
         {/* Support */}
-        <section className="mt-10 rounded-3xl border border-neutral-200 bg-neutral-50 p-6 text-center sm:p-8">
-          <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-white">
-            <MessageCircle size={18} className="text-neutral-600" />
+        <section className="mt-10 rounded-[28px] border border-border/75 bg-surface-secondary/75 p-6 text-center shadow-[0_20px_46px_-32px_var(--shadow-color)] sm:p-8">
+          <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl border border-border/60 bg-surface">
+            <MessageCircle size={18} className="text-muted-strong" />
           </div>
 
           <h2 className="mt-4 text-lg font-semibold">
             {UI[language].supportQuestion}
           </h2>
 
-          <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-neutral-500">
+          <p className="mx-auto mt-2 max-w-lg text-sm leading-7 text-muted">
             {UI[language].supportDescription}
           </p>
 
-          <button className="mt-5 inline-flex items-center gap-2 rounded-xl bg-neutral-950 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-neutral-800">
+          <button className="mt-5 inline-flex items-center gap-2 rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground shadow-[0_12px_30px_-20px_var(--shadow-color)] transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90">
             <MessageCircle size={16} />
             {UI[language].contactSupport}
           </button>

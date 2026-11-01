@@ -1,0 +1,216 @@
+/* ORIA v2 · Finitions des autres pages Web (visuel uniquement)
+ * Aucun endpoint, aucun événement, aucune logique React n'est modifié.
+ * Le Chat (main.overflow-x-clip) et le moteur embarqué (main[style])
+ * ne sont pas ciblés par la couche générale.
+ */
+
+:root {
+  --oria-panel: rgb(255 255 255 / 0.88);
+  --oria-panel-raised: rgb(255 255 255 / 0.94);
+  --oria-panel-stroke: rgb(33 48 74 / 0.10);
+  --oria-panel-shadow: 0 14px 42px -25px rgb(25 39 63 / 0.22),
+                       0 2px 12px -9px rgb(25 39 63 / 0.10);
+  --oria-panel-hover-shadow: 0 20px 46px -24px rgb(25 39 63 / 0.29),
+                             0 3px 16px -10px rgb(25 39 63 / 0.14);
+  --oria-input-bg: rgb(248 250 253 / 0.82);
+  --oria-divider: rgb(46 61 87 / 0.10);
+}
+
+html.dark {
+  --oria-panel: rgb(20 25 33 / 0.88);
+  --oria-panel-raised: rgb(26 32 42 / 0.94);
+  --oria-panel-stroke: rgb(223 233 250 / 0.10);
+  --oria-panel-shadow: 0 18px 42px -22px rgb(0 0 0 / 0.63),
+                       0 2px 12px -9px rgb(0 0 0 / 0.35);
+  --oria-panel-hover-shadow: 0 24px 50px -23px rgb(0 0 0 / 0.70),
+                             0 3px 16px -9px rgb(0 0 0 / 0.45);
+  --oria-input-bg: rgb(26 32 42 / 0.82);
+  --oria-divider: rgb(223 233 250 / 0.10);
+}
+
+/* Pas d'effets qui réduisent le contraste des vidéos, images, tableaux,
+   prévisualisations de documents ou éléments chargés en streaming. */
+main:not([class*="overflow-x-clip"]):not([style]) > header[class*="border-b"] {
+  border-bottom-color: var(--oria-divider);
+  background-color: var(--glass-surface);
+  -webkit-backdrop-filter: blur(14px) saturate(115%);
+  backdrop-filter: blur(14px) saturate(115%);
+}
+
+/* Cartes existantes : conserver dimensions, grille, padding et variantes.
+   Les touches de transparence remplacent des fonds pleins uniquement
+   lorsque le composant utilisait déjà la couleur neutre de surface. */
+main:not([class*="overflow-x-clip"]):not([style])
+  :is(article, section, div)[class~="rounded-3xl"][class~="bg-surface"],
+main:not([class*="overflow-x-clip"]):not([style])
+  :is(article, section, div)[class~="rounded-2xl"][class~="bg-surface"] {
+  background-color: var(--oria-panel);
+  box-shadow: var(--oria-panel-shadow);
+}
+
+main:not([class*="overflow-x-clip"]):not([style])
+  :is(article, section, div)[class~="rounded-3xl"][class~="border-border"],
+main:not([class*="overflow-x-clip"]):not([style])
+  :is(article, section, div)[class~="rounded-2xl"][class~="border-border"] {
+  border-color: var(--oria-panel-stroke);
+}
+
+/* Relief discret au survol, aucun déplacement de la mise en page. */
+@media (hover: hover) {
+  main:not([class*="overflow-x-clip"]):not([style])
+    article[class~="bg-surface"][class*="rounded-"]:hover,
+  main:not([class*="overflow-x-clip"]):not([style])
+    article[class~="bg-white"][class*="rounded-"]:hover {
+    box-shadow: var(--oria-panel-hover-shadow);
+  }
+}
+
+/* Lissage minimal des contrôles : ne modifie ni tailles ni événements. */
+main:not([class*="overflow-x-clip"]):not([style])
+  :is(input:not([type="checkbox"]):not([type="radio"]), textarea, select) {
+  transition: border-color 180ms ease, background-color 180ms ease,
+              box-shadow 180ms ease;
+}
+
+main:not([class*="overflow-x-clip"]):not([style])
+  :is(input:not([type="checkbox"]):not([type="radio"]), textarea, select):focus-visible {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+  outline: none;
+}
+
+main:not([class*="overflow-x-clip"]):not([style])
+  :is(button, a)[class~="rounded-xl"] {
+  border-radius: 15px;
+}
+
+/* Fonds de sections / panneaux : très légère nuance pour la lisibilité. */
+main:not([class*="overflow-x-clip"]):not([style])
+  :where(section, article)[class~="bg-surface-secondary"][class~="rounded-2xl"] {
+  border-radius: 22px;
+}
+
+/* ----------------------------------------------------------------------
+ * Harmonisation visuelle des anciennes pages restées en blanc forcé.
+ * Ciblage volontaire par leur racine actuelle, sans toucher au Chat ni
+ * aux éditeurs/documents embarqués hors de ces pages.
+ * ---------------------------------------------------------------------- */
+
+/* Conversations et Aide : fond et texte globaux en mode sombre. */
+html.dark main.bg-white.text-neutral-950 {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+html.dark main.bg-white.text-neutral-950 .bg-white {
+  background-color: var(--oria-panel-raised);
+}
+html.dark main.bg-white.text-neutral-950 .bg-neutral-50 {
+  background-color: var(--oria-input-bg);
+}
+html.dark main.bg-white.text-neutral-950 .bg-neutral-100 {
+  background-color: var(--surface-tertiary);
+}
+html.dark main.bg-white.text-neutral-950 .bg-neutral-950,
+html.dark main.bg-white.text-neutral-950 :is(button, a).bg-neutral-950 {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+html.dark main.bg-white.text-neutral-950 .text-neutral-950,
+html.dark main.bg-white.text-neutral-950 .text-neutral-900,
+html.dark main.bg-white.text-neutral-950 .text-neutral-800 {
+  color: var(--foreground);
+}
+html.dark main.bg-white.text-neutral-950 .text-neutral-600 {
+  color: var(--muted-strong);
+}
+html.dark main.bg-white.text-neutral-950 :is(.text-neutral-500, .text-neutral-400) {
+  color: var(--muted);
+}
+html.dark main.bg-white.text-neutral-950 .border-neutral-200 {
+  border-color: var(--border);
+}
+html.dark main.bg-white.text-neutral-950 .border-neutral-300 {
+  border-color: var(--border-strong);
+}
+html.dark main.bg-white.text-neutral-950 :is(button, a)[class*="hover:bg-neutral-50"]:hover {
+  background-color: var(--surface-secondary);
+}
+html.dark main.bg-white.text-neutral-950 :is(button, a)[class*="hover:bg-neutral-100"]:hover {
+  background-color: var(--surface-tertiary);
+}
+html.dark main.bg-white.text-neutral-950 :is(input, textarea)[class*="focus:bg-white"]:focus {
+  background-color: var(--surface);
+}
+html.dark main.bg-white.text-neutral-950 [class*="border-t-neutral-950"] {
+  border-top-color: var(--foreground);
+}
+
+/* Les cartes des pages Aide / Conversations gagnent un léger verre dépoli.
+   Pas de filtre blur sur chaque carte : meilleur rendement mobile. */
+main.bg-white.text-neutral-950
+  :is(article, section, div)[class~="rounded-2xl"][class~="border-neutral-200"],
+main.bg-white.text-neutral-950
+  :is(article, section, div)[class~="rounded-3xl"][class~="border-neutral-200"] {
+  border-color: var(--oria-panel-stroke);
+  box-shadow: var(--oria-panel-shadow);
+}
+
+/* Mes créations : harmoniser la bibliothèque et les filtres avec le thème.
+   Les médias et lecteurs restent opaques pour préserver leur rendu. */
+html.dark main[class~="bg-[#f7f7f5]"] {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+html.dark main[class~="bg-[#f7f7f5]"] > div:not(.fixed) [class~="bg-white"] {
+  background-color: var(--oria-panel-raised);
+}
+html.dark main[class~="bg-[#f7f7f5]"] > div:not(.fixed) [class~="bg-black"] {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+html.dark main[class~="bg-[#f7f7f5]"] > div:not(.fixed) :is([class~="bg-black/[0.04]"], [class~="bg-black/[0.05]"]) {
+  background-color: var(--surface-tertiary);
+}
+html.dark main[class~="bg-[#f7f7f5]"] > div:not(.fixed) :is([class~="border-black/10"], [class~="border-black/15"]),
+html.dark main[class~="bg-[#f7f7f5]"] > div:not(.fixed) :is([class~="border-black/20"], [class~="border-black/25"]) {
+  border-color: var(--border);
+}
+html.dark main[class~="bg-[#f7f7f5]"] > div:not(.fixed) [class*="text-black/"] {
+  color: var(--muted-strong);
+}
+html.dark main[class~="bg-[#f7f7f5]"] > div:not(.fixed) [class~="text-black"] {
+  color: var(--foreground);
+}
+html.dark main[class~="bg-[#f7f7f5]"] > div:not(.fixed) :is(button, a)[class*="hover:bg-black/"]:hover {
+  background-color: var(--surface-tertiary);
+}
+
+main[class~="bg-[#f7f7f5]"] > div:not(.fixed) article[class~="bg-white"] {
+  border-color: var(--oria-panel-stroke);
+  box-shadow: var(--oria-panel-shadow);
+}
+
+/* Paramètres : la page historique possède des boutons inversés en blanc
+   sur une surface claire en mode sombre. Uniquement leur rendu est corrigé. */
+html.dark main[class*="bg-[var(--background)]"] :is(button, a)[class*="bg-[var(--foreground)]"] {
+  color: var(--background);
+}
+html.dark main[class*="bg-[var(--background)]"] [class~="divide-neutral-200"] > :not(:last-child) {
+  border-color: var(--border);
+}
+
+/* Sémantique et confort utilisateur : ne pas dégrader l'accessibilité. */
+@media (prefers-reduced-transparency: reduce) {
+  main:not([class*="overflow-x-clip"]):not([style]) > header[class*="border-b"] {
+    background-color: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  main:not([class*="overflow-x-clip"]):not([style])
+    :is(input, textarea, select) {
+    transition: none;
+  }
+}

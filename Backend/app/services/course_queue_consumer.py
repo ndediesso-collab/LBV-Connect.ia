@@ -412,7 +412,6 @@ def build_course_queue_consumer(*, client_factory: Callable[[], Any]) -> CourseQ
     from app.repositories.supabase_audio_repository import SupabaseCourseAudioRepository
     from app.repositories.supabase_credit_repository import SupabaseCreditRepository
     from app.services.course_service import CourseService
-    from app.services.openai_service import OpenAIService
     from app.services.course_worker import CourseWorker, CourseArtifactRenderer
     from app.services.artifact_service import ArtifactService
     from app.repositories.supabase_artifact_repository import SupabaseArtifactRepository
@@ -432,7 +431,9 @@ def build_course_queue_consumer(*, client_factory: Callable[[], Any]) -> CourseQ
                 course_repository=SupabaseCourseAudioRepository(client),
                 job_store=jobs,
                 credit_repository=SupabaseCreditRepository(client),
-                openai_service=OpenAIService(),
+                # Lazy provider resolution from SQL pinned plan in CourseWorker:
+                # no mandatory OpenAI client for an OpenRouter course.
+                openai_service=None,
                 renderer=None,  # Le worker injecte le renderer Code-First service_role.
             )
 

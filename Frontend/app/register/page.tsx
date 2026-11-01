@@ -661,14 +661,14 @@ export default function RegisterPage() {
   }
 
   return (
-    <main className="min-h-dvh bg-background text-foreground">
+    <main className="min-h-dvh overflow-x-clip bg-background text-foreground">
       {/* Header */}
 
-      <header className="absolute left-0 right-0 top-0">
+      <header className="absolute left-0 right-0 top-0 z-20">
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center px-5 sm:px-8">
           <Link
             href="/"
-            className="flex items-center gap-2 text-sm font-semibold tracking-tight transition-opacity hover:opacity-70"
+            className="inline-flex items-center gap-2 rounded-2xl px-2 py-1.5 text-sm font-semibold tracking-tight transition-[background-color,opacity] duration-200 hover:bg-surface-secondary/60 hover:opacity-90"
           >
             <Sparkles size={18} />
 
@@ -681,12 +681,12 @@ export default function RegisterPage() {
 
       <div className="flex min-h-dvh items-center justify-center px-5 py-24 sm:px-8">
         <div className="w-full max-w-md">
-          <div className="rounded-3xl border border-border bg-surface p-6 shadow-sm sm:p-8">
+          <div className="rounded-[30px] border border-border/70 bg-surface/85 p-6 shadow-[0_22px_65px_-38px_var(--shadow-color)] backdrop-blur-xl sm:p-8">
             {/* Back */}
 
             <Link
               href="/"
-              className="mb-8 inline-flex items-center gap-2 text-sm text-muted-strong transition hover:text-foreground"
+              className="mb-8 inline-flex items-center gap-2 rounded-xl py-1 text-sm text-muted-strong transition-colors duration-200 hover:text-foreground"
             >
               <ArrowLeft size={16} />
 
@@ -696,11 +696,11 @@ export default function RegisterPage() {
             {/* Intro */}
 
             <div>
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
+              <div className="flex h-12 w-12 items-center justify-center rounded-[19px] border border-border/40 bg-accent text-accent-foreground shadow-[0_10px_26px_-19px_var(--shadow-color)]">
                 <UserRound size={19} />
               </div>
 
-              <h1 className="mt-6 text-2xl font-semibold tracking-tight sm:text-3xl">
+              <h1 className="mt-6 text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">
                 {UI[language].createAccountTitle}
               </h1>
 
@@ -734,7 +734,7 @@ export default function RegisterPage() {
                     placeholder={UI[language].firstNamePlaceholder}
                     required
                     disabled={loading}
-                    className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                    className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 text-[15px] text-foreground outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-muted focus:border-border-strong focus:bg-surface focus:shadow-[0_0_0_3px_var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
 
@@ -754,7 +754,7 @@ export default function RegisterPage() {
                     placeholder={UI[language].lastNamePlaceholder}
                     required
                     disabled={loading}
-                    className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                    className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 text-[15px] text-foreground outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-muted focus:border-border-strong focus:bg-surface focus:shadow-[0_0_0_3px_var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -777,7 +777,7 @@ export default function RegisterPage() {
                   }
                   required
                   disabled={loading}
-                  className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 text-[15px] text-foreground outline-none transition-[border-color,background-color,box-shadow] duration-200 focus:border-border-strong focus:bg-surface focus:shadow-[0_0_0_3px_var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {COUNTRY_PHONE_CONFIGS.map(
                     (country) => (
@@ -819,7 +819,7 @@ export default function RegisterPage() {
                   placeholder="06 12 34 56 7"
                   required
                   disabled={loading}
-                  className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 text-[15px] text-foreground outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-muted focus:border-border-strong focus:bg-surface focus:shadow-[0_0_0_3px_var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                 />
 
                 <p className="mt-2 text-xs text-muted">
@@ -845,7 +845,7 @@ export default function RegisterPage() {
                   placeholder={UI[language].emailPlaceholder}
                   required
                   disabled={loading}
-                  className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 text-[15px] text-foreground outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-muted focus:border-border-strong focus:bg-surface focus:shadow-[0_0_0_3px_var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </div>
 
@@ -873,7 +873,7 @@ export default function RegisterPage() {
                     required
                     minLength={8}
                     disabled={loading}
-                    className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 pr-12 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                    className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 pr-12 text-[15px] text-foreground outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-muted focus:border-border-strong focus:bg-surface focus:shadow-[0_0_0_3px_var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <button
@@ -889,7 +889,7 @@ export default function RegisterPage() {
                       )
                     }
                     disabled={loading}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-muted transition hover:bg-surface-tertiary hover:text-foreground disabled:opacity-50"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl p-2 text-muted transition-colors duration-200 hover:bg-surface-tertiary hover:text-foreground disabled:opacity-50"
                   >
                     {showPassword ? (
                       <EyeOff size={18} />
@@ -928,7 +928,7 @@ export default function RegisterPage() {
                     required
                     minLength={8}
                     disabled={loading}
-                    className="h-12 w-full rounded-xl border border-border bg-surface-secondary px-4 pr-12 text-sm outline-none transition placeholder:text-muted focus:border-border-strong focus:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                    className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 pr-12 text-[15px] text-foreground outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-muted focus:border-border-strong focus:bg-surface focus:shadow-[0_0_0_3px_var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                   <button
@@ -944,7 +944,7 @@ export default function RegisterPage() {
                       )
                     }
                     disabled={loading}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-muted transition hover:bg-surface-tertiary hover:text-foreground disabled:opacity-50"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl p-2 text-muted transition-colors duration-200 hover:bg-surface-tertiary hover:text-foreground disabled:opacity-50"
                   >
                     {showConfirmPassword ? (
                       <EyeOff size={18} />
@@ -960,7 +960,7 @@ export default function RegisterPage() {
               {error && (
                 <div
                   role="alert"
-                  className="rounded-xl border border-red-200 bg-danger-surface px-4 py-3 text-sm leading-5 text-danger dark:border-red-900/40"
+                  className="rounded-2xl border border-red-200/75 bg-danger-surface px-4 py-3 text-sm leading-6 text-danger dark:border-red-900/40"
                 >
                   {localizeFrontendError(
                     error,
@@ -974,7 +974,7 @@ export default function RegisterPage() {
               {message && (
                 <div
                   role="status"
-                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm leading-5 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400"
+                  className="rounded-2xl border border-emerald-200/80 bg-emerald-50/90 px-4 py-3 text-sm leading-6 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400"
                 >
                   {message}
                 </div>
@@ -1027,7 +1027,7 @@ export default function RegisterPage() {
               <button
                 type="submit"
                 disabled={loading}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 text-sm font-medium text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground shadow-[0_13px_26px_-21px_var(--shadow-color)] transition-[opacity,transform] duration-200 hover:-translate-y-0.5 hover:opacity-90 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loading ? (
                   <>
@@ -1061,7 +1061,7 @@ export default function RegisterPage() {
             <button
               type="button"
               disabled={loading}
-              className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-border bg-surface px-4 text-sm font-medium transition hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex h-12 w-full items-center justify-center gap-3 rounded-2xl border border-border/75 bg-surface/80 px-4 text-sm font-medium transition-[background-color,border-color] duration-200 hover:border-border-strong hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-60"
             >
               {UI[language].continueWithGoogle}
             </button>
