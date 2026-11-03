@@ -1,3 +1,4 @@
+
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -31,21 +32,21 @@ export async function middleware(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
 
-  // Routes qui nécessitent une connexion
+  // Routes privées nécessitant une connexion
   const protectedRoutes = [
     "/chat",
     "/conversations",
     "/credits",
-    "/packs",
     "/settings",
   ];
 
   const isProtectedRoute = protectedRoutes.some(
     (route) =>
-      pathname === route || pathname.startsWith(`${route}/`),
+      pathname === route ||
+      pathname.startsWith(`${route}/`),
   );
 
-  // Utilisateur non connecté → login
+  // Utilisateur non connecté → page de connexion
   if (!user && isProtectedRoute) {
     return NextResponse.redirect(
       new URL("/login", request.url),
@@ -53,7 +54,10 @@ export async function middleware(request: NextRequest) {
   }
 
   // Utilisateur déjà connecté → chat
-  if (user && (pathname === "/login" || pathname === "/register")) {
+  if (
+    user &&
+    (pathname === "/login" || pathname === "/register")
+  ) {
     return NextResponse.redirect(
       new URL("/chat", request.url),
     );
@@ -69,7 +73,6 @@ export const config = {
     "/chat/:path*",
     "/conversations/:path*",
     "/credits/:path*",
-    "/packs/:path*",
     "/settings/:path*",
   ],
 };
