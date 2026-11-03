@@ -28,10 +28,16 @@ app.add_middleware(
 # CORS
 # ============================================================
 
-# Domaine Vercel de production
+# Ancien domaine Vercel de production
 VERCEL_PRODUCTION_ORIGIN = (
     "https://lbv-connect-ia.vercel.app"
 )
+
+# Nouveau domaine officiel ORIA
+ORIA_PRODUCTION_ORIGINS = [
+    "https://myoriaai.com",
+    "https://www.myoriaai.com",
+]
 
 
 # Previews Vercel du projet
@@ -41,11 +47,7 @@ VERCEL_ORIGIN_REGEX = (
 )
 
 
-# Expo Web / développement local.
-#
-# Expo peut utiliser différents ports selon le lancement
-# du serveur (8081, 8092, etc.). On autorise donc localhost
-# et 127.0.0.1 sur n'importe quel port de développement.
+# Expo Web / développement local
 LOCALHOST_ORIGIN_REGEX = (
     r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 )
@@ -54,46 +56,26 @@ LOCALHOST_ORIGIN_REGEX = (
 app.add_middleware(
     CORSMiddleware,
 
-    # ========================================================
-    # ORIGINES EXACTES AUTORISÉES
-    # ========================================================
-
+    # Origines exactes autorisées
     allow_origins=[
         VERCEL_PRODUCTION_ORIGIN,
+        *ORIA_PRODUCTION_ORIGINS,
     ],
 
-    # ========================================================
-    # ORIGINES AUTORISÉES PAR REGEX
-    # ========================================================
-
-    # - Previews Vercel
-    # - Expo Web / localhost
+    # Previews Vercel et développement local
     allow_origin_regex=(
         f"(?:{VERCEL_ORIGIN_REGEX[1:-1]})"
         f"|(?:{LOCALHOST_ORIGIN_REGEX[1:-1]})"
     ),
 
-    # ========================================================
-    # AUTHENTIFICATION
-    # ========================================================
-
+    # Authentification
     allow_credentials=True,
 
-    # ========================================================
-    # MÉTHODES
-    # ========================================================
+    # Méthodes HTTP
+    allow_methods=["*"],
 
-    allow_methods=[
-        "*",
-    ],
-
-    # ========================================================
-    # HEADERS
-    # ========================================================
-
-    allow_headers=[
-        "*",
-    ],
+    # Headers HTTP
+    allow_headers=["*"],
 )
 
 
