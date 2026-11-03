@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import Image from "next/image";
 
 export const metadata: Metadata = {
   title: "Comment fonctionne ORIA ?",
@@ -65,6 +66,21 @@ export default function FonctionnementPage() {
           <div><h3 className="font-semibold">Travailler avec des documents</h3><p className="mt-2 text-sm leading-7 text-muted-strong">Analysez vos fichiers et préparez vos contenus selon les fonctions disponibles.</p></div>
           <div><h3 className="font-semibold">Créer des images et des vidéos</h3><p className="mt-2 text-sm leading-7 text-muted-strong">Transformez vos idées en visuels. Les possibilités et la consommation de crédits dépendent de votre formule et des paramètres choisis.</p></div>
         </div>
+        <section id="oria-mini-studio-visuels" aria-labelledby="oria-mini-studio-visuels-titre" className="mt-12">
+          <h2 id="oria-mini-studio-visuels-titre" className="text-2xl font-semibold tracking-tight sm:text-3xl">Découvrir les créations ORIA</h2>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-strong">Deux aperçus des outils de création disponibles dans le Mini-Studio ORIA, selon le pack choisi.</p>
+          <div className="mt-6 grid gap-6 md:grid-cols-2">
+            <figure className="overflow-hidden rounded-2xl border border-border/70 bg-surface/80">
+              <Image src="/oria/oria-mini-studio-image.webp" alt="ORIA Mini-Studio : aperçu de la création d’images par intelligence artificielle" width={482} height={171} unoptimized className="h-auto w-full" />
+              <figcaption className="px-5 py-4 text-sm font-medium">Création d’images avec ORIA</figcaption>
+            </figure>
+            <figure className="overflow-hidden rounded-2xl border border-border/70 bg-surface/80">
+              <Image src="/oria/oria-mini-studio-video.webp" alt="ORIA Mini-Studio : aperçu des outils de création vidéo par intelligence artificielle" width={481} height={175} unoptimized className="h-auto w-full" />
+              <figcaption className="px-5 py-4 text-sm font-medium">Création vidéo avec ORIA</figcaption>
+            </figure>
+          </div>
+        </section>
+
         <div className="mt-12 flex flex-wrap gap-6 text-sm text-muted-strong">
           <Link href="/packs" className="font-semibold text-foreground underline underline-offset-4">Découvrir les tarifs</Link>
           <Link href="/help" className="hover:text-foreground">Questions fréquentes</Link>

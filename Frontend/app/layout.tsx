@@ -41,8 +41,8 @@ export const metadata: Metadata = {
     images: ["/oria-logo.png"],
   },
   icons: {
-    icon: "/oria-logo.png",
-    shortcut: "/oria-logo.png",
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
     apple: "/oria-logo.png",
   },
 };
