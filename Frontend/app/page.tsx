@@ -23,6 +23,15 @@ export default function Home() {
         </Link>
 
         <div className="flex items-center gap-2 sm:gap-3">
+          <Link href="/fonctionnement" className="hidden text-sm font-medium text-muted-strong transition-colors hover:text-foreground lg:inline-flex">
+            Fonctionnement
+          </Link>
+          <Link href="/packs" className="hidden text-sm font-medium text-muted-strong transition-colors hover:text-foreground md:inline-flex">
+            Tarifs
+          </Link>
+          <Link href="/help" className="hidden text-sm font-medium text-muted-strong transition-colors hover:text-foreground lg:inline-flex">
+            Aide
+          </Link>
           <Link
             href="/login"
             className="rounded-2xl px-4 py-2.5 text-sm font-medium text-muted-strong transition-colors duration-200 hover:bg-surface-secondary/75 hover:text-foreground"
@@ -174,6 +183,14 @@ export default function Home() {
           </div>
         </div>
       </section>
+      <footer className="border-t border-border/70 px-5 py-8 sm:px-8">
+        <nav aria-label="Navigation de pied de page" className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-6 gap-y-3 text-sm text-muted-strong">
+          <Link href="/fonctionnement" className="hover:text-foreground">Comment ça marche</Link>
+          <Link href="/packs" className="hover:text-foreground">Packs et tarifs</Link>
+          <Link href="/help" className="hover:text-foreground">Aide</Link>
+          <Link href="/legal" className="hover:text-foreground">À propos et informations légales</Link>
+        </nav>
+      </footer>
     </main>
   );
 }

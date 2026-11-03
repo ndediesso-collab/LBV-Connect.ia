@@ -7,7 +7,6 @@ const privatePagePatterns = [
   "/credits/:path*",
   "/mes_creations/:path*",
   "/settings/:path*",
-  "/packs/:path*",
   "/login/:path*",
   "/register/:path*",
   "/oria-visual-embed/:path*",
