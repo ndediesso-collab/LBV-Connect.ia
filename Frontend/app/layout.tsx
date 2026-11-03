@@ -3,7 +3,6 @@ import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
-import oriaLogo from "./oria-logo.png";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,14 +34,16 @@ export const metadata: Metadata = {
     title: "ORIA | Plateforme d'intelligence artificielle multimodèle",
     description:
       "Discutez, recherchez, analysez vos fichiers et créez des images ou vidéos avec plusieurs IA réunies dans un seul espace.",
+    images: [{ url: "/oria-logo.png", width: 1254, height: 1254, alt: "Logo officiel ORIA" }],
   },
   twitter: {
     card: "summary",
+    images: ["/oria-logo.png"],
   },
   icons: {
-    icon: oriaLogo.src,
-    shortcut: oriaLogo.src,
-    apple: oriaLogo.src,
+    icon: "/oria-logo.png",
+    shortcut: "/oria-logo.png",
+    apple: "/oria-logo.png",
   },
 };
 

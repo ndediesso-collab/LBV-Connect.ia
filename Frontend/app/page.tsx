@@ -2,6 +2,24 @@ import Image from "next/image";
 import Link from "next/link";
 import oriaLogo from "./oria-logo.png";
 
+const oriaSeoStructuredData = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      name: "ORIA",
+      url: "https://www.myoriaai.com/",
+      logo: "https://www.myoriaai.com/oria-logo.png",
+    },
+    {
+      "@type": "WebSite",
+      name: "ORIA",
+      url: "https://www.myoriaai.com/",
+      inLanguage: "fr",
+    },
+  ],
+};
+
 export default function Home() {
   return (
     <main className="min-h-dvh overflow-x-clip bg-background text-foreground oria-page-enter">
@@ -149,6 +167,23 @@ export default function Home() {
             />
           </div>
 
+          <section id="oria-visuels" aria-labelledby="oria-visuels-titre" className="mx-auto mt-14 max-w-5xl">
+            <div className="mb-7">
+              <h2 id="oria-visuels-titre" className="text-2xl font-semibold tracking-tight sm:text-3xl">Découvrez le Mini-Studio ORIA</h2>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-strong sm:text-base">Créez des visuels et explorez la création vidéo depuis une plateforme unique, selon votre pack et les options disponibles.</p>
+            </div>
+            <div className="grid gap-5 md:grid-cols-2">
+              <figure className="overflow-hidden rounded-[27px] border border-border/75 bg-surface/80">
+                <Image src="/oria/oria-mini-studio-image.webp" alt="ORIA Mini-Studio : création d’images par intelligence artificielle" width={482} height={171} className="h-auto w-full object-cover" />
+                <figcaption className="px-5 py-4 text-sm font-medium">Création d’images avec ORIA</figcaption>
+              </figure>
+              <figure className="overflow-hidden rounded-[27px] border border-border/75 bg-surface/80">
+                <Image src="/oria/oria-mini-studio-video.webp" alt="ORIA Mini-Studio : outils de création de vidéos avec intelligence artificielle" width={481} height={175} className="h-auto w-full object-cover" />
+                <figcaption className="px-5 py-4 text-sm font-medium">Création vidéo avec ORIA</figcaption>
+              </figure>
+            </div>
+          </section>
+
           <div className="mx-auto mt-4 max-w-5xl">
             <div className="relative overflow-hidden rounded-[30px] border border-border/70 bg-surface-secondary/80 p-6 shadow-[0_20px_55px_-37px_var(--shadow-color)] sm:p-8 oria-card-rise">
               <div
@@ -191,6 +226,7 @@ export default function Home() {
           <Link href="/legal" className="hover:text-foreground">À propos et informations légales</Link>
         </nav>
       </footer>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(oriaSeoStructuredData) }} />
     </main>
   );
 }
