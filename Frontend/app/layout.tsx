@@ -16,8 +16,29 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Oria",
-  description: "Votre espace intelligent Oria",
+  metadataBase: new URL("https://www.myoriaai.com"),
+  applicationName: "ORIA",
+  title: {
+    default: "ORIA | Plateforme d'intelligence artificielle multimodèle",
+    template: "%s | ORIA",
+  },
+  description:
+    "ORIA réunit plusieurs modèles d'intelligence artificielle pour discuter, raisonner, rechercher sur le Web, analyser des documents et créer des images ou des vidéos.",
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    type: "website",
+    locale: "fr_FR",
+    siteName: "ORIA",
+    url: "/",
+    title: "ORIA | Plateforme d'intelligence artificielle multimodèle",
+    description:
+      "Discutez, recherchez, analysez vos fichiers et créez des images ou vidéos avec plusieurs IA réunies dans un seul espace.",
+  },
+  twitter: {
+    card: "summary",
+  },
   icons: {
     icon: oriaLogo.src,
     shortcut: oriaLogo.src,
