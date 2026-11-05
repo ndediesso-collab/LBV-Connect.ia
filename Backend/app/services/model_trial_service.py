@@ -1,267 +1,117 @@
+"""Gestion des essais découverte ORIA, avec lectures Supabase résilientes.
+
+IMPORTANT : une contrainte UNIQUE(user_id, model_id) doit exister sur
+public.model_trials pour la création concurrente sans doublon.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
 from app.config.model_trials import (
     TRIAL_COSTS,
     TRIAL_MAX_USES,
     TRIAL_MODELS_BY_PACK,
 )
 from app.core.supabase import supabase
+from app.services.supabase_read_retry import execute_supabase_read
 
 
 class ModelTrialService:
-    """
-    Gestion centralisée des essais des modèles supérieurs.
-
-    Les essais sont persistants dans Supabase.
-
-    Ils ne sont jamais réinitialisés automatiquement
-    lorsqu'un utilisateur change de pack.
-    """
-
-    # ========================================================
-    # MODÈLE SUPÉRIEUR
-    # ========================================================
+    """Essais persistants, non réinitialisés lors d'un changement de pack."""
 
     @staticmethod
-    def get_trial_model(
-        pack_id: str | None,
-    ) -> str | None:
-
+    def get_trial_model(pack_id: str | None) -> str | None:
         if not pack_id:
             return None
-
-        return TRIAL_MODELS_BY_PACK.get(
-            pack_id
-        )
-
-    # ========================================================
-    # COÛT
-    # ========================================================
+        return TRIAL_MODELS_BY_PACK.get(pack_id)
 
     @staticmethod
-    def get_trial_cost(
-        model_id: str,
-        web: bool = False,
-    ) -> int:
-
-        model_costs = TRIAL_COSTS.get(
-            model_id
-        )
-
+    def get_trial_cost(model_id: str, web: bool = False) -> int:
+        model_costs = TRIAL_COSTS.get(model_id)
         if not model_costs:
-            raise ValueError(
-                "Ce modèle ne possède pas "
-                "de système de découverte."
-            )
-
-        return model_costs[
-            "web" if web else "normal"
-        ]
-
-    # ========================================================
-    # RÉCUPÉRATION DU COMPTEUR
-    # ========================================================
+            raise ValueError("Ce modèle ne possède pas de système de découverte.")
+        return model_costs["web" if web else "normal"]
 
     @staticmethod
-    def get_trial(
-        user_id: str,
-        model_id: str,
-    ) -> dict | None:
-        """
-        Retourne le compteur d'essais d'un utilisateur.
-
-        Si aucun compteur n'existe encore, retourne None.
-
-        Une réponse Supabase absente est également traitée
-        comme une absence de compteur afin d'éviter une
-        erreur AttributeError sur response.data.
-        """
-
-        response = (
-            supabase
-            .table("model_trials")
-            .select("*")
-            .eq("user_id", user_id)
-            .eq("model_id", model_id)
-            .maybe_single()
-            .execute()
+    def get_trial(user_id: str, model_id: str) -> dict | None:
+        # Ne JAMAIS interpréter une erreur réseau comme un compteur inexistant.
+        response = execute_supabase_read(
+            lambda: (
+                supabase.table("model_trials")
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("model_id", model_id)
+                .maybe_single()
+            ),
+            label="model_trials.get",
         )
-
         if response is None:
+            # Compatibilité avec les versions de postgrest qui renvoient None
+            # quand maybe_single() ne trouve aucune ligne.
             return None
-
         return response.data
 
-    # ========================================================
-    # INITIALISATION DU COMPTEUR
-    # ========================================================
-
     @staticmethod
-    def get_or_create_trial(
-        user_id: str,
-        model_id: str,
-    ) -> dict:
-        """
-        Retourne le compteur existant ou crée le compteur
-        initial de 5 essais pour le modèle concerné.
-        """
-
-        existing = (
-            ModelTrialService.get_trial(
-                user_id,
-                model_id,
-            )
-        )
-
-        if existing:
+    def get_or_create_trial(user_id: str, model_id: str) -> dict:
+        existing = ModelTrialService.get_trial(user_id, model_id)
+        if existing is not None:
             return existing
 
-        response = (
-            supabase
-            .table("model_trials")
-            .insert(
-                {
-                    "user_id": user_id,
-                    "model_id": model_id,
-                    "max_trials": TRIAL_MAX_USES,
-                    "used_trials": 0,
-                }
-            )
-            .execute()
-        )
+        # Une création concurrente ne doit ni produire de doublons ni remettre
+        # used_trials à zéro. NE PAS réessayer un write automatiquement.
+        supabase.table("model_trials").upsert(
+            {
+                "user_id": user_id,
+                "model_id": model_id,
+                "max_trials": TRIAL_MAX_USES,
+                "used_trials": 0,
+            },
+            on_conflict="user_id,model_id",
+            ignore_duplicates=True,
+        ).execute()
 
-        if response is None:
-            raise RuntimeError(
-                "Supabase n'a retourné aucune réponse "
-                "lors de la création du compteur d'essais."
-            )
-
-        if not response.data:
-            raise RuntimeError(
-                "Impossible de créer le compteur "
-                "d'essais du modèle."
-            )
-
-        return response.data[0]
-
-    # ========================================================
-    # ESSAIS RESTANTS
-    # ========================================================
+        trial = ModelTrialService.get_trial(user_id, model_id)
+        if trial is None:
+            raise RuntimeError("Compteur d'essais introuvable après initialisation")
+        return trial
 
     @staticmethod
-    def get_remaining(
-        user_id: str,
-        model_id: str,
-    ) -> int:
-        """
-        Retourne le nombre d'essais encore disponibles.
-        """
-
-        trial = (
-            ModelTrialService.get_or_create_trial(
-                user_id,
-                model_id,
-            )
-        )
-
-        return max(
-            0,
-            trial["max_trials"]
-            - trial["used_trials"],
-        )
-
-    # ========================================================
-    # AUTORISATION
-    # ========================================================
+    def get_remaining(user_id: str, model_id: str) -> int:
+        trial = ModelTrialService.get_or_create_trial(user_id, model_id)
+        return max(0, int(trial["max_trials"]) - int(trial["used_trials"]))
 
     @staticmethod
-    def can_use_trial(
-        user_id: str,
-        pack_id: str | None,
-        model_id: str,
-    ) -> bool:
-        """
-        Vérifie que le modèle correspond au modèle d'essai
-        du pack et qu'il reste au moins un essai.
-        """
-
-        expected_model = (
-            ModelTrialService.get_trial_model(
-                pack_id
-            )
-        )
-
-        if expected_model != model_id:
+    def can_use_trial(user_id: str, pack_id: str | None, model_id: str) -> bool:
+        if ModelTrialService.get_trial_model(pack_id) != model_id:
             return False
-
-        remaining = (
-            ModelTrialService.get_remaining(
-                user_id,
-                model_id,
-            )
-        )
-
-        return remaining > 0
-
-    # ========================================================
-    # CONSOMMATION D'UN ESSAI
-    # ========================================================
+        return ModelTrialService.get_remaining(user_id, model_id) > 0
 
     @staticmethod
-    def consume_trial(
-        user_id: str,
-        model_id: str,
-    ) -> dict:
-        """
-        Consomme exactement un essai.
-
-        La condition used_trials == ancienne valeur
-        protège contre une consommation concurrente.
-        """
-
-        trial = (
-            ModelTrialService.get_or_create_trial(
-                user_id,
-                model_id,
-            )
-        )
-
-        used = trial["used_trials"]
-        maximum = trial["max_trials"]
-
+    def consume_trial(user_id: str, model_id: str) -> dict:
+        trial = ModelTrialService.get_or_create_trial(user_id, model_id)
+        used = int(trial["used_trials"])
+        maximum = int(trial["max_trials"])
         if used >= maximum:
-            raise ValueError(
-                "Les essais découverte de ce modèle "
-                "sont épuisés."
-            )
+            raise ValueError("Les essais découverte de ce modèle sont épuisés.")
 
-        new_used = used + 1
-
+        # CAS (Compare And Swap) : 2 appels concurrents avec le même 'used'
+        # ne peuvent pas valider tous les deux. L'update n'est PAS retenté,
+        # car une réponse réseau perdue n'implique pas que le write a échoué.
         response = (
-            supabase
-            .table("model_trials")
-            .update(
-                {
-                    "used_trials": new_used,
-                    "updated_at": "now()",
-                }
-            )
+            supabase.table("model_trials")
+            .update({
+                "used_trials": used + 1,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
             .eq("user_id", user_id)
             .eq("model_id", model_id)
             .eq("used_trials", used)
+            .lt("used_trials", maximum)
             .execute()
         )
-
-        if response is None:
+        if response is None or not response.data:
             raise RuntimeError(
-                "Supabase n'a retourné aucune réponse "
-                "lors de la consommation de l'essai."
+                "Mise à jour non confirmée : le compteur a peut-être changé. "
+                "Relire son état avant toute nouvelle consommation."
             )
-
-        if not response.data:
-            raise RuntimeError(
-                "Impossible de mettre à jour "
-                "le compteur d'essais. "
-                "Le compteur a peut-être été modifié "
-                "par une autre requête."
-            )
-
         return response.data[0]

@@ -1,13 +1,13 @@
 """Outils de mémoire conversationnelle ORIA.
 
-Sans dépendance externe ni appels IA. Compatible avec la chaîne de requêtes
-Supabase/PostgREST existante ; toutes les lectures sont bornées et paginées.
+Sans appels IA. Compatible avec la chaîne de requêtes Supabase/PostgREST
+existante ; toutes les lectures sont bornées et paginées.
 """
-
 from __future__ import annotations
 
 from typing import Any
 
+from app.services.supabase_read_retry import execute_supabase_read
 
 HISTORY_PAGE_SIZE = 250  # sous le plafond PostgREST usuel (1 000 lignes)
 MAX_STORED_MESSAGES_TO_SCAN = 10000  # garde-fou, pas une politique de rétention
@@ -28,9 +28,8 @@ def fetch_conversation_rows(
 ) -> list[dict[str, Any]]:
     """Lit toutes les lignes autorisées, dans un ordre déterministe.
 
-    Attention : .execute() seul peut renvoyer au maximum 1 000 lignes.
-    Un dépassement de max_rows produit une erreur explicite, jamais une
-    lecture tronquée qui conduirait à supprimer les mauvaises lignes.
+    Un échec temporaire de lecture est retenté sur la même page ; aucune
+    suppression ou modification de messages ne se produit ici.
     """
     if not conversation_id or not user_id:
         raise ValueError("Identité de conversation manquante")
@@ -40,52 +39,52 @@ def fetch_conversation_rows(
     result: list[dict[str, Any]] = []
     offset = 0
     while True:
-        response = (
-            client.table("messages")
-            .select(columns)
-            .eq("conversation_id", conversation_id)
-            .eq("user_id", user_id)
-            .order("created_at", desc=False)
-            .order("id", desc=False)
-            .range(offset, offset + page_size - 1)
-            .execute()
+        response = execute_supabase_read(
+            lambda: (
+                client.table("messages")
+                .select(columns)
+                .eq("conversation_id", conversation_id)
+                .eq("user_id", user_id)
+                .order("created_at", desc=False)
+                .order("id", desc=False)
+                .range(offset, offset + page_size - 1)
+            ),
+            label="messages.page",
         )
+        if response is None:
+            raise RuntimeError("Supabase n'a renvoyé aucune réponse pour l'historique")
         page = response.data or []
         result.extend(page)
         if len(page) < page_size:
             return result
         offset += len(page)
         if len(result) >= max_rows:
-            # Un dernier appel est nécessaire pour distinguer exactement
-            # max_rows lignes d'un dépassement : le seuil reste strict.
             if len(result) > max_rows:
                 raise ConversationHistoryOverflow("Historique trop volumineux")
-            check = (
-                client.table("messages")
-                .select("id")
-                .eq("conversation_id", conversation_id)
-                .eq("user_id", user_id)
-                .order("created_at", desc=False)
-                .order("id", desc=False)
-                .range(offset, offset)
-                .execute()
+            check = execute_supabase_read(
+                lambda: (
+                    client.table("messages")
+                    .select("id")
+                    .eq("conversation_id", conversation_id)
+                    .eq("user_id", user_id)
+                    .order("created_at", desc=False)
+                    .order("id", desc=False)
+                    .range(offset, offset)
+                ),
+                label="messages.overflow_check",
             )
+            if check is None:
+                raise RuntimeError("Supabase n'a renvoyé aucune réponse pour le contrôle d'historique")
             if check.data:
                 raise ConversationHistoryOverflow("Historique trop volumineux")
             return result
 
 
 def estimate_text_tokens(content: str) -> int:
-    """Estimation conservatrice pour *sélectionner*, pas facturer.
-
-    Le nombre exact est retourné par le fournisseur après exécution.
-    Unicode, code et contenu multimodal peuvent diverger de cette estimation.
-    """
+    """Estimation pour sélectionner l'historique, JAMAIS pour facturer."""
     text = str(content or "")
     if not text:
         return 0
-    # L'UTF-8 évite de sous-estimer massivement les textes non latins.
-    # L'ASCII/code peut, lui aussi, se tokeniser plus finement que 3 char/token.
     char_based = (len(text) + 1) // 2
     byte_based = (len(text.encode("utf-8")) + 2) // 3
     return max(1, char_based, byte_based) + 12
@@ -106,7 +105,7 @@ def safe_prune_ids(
     max_messages: int,
     last_processed_message_id: str | None,
 ) -> list[str]:
-    """Retourne seulement les messages *déjà résumés* et excédentaires.
+    """Retourne seulement les messages déjà résumés et excédentaires.
 
     Si la mémoire manque ou si son curseur a disparu, aucune suppression.
     """
@@ -120,8 +119,6 @@ def safe_prune_ids(
     )
     if cursor_index is None:
         return []
-    # Conserver le message curseur : l’actualisation suivante doit
-    # pouvoir retrouver sa position sans ambiguïté.
     return [
         str(r["id"]) for r in rows[:min(overflow, cursor_index)]
         if r.get("id")
