@@ -1038,7 +1038,33 @@ def _resolve_artifact_requests(
             or "archive" in lower_message
         )
 
-        if has_generation_intent or has_file_intent:
+        # Une demande directe de fichier doit fonctionner même sans les verbes
+        # « crée » / « génère ». Ex. « je veux un PDF », « renvoie-le-moi en PDF ».
+        # Ne pas déclencher une génération pour « explique-moi ce PDF » ou
+        # « je veux comprendre le PDF » : il s'agit d'une analyse, pas d'un export.
+        direct_pdf_request = bool(
+            re.search(
+                r"\b(?:je\s+(?:veux|voudrais|souhaite|souhaiterais)|"
+                r"j['’]aimerais|il\s+me\s+faut|"
+                r"j['’]ai\s+besoin\s+d['’](?:un\s+|une\s+)?)"
+                r"\s+(?:(?:un|une|le|la|du|des)\s+)?"
+                r"(?:(?:fichier|document)\s+)?pdf\b",
+                lower_message,
+            )
+            or re.search(
+                r"\b(?:renvoi(?:e|es|ez)|envoi(?:e|es|ez)|fournis|fournissez|"
+                r"redonne|redonnez|transmets|transmettez)\b"
+                r"[^.!?\n]{0,100}?\b(?:en|au\s+format)\s+pdf\b",
+                lower_message,
+            )
+            or re.search(
+                r"\b(?:renvoi(?:e|es|ez)|envoi(?:e|es|ez)|fournis|fournissez)\b"
+                r"(?:-moi|\s+moi|\s+me)\s+(?:le|un)\s+pdf\b",
+                lower_message,
+            )
+        )
+
+        if has_generation_intent or has_file_intent or direct_pdf_request:
             for extension, keywords in _ARTIFACT_FORMAT_PATTERNS:
                 if any(keyword in lower_message for keyword in keywords):
                     if extension not in detected_types:
