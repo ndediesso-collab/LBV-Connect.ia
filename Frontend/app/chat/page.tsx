@@ -179,17 +179,25 @@ function requiresOriginalFiles(content: string): boolean {
 }
 // Le marqueur historique reste dans le contenu enregistré pour compatibilité
 // avec les anciennes conversations. Il n'apparaît plus dans l'interface.
+// ORIA_ATTACHMENT_UI_V2 : le marqueur historique est une métadonnée, pas du texte affichable.
+// IMPORTANT : l'extraction des noms se fait sur le contenu BRUT avant nettoyage.
+const ORIA_LEGACY_ATTACHMENT_REGEX =
+  /\[\s*Pi[eè]ces\s+jointes\s*:\s*([^\]\r\n]{1,700})\]/gi;
+
 function attachmentNamesFromMessage(content: string): string[] {
-  const match = getVisibleMessageContent(content).match(
-    /\[Pièces jointes\s*:\s*([^\]\r\n]+)\]\s*$/i,
-  );
-  return match ? match[1].split(/,\s*/).map((name) => name.trim()).filter(Boolean).slice(0, 3) : [];
+  const names: string[] = [];
+  for (const match of content.matchAll(ORIA_LEGACY_ATTACHMENT_REGEX)) {
+    for (const value of match[1].split(/,\s*/)) {
+      const name = value.trim();
+      if (name && !names.includes(name)) names.push(name);
+      if (names.length >= MAX_ATTACHMENTS) return names;
+    }
+  }
+  return names;
 }
 
 function getVisibleUserMessageContent(content: string): string {
-  return getVisibleMessageContent(content)
-    .replace(/(?:\r?\n)*\[Pièces jointes\s*:[^\]\r\n]*\]\s*$/i, "")
-    .trim();
+  return getVisibleMessageContent(content).trim();
 }
 
 function editableUserText(content: string): string {
@@ -692,6 +700,9 @@ function getVisibleMessageContent(
     )
     .replace(/\s*\[\[ORIA_WEB_IMAGES:[A-Za-z0-9+/=]+\]\]/g, "")
     .replace(/\s*\[\[ORIA_AUDIO_ID:[^\]]+\]\]/g, "")
+    // Un marqueur historique peut être au milieu du message, pas seulement à la fin.
+    // La mémoire serveur continue de recevoir la valeur originale non nettoyée.
+    .replace(ORIA_LEGACY_ATTACHMENT_REGEX, "\n")
     .trimEnd();
 }
 
@@ -7451,6 +7462,12 @@ export default function ChatPage() {
                                       language={language}
                                     />
                                   ) : null}
+
+                                </div>
+                              )}
+                              {/* La carte doit apparaître pour tout message, vocal ou texte. */}
+                              {userFileCardsForMessage(item).length > 0 && (
+                                <div data-oria-attachment-ui="v2" className="mt-2 flex min-w-0 flex-col gap-2.5">
                                   {userFileCardsForMessage(item).map((file) => (
                                     <UserFileCard key={file.key} item={file} language={language}
                                       busy={busyUserAttachmentId === file.stored?.id}
@@ -7468,7 +7485,7 @@ export default function ChatPage() {
                             <div className="flex justify-end gap-1">
                               <MessageCopyButton
                                 language={language}
-                                value={item.content}
+                                value={getVisibleUserMessageContent(item.content)}
                               />
 
                               {isThinking &&
