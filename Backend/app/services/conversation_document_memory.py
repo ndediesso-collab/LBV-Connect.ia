@@ -34,7 +34,7 @@ CHUNK_OVERLAP = 180
 MAX_CONTEXT_CHARS = 13500
 MAX_CONTEXT_FRAGMENTS = 8
 MAX_REPLAY_FILES = 2
-# Namespace fixe: idempotence sur un même fichier+conversation, même si HTTP est retenté.
+# Namespace fixe: idempotence par message + contenu (repli historique sans ID message).
 ATTACHMENT_NAMESPACE = UUID('ee961fb6-9f78-4eb8-949e-bf67f234ba83')
 FILE_RELATED = re.compile(
     r"\b(?:fichier|document|pdf|docx|image|photo|piece jointe|pièce jointe|"
@@ -366,7 +366,19 @@ class ConversationDocumentMemoryService:
                 raise ValueError('Pièce jointe Base64 non valide.') from exc
             name, mime = validate_file(name, mime, binary)
             digest = hashlib.sha256(binary).hexdigest()
-            aid = str(uuid5(ATTACHMENT_NAMESPACE, f'{uid}|{cid}|{name}|{digest}'))
+            # Un message doit avoir SA PROPRE occurrence, même si l'utilisateur
+            # renvoie exactement le même fichier dans la même conversation.
+            # L'ID stable du message rend l'upload rejouable sans doublon.
+            mid = _safe_message_id(source_message_id)
+            if not mid:
+                mid = self._match_recent_user_message(
+                    user_id=uid, conversation_id=cid,
+                    filename=name, current_text=message_text)
+            aid = str(uuid5(
+                ATTACHMENT_NAMESPACE,
+                f'{uid}|{cid}|message:{mid}|{name}|{digest}'
+                if mid else f'{uid}|{cid}|{name}|{digest}',
+            ))
             row = self.repo.save(user_id=uid, conversation_id=cid, filename=name,
                                  mime_type=mime, file_bytes=binary, attachment_id=aid)
             if str(row.get('index_status') or 'pending') == 'pending':
@@ -375,7 +387,6 @@ class ConversationDocumentMemoryService:
                 except Exception:
                     LOG.exception('ORIA_DOC_MEMORY indexing_failed attachment_id=%s', aid)
                     # L'original existe toujours : relecture native possible.
-            mid = _safe_message_id(source_message_id)
             if row.get('message_id') is None:
                 # Le champ historique source_message_id peut désigner une
                 # réponse assistant : valider son rôle et ne pas le supposer.

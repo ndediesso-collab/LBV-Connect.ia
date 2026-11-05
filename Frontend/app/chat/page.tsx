@@ -229,6 +229,7 @@ type StoredConversationAttachment = {
   mime_type: string;
   kind: string;
   size_bytes: number;
+  sha256: string | null;
   created_at: string | null;
 };
 
@@ -262,6 +263,8 @@ function normalizeStoredConversationAttachment(
     kind: typeof raw.kind === "string" ? raw.kind : "file",
     size_bytes: typeof raw.size_bytes === "number" && Number.isFinite(raw.size_bytes)
       ? raw.size_bytes : 0,
+    sha256: typeof raw.sha256 === "string" && /^[0-9a-f]{64}$/i.test(raw.sha256)
+      ? raw.sha256.toLowerCase() : null,
     created_at: typeof raw.created_at === "string" ? raw.created_at : null,
   };
 }
@@ -1437,6 +1440,7 @@ async function saveMessageRemote(
         body: JSON.stringify({
           role: message.role,
           content: message.content,
+          id: message.id, // UUID client stable; associe durablement les pièces jointes au message.
         }),
       },
     );
@@ -5031,20 +5035,35 @@ export default function ChatPage() {
       key: file.id, filename: file.filename, mimeType: file.mime_type,
       sizeBytes: file.size_bytes, stored: file,
     }));
-    // Messages optimistes et anciennes conversations : fallback visuel du nom.
-    // Un fichier non lié n'est associé qu'en cas de correspondance unique
-    // dans la même conversation et à deux minutes du message.
+    // Le protocole précédent dédupliquait l'upload par (utilisateur, chat,
+    // nom, SHA256) : deux messages envoyant le MEME PDF pointaient donc
+    // vers une seule ligne, liée au premier message uniquement.
+    // Dans ce cas, réutiliser la référence privée existante et vérifiée.
+    // Ne JAMAIS choisir arbitrairement si plusieurs versions du même nom
+    // contiennent des octets différents (SHA256 différents).
     for (const [index, name] of names.entries()) {
       if (result.some((file) => file.filename === name)) continue;
-      const possibilities = stored.filter((file) => file.filename === name && !file.message_id);
-      const messageTime = new Date(item.createdAt || "").getTime();
-      const candidates = possibilities.filter((file) =>
-        Number.isFinite(messageTime) && file.created_at &&
-        Math.abs(new Date(file.created_at).getTime() - messageTime) <= 120_000,
-      );
-      const resolved = candidates.length === 1 ? candidates[0] : null;
+      const possibilities = stored.filter((file) => file.filename === name);
+      let resolved: StoredConversationAttachment | null = null;
+      if (possibilities.length === 1) {
+        resolved = possibilities[0];
+      } else if (possibilities.length > 1 &&
+        possibilities.every((file) => file.sha256 !== null &&
+          file.sha256 === possibilities[0].sha256)) {
+        // Plusieurs uploads historiques du même contenu, SHA vérifié côté serveur.
+        resolved = possibilities[0];
+      } else {
+        // Pour des versions différentes, seule une occurrence non liée,
+        // proche du message dans le temps, peut être utilisée sans ambiguïté.
+        const messageTime = new Date(item.createdAt || "").getTime();
+        const candidates = possibilities.filter((file) =>
+          !file.message_id && Number.isFinite(messageTime) && file.created_at &&
+          Math.abs(new Date(file.created_at).getTime() - messageTime) <= 120_000,
+        );
+        resolved = candidates.length === 1 ? candidates[0] : null;
+      }
       result.push({
-        key: resolved?.id || `${item.id}-attachment-${index}`,
+        key: `${item.id}-attachment-${resolved?.id || index}`,
         filename: name,
         mimeType: resolved?.mime_type || (name.toLowerCase().endsWith(".pdf")
           ? "application/pdf" : "application/octet-stream"),
@@ -6209,6 +6228,19 @@ export default function ChatPage() {
         "conversation_id",
         conversationId,
       );
+
+      // ID réservé aux fichiers reçus, distinct de source_message_id utilisé
+      // par les artifacts générés. Le backend ne doit pas lier le fichier
+      // au mauvais message en cas d'uploads identiques.
+      if (attachments.length > 0) {
+        formData.append("attachment_message_id", userMessageId);
+        // Pour un envoi avec fichiers, confirmer l'INSERT du message AVANT
+        // l'upload privé. Sinon la liaison peut courir contre Supabase.
+        const persistedUserMessage = await userMessageSavePromise;
+        if (!persistedUserMessage?.id) {
+          throw new Error("Le message n'a pas été enregistré : fichiers non envoyés pour éviter une perte de liaison.");
+        }
+      }
 
       // Identifiant stable créé avant l'appel réseau afin que
       // « Modifier » soit disponible immédiatement.

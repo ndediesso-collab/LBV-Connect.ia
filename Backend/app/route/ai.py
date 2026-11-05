@@ -4745,6 +4745,7 @@ async def chat(
     artifact_type: str | None = Form(default=None),
     artifact_filename: str | None = Form(default=None),
     source_message_id: str | None = Form(default=None),
+    attachment_message_id: str | None = Form(default=None),
     files: list[UploadFile] = File(default=[]),
     user_id: str | None = Header(default=None, alias="user-id"),
     authorization: str | None = Header(default=None, alias="authorization"),
@@ -4773,7 +4774,7 @@ async def chat(
     history, attachments = await _oria_document_memory_prepare(
         user_id=authenticated_user_id, conversation_id=conversation_id,
         message=message, history=history, attachments=attachments,
-        source_message_id=source_message_id,
+        source_message_id=attachment_message_id or source_message_id,
     )
 
     artifact_requests = _resolve_artifact_requests(
@@ -7148,6 +7149,7 @@ async def chat_stream(
     artifact_type: str | None = Form(default=None),
     artifact_filename: str | None = Form(default=None),
     source_message_id: str | None = Form(default=None),
+    attachment_message_id: str | None = Form(default=None),
     files: list[UploadFile] = File(default=[]),
     user_id: str | None = Header(default=None, alias="user-id"),
     authorization: str | None = Header(default=None, alias="authorization"),
@@ -7195,7 +7197,7 @@ async def chat_stream(
     history, attachments = await _oria_document_memory_prepare(
         user_id=authenticated_user_id, conversation_id=conversation_id,
         message=message, history=history, attachments=attachments,
-        source_message_id=source_message_id,
+        source_message_id=attachment_message_id or source_message_id,
     )
 
     artifact_requests = _resolve_artifact_requests(
