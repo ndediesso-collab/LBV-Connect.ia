@@ -37,8 +37,6 @@ const UI = {
     loginSuccess: "Connexion réussie. Redirection...",
     loggingIn: "Connexion...",
     signIn: "Se connecter",
-    or: "ou",
-    continueWithGoogle: "Continuer avec Google",
     noAccount: "Vous n'avez pas encore de compte ?",
     createAccount: "Créer un compte",
     legalNotice:
@@ -63,8 +61,6 @@ const UI = {
     loginSuccess: "Signed in successfully. Redirecting...",
     loggingIn: "Signing in...",
     signIn: "Sign in",
-    or: "or",
-    continueWithGoogle: "Continue with Google",
     noAccount: "Don't have an account yet?",
     createAccount: "Create an account",
     legalNotice:
@@ -415,28 +411,6 @@ export default function LoginPage() {
                 )}
               </button>
             </form>
-
-            {/* Divider */}
-
-            <div className="my-7 flex items-center gap-3">
-              <div className="h-px flex-1 bg-border" />
-
-              <span className="text-xs text-muted">
-                {UI[language].or}
-              </span>
-
-              <div className="h-px flex-1 bg-border" />
-            </div>
-
-            {/* Google */}
-
-            <button
-              type="button"
-              disabled={loading}
-              className="flex h-12 w-full items-center justify-center gap-3 rounded-2xl border border-border/75 bg-surface/80 px-4 text-sm font-medium transition-[background-color,border-color] duration-200 hover:border-border-strong hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Continuer avec Google
-            </button>
 
             {/* Register */}
 
