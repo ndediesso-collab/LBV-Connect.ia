@@ -8,6 +8,50 @@ import { createClient as createWebsiteClient } from "@/lib/supabase/client";
 
 type Language = "fr" | "en";
 type Status = "initializing" | "confirm" | "ready" | "invalid" | "success" | "logout-error";
+type InvalidReason = "missing" | "server-rejected" | "verification-failed";
+
+type RecoveryLink =
+  | { kind: "direct"; tokenHash: string }
+  | { kind: "legacy-session"; accessToken: string; refreshToken: string }
+  | { kind: "legacy-code"; code: string }
+  | { kind: "invalid"; reason: InvalidReason };
+
+/**
+ * Recognize the custom ORIA token_hash email and both legacy Supabase redirects.
+ * Parsing NEVER sends, consumes, or logs a secret. URL input is immediately
+ * cleared by the caller before any asynchronous work.
+ */
+function parseRecoveryLink(search: string, hash: string): RecoveryLink {
+  const query = new URLSearchParams(search.replace(/^\?/, ""));
+  const fragment = new URLSearchParams(hash.replace(/^#/, ""));
+
+  // Supabase can redirect here with an error if its /verify endpoint already
+  // consumed/rejected the link (for example after an email scanner request).
+  if (query.has("error") || fragment.has("error")) {
+    return { kind: "invalid", reason: "server-rejected" };
+  }
+
+  const tokenHash = query.get("token_hash");
+  const tokenType = query.get("type") ?? query.get("amp;type");
+  if (tokenHash && tokenType === "recovery") {
+    return { kind: "direct", tokenHash };
+  }
+
+  const accessToken = fragment.get("access_token");
+  const refreshToken = fragment.get("refresh_token");
+  if (fragment.get("type") === "recovery" && accessToken && refreshToken) {
+    return { kind: "legacy-session", accessToken, refreshToken };
+  }
+
+  const code = query.get("code");
+  if (query.get("flow") === "recovery" && code) {
+    return { kind: "legacy-code", code };
+  }
+
+  // Never treat an existing login as a recovery entitlement.
+  return { kind: "invalid", reason: "missing" };
+}
+
 
 const UI = {
   fr: {
@@ -17,8 +61,13 @@ const UI = {
     confirmText: "Vous avez ouvert un lien de récupération ORIA. Cliquez ci-dessous pour vérifier ce lien à usage unique, puis choisissez votre nouveau mot de passe.",
     confirmButton: "Vérifier mon lien et continuer",
     readyText: "Lien vérifié. Choisissez maintenant votre nouveau mot de passe.",
-    invalidTitle: "Lien invalide, expiré ou déjà utilisé",
-    invalidText: "Ce lien ne peut plus être utilisé. Demandez un nouvel email de récupération. Ce parcours n'a pas modifié votre mot de passe.",
+    invalidTitle: "Lien de récupération non utilisable",
+    invalidText: "Ce lien ne peut pas être vérifié. Votre mot de passe n'a pas été modifié.",
+    missingText: "Le lien ouvert ne contient pas les informations de récupération attendues. Il s'agit peut-être d'un ancien modèle d'email Supabase ou d'une redirection qui a supprimé les paramètres.",
+    rejectedText: "Supabase a rejeté ce lien avant l'ouverture du formulaire. Il peut avoir expiré ou été ouvert automatiquement par un système de vérification des emails.",
+    failedText: "Supabase n'a pas pu valider ce lien. Il est peut-être expiré, déjà consommé ou issu d'un ancien format incompatible.",
+    diagnosticDirect: "Lien ORIA détecté",
+    diagnosticLegacy: "Ancien lien Supabase reconnu",
     newLink: "Demander un nouveau lien",
     password: "Nouveau mot de passe",
     confirmPassword: "Confirmer le mot de passe",
@@ -45,8 +94,13 @@ const UI = {
     confirmText: "You have opened an ORIA password recovery link. Select the button below to verify this one-time link and choose a new password.",
     confirmButton: "Verify my link and continue",
     readyText: "Link verified. You can now choose a new password.",
-    invalidTitle: "Invalid, expired or already used link",
-    invalidText: "This link cannot be used again. Request a new recovery email. Your existing password was not changed.",
+    invalidTitle: "Recovery link cannot be used",
+    invalidText: "The link could not be verified. Your password has not been changed.",
+    missingText: "This link does not include the expected recovery parameters. It may have come from an old Supabase email template, or a redirect may have removed them.",
+    rejectedText: "Supabase rejected the link before the form opened. It may have expired or been visited automatically by an email scanner.",
+    failedText: "Supabase could not verify this link. It may be expired, already consumed, or from an incompatible legacy flow.",
+    diagnosticDirect: "ORIA link detected",
+    diagnosticLegacy: "Legacy Supabase link recognized",
     newLink: "Request a new link",
     password: "New password",
     confirmPassword: "Confirm new password",
@@ -107,8 +161,10 @@ export default function ResetPasswordPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [invalidReason, setInvalidReason] = useState<InvalidReason>("missing");
+  const [linkKind, setLinkKind] = useState<RecoveryLink["kind"]>("invalid");
   const startedRef = useRef(false);
-  const tokenHashRef = useRef<string | null>(null);
+  const linkRef = useRef<RecoveryLink | null>(null);
   const recoveryClientRef = useRef<SupabaseClient | null>(null);
 
   useEffect(() => {
@@ -120,16 +176,18 @@ export default function ResetPasswordPage() {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    // Read the token ONCE. Remove it from browser history before any async work.
-    const parameters = new URLSearchParams(window.location.search);
-    const token = parameters.get("token_hash");
-    tokenHashRef.current = parameters.get("type") === "recovery" && token ? token : null;
+    // Capture an email link exactly once and hide its secrets from browser
+    // history *before* doing any Supabase calls or changing browser routes.
+    const link = parseRecoveryLink(window.location.search, window.location.hash);
+    linkRef.current = link;
+    setLinkKind(link.kind);
+    if (link.kind === "invalid") setInvalidReason(link.reason);
     window.history.replaceState(window.history.state, "", "/reset-password");
 
-    // Always clear any older ORIA web session first, including one left behind
-    // by a failed recovery. Do NOT verify or consume the token on page load.
+    // A recovery link is not an ordinary sign-in. Clear an old website session,
+    // and keep any temporary recovery credentials in an isolated client.
     void closeWebsiteSession()
-      .then(() => setStatus(tokenHashRef.current ? "confirm" : "invalid"))
+      .then(() => setStatus(link.kind === "invalid" ? "invalid" : "confirm"))
       .catch(() => setStatus("logout-error"));
   }, []);
 
@@ -142,34 +200,58 @@ export default function ResetPasswordPage() {
   }, [status]);
 
   async function handleVerify() {
-    if (status !== "confirm" || loading || !tokenHashRef.current) return;
+    const link = linkRef.current;
+    if (status !== "confirm" || loading || !link || link.kind === "invalid") return;
     setErrorMessage("");
     setLoading(true);
     try {
-      // Explicit user click: automated mail scanners loading this page should
-      // not consume the one-time Supabase token.
+      // Wait for a physical click: email previewers fetching the ORIA page
+      // must not consume the Supabase one-time recovery token.
       const recoveryClient = newRecoveryClient();
-      const { data, error } = await recoveryClient.auth.verifyOtp({
-        token_hash: tokenHashRef.current,
-        type: "recovery",
-      });
-      if (error || !data.session || !data.user) {
-        tokenHashRef.current = null;
+      let verifiedUserId: string | null = null;
+
+      if (link.kind === "direct") {
+        const { data, error } = await recoveryClient.auth.verifyOtp({
+          token_hash: link.tokenHash,
+          type: "recovery",
+        });
+        if (!error && data.session && data.user) verifiedUserId = data.user.id;
+      } else if (link.kind === "legacy-session") {
+        // Supabase default email verification may redirect back with an
+        // authenticated recovery session in the URL fragment. Import it into
+        // MEMORY-ONLY storage, never the regular website client.
+        const { data, error } = await recoveryClient.auth.setSession({
+          access_token: link.accessToken,
+          refresh_token: link.refreshToken,
+        });
+        if (!error && data.session && data.user) verifiedUserId = data.user.id;
+      } else if (link.kind === "legacy-code") {
+        // PKCE requires the original browser code_verifier. It can fail when
+        // mail is opened on a different device; direct token_hash links work
+        // across devices and should be used for new recovery emails.
+        const { data, error } = await recoveryClient.auth.exchangeCodeForSession(link.code);
+        if (!error && data.session && data.user) verifiedUserId = data.user.id;
+      }
+
+      // Release secrets even after failure. Never grant the form merely
+      // because an unrelated website session happens to exist.
+      linkRef.current = null;
+      if (!verifiedUserId) {
+        setInvalidReason("verification-failed");
         setStatus("invalid");
         return;
       }
       const { data: userData, error: userError } = await recoveryClient.auth.getUser();
-      if (userError || !userData.user || userData.user.id !== data.user.id) {
-        tokenHashRef.current = null;
+      if (userError || !userData.user || userData.user.id !== verifiedUserId) {
         await recoveryClient.auth.signOut({ scope: "local" });
+        setInvalidReason("verification-failed");
         setStatus("invalid");
         return;
       }
-      tokenHashRef.current = null;
       recoveryClientRef.current = recoveryClient;
       setStatus("ready");
     } catch {
-      // A transient network problem is not proof the token is invalid.
+      // Network errors do not prove the OTP was rejected by Supabase.
       setErrorMessage(t.genericError);
     } finally {
       setLoading(false);
@@ -233,7 +315,7 @@ export default function ResetPasswordPage() {
     try {
       await closeWebsiteSession();
       // Invalid/no link stays invalid; an unused valid link may be verified.
-      setStatus(tokenHashRef.current ? "confirm" : "invalid");
+      setStatus(linkRef.current && linkRef.current.kind !== "invalid" ? "confirm" : "invalid");
     } catch {
       setErrorMessage(t.genericError);
     } finally {
@@ -258,9 +340,12 @@ export default function ResetPasswordPage() {
             {status === "confirm" ? t.confirmTitle : status === "invalid" ? t.invalidTitle : status === "success" ? t.successTitle : status === "logout-error" ? t.logoutTitle : t.title}
           </h1>
           <p className="mt-3 text-sm leading-7 text-muted" aria-live="polite">
-            {status === "initializing" ? t.prepare : status === "confirm" ? t.confirmText : status === "ready" ? t.readyText : status === "invalid" ? t.invalidText : status === "success" ? t.successText : status === "logout-error" ? t.logoutText : t.prepare}
+            {status === "initializing" ? t.prepare : status === "confirm" ? t.confirmText : status === "ready" ? t.readyText : status === "invalid" ? (
+              invalidReason === "missing" ? t.missingText : invalidReason === "server-rejected" ? t.rejectedText : t.failedText
+            ) : status === "success" ? t.successText : status === "logout-error" ? t.logoutText : t.prepare}
           </p>
 
+          {status === "confirm" ? <p className="mt-3 text-xs text-muted" aria-live="polite">{linkKind === "direct" ? t.diagnosticDirect : t.diagnosticLegacy}</p> : null}
           {status === "initializing" ? <div className="mt-7 flex items-center gap-2 text-sm text-muted"><Loader2 size={18} className="animate-spin" />{t.prepare}</div> : null}
           {status === "confirm" ? (
             <button type="button" onClick={() => void handleVerify()} disabled={loading} className="mt-7 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground disabled:opacity-60">
