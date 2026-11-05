@@ -138,6 +138,7 @@ type MessagesResponse = {
   messages: ChatMessage[];
   artifacts?: Array<Record<string, unknown>>;
   voice_notes?: Array<Record<string, unknown>>;
+  attachments?: Array<Record<string, unknown>>;
 };
 
 type OriaRevision = {
@@ -176,10 +177,23 @@ type OriaGenerateRevisionResponse = {
 function requiresOriginalFiles(content: string): boolean {
   return /\[Pièces jointes\s*:/i.test(content);
 }
-function editableUserText(content: string): string {
+// Le marqueur historique reste dans le contenu enregistré pour compatibilité
+// avec les anciennes conversations. Il n'apparaît plus dans l'interface.
+function attachmentNamesFromMessage(content: string): string[] {
+  const match = getVisibleMessageContent(content).match(
+    /\[Pièces jointes\s*:\s*([^\]\r\n]+)\]\s*$/i,
+  );
+  return match ? match[1].split(/,\s*/).map((name) => name.trim()).filter(Boolean).slice(0, 3) : [];
+}
+
+function getVisibleUserMessageContent(content: string): string {
   return getVisibleMessageContent(content)
-    .replace(/\n\n\[Pièces jointes\s*:[^\]]*\]/i, "")
+    .replace(/(?:\r?\n)*\[Pièces jointes\s*:[^\]\r\n]*\]\s*$/i, "")
     .trim();
+}
+
+function editableUserText(content: string): string {
+  return getVisibleUserMessageContent(content);
 }
 
 
@@ -196,6 +210,53 @@ type ChatAttachment = {
   kind: "image" | "file";
   previewUrl: string | null;
 };
+
+// Métadonnées publiques renvoyées par GET /conversations/{id}/messages
+// ou GET /conversations/{id}/attachments (aucune URL signée persistée).
+type StoredConversationAttachment = {
+  id: string;
+  conversation_id: string;
+  message_id: string | null;
+  filename: string;
+  mime_type: string;
+  kind: string;
+  size_bytes: number;
+  created_at: string | null;
+};
+
+type UserAttachmentCard = {
+  key: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  stored: StoredConversationAttachment | null;
+};
+
+type UserAttachmentPreview = {
+  id: string;
+  filename: string;
+  url: string;
+  isImage: boolean;
+};
+
+function normalizeStoredConversationAttachment(
+  raw: Record<string, unknown>,
+): StoredConversationAttachment | null {
+  const id = typeof raw.id === "string" ? raw.id : "";
+  const conversationId = typeof raw.conversation_id === "string" ? raw.conversation_id : "";
+  if (!id || !conversationId) return null;
+  return {
+    id,
+    conversation_id: conversationId,
+    message_id: typeof raw.message_id === "string" ? raw.message_id : null,
+    filename: typeof raw.filename === "string" ? raw.filename : "document",
+    mime_type: typeof raw.mime_type === "string" ? raw.mime_type : "application/octet-stream",
+    kind: typeof raw.kind === "string" ? raw.kind : "file",
+    size_bytes: typeof raw.size_bytes === "number" && Number.isFinite(raw.size_bytes)
+      ? raw.size_bytes : 0,
+    created_at: typeof raw.created_at === "string" ? raw.created_at : null,
+  };
+}
 
 type WebIllustration = {
   image_url: string;
@@ -824,6 +885,52 @@ function formatArtifactSize(
   return `${(sizeBytes / (1024 * 1024)).toFixed(1)} Mo`;
 }
 
+
+// Petite carte neutre dans la bulle utilisateur, compatible clair/sombre.
+function UserFileCard({
+  item, language, onPreview, onDownload, busy,
+}: {
+  item: UserAttachmentCard;
+  language: OriaLanguage;
+  onPreview: () => void;
+  onDownload: () => void;
+  busy: boolean;
+}) {
+  const extension = item.filename.split(".").pop()?.toUpperCase() || "FILE";
+  const isImage = item.mimeType.startsWith("image/");
+  const isPdf = item.mimeType === "application/pdf" || extension === "PDF";
+  const accessible = Boolean(item.stored);
+  const label = isImage ? (language === "fr" ? "Image" : "Image")
+    : isPdf ? "PDF" : extension === "DOCX" ? "Word" : extension;
+  return (
+    <div className="flex w-full min-w-0 max-w-[330px] items-center gap-2.5 rounded-xl border border-border/75 bg-surface px-3 py-2.5 text-foreground shadow-sm">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-surface-tertiary text-muted-strong">
+        {isImage ? <ImageIcon size={19} strokeWidth={1.7} /> : <FileText size={19} strokeWidth={1.7} />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[12px] font-semibold leading-5" title={item.filename}>{item.filename}</p>
+        <p className="text-[10px] leading-4 text-muted">
+          {label}{item.sizeBytes > 0 ? ` · ${formatArtifactSize(item.sizeBytes, language)}` : ""}
+          {!accessible ? (language === "fr" ? " · Accès indisponible" : " · Unavailable") : ""}
+        </p>
+      </div>
+      {accessible && (
+        <div className="flex shrink-0 items-center gap-0.5">
+          {(isPdf || isImage) && <button type="button" onClick={onPreview} disabled={busy}
+            className="rounded-lg p-2 text-muted transition hover:bg-surface-tertiary hover:text-foreground disabled:opacity-40"
+            aria-label={language === "fr" ? `Aperçu de ${item.filename}` : `Preview ${item.filename}`}>
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <Eye size={15} />}
+          </button>}
+          <button type="button" onClick={onDownload} disabled={busy}
+            className="rounded-lg p-2 text-muted transition hover:bg-surface-tertiary hover:text-foreground disabled:opacity-40"
+            aria-label={language === "fr" ? `Télécharger ${item.filename}` : `Download ${item.filename}`}>
+            {busy && !isPdf && !isImage ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const ACCEPTED_FILE_TYPES = [
   "application/pdf",
@@ -3912,6 +4019,13 @@ export default function ChatPage() {
   const [generatedArtifacts, setGeneratedArtifacts] =
     useState<GeneratedArtifact[]>([]);
 
+  // Les documents transmis par l'utilisateur sont différents des fichiers générés.
+  const [storedAttachmentsByConversation, setStoredAttachmentsByConversation] =
+    useState<Record<string, StoredConversationAttachment[]>>({});
+  const [userAttachmentPreview, setUserAttachmentPreview] =
+    useState<UserAttachmentPreview | null>(null);
+  const [busyUserAttachmentId, setBusyUserAttachmentId] = useState<string | null>(null);
+
   // Le Chat ne conserve que le déclencheur : tout le Mini-Studio est isolé.
   const [isMiniStudioOpen, setIsMiniStudioOpen] = useState(false);
 
@@ -4528,6 +4642,9 @@ export default function ChatPage() {
       if (activeConversationRef.current === conversationId) {
         const remoteMessages = data.messages || [];
         setMessages(remoteMessages);
+        if (Array.isArray(data.attachments)) {
+          applyStoredAttachmentMetadata(conversationId, data.attachments);
+        }
         const refreshedArtifacts = (data.artifacts || [])
           .map((raw) => normalizeGeneratedArtifact(raw))
           .filter((a): a is GeneratedArtifact => a !== null);
@@ -4742,6 +4859,9 @@ export default function ChatPage() {
 
       const remoteMessages =
         data.messages || [];
+      if (Array.isArray(data.attachments)) {
+        applyStoredAttachmentMetadata(conversationId, data.attachments);
+      }
 
       const remoteVoiceNotes = (data.voice_notes || [])
         .map(normalizeVoiceNote)
@@ -4846,6 +4966,133 @@ export default function ChatPage() {
         "Erreur chargement fichiers Oria :",
         requestError,
       );
+    }
+  }
+
+  function applyStoredAttachmentMetadata(conversationId: string, raw: Array<Record<string, unknown>>) {
+    const normalized = raw.map(normalizeStoredConversationAttachment)
+      .filter((value): value is StoredConversationAttachment => value !== null &&
+        value.conversation_id === conversationId);
+    setStoredAttachmentsByConversation((current) => ({ ...current, [conversationId]: normalized }));
+  }
+
+  async function refreshStoredAttachments(conversationId: string): Promise<void> {
+    try {
+      const all: Array<Record<string, unknown>> = [];
+      let offset: number | null = 0;
+      // Le backend limite les pages à 100 : parcourir l'historique sans écraser
+      // une liste complète avec seulement la première page.
+      for (let page = 0; page < 20 && offset !== null; page++) {
+        const response: {
+          success: boolean;
+          attachments?: Array<Record<string, unknown>>;
+          next_offset?: number | null;
+        } = await apiFetch(
+          `/conversations/${encodeURIComponent(conversationId)}/attachments?limit=100&offset=${offset}`,
+        );
+        if (!response.success || !Array.isArray(response.attachments)) return;
+        all.push(...response.attachments);
+        offset = typeof response.next_offset === "number" ? response.next_offset : null;
+      }
+      applyStoredAttachmentMetadata(conversationId, all);
+    } catch (cause) {
+      // La consultation du chat reste disponible si le stockage privé est momentanément indisponible.
+      console.warn("Pièces jointes ORIA temporairement indisponibles", cause);
+    }
+  }
+
+  // Le chargement initial depuis le cache et un changement de conversation
+  // déclenchent une lecture de métadonnées, jamais une génération payante.
+  useEffect(() => {
+    if (!currentUserId || !activeConversationId) return;
+    void refreshStoredAttachments(activeConversationId);
+  }, [currentUserId, activeConversationId]);
+
+  function userFileCardsForMessage(item: ChatMessage): UserAttachmentCard[] {
+    if (item.role !== "user") return [];
+    const stored = storedAttachmentsByConversation[activeConversationId || ""] || [];
+    const serverMessageId = persistedMessageIds[item.id] || item.id;
+    const direct = stored.filter((file) =>
+      file.message_id === item.id || file.message_id === serverMessageId,
+    );
+    const names = attachmentNamesFromMessage(item.content || "");
+    const result: UserAttachmentCard[] = direct.map((file) => ({
+      key: file.id, filename: file.filename, mimeType: file.mime_type,
+      sizeBytes: file.size_bytes, stored: file,
+    }));
+    // Messages optimistes et anciennes conversations : fallback visuel du nom.
+    // Un fichier non lié n'est associé qu'en cas de correspondance unique
+    // dans la même conversation et à deux minutes du message.
+    for (const [index, name] of names.entries()) {
+      if (result.some((file) => file.filename === name)) continue;
+      const possibilities = stored.filter((file) => file.filename === name && !file.message_id);
+      const messageTime = new Date(item.createdAt || "").getTime();
+      const candidates = possibilities.filter((file) =>
+        Number.isFinite(messageTime) && file.created_at &&
+        Math.abs(new Date(file.created_at).getTime() - messageTime) <= 120_000,
+      );
+      const resolved = candidates.length === 1 ? candidates[0] : null;
+      result.push({
+        key: resolved?.id || `${item.id}-attachment-${index}`,
+        filename: name,
+        mimeType: resolved?.mime_type || (name.toLowerCase().endsWith(".pdf")
+          ? "application/pdf" : "application/octet-stream"),
+        sizeBytes: resolved?.size_bytes || 0,
+        stored: resolved,
+      });
+    }
+    return result;
+  }
+
+  async function getStoredAttachmentUrl(file: StoredConversationAttachment): Promise<string> {
+    const result = await apiFetch<{ download_url?: string }>(
+      `/conversations/${encodeURIComponent(file.conversation_id)}/attachments/${encodeURIComponent(file.id)}`,
+    );
+    const url = safePrivateArtifactUrl(result.download_url);
+    if (!url) throw new Error(language === "fr" ? "Lien privé indisponible." : "Private link unavailable.");
+    return url;
+  }
+
+  async function previewStoredAttachment(file: StoredConversationAttachment): Promise<void> {
+    if (busyUserAttachmentId) return;
+    setBusyUserAttachmentId(file.id);
+    try {
+      const isImage = file.mime_type.startsWith("image/");
+      if (!isImage && file.mime_type !== "application/pdf") return;
+      const url = await getStoredAttachmentUrl(file);
+      setUserAttachmentPreview({ id: file.id, filename: file.filename, url, isImage });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Aperçu indisponible.");
+    } finally {
+      setBusyUserAttachmentId(null);
+    }
+  }
+
+  async function downloadStoredAttachment(file: StoredConversationAttachment): Promise<void> {
+    if (busyUserAttachmentId) return;
+    setBusyUserAttachmentId(file.id);
+    try {
+      const url = await getStoredAttachmentUrl(file);
+      // Le Blob force un téléchargement même si l'URL Supabase est en mode inline.
+      const result = await fetch(url);
+      if (!result.ok) throw new Error("Téléchargement impossible.");
+      const blob = await result.blob();
+      const localUrl = URL.createObjectURL(blob);
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = localUrl;
+        anchor.download = file.filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } finally {
+        window.setTimeout(() => URL.revokeObjectURL(localUrl), 30_000);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message :
+        language === "fr" ? "Téléchargement impossible." : "Download failed.");
+    } finally {
+      setBusyUserAttachmentId(null);
     }
   }
 
@@ -6531,6 +6778,9 @@ export default function ChatPage() {
       // On ne l'attend qu'ici, après la génération : aucun impact sur
       // le temps avant le premier token.
       await userMessageSavePromise;
+      if (attachments.length > 0) {
+        void refreshStoredAttachments(conversationId);
+      }
 
       try {
         await saveMessageRemote(
@@ -6746,6 +6996,44 @@ export default function ChatPage() {
         }}
         language={language}
       /> : null}
+      {userAttachmentPreview ? (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 p-3 sm:p-6"
+          role="dialog" aria-modal="true" aria-label={userAttachmentPreview.filename}>
+          <div className="flex h-[min(88vh,920px)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
+            <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+              <FileText size={17} className="shrink-0 text-muted" />
+              <p className="min-w-0 flex-1 truncate text-sm font-semibold">{userAttachmentPreview.filename}</p>
+              <button type="button" className="rounded-lg p-2 text-muted hover:bg-surface-tertiary hover:text-foreground"
+                aria-label={language === "fr" ? "Fermer l'aperçu" : "Close preview"}
+                onClick={() => setUserAttachmentPreview(null)}><X size={17}/></button>
+            </div>
+            <div className="min-h-0 flex-1 bg-surface-secondary">
+              {userAttachmentPreview.isImage ? (
+                <div className="flex h-full items-center justify-center overflow-auto p-4">
+                  <img src={userAttachmentPreview.url} alt={userAttachmentPreview.filename}
+                    className="max-h-full max-w-full object-contain" />
+                </div>
+              ) : (
+                <iframe title={userAttachmentPreview.filename} src={userAttachmentPreview.url}
+                  className="h-full w-full border-0" />
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-2.5">
+              <button type="button" onClick={() => setUserAttachmentPreview(null)}
+                className="rounded-xl border border-border px-3 py-2 text-xs font-medium">
+                {language === "fr" ? "Fermer" : "Close"}
+              </button>
+              <button type="button" onClick={() => {
+                  const file = (storedAttachmentsByConversation[activeConversationId || ""] || [])
+                    .find((value) => value.id === userAttachmentPreview.id);
+                  if (file) void downloadStoredAttachment(file);
+                }} className="inline-flex items-center gap-2 rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground">
+                <Download size={14} /> {UI[language].download}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {wordPreview ? <WordPreviewModal preview={wordPreview}
         onClose={() => setWordPreview(null)} language={language}
         onDownload={() => {
@@ -7156,10 +7444,20 @@ export default function ChatPage() {
                                   </details>
                                 </div>
                               ) : (
-                                <CollapsibleUserMessage
-                                  content={getVisibleMessageContent(item.content)}
-                                  language={language}
-                                />
+                                <div className="flex min-w-0 flex-col gap-2.5">
+                                  {getVisibleUserMessageContent(item.content) ? (
+                                    <CollapsibleUserMessage
+                                      content={getVisibleUserMessageContent(item.content)}
+                                      language={language}
+                                    />
+                                  ) : null}
+                                  {userFileCardsForMessage(item).map((file) => (
+                                    <UserFileCard key={file.key} item={file} language={language}
+                                      busy={busyUserAttachmentId === file.stored?.id}
+                                      onPreview={() => { if (file.stored) void previewStoredAttachment(file.stored); }}
+                                      onDownload={() => { if (file.stored) void downloadStoredAttachment(file.stored); }}/>
+                                  ))}
+                                </div>
                               )}
                             </>
                           )}
@@ -7928,32 +8226,32 @@ export default function ChatPage() {
                   </div>
                 ) : null}
                 {attachments.length > 0 && (
-                  <div className="flex flex-wrap gap-2 px-4 pt-4">
+                  <div className="flex flex-wrap gap-2 px-3 pt-3 sm:px-4">
                     {attachments.map((attachment) => (
                       <div
                         key={attachment.id}
-                        className="group relative flex max-w-[220px] items-center gap-2 rounded-2xl border border-border bg-surface-secondary p-2"
+                        className="group relative flex w-full max-w-[260px] items-center gap-2.5 rounded-xl border border-border/80 bg-surface-secondary px-2.5 py-2 shadow-sm sm:w-auto"
                       >
                         {attachment.previewUrl ? (
                           <img
                             src={attachment.previewUrl}
                             alt={attachment.file.name}
-                            className="h-12 w-12 rounded-xl object-cover"
+                            className="h-10 w-10 shrink-0 rounded-lg object-cover"
                           />
                         ) : (
-                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-surface-tertiary">
-                            <FileText size={18} />
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-surface-tertiary text-muted-strong">
+                            <FileText size={18} strokeWidth={1.7} />
                           </div>
                         )}
 
-                        <div className="min-w-0 pr-6">
-                          <p className="truncate text-xs font-medium">
+                        <div className="min-w-0 flex-1 pr-5">
+                          <p className="truncate text-xs font-semibold" title={attachment.file.name}>
                             {attachment.file.name}
                           </p>
                           <p className="mt-0.5 text-[10px] text-muted">
-                            {attachment.kind === "image"
-                              ? UI[language].image
-                              : UI[language].file}
+                            {attachment.kind === "image" ? UI[language].image :
+                              attachment.file.name.split(".").pop()?.toUpperCase() || UI[language].file}
+                            {" · "}{formatArtifactSize(attachment.file.size, language)}
                           </p>
                         </div>
 
