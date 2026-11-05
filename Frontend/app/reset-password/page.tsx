@@ -2,7 +2,7 @@
 
 import { ArrowLeft, CheckCircle2, Eye, EyeOff, Loader2, LockKeyhole, Sparkles } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 type Language = "fr" | "en";
@@ -11,49 +11,103 @@ type Status = "checking" | "ready" | "invalid" | "success";
 const translations = {
   fr: {
     back: "Retour à la connexion",
-    title: "Nouveau mot de passe",
-    intro: "Choisis un mot de passe sûr pour retrouver ton compte ORIA.",
+    title: "Créer un nouveau mot de passe",
+    intro: "Ton lien sécurisé a été vérifié. Choisis maintenant ton nouveau mot de passe ORIA.",
     checking: "Vérification du lien sécurisé…",
     invalidTitle: "Lien invalide ou expiré",
-    invalid: "Ce lien ne peut plus être utilisé. Demande un nouveau lien pour réinitialiser ton mot de passe.",
-    resend: "Demander un nouveau lien",
+    invalid: "Ce lien a expiré ou a déjà été utilisé. Demande un nouvel email de récupération.",
+    resend: "Recevoir un nouveau lien",
     password: "Nouveau mot de passe",
     confirm: "Confirmer le mot de passe",
     passwordPlaceholder: "Au moins 8 caractères",
-    passwordMismatch: "Les deux mots de passe ne correspondent pas.",
-    passwordShort: "Utilise au moins 8 caractères.",
-    changing: "Modification en cours…",
+    passwordMismatch: "Les mots de passe ne correspondent pas.",
+    passwordShort: "Le mot de passe doit contenir au moins 8 caractères.",
+    changing: "Enregistrement en cours…",
     change: "Enregistrer mon nouveau mot de passe",
-    genericError: "La modification a échoué. Vérifie le lien reçu par email et réessaie.",
-    successTitle: "Mot de passe modifié",
-    success: "Ton mot de passe a bien été enregistré. Connecte-toi maintenant avec le nouveau mot de passe.",
-    login: "Se connecter",
+    genericError: "Impossible d'enregistrer le mot de passe. Demande un nouveau lien si nécessaire.",
+    successTitle: "Mot de passe modifié !",
+    success: "Tu peux maintenant te connecter à ORIA avec ton nouveau mot de passe. Redirection vers la connexion…",
+    login: "Aller à la connexion",
     show: "Afficher le mot de passe",
     hide: "Masquer le mot de passe",
   },
   en: {
     back: "Back to sign in",
-    title: "Choose a new password",
-    intro: "Set a secure password to regain access to your ORIA account.",
-    checking: "Checking the secure link…",
+    title: "Create a new password",
+    intro: "Your secure link has been verified. Choose your new ORIA password.",
+    checking: "Verifying secure link…",
     invalidTitle: "Invalid or expired link",
-    invalid: "This link can't be used anymore. Please request a new password reset link.",
+    invalid: "This link has expired or was already used. Request a new recovery email.",
     resend: "Request a new link",
     password: "New password",
     confirm: "Confirm password",
     passwordPlaceholder: "At least 8 characters",
-    passwordMismatch: "The passwords don't match.",
-    passwordShort: "Use at least 8 characters.",
+    passwordMismatch: "Passwords do not match.",
+    passwordShort: "Your password must have at least 8 characters.",
     changing: "Saving…",
-    change: "Save new password",
-    genericError: "Password update failed. Check your email link and try again.",
-    successTitle: "Password updated",
-    success: "Your new password has been saved. Sign in using your new password.",
-    login: "Sign in",
+    change: "Save my new password",
+    genericError: "We couldn't save the password. Request a new link if needed.",
+    successTitle: "Password updated!",
+    success: "You can now sign in to ORIA with your new password. Redirecting to sign in…",
+    login: "Go to sign in",
     show: "Show password",
     hide: "Hide password",
   },
 } as const;
+
+/**
+ * Vérifier le jeton Supabase est OBLIGATOIRE pour accéder au formulaire.
+ * Un utilisateur déjà connecté qui visite simplement /reset-password ne
+ * doit jamais obtenir automatiquement le formulaire de récupération.
+ *
+ * Chemin conseillé : /reset-password?token_hash=...&type=recovery
+ * Support rétrocompatible : ?flow=recovery&code=... ou hash implicite.
+ */
+async function verifyRecoveryLink(): Promise<boolean> {
+  const query = new URLSearchParams(window.location.search);
+  const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const tokenHash = query.get("token_hash");
+  const recoveryType = query.get("type");
+  const code = query.get("code");
+  const hashToken = fragment.get("access_token");
+  const hashRefresh = fragment.get("refresh_token");
+  const hashType = fragment.get("type");
+  const hasError = query.has("error") || fragment.has("error");
+
+  // Retirer immédiatement les secrets de l'URL après lecture : pas de
+  // réutilisation accidentelle, d'historique de navigateur ou de copie.
+  window.history.replaceState(window.history.state, "", "/reset-password");
+
+  if (hasError) return false;
+
+  try {
+    const supabase = createClient();
+    if (tokenHash && recoveryType === "recovery") {
+      // Jeton à usage unique ; fonctionne même sur un autre navigateur/appareil.
+      const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: "recovery" });
+      if (error) return false;
+    } else if (code && query.get("flow") === "recovery") {
+      // Compatibilité avec les anciens emails Supabase utilisant le PKCE.
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
+      if (error) return false;
+    } else if (hashType === "recovery" && hashToken && hashRefresh) {
+      // Compatibilité avec le flux implicite. À ne pas utiliser dans le
+      // nouveau template : il place des credentials dans le fragment d'URL.
+      const { error } = await supabase.auth.setSession({
+        access_token: hashToken,
+        refresh_token: hashRefresh,
+      });
+      if (error) return false;
+    } else {
+      return false;
+    }
+
+    const { data, error } = await supabase.auth.getUser();
+    return !error && !!data.user;
+  } catch {
+    return false;
+  }
+}
 
 export default function ResetPasswordPage() {
   const [language, setLanguage] = useState<Language>("fr");
@@ -63,6 +117,9 @@ export default function ResetPasswordPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  // React StrictMode peut exécuter useEffect deux fois en développement.
+  // Empêcher une double consommation du jeton Supabase à usage unique.
+  const startedRef = useRef(false);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("oria_language");
@@ -70,62 +127,16 @@ export default function ResetPasswordPage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const supabase = createClient();
-    const query = new URLSearchParams(window.location.search);
-    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-
-    async function validateRecovery() {
-      const authError = query.get("error") || hash.get("error");
-      if (authError) {
-        if (!cancelled) setStatus("invalid");
-        return;
-      }
-
-      const code = query.get("code");
-      const tokenHash = query.get("token_hash");
-      const recoveryFlow = query.get("flow") === "recovery";
-      const recoveryHash = hash.get("type") === "recovery";
-      // A normal authenticated user visiting /reset-password has no recovery proof.
-      if (!recoveryFlow && !recoveryHash && !(tokenHash && query.get("type") === "recovery")) {
-        if (!cancelled) setStatus("invalid");
-        return;
-      }
-
-      try {
-        if (tokenHash && query.get("type") === "recovery") {
-          const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: "recovery" });
-          if (error) throw error;
-        } else if (code) {
-          // Supabase SSR/PKCE flow. Some browser clients exchange this code automatically;
-          // if so, a valid current session is accepted as the fallback.
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) {
-            const { data: sessionData } = await supabase.auth.getSession();
-            if (!sessionData.session) throw error;
-          }
-        } else if (recoveryHash && hash.get("access_token") && hash.get("refresh_token")) {
-          // Implicit flow fallback for installations using the default JS auth flow.
-          const { error } = await supabase.auth.setSession({
-            access_token: hash.get("access_token")!,
-            refresh_token: hash.get("refresh_token")!,
-          });
-          if (error) throw error;
-        }
-
-        // A query-string marker alone grants nothing: Supabase must validate a real user session.
-        const { data, error } = await supabase.auth.getUser();
-        if (error || !data.user) throw error ?? new Error("No recovery session");
-        if (!cancelled) setStatus("ready");
-      } catch (error) {
-        console.error("ORIA PASSWORD RECOVERY VALIDATION ERROR", error);
-        if (!cancelled) setStatus("invalid");
-      }
-    }
-
-    void validateRecovery();
-    return () => { cancelled = true; };
+    if (startedRef.current) return;
+    startedRef.current = true;
+    void verifyRecoveryLink().then((valid) => setStatus(valid ? "ready" : "invalid"));
   }, []);
+
+  useEffect(() => {
+    if (status !== "success") return;
+    const timeout = window.setTimeout(() => window.location.replace("/login"), 2500);
+    return () => window.clearTimeout(timeout);
+  }, [status]);
 
   const t = translations[language];
 
@@ -139,19 +150,24 @@ export default function ResetPasswordPage() {
     setLoading(true);
     try {
       const supabase = createClient();
+      // Ne pas autoriser une mise à jour sans session obtenue par le jeton.
       const { data: userData, error: userError } = await supabase.auth.getUser();
-      if (userError || !userData.user) throw userError ?? new Error("No recovery session");
+      if (userError || !userData.user) throw new Error("Recovery session unavailable");
+
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
-      // Restore the normal "sign in" flow instead of leaving the recovery session open.
-      try { await supabase.auth.signOut(); } catch { /* Password was updated successfully. */ }
-      window.history.replaceState(null, "", "/reset-password");
+
+      // Fermer la session temporaire avant le retour à la connexion.
+      // Scope local : ne pas déconnecter tous les autres appareils.
+      const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
+      if (signOutError) {
+        console.warn("ORIA: local sign-out after password recovery failed");
+      }
       setStatus("success");
       setPassword("");
       setConfirmPassword("");
-    } catch (error) {
-      console.error("ORIA PASSWORD UPDATE ERROR", error);
-      setErrorMessage(error instanceof Error && error.message ? error.message : t.genericError);
+    } catch {
+      setErrorMessage(t.genericError);
     } finally {
       setLoading(false);
     }
@@ -171,7 +187,7 @@ export default function ResetPasswordPage() {
           <h1 className="mt-6 text-2xl font-semibold tracking-tight sm:text-3xl">
             {status === "invalid" ? t.invalidTitle : status === "success" ? t.successTitle : t.title}
           </h1>
-          <p className="mt-3 text-sm leading-7 text-muted">
+          <p className="mt-3 text-sm leading-7 text-muted" aria-live="polite">
             {status === "checking" ? t.checking : status === "invalid" ? t.invalid : status === "success" ? t.success : t.intro}
           </p>
 

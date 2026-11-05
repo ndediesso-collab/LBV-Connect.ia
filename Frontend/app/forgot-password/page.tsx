@@ -7,6 +7,9 @@ import { createClient } from "@/lib/supabase/client";
 
 type Language = "fr" | "en";
 
+// Toujours utiliser le domaine officiel, même si la demande part de localhost.
+const RECOVERY_REDIRECT_URL = "https://www.myoriaai.com/reset-password?flow=recovery";
+
 const translations = {
   fr: {
     back: "Retour à la connexion",
@@ -59,8 +62,8 @@ export default function ForgotPasswordPage() {
     setErrorMessage("");
     setLoading(true);
     try {
-      // The marker remains in the URL even when Supabase consumes an auth code.
-      const redirectTo = new URL("/reset-password?flow=recovery", window.location.origin).toString();
+      // URL de production fixe : l’email ne doit jamais ouvrir localhost sur un autre appareil.
+      const redirectTo = RECOVERY_REDIRECT_URL;
       const { error } = await createClient().auth.resetPasswordForEmail(email.trim().toLowerCase(), {
         redirectTo,
       });
