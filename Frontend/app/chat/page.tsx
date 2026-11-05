@@ -7006,6 +7006,20 @@ export default function ChatPage() {
       ? wallet.balance
       : 0;
 
+  // CTA d'achat visible depuis le Chat, sans modifier la facturation.
+  // Un pack actif reste utilisable normalement : on ne le presente pas comme expire.
+  const packCtaIsPrimary = !isLoadingWallet && (
+    wallet?.is_pack_active === false ||
+    (wallet?.is_pack_active === true && availableBalance <= 0)
+  );
+  const packCtaLabel = isLoadingWallet || !wallet
+    ? (language === "fr" ? "Voir les packs" : "View plans")
+    : !wallet.is_pack_active
+      ? (language === "fr" ? "Acheter un pack pour discuter" : "Buy a plan to chat")
+      : availableBalance <= 0
+        ? (language === "fr" ? "Recharger mes crédits" : "Top up my credits")
+        : (language === "fr" ? "Voir les packs" : "View plans");
+
   /*
    * ==========================================================
    * AFFICHAGE
@@ -7325,6 +7339,15 @@ export default function ChatPage() {
 
           <div className="flex items-center gap-2">
             <Link
+              href="/packs"
+              data-oria-pack-cta="desktop"
+              aria-label={packCtaLabel}
+              className={`hidden min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold shadow-sm transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:inline-flex ${packCtaIsPrimary ? "bg-accent text-accent-foreground" : "border border-border bg-surface text-foreground"}`}
+            >
+              <Wallet size={16} aria-hidden="true" />
+              {packCtaLabel}
+            </Link>
+            <Link
               href="/credits"
               className="hidden rounded-full border border-border bg-surface px-3 py-1.5 transition hover:bg-surface-secondary sm:flex"
             >
@@ -7350,6 +7373,19 @@ export default function ChatPage() {
             </Link>
           </div>
         </header>
+
+        {/* Sur mobile, le CTA complet reste visible sans comprimer l'en-tete. */}
+        <div className="border-b border-border/50 px-3 py-2 sm:hidden">
+          <Link
+            href="/packs"
+            data-oria-pack-cta="mobile"
+            aria-label={packCtaLabel}
+            className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-center text-sm font-semibold shadow-sm transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${packCtaIsPrimary ? "bg-accent text-accent-foreground" : "border border-border bg-surface text-foreground"}`}
+          >
+            <Wallet size={17} aria-hidden="true" />
+            {packCtaLabel}
+          </Link>
+        </div>
 
         <div className="flex w-full min-w-0 max-w-full flex-1 flex-col px-3 pb-3 sm:px-8 sm:pb-4">
           <div className="relative mx-auto flex w-full min-w-0 max-w-full flex-1 flex-col">
