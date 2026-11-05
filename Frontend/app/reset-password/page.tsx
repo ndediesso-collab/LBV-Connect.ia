@@ -1,125 +1,115 @@
 "use client";
 
-import { ArrowLeft, CheckCircle2, Eye, EyeOff, Loader2, LockKeyhole, Sparkles } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff, Loader2, LockKeyhole, Sparkles } from "lucide-react";
 import Link from "next/link";
+import { createClient as createEphemeralClient, type SupabaseClient } from "@supabase/supabase-js";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { createClient as createWebsiteClient } from "@/lib/supabase/client";
 
 type Language = "fr" | "en";
-type Status = "checking" | "ready" | "invalid" | "success";
+type Status = "initializing" | "confirm" | "ready" | "invalid" | "success" | "logout-error";
 
-const translations = {
+const UI = {
   fr: {
-    back: "Retour à la connexion",
     title: "Créer un nouveau mot de passe",
-    intro: "Ton lien sécurisé a été vérifié. Choisis maintenant ton nouveau mot de passe ORIA.",
-    checking: "Vérification du lien sécurisé…",
-    invalidTitle: "Lien invalide ou expiré",
-    invalid: "Ce lien a expiré ou a déjà été utilisé. Demande un nouvel email de récupération.",
-    resend: "Recevoir un nouveau lien",
+    prepare: "Préparation sécurisée de votre récupération…",
+    confirmTitle: "Confirmer la récupération",
+    confirmText: "Vous avez ouvert un lien de récupération ORIA. Cliquez ci-dessous pour vérifier ce lien à usage unique, puis choisissez votre nouveau mot de passe.",
+    confirmButton: "Vérifier mon lien et continuer",
+    readyText: "Lien vérifié. Choisissez maintenant votre nouveau mot de passe.",
+    invalidTitle: "Lien invalide, expiré ou déjà utilisé",
+    invalidText: "Ce lien ne peut plus être utilisé. Demandez un nouvel email de récupération. Ce parcours n'a pas modifié votre mot de passe.",
+    newLink: "Demander un nouveau lien",
     password: "Nouveau mot de passe",
-    confirm: "Confirmer le mot de passe",
-    passwordPlaceholder: "Au moins 8 caractères",
-    passwordMismatch: "Les mots de passe ne correspondent pas.",
-    passwordShort: "Le mot de passe doit contenir au moins 8 caractères.",
-    changing: "Enregistrement en cours…",
-    change: "Enregistrer mon nouveau mot de passe",
-    genericError: "Impossible d'enregistrer le mot de passe. Demande un nouveau lien si nécessaire.",
-    successTitle: "Mot de passe modifié !",
-    success: "Tu peux maintenant te connecter à ORIA avec ton nouveau mot de passe. Redirection vers la connexion…",
-    login: "Aller à la connexion",
+    confirmPassword: "Confirmer le mot de passe",
+    placeholder: "Au moins 8 caractères",
+    mismatch: "Les mots de passe ne correspondent pas.",
+    tooShort: "Le mot de passe doit contenir au moins 8 caractères.",
+    save: "Enregistrer mon nouveau mot de passe",
+    saving: "Enregistrement en cours…",
+    checking: "Vérification du lien…",
     show: "Afficher le mot de passe",
     hide: "Masquer le mot de passe",
+    genericError: "Une erreur s'est produite. Veuillez réessayer ou demander un nouveau lien.",
+    successTitle: "Mot de passe modifié",
+    successText: "Votre nouveau mot de passe est enregistré. Vous pouvez maintenant vous connecter avec votre adresse email.",
+    logoutTitle: "Session à fermer",
+    logoutText: "Une session ORIA doit être fermée avant de continuer. Si vous venez d’enregistrer un nouveau mot de passe, il est peut-être déjà pris en compte : ne répétez pas l’enregistrement.",
+    retryLogout: "Fermer la session et continuer",
+    login: "Retour à la connexion",
   },
   en: {
-    back: "Back to sign in",
     title: "Create a new password",
-    intro: "Your secure link has been verified. Choose your new ORIA password.",
-    checking: "Verifying secure link…",
-    invalidTitle: "Invalid or expired link",
-    invalid: "This link has expired or was already used. Request a new recovery email.",
-    resend: "Request a new link",
+    prepare: "Preparing secure password recovery…",
+    confirmTitle: "Confirm recovery",
+    confirmText: "You have opened an ORIA password recovery link. Select the button below to verify this one-time link and choose a new password.",
+    confirmButton: "Verify my link and continue",
+    readyText: "Link verified. You can now choose a new password.",
+    invalidTitle: "Invalid, expired or already used link",
+    invalidText: "This link cannot be used again. Request a new recovery email. Your existing password was not changed.",
+    newLink: "Request a new link",
     password: "New password",
-    confirm: "Confirm password",
-    passwordPlaceholder: "At least 8 characters",
-    passwordMismatch: "Passwords do not match.",
-    passwordShort: "Your password must have at least 8 characters.",
-    changing: "Saving…",
-    change: "Save my new password",
-    genericError: "We couldn't save the password. Request a new link if needed.",
-    successTitle: "Password updated!",
-    success: "You can now sign in to ORIA with your new password. Redirecting to sign in…",
-    login: "Go to sign in",
+    confirmPassword: "Confirm new password",
+    placeholder: "At least 8 characters",
+    mismatch: "Passwords do not match.",
+    tooShort: "The password must have at least 8 characters.",
+    save: "Save my new password",
+    saving: "Saving…",
+    checking: "Verifying your link…",
     show: "Show password",
     hide: "Hide password",
+    genericError: "Something went wrong. Please try again or request a new link.",
+    successTitle: "Password changed",
+    successText: "Your new password was saved. You can now sign in with your email address.",
+    logoutTitle: "Session must be closed",
+    logoutText: "Password recovery cannot continue while an old ORIA session is still active. Close it before returning to sign in.",
+    retryLogout: "Close session and continue",
+    login: "Return to sign in",
   },
 } as const;
 
 /**
- * Vérifier le jeton Supabase est OBLIGATOIRE pour accéder au formulaire.
- * Un utilisateur déjà connecté qui visite simplement /reset-password ne
- * doit jamais obtenir automatiquement le formulaire de récupération.
- *
- * Chemin conseillé : /reset-password?token_hash=...&type=recovery
- * Support rétrocompatible : ?flow=recovery&code=... ou hash implicite.
+ * IMPORTANT: Supabase verifyOtp() normally creates an authenticated session.
+ * Use a separate, MEMORY-ONLY client so a verified recovery link NEVER signs
+ * the normal ORIA browser client into /chat.
  */
-async function verifyRecoveryLink(): Promise<boolean> {
-  const query = new URLSearchParams(window.location.search);
-  const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  const tokenHash = query.get("token_hash");
-  const recoveryType = query.get("type");
-  const code = query.get("code");
-  const hashToken = fragment.get("access_token");
-  const hashRefresh = fragment.get("refresh_token");
-  const hashType = fragment.get("type");
-  const hasError = query.has("error") || fragment.has("error");
+function newRecoveryClient(): SupabaseClient {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !key) throw new Error("Supabase public configuration is missing");
+  return createEphemeralClient(url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
 
-  // Retirer immédiatement les secrets de l'URL après lecture : pas de
-  // réutilisation accidentelle, d'historique de navigateur ou de copie.
-  window.history.replaceState(window.history.state, "", "/reset-password");
-
-  if (hasError) return false;
-
-  try {
-    const supabase = createClient();
-    if (tokenHash && recoveryType === "recovery") {
-      // Jeton à usage unique ; fonctionne même sur un autre navigateur/appareil.
-      const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: "recovery" });
-      if (error) return false;
-    } else if (code && query.get("flow") === "recovery") {
-      // Compatibilité avec les anciens emails Supabase utilisant le PKCE.
-      const { error } = await supabase.auth.exchangeCodeForSession(code);
-      if (error) return false;
-    } else if (hashType === "recovery" && hashToken && hashRefresh) {
-      // Compatibilité avec le flux implicite. À ne pas utiliser dans le
-      // nouveau template : il place des credentials dans le fragment d'URL.
-      const { error } = await supabase.auth.setSession({
-        access_token: hashToken,
-        refresh_token: hashRefresh,
-      });
-      if (error) return false;
-    } else {
-      return false;
-    }
-
-    const { data, error } = await supabase.auth.getUser();
-    return !error && !!data.user;
-  } catch {
-    return false;
+/** Remove an old / normal ORIA session locally, without revoking other devices. */
+async function closeWebsiteSession(): Promise<void> {
+  const auth = createWebsiteClient().auth;
+  const { data, error } = await auth.getSession();
+  if (error) throw error;
+  if (data.session) {
+    const { error: logoutError } = await auth.signOut({ scope: "local" });
+    if (logoutError) throw logoutError;
   }
+  const { data: after, error: checkError } = await auth.getSession();
+  if (checkError || after.session) throw checkError ?? new Error("Old session remains active");
 }
 
 export default function ResetPasswordPage() {
   const [language, setLanguage] = useState<Language>("fr");
-  const [status, setStatus] = useState<Status>("checking");
+  const [status, setStatus] = useState<Status>("initializing");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
-  // React StrictMode peut exécuter useEffect deux fois en développement.
-  // Empêcher une double consommation du jeton Supabase à usage unique.
   const startedRef = useRef(false);
+  const tokenHashRef = useRef<string | null>(null);
+  const recoveryClientRef = useRef<SupabaseClient | null>(null);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("oria_language");
@@ -129,43 +119,121 @@ export default function ResetPasswordPage() {
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
-    void verifyRecoveryLink().then((valid) => setStatus(valid ? "ready" : "invalid"));
+
+    // Read the token ONCE. Remove it from browser history before any async work.
+    const parameters = new URLSearchParams(window.location.search);
+    const token = parameters.get("token_hash");
+    tokenHashRef.current = parameters.get("type") === "recovery" && token ? token : null;
+    window.history.replaceState(window.history.state, "", "/reset-password");
+
+    // Always clear any older ORIA web session first, including one left behind
+    // by a failed recovery. Do NOT verify or consume the token on page load.
+    void closeWebsiteSession()
+      .then(() => setStatus(tokenHashRef.current ? "confirm" : "invalid"))
+      .catch(() => setStatus("logout-error"));
   }, []);
+
+  const t = UI[language];
 
   useEffect(() => {
     if (status !== "success") return;
-    const timeout = window.setTimeout(() => window.location.replace("/login"), 2500);
+    const timeout = window.setTimeout(() => window.location.replace("/login"), 1800);
     return () => window.clearTimeout(timeout);
   }, [status]);
 
-  const t = translations[language];
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (status !== "ready" || loading) return;
+  async function handleVerify() {
+    if (status !== "confirm" || loading || !tokenHashRef.current) return;
     setErrorMessage("");
-    if (password.length < 8) { setErrorMessage(t.passwordShort); return; }
-    if (password !== confirmPassword) { setErrorMessage(t.passwordMismatch); return; }
-
     setLoading(true);
     try {
-      const supabase = createClient();
-      // Ne pas autoriser une mise à jour sans session obtenue par le jeton.
-      const { data: userData, error: userError } = await supabase.auth.getUser();
-      if (userError || !userData.user) throw new Error("Recovery session unavailable");
-
-      const { error } = await supabase.auth.updateUser({ password });
-      if (error) throw error;
-
-      // Fermer la session temporaire avant le retour à la connexion.
-      // Scope local : ne pas déconnecter tous les autres appareils.
-      const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
-      if (signOutError) {
-        console.warn("ORIA: local sign-out after password recovery failed");
+      // Explicit user click: automated mail scanners loading this page should
+      // not consume the one-time Supabase token.
+      const recoveryClient = newRecoveryClient();
+      const { data, error } = await recoveryClient.auth.verifyOtp({
+        token_hash: tokenHashRef.current,
+        type: "recovery",
+      });
+      if (error || !data.session || !data.user) {
+        tokenHashRef.current = null;
+        setStatus("invalid");
+        return;
       }
-      setStatus("success");
+      const { data: userData, error: userError } = await recoveryClient.auth.getUser();
+      if (userError || !userData.user || userData.user.id !== data.user.id) {
+        tokenHashRef.current = null;
+        await recoveryClient.auth.signOut({ scope: "local" });
+        setStatus("invalid");
+        return;
+      }
+      tokenHashRef.current = null;
+      recoveryClientRef.current = recoveryClient;
+      setStatus("ready");
+    } catch {
+      // A transient network problem is not proof the token is invalid.
+      setErrorMessage(t.genericError);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (status !== "ready" || loading || !recoveryClientRef.current) return;
+    setErrorMessage("");
+    if (password.length < 8) { setErrorMessage(t.tooShort); return; }
+    if (password !== confirmPassword) { setErrorMessage(t.mismatch); return; }
+    setLoading(true);
+    let passwordUpdated = false;
+    try {
+      const recoveryClient = recoveryClientRef.current;
+      const { data, error } = await recoveryClient.auth.getUser();
+      if (error || !data.user) throw new Error("Recovery session unavailable");
+      const update = await recoveryClient.auth.updateUser({ password });
+      if (update.error) throw update.error;
+      passwordUpdated = true;
+
+      // Password changed: never leave an authenticated recovery session behind.
       setPassword("");
       setConfirmPassword("");
+      recoveryClientRef.current = null;
+      const logout = await recoveryClient.auth.signOut({ scope: "local" });
+      if (logout.error) console.warn("ORIA: isolated recovery sign-out failed; ephemeral session won't be persisted");
+      await closeWebsiteSession();
+      setStatus("success");
+    } catch {
+      if (passwordUpdated) setStatus("logout-error");
+      setErrorMessage(t.genericError);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function goToLogin() {
+    if (loading) return;
+    setLoading(true);
+    setErrorMessage("");
+    try {
+      if (recoveryClientRef.current) {
+        await recoveryClientRef.current.auth.signOut({ scope: "local" });
+        recoveryClientRef.current = null;
+      }
+      await closeWebsiteSession();
+      window.location.replace("/login");
+    } catch {
+      setStatus("logout-error");
+      setErrorMessage(t.genericError);
+      setLoading(false);
+    }
+  }
+
+  async function retryLogout() {
+    if (loading) return;
+    setLoading(true);
+    setErrorMessage("");
+    try {
+      await closeWebsiteSession();
+      // Invalid/no link stays invalid; an unused valid link may be verified.
+      setStatus(tokenHashRef.current ? "confirm" : "invalid");
     } catch {
       setErrorMessage(t.genericError);
     } finally {
@@ -176,33 +244,41 @@ export default function ResetPasswordPage() {
   return (
     <main className="min-h-dvh bg-background text-foreground">
       <header className="mx-auto flex h-20 w-full max-w-6xl items-center px-5 sm:px-8">
-        <Link href="/" className="inline-flex items-center gap-2 text-sm font-semibold tracking-tight"><Sparkles size={18} />Oria.</Link>
+        <div className="inline-flex items-center gap-2 text-sm font-semibold tracking-tight"><Sparkles size={18} /> Oria.</div>
       </header>
       <div className="mx-auto flex min-h-[calc(100dvh-5rem)] max-w-md items-center px-5 pb-20 sm:px-0">
         <section className="w-full rounded-[30px] border border-border/70 bg-surface/85 p-6 shadow-[0_22px_65px_-38px_var(--shadow-color)] sm:p-8">
-          <Link href="/login" className="mb-8 inline-flex items-center gap-2 text-sm text-muted-strong hover:text-foreground"><ArrowLeft size={16} />{t.back}</Link>
+          <button type="button" disabled={loading} onClick={() => void goToLogin()} className="mb-8 text-sm text-muted-strong hover:text-foreground disabled:opacity-50">
+            ← {t.login}
+          </button>
           <div className="flex h-12 w-12 items-center justify-center rounded-[19px] border border-border/40 bg-accent text-accent-foreground">
             {status === "success" ? <CheckCircle2 size={21} /> : <LockKeyhole size={21} />}
           </div>
           <h1 className="mt-6 text-2xl font-semibold tracking-tight sm:text-3xl">
-            {status === "invalid" ? t.invalidTitle : status === "success" ? t.successTitle : t.title}
+            {status === "confirm" ? t.confirmTitle : status === "invalid" ? t.invalidTitle : status === "success" ? t.successTitle : status === "logout-error" ? t.logoutTitle : t.title}
           </h1>
           <p className="mt-3 text-sm leading-7 text-muted" aria-live="polite">
-            {status === "checking" ? t.checking : status === "invalid" ? t.invalid : status === "success" ? t.success : t.intro}
+            {status === "initializing" ? t.prepare : status === "confirm" ? t.confirmText : status === "ready" ? t.readyText : status === "invalid" ? t.invalidText : status === "success" ? t.successText : status === "logout-error" ? t.logoutText : t.prepare}
           </p>
 
-          {status === "checking" ? <div className="mt-8 flex items-center gap-3 text-sm text-muted"><Loader2 className="animate-spin" size={20} />{t.checking}</div> : null}
-          {status === "invalid" ? <Link className="mt-8 flex h-12 items-center justify-center rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground" href="/forgot-password">{t.resend}</Link> : null}
-          {status === "success" ? <Link className="mt-8 flex h-12 items-center justify-center rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground" href="/login">{t.login}</Link> : null}
+          {status === "initializing" ? <div className="mt-7 flex items-center gap-2 text-sm text-muted"><Loader2 size={18} className="animate-spin" />{t.prepare}</div> : null}
+          {status === "confirm" ? (
+            <button type="button" onClick={() => void handleVerify()} disabled={loading} className="mt-7 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground disabled:opacity-60">
+              {loading ? <><Loader2 size={17} className="animate-spin" />{t.checking}</> : t.confirmButton}
+            </button>
+          ) : null}
+          {status === "invalid" ? <Link href="/forgot-password" className="mt-7 flex h-12 items-center justify-center rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground">{t.newLink}</Link> : null}
+          {status === "logout-error" ? <button type="button" onClick={() => void retryLogout()} disabled={loading} className="mt-7 flex h-12 w-full items-center justify-center rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground disabled:opacity-60">{t.retryLogout}</button> : null}
+          {status === "success" ? <button type="button" disabled={loading} onClick={() => void goToLogin()} className="mt-7 flex h-12 w-full items-center justify-center rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground">{t.login}</button> : null}
 
           {status === "ready" ? (
-            <form onSubmit={handleSubmit} className="mt-7 space-y-5">
+            <form onSubmit={handleSave} className="mt-7 space-y-5">
               <div>
                 <label htmlFor="new-password" className="mb-2 block text-sm font-medium">{t.password}</label>
                 <div className="relative">
                   <input id="new-password" type={showPassword ? "text" : "password"} autoComplete="new-password" required minLength={8}
-                    value={password} onChange={(event) => setPassword(event.target.value)} disabled={loading} placeholder={t.passwordPlaceholder}
-                    className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 pr-12 text-[15px] text-foreground outline-none placeholder:text-muted focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]" />
+                    value={password} onChange={event => setPassword(event.target.value)} disabled={loading} placeholder={t.placeholder}
+                    className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 pr-12 text-[15px] text-foreground outline-none focus:border-border-strong" />
                   <button type="button" aria-label={showPassword ? t.hide : t.show} onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-muted hover:text-foreground">
                     {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
@@ -210,17 +286,17 @@ export default function ResetPasswordPage() {
                 </div>
               </div>
               <div>
-                <label htmlFor="confirm-password" className="mb-2 block text-sm font-medium">{t.confirm}</label>
+                <label htmlFor="confirm-password" className="mb-2 block text-sm font-medium">{t.confirmPassword}</label>
                 <input id="confirm-password" type={showPassword ? "text" : "password"} autoComplete="new-password" required minLength={8}
-                  value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} disabled={loading}
-                  className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 text-[15px] text-foreground outline-none focus:border-border-strong focus:shadow-[0_0_0_3px_var(--focus-ring)]" />
+                  value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} disabled={loading}
+                  className="h-12 w-full rounded-2xl border border-border/75 bg-surface-secondary/65 px-4 text-[15px] text-foreground outline-none focus:border-border-strong" />
               </div>
-              {errorMessage ? <p role="alert" className="rounded-2xl border border-red-200/70 bg-danger-surface px-4 py-3 text-sm text-danger">{errorMessage}</p> : null}
-              <button type="submit" disabled={loading} className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground hover:opacity-90 disabled:opacity-60">
-                {loading ? <><Loader2 size={17} className="animate-spin" />{t.changing}</> : t.change}
+              <button type="submit" disabled={loading} className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-accent px-4 text-sm font-semibold text-accent-foreground disabled:opacity-60">
+                {loading ? <><Loader2 size={17} className="animate-spin" />{t.saving}</> : t.save}
               </button>
             </form>
           ) : null}
+          {errorMessage ? <p role="alert" className="mt-4 rounded-2xl border border-red-200/70 bg-danger-surface px-4 py-3 text-sm text-danger">{errorMessage}</p> : null}
         </section>
       </div>
     </main>
