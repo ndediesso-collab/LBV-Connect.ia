@@ -238,7 +238,10 @@ async def _build_attachments(
 
         mime_type = upload.content_type or "application/octet-stream"
 
-        data = await upload.read()
+        from app.repositories.supabase_conversation_attachment_repository import MAX_FILE_BYTES
+        data = await upload.read(MAX_FILE_BYTES + 1)
+        if len(data) > MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail="Piece jointe superieure a 12 Mo.")
 
 
 
@@ -2881,6 +2884,49 @@ def _attachments_for_openai(
 
 
 
+# ORIA MEMOIRE DOCUMENTAIRE - intégration commune OpenAI/OpenRouter.
+async def _oria_document_memory_prepare(*, user_id: str, conversation_id: str | None,
+                                        message: str, history: list,
+                                        attachments: list[ChatAttachment],
+                                        source_message_id: str | None = None,
+                                        before_message_id: str | None = None):
+    """Persister puis retrouver le contexte avant tout débit ou appel fournisseur."""
+    if not conversation_id:
+        if attachments:
+            raise HTTPException(status_code=409, detail=(
+                "Une conversation doit etre creee avant l'envoi du fichier "
+                "pour garantir sa sauvegarde permanente."
+            ))
+        return history, attachments
+    from fastapi.concurrency import run_in_threadpool
+    from app.services.conversation_document_memory import conversation_document_memory
+    try:
+        if attachments:
+            await run_in_threadpool(
+                conversation_document_memory.persist_uploaded,
+                user_id=user_id, conversation_id=conversation_id,
+                attachments=attachments, source_message_id=source_message_id,
+                message_text=message,
+            )
+        enriched = await run_in_threadpool(
+            conversation_document_memory.enrich,
+            user_id=user_id, conversation_id=conversation_id,
+            message=message, history=history, existing_attachments=attachments,
+            before_message_id=before_message_id,
+        )
+        replays = [ChatAttachment(type=a['type'], name=a['name'],
+                                  mime_type=a['mime_type'], data=a['data'])
+                   for a in enriched.replays]
+        return enriched.history, attachments + replays
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logging.getLogger(__name__).exception('ORIA_DOCUMENT_MEMORY_FAILURE')
+        raise HTTPException(status_code=503, detail=(
+            'Memoire documentaire temporairement indisponible. '
+            'Le fichier n\'a pas ete perdu ; aucun appel IA n\'a ete declenche.'
+        )) from exc
+
 # ============================================================
 # ESTIMATION FOURNISSEUR : diagnostics internes, jamais autorisation de paiement
 # ============================================================
@@ -4724,6 +4770,12 @@ async def chat(
         conversation_id=conversation_id,
     )
 
+    history, attachments = await _oria_document_memory_prepare(
+        user_id=authenticated_user_id, conversation_id=conversation_id,
+        message=message, history=history, attachments=attachments,
+        source_message_id=source_message_id,
+    )
+
     artifact_requests = _resolve_artifact_requests(
         message=message,
         explicit_type=artifact_type,
@@ -5073,6 +5125,12 @@ async def generate_chat_revision(
      )
     if confirmed_owner != owner:
         raise HTTPException(status_code=403, detail="Identite incoherente.")
+
+    history, attachments = await _oria_document_memory_prepare(
+        user_id=owner, conversation_id=conversation_id,
+        message=message, history=history, attachments=attachments,
+        before_message_id=message_id,
+    )
 
     selection = _oria_chat_selection(model, wallet, is_trial_model)
     provider_api_model = selection.api_model
@@ -7132,6 +7190,12 @@ async def chat_stream(
         user_id=user_id,
         authorization=authorization,
         conversation_id=conversation_id,
+    )
+
+    history, attachments = await _oria_document_memory_prepare(
+        user_id=authenticated_user_id, conversation_id=conversation_id,
+        message=message, history=history, attachments=attachments,
+        source_message_id=source_message_id,
     )
 
     artifact_requests = _resolve_artifact_requests(

@@ -382,7 +382,7 @@ class OpenRouterChatService:
             raise OpenRouterUnsupportedFeatureError("Effort de raisonnement non autorisé.")
         if web and cap.get("web_search") is not True:
             raise OpenRouterUnsupportedFeatureError("Recherche Web non validée pour ce modèle.")
-        if attachments and cap.get("images") is not True:
+        if attachments and any(a.get("type") == "image" for a in attachments) and cap.get("images") is not True:
             raise OpenRouterUnsupportedFeatureError("Lecture d'images non validée pour ce modèle.")
 
         payload: dict[str, Any] = {

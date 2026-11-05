@@ -66,6 +66,13 @@ router = APIRouter()
 # Les dix endpoints de courses.py sont inclus une seule fois ici.
 router.include_router(courses_router)
 
+# Mémoire documentaire phase 2A : routes additives, sans effet sur les fichiers générés.
+from app.route.conversation_attachments import router as conversation_attachments_router
+from app.repositories.supabase_conversation_attachment_repository import (
+    conversation_attachment_repository,
+)
+router.include_router(conversation_attachments_router)
+
 
 def _configure_oria_courses_dispatcher() -> None:
     """Active uniquement l'enqueue PostgreSQL, jamais le worker HTTP.
@@ -3798,6 +3805,22 @@ def _validate_conversation_role(role: str) -> str:
     return normalized_role
 
 
+def _oria_load_conversation_attachments(*, user_id: str, conversation_id: str) -> list[dict]:
+    """Liste stable sans URLs signées; conservée même si les messages sont purgés."""
+    from app.repositories.supabase_conversation_attachment_repository import public_metadata
+    rows: list[dict] = []
+    offset = 0
+    while offset < 2000:
+        batch = conversation_attachment_repository.list(
+            user_id=user_id, conversation_id=conversation_id, limit=100,
+            offset=offset,
+        )
+        rows.extend(public_metadata(row) for row in batch)
+        if len(batch) < 100:
+            break
+        offset += 100
+    return rows
+
 def _get_conversation(
     conversation_id: str,
     authenticated_user_id: str,
@@ -4207,6 +4230,9 @@ def get_conversation_messages(
         "conversation_id": conversation_id,
         "messages": message_rows,
         "voice_notes": voice_notes,
+        "attachments": _oria_load_conversation_attachments(
+            user_id=authenticated_user_id, conversation_id=conversation_id,
+        ),
         "artifacts": [
             _artifact_response(item)
             for item in artifacts
@@ -4625,6 +4651,19 @@ def delete_conversation(
         conversation_id=conversation_id,
         authenticated_user_id=authenticated_user_id,
     )
+
+    # Les fichiers *reçus* appartiennent à cette conversation : supprimer
+    # les blobs privés avant la conversation. Une erreur empêche l'effacement
+    # des références en base ; réessayer plus tard sans perdre la traçabilité.
+    try:
+        conversation_attachment_repository.purge_conversation(
+            user_id=authenticated_user_id, conversation_id=conversation_id,
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Suppression des pièces jointes non confirmée ; conversation conservée.",
+        ) from error
 
     # Les fichiers générés appartiennent à l'utilisateur, pas uniquement
     # à la conversation. Lorsqu'une conversation est supprimée, on les
