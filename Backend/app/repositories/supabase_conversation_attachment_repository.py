@@ -162,17 +162,49 @@ class ConversationAttachmentRepository:
     @staticmethod
     def _expected_path(user_id: str, conversation_id: str,
                        attachment_id: str, filename: str) -> str:
-        return f"{user_id}/{conversation_id}/{attachment_id}/{filename}"
+        """Chemin technique pour les nouveaux fichiers, indépendant du nom affiché.
+
+        Supabase Storage n'accepte pas tous les caractères Unicode dans les
+        noms d'objets. L'UUID du fichier identifie déjà le dossier de manière
+        unique ; une feuille ASCII fixe et l'extension validée suffisent.
+        """
+        name = safe_filename(filename)
+        ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext not in ALLOWED_TYPES:
+            raise ValueError("Extension de pièce jointe invalide.")
+        return f"{user_id}/{conversation_id}/{attachment_id}/original{ext}"
+
+    @staticmethod
+    def _legacy_path(user_id: str, conversation_id: str,
+                     attachment_id: str, filename: str) -> str:
+        """Chemin des fichiers enregistrés avant le correctif (lecture seule)."""
+        return (f"{user_id}/{conversation_id}/{attachment_id}/"
+                f"{safe_filename(filename)}")
+
+    def _stored_path(self, row: dict, *, uid: str, cid: str, aid: str) -> str:
+        """N'utiliser que l'un des deux chemins attendus pour CET utilisateur.
+
+        Le chemin enregistré en base n'est jamais accepté arbitrairement :
+        la lecture, les URL signées et la suppression restent confinées au
+        dossier propriétaire/conversation/pièce jointe.
+        """
+        name = safe_filename(row.get("filename") or "")
+        current = self._expected_path(uid, cid, aid, name)
+        legacy = self._legacy_path(uid, cid, aid, name)
+        stored = row.get("storage_path")
+        if not isinstance(stored, str) or stored not in (current, legacy):
+            raise AttachmentConflict("Chemin Storage incohérent.")
+        return stored
 
     def _verify_row(self, row: dict, *, uid: str, cid: str, aid: str,
                     name: str, mime: str, size: int, digest: str) -> dict:
-        expected_path = self._expected_path(uid, cid, aid, name)
         if any((str(row.get(key)) != val) for key, val in {
             "user_id": uid, "conversation_id": cid, "id": aid,
-            "filename": name, "mime_type": mime,
-            "storage_path": expected_path, "sha256": digest,
+            "filename": name, "mime_type": mime, "sha256": digest,
         }.items()) or row.get("size_bytes") != size:
             raise AttachmentConflict("Identifiant déjà utilisé pour un autre fichier.")
+        # Accepter un ancien objet au chemin original OU un nouvel objet ASCII.
+        self._stored_path(row, uid=uid, cid=cid, aid=aid)
         return row
 
     def save(self, *, user_id: str, conversation_id: str, filename: str,
@@ -269,10 +301,8 @@ class ConversationAttachmentRepository:
         if row is None:
             raise LookupError("Pièce jointe introuvable.")
         uid, cid, aid = (canonical_uuid(x) for x in (user_id, conversation_id, attachment_id))
-        expected = self._expected_path(uid, cid, aid, safe_filename(row["filename"]))
-        if row.get("storage_path") != expected:
-            raise AttachmentConflict("Chemin Storage incohérent.")
-        result = self.client.storage.from_(BUCKET).create_signed_url(expected, expires_in)
+        path = self._stored_path(row, uid=uid, cid=cid, aid=aid)
+        result = self.client.storage.from_(BUCKET).create_signed_url(path, expires_in)
         if isinstance(result, str):
             url = result
         elif isinstance(result, dict):
@@ -302,9 +332,7 @@ class ConversationAttachmentRepository:
         if row is None:
             raise LookupError("Pièce jointe introuvable.")
         uid, cid, aid = (canonical_uuid(x) for x in (user_id, conversation_id, attachment_id))
-        path = self._expected_path(uid, cid, aid, safe_filename(row["filename"]))
-        if row.get("storage_path") != path:
-            raise AttachmentConflict("Chemin Storage incohérent.")
+        path = self._stored_path(row, uid=uid, cid=cid, aid=aid)
         binary = self.client.storage.from_(BUCKET).download(path)
         if not isinstance(binary, (bytes, bytearray)):
             raise AttachmentUnavailable("Objet Storage illisible.")
@@ -319,9 +347,7 @@ class ConversationAttachmentRepository:
         row = self.get(user_id=uid, conversation_id=cid, attachment_id=aid)
         if row is None:
             return False
-        path = self._expected_path(uid, cid, aid, safe_filename(row["filename"]))
-        if row.get("storage_path") != path:
-            raise AttachmentConflict("Chemin Storage incohérent.")
+        path = self._stored_path(row, uid=uid, cid=cid, aid=aid)
         # Storage puis SQL : sur erreur de SQL, le second essai doit être tolérant
         # à l'absence de l'objet (remove Supabase est normalement idempotent).
         self.client.storage.from_(BUCKET).remove([path])
