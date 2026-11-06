@@ -751,6 +751,44 @@ type DiscoveryStatus = {
   topup_pending?: boolean;
   topup_used: boolean;
 };
+// Erreurs courtes et exploitables, sans exposer les tokens Supabase.
+// L'echec de verification n'est JAMAIS interprete comme une autorisation d'achat.
+type DiscoveryCheckErrorCode =
+  | "network"
+  | "invalid_status"
+  | `status:${number}`
+  | `wallet:${number}`;
+
+function discoveryCheckErrorText(code: DiscoveryCheckErrorCode, language: OriaLanguage): string {
+  const en = language === "en";
+  if (code === "network") return en
+    ? "Unable to reach ORIA's backend. Check the connection and try again."
+    : "Impossible de joindre le backend ORIA. Vérifiez la connexion et réessayez.";
+  if (code === "invalid_status") return en
+    ? "ORIA's backend returned an incomplete Discovery status. The purchase is paused."
+    : "Le backend ORIA a renvoyé un statut Découverte incomplet. L'achat reste bloqué.";
+  const [source, value] = code.split(":");
+  const httpCode = Number(value);
+  if (source === "wallet") return en
+    ? `Your ORIA wallet could not be verified (HTTP ${httpCode}). Please retry.`
+    : `Impossible de vérifier votre portefeuille ORIA (HTTP ${httpCode}). Réessayez.`;
+  if (httpCode === 401) return en
+    ? "Your session has expired. Sign in again to verify Discovery eligibility (401)."
+    : "Votre session a expiré. Reconnectez-vous pour vérifier l'éligibilité Découverte (401).";
+  if (httpCode === 403) return en
+    ? "The server refused access to Discovery eligibility (403). Please sign in again."
+    : "Le serveur refuse la vérification d'éligibilité Découverte (403). Reconnectez-vous.";
+  if (httpCode === 404) return en
+    ? "The Discovery status endpoint is missing on the deployed backend (404)."
+    : "La route de vérification Découverte est absente du backend déployé (404).";
+  if (httpCode === 503) return en
+    ? "The Discovery service is not ready on the backend (503). Check the Supabase migration and payment readiness."
+    : "Le service Découverte n'est pas prêt côté backend (503). Vérifiez la migration Supabase et l'activation des paiements.";
+  return en
+    ? `Discovery eligibility could not be checked (HTTP ${httpCode}). No payment was started.`
+    : `Impossible de vérifier l'éligibilité Découverte (HTTP ${httpCode}). Aucun paiement n'a été lancé.`;
+}
+
 const DISCOVERY_PUBLIC = process.env.NEXT_PUBLIC_ORIA_DISCOVERY_ENABLED === "1";
 const DISCOVERY_PACK_ID = "discovery_pack";
 const DISCOVERY_TOPUP_ID = "discovery_topup_1000";
@@ -1461,7 +1499,7 @@ export default function PacksPage() {
   // Le compte ne voit jamais l'offre avant confirmation de ses droits backend.
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
   const [discoverySession, setDiscoverySession] = useState<"loading" | "guest" | "authenticated" | "error">("loading");
-  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<DiscoveryCheckErrorCode | null>(null);
   const [discoveryNotice, setDiscoveryNotice] = useState<string | null>(null);
   const [walletPackId, setWalletPackId] = useState<string | null>(null);
   const previousDiscoveryStatus = useRef<DiscoveryStatus | null>(null);
@@ -1478,6 +1516,7 @@ export default function PacksPage() {
         setDiscoveryStatus(null);
         setDiscoverySession("guest");
         setWalletPackId(null);
+        setDiscoveryError(null);
         return;
       }
       setDiscoverySession("authenticated");
@@ -1487,11 +1526,11 @@ export default function PacksPage() {
         fetch(`${API_URL}/payments/discovery/status`, { headers, cache: "no-store" }),
         fetch(`${API_URL}/credits/me`, { headers, cache: "no-store" }),
       ]);
-      if (!statusResponse.ok) throw new Error("Statut Découverte indisponible.");
+      if (!statusResponse.ok) throw new Error(`status:${statusResponse.status}`);
       const status = await statusResponse.json() as DiscoveryStatus;
       if (!status || typeof status.enabled !== "boolean" || typeof status.can_buy !== "boolean" ||
           typeof status.purchased !== "boolean" || typeof status.topup_available !== "boolean") {
-        throw new Error("Statut Découverte incomplet.");
+        throw new Error("invalid_status");
       }
       if (requestId !== discoveryRequest.current) return;
       let packId: string | null = null;
@@ -1500,7 +1539,7 @@ export default function PacksPage() {
         packId = typeof walletData?.wallet?.pack_id === "string" ? walletData.wallet.pack_id : null;
       } else if (walletResponse.status !== 404) {
         // 404 est normal sur un nouveau compte, avant son tout premier achat.
-        throw new Error("Portefeuille indisponible.");
+        throw new Error(`wallet:${walletResponse.status}`);
       }
       if (requestId !== discoveryRequest.current) return;
       const previous = previousDiscoveryStatus.current;
@@ -1517,8 +1556,14 @@ export default function PacksPage() {
       if (requestId !== discoveryRequest.current) return;
       setDiscoveryStatus(null);
       setWalletPackId(null);
-      setDiscoveryError(cause instanceof Error ? cause.message : "Statut Découverte indisponible.");
+      const raw = cause instanceof Error ? cause.message : "";
+      const code: DiscoveryCheckErrorCode = /^(?:status|wallet):\d{3}$/.test(raw)
+        ? raw as DiscoveryCheckErrorCode
+        : raw === "invalid_status" ? "invalid_status" : "network";
+      setDiscoveryError(code);
       setDiscoverySession("error");
+      // Diagnostic sans identifiant utilisateur ni token d'authentification.
+      console.warn("[ORIA Découverte] Échec de vérification :", code);
     }
   }
   useEffect(() => {
@@ -1555,6 +1600,7 @@ export default function PacksPage() {
   const discoveryWallet = walletPackId === DISCOVERY_PACK_ID;
   const discoveryBuyVisible = DISCOVERY_PUBLIC && (
     discoverySession === "guest" ||
+    discoverySession === "error" || // Garder l'offre visible, mais bloquer le paiement.
     (discoverySession === "authenticated" && discoveryStatus?.enabled && discoveryStatus.can_buy)
   );
   const discoveryTopupVisible = DISCOVERY_PUBLIC && discoverySession === "authenticated" &&
@@ -1682,7 +1728,7 @@ export default function PacksPage() {
           headers: { Authorization: `Bearer ${session.access_token}`, "user-id": session.user.id },
           cache: "no-store",
         });
-        if (!statusResponse.ok) throw new Error("Impossible de vérifier l'éligibilité Découverte.");
+        if (!statusResponse.ok) throw new Error(discoveryCheckErrorText(`status:${statusResponse.status}`, language));
         const verified = await statusResponse.json() as DiscoveryStatus;
         const allowed = verified.enabled && (target.id === DISCOVERY_PACK_ID
           ? verified.can_buy : verified.topup_available);
@@ -2303,8 +2349,14 @@ export default function PacksPage() {
             <button type="button" className="shrink-0 text-muted underline" onClick={() => setDiscoveryNotice(null)}>{language === "fr" ? "Fermer" : "Close"}</button>
           </div>
         )}
-        {DISCOVERY_PUBLIC && discoveryError && discoverySession !== "guest" && (
-          <p role="status" className="mt-5 text-sm text-muted">{language === "fr" ? "Pack Découverte temporairement indisponible : éligibilité non vérifiée." : "Discovery Pass unavailable: eligibility could not be checked."}</p>
+        {DISCOVERY_PUBLIC && discoveryError && discoverySession === "error" && (
+          <div role="alert" className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm">
+            <span className="max-w-3xl text-muted-strong">{discoveryCheckErrorText(discoveryError, language)}</span>
+            <button type="button" onClick={() => void refreshDiscoveryStatus()}
+              className="shrink-0 font-semibold text-foreground underline underline-offset-4 hover:opacity-70">
+              {language === "fr" ? "Réessayer la vérification" : "Retry verification"}
+            </button>
+          </div>
         )}
         {discoveryBuyVisible && (
           <section id="offre-decouverte" className="mt-9 border-y border-border/70 py-7 sm:py-9">
@@ -2320,10 +2372,13 @@ export default function PacksPage() {
               <div className="min-w-[190px]">
                 <p className="text-3xl font-semibold tabular-nums">1 000 <span className="text-base">FCFA</span></p>
                 <p className="mt-1 text-xs text-muted">{language === "fr" ? "Une fois par compte" : "Once per account"}</p>
-                <button type="button" disabled={isPaying !== null}
+                <button type="button" disabled={isPaying !== null || discoverySession === "error"}
                   onClick={() => void startPayment({ type: "primary_pack", id: DISCOVERY_PACK_ID })}
-                  className="mt-4 w-full rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-90 disabled:opacity-50">
-                  {isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting : language === "fr" ? "Découvrir ORIA" : "Try ORIA"}
+                  className="mt-4 w-full rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+                  {discoverySession === "error"
+                    ? language === "fr" ? "Vérification nécessaire" : "Verification required"
+                    : isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting
+                    : language === "fr" ? "Découvrir ORIA" : "Try ORIA"}
                 </button>
               </div>
             </div>
