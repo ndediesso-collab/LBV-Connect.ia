@@ -55,7 +55,7 @@ export default function FonctionnementPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.17em] text-muted-strong">Offre de bienvenue · une fois par compte</p>
               <h2 id="offre-decouverte-titre" className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">Commencez avec le Pack Découverte.</h2>
               <p className="mt-3 text-sm leading-7 text-muted-strong">
-                8 000 crédits sans expiration, GPT-6 Luna et deux essais GPT-5.6 Terra. Découvrez aussi la création d'une image Recraft en 1K et jusqu'à deux vidéos Grok de 4 secondes en 480p. Les fonctionnalités avancées restent réservées aux autres formules.
+                8 000 crédits sans expiration avec GPT-6 Luna, GPT-5.6 Terra, la création d’images Recraft en 1K et de vidéos Grok de 4 secondes en 480p. Utilisez ces fonctionnalités selon votre solde : aucune limite de nombre de demandes. Les autres fonctions restent réservées aux packs supérieurs.
               </p>
               <p className="mt-2 text-xs text-muted-strong">Recharge supplémentaire unique : 1 000 crédits pour 600 FCFA, sans date d'expiration. L'éligibilité est vérifiée avant l'achat.</p>
             </div>

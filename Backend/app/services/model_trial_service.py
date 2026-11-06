@@ -3,16 +3,15 @@
 IMPORTANT : une contrainte UNIQUE(user_id, model_id) doit exister sur
 public.model_trials pour la création concurrente sans doublon.
 
-Pour ORIA Découverte, la cle persistée « discovery_pack:gpt-5.6-terra »
-est séparée du compteur Terra historique (5 essais). Aucun compteur
-existant n'est renommé, migré ou remis à zéro.
+Le Pass Découverte n’utilise plus de compteur d’essais : Luna et Terra
+sont des modèles ordinaires, payés en crédits. Les compteurs historiques
+des quatre packs classiques restent inchangés.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from app.config.model_trials import (
-    DISCOVERY_TRIAL_MAX_USES,
     TRIAL_COSTS,
     TRIAL_MAX_USES,
     TRIAL_MODELS_BY_PACK,
@@ -42,35 +41,18 @@ class ModelTrialService:
 
     @staticmethod
     def _counter_model_id(model_id: str, pack_id: str | None) -> str:
-        """Isoler le quota Découverte sans modifier les compteurs historiques.
+        """Conserver le fonctionnement des essais des quatre packs classiques.
 
         model_trials.model_id est une colonne TEXT avec UNIQUE(user_id,model_id).
-        La clé spéciale n'est jamais envoyée à OpenAI / OpenRouter.
+        Le Pass Découverte ne possède plus de compteur d'essais.
         """
         if pack_id == _DISCOVERY_PACK_ID:
-            if TRIAL_MODELS_BY_PACK.get(_DISCOVERY_PACK_ID) != model_id:
-                raise ValueError("Ce modèle n'est pas un essai du Pass Découverte.")
-            return f"{_DISCOVERY_PACK_ID}:{model_id}"
+            raise ValueError("Le Pass Découverte n’utilise plus de compteurs d’essais.")
         return model_id
 
     @staticmethod
     def _expected_maximum(pack_id: str | None) -> int:
-        if pack_id == _DISCOVERY_PACK_ID:
-            return DISCOVERY_TRIAL_MAX_USES
         return TRIAL_MAX_USES
-
-    @staticmethod
-    def _check_discovery_quota(trial: dict, pack_id: str | None) -> None:
-        """Refuser toute ligne Découverte mal configurée plutôt que donner 5 essais."""
-        if pack_id != _DISCOVERY_PACK_ID:
-            return
-        try:
-            maximum = int(trial["max_trials"])
-            used = int(trial["used_trials"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("Compteur du Pass Découverte invalide.") from exc
-        if maximum != DISCOVERY_TRIAL_MAX_USES or not 0 <= used <= maximum:
-            raise RuntimeError("Quota du Pass Découverte incohérent dans Supabase.")
 
     @staticmethod
     def get_trial(
@@ -93,8 +75,6 @@ class ModelTrialService:
             # quand maybe_single() ne trouve aucune ligne.
             return None
         trial = response.data
-        if trial is not None:
-            ModelTrialService._check_discovery_quota(trial, pack_id)
         return trial
 
     @staticmethod
@@ -146,7 +126,7 @@ class ModelTrialService:
         if used >= maximum:
             raise ValueError("Les essais découverte de ce modèle sont épuisés.")
 
-        # CAS (Compare And Swap) : 2 appels concurrents avec le même 'used'
+        # CAS (Compare And Swap) : deux appels concurrents avec le même 'used'
         # ne peuvent pas valider tous les deux. L'update n'est PAS retenté,
         # car une réponse réseau perdue n'implique pas que le write a échoué.
         response = (
@@ -167,6 +147,4 @@ class ModelTrialService:
                 "Relire son état avant toute nouvelle consommation."
             )
         result = response.data[0]
-        ModelTrialService._check_discovery_quota(result, pack_id)
         return result
-[0]

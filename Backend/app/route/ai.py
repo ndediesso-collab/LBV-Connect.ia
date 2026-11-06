@@ -2096,8 +2096,8 @@ PACK_ALLOWED_MODELS = {
         "gpt-6-astra",
     },
 
-    # ORIA Découverte : Terra reste UNIQUEMENT un modèle d'essai.
-    "discovery_pack": {"luna"},
+    # ORIA Découverte : Luna et Terra sont disponibles tant que les crédits suffisent.
+    "discovery_pack": {"luna", "gpt-5.6-terra"},
 
 }
 
@@ -2200,67 +2200,12 @@ def _discovery_chat_rights(provider: ChatProvider):
     # Le fichier credit_costs.py sera raccordé ultérieurement. Pour l'instant,
     # on ne fait pas apparaître le pack dans ses constantes historiques.
     return {**OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK,
-            _DISCOVERY_PACK: frozenset({"luna"})}
+            _DISCOVERY_PACK: frozenset({"luna", "gpt-5.6-terra"})}
 
 
-def _discovery_claim_terra(*, uid: str, model: str, wallet,
-                           is_trial_model: bool, repository,
-                           reservation_id: str) -> None:
-    """Consomme une place AVANT l'appel fournisseur, jamais après.
-
-    Le CAS SQL de model_trials garantit au plus 2 réclamations réussies.
-    Une tentative incertaine conserve sa place : ne pas réattribuer une
-    tentative potentiellement facturée sans rapprochement administratif.
-    """
-    if wallet.pack_id != _DISCOVERY_PACK or not is_trial_model:
-        return
-    try:
-        ModelTrialService.consume_trial(uid, model, pack_id=wallet.pack_id)
-    except Exception as exc:
-        # Aucun appel IA n'a eu lieu : on libère les crédits provisionnés.
-        try:
-            repository.release_credit_reservation(user_id=uid,
-                                                   reference_id=reservation_id)
-        except Exception:
-            logging.getLogger(__name__).exception(
-                "ORIA_DISCOVERY_TERRA_RESERVATION_RELEASE_FAILED ref=%s", reservation_id)
-        raise HTTPException(403, "Essais Terra indisponibles ou quota épuisé.") from exc
-
-
-def _discovery_image_claim(*, user_id: str, request_id: str) -> None:
-    """Réserve l'image unique du Pass Découverte AVANT tout appel facturable.
-
-    L'unicité et le verrou concurrent sont assurés par la RPC Supabase
-    oria_discovery_image_try(uuid, text). Réutiliser le même request_id
-    ne débite pas de quota supplémentaire. En cas de réponse réseau
-    incertaine, conserver le quota jusqu'à rapprochement administratif.
-    """
-    try:
-        response = supabase.rpc("oria_discovery_image_try", {
-            "p_user_id": user_id, "p_request_id": request_id,
-        }).execute()
-    except Exception as exc:
-        raise HTTPException(503, "Quota image Découverte indisponible.") from exc
-    if getattr(response, "data", None) is not True:
-        raise HTTPException(403, "Image unique du Pass Découverte déjà utilisée.")
-
-
-def _discovery_video_claim(*, user_id: str, request_id: str) -> None:
-    """Quota concurrent de deux clips, via RPC PostgreSQL atomique.
-
-    Cette RPC est une DÉPENDANCE OBLIGATOIRE non présente dans ai.py :
-    oria_discovery_video_try(p_user_id uuid,p_request_id text) RETURNS boolean.
-    Aucune requête fournisseur n'est autorisée si la fonction est absente.
-    """
-    try:
-        response = supabase.rpc("oria_discovery_video_try", {
-            "p_user_id": user_id, "p_request_id": request_id,
-        }).execute()
-    except Exception as exc:
-        raise HTTPException(503, "Quota vidéo Découverte indisponible.") from exc
-    result = getattr(response, "data", None)
-    if result is not True:
-        raise HTTPException(403, "Limite de deux vidéos Découverte atteinte.")
+# Découverte : aucun quota fixe Terra, image ou vidéo.
+# L’autorisation du modèle, les crédits, la réservation et les jobs durables
+# sont contrôlés dans le parcours normal des actions.
 
 
 IMAGE_ACTIONS = {
@@ -3987,7 +3932,7 @@ def _prepare_chat(
                 status_code=403,
                 detail=(
                     f"Vous avez utilisé tous vos "
-                    f"{2 if wallet.pack_id == _DISCOVERY_PACK else 5} essais de {model}."
+                    f"5 essais de {model}."
                 ),
             )
 
@@ -4167,17 +4112,11 @@ def _settle_chat_reservation(
     trials_remaining = None
 
     if is_trial_model:
-        if wallet_before_reservation.pack_id == _DISCOVERY_PACK:
-            # Déjà consommé via CAS avant appel fournisseur.
-            trials_remaining = ModelTrialService.get_remaining(
-                authenticated_user_id, model_id,
-                pack_id=wallet_before_reservation.pack_id,
-            )
-        else:
-            trial = ModelTrialService.consume_trial(
-                authenticated_user_id, model_id,
-            )
-            trials_remaining = max(0, trial["max_trials"] - trial["used_trials"])
+        # Exclusivement les essais historiques des quatre packs classiques.
+        trial = ModelTrialService.consume_trial(
+            authenticated_user_id, model_id,
+        )
+        trials_remaining = max(0, trial["max_trials"] - trial["used_trials"])
 
     return result, trials_remaining
 
@@ -4221,12 +4160,6 @@ def get_chat_capabilities(
     catalog = (MODEL_OPENAI_IDS if provider is ChatProvider.OPENAI
                else OPENROUTER_CHAT_MODEL_IDS)
     visible_models = set(models)
-    if wallet.pack_id == _DISCOVERY_PACK:
-        # Terra n'est visible qu'avec ses deux essais séparés disponibles.
-        if ModelTrialService.get_remaining(
-            uid, "gpt-5.6-terra", pack_id=wallet.pack_id
-        ) > 0:
-            visible_models.add("gpt-5.6-terra")
     return {
         "success": True,
         "provider": provider.value,
@@ -4393,11 +4326,6 @@ async def _oria_openrouter_execute_classic(*, service, selection, repository,
     reservation_id = reservation_id or _oria_openrouter_reserve(
         repository=repository, uid=uid, action=action, quote=quote,
     )
-    _discovery_claim_terra(
-        uid=uid, model=selection.oria_model, wallet=wallet,
-        is_trial_model=is_trial_model, repository=repository,
-        reservation_id=reservation_id,
-    )
     try:
         response = await asyncio.to_thread(
             service.chat, model=selection.api_model, message=message,
@@ -4477,11 +4405,6 @@ async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: s
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     reservation_id = _oria_openrouter_reserve(
         repository=repository, uid=uid, action=action, quote=quote,
-    )
-    _discovery_claim_terra(
-        uid=uid, model=model, wallet=wallet,
-        is_trial_model=is_trial_model, repository=repository,
-        reservation_id=reservation_id,
     )
     try:
         state = _register_active_generation(
@@ -4797,13 +4720,9 @@ async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: s
                 else:
                     artifact_errors.append("Réponse incomplète : aucun fichier exporté.")
                 if is_trial_model:
-                    if wallet.pack_id == _DISCOVERY_PACK:
-                        # Place déjà prélevée avant le premier appel fournisseur.
-                        remaining = ModelTrialService.get_remaining(
-                            uid, model, pack_id=wallet.pack_id)
-                    else:
-                        trial = ModelTrialService.consume_trial(uid, model)
-                        remaining = max(0, trial["max_trials"] - trial["used_trials"])
+                    # Les essais ne s'appliquent qu'aux packs classiques.
+                    trial = ModelTrialService.consume_trial(uid, model)
+                    remaining = max(0, trial["max_trials"] - trial["used_trials"])
                 yield _oria_chat_status("clear", generation_id=generation_id,
                                         attempt_id=attempt_id)
                 yield _sse("done", {
@@ -4981,11 +4900,6 @@ async def chat(
             web=web,
         )
 
-        _discovery_claim_terra(
-            uid=authenticated_user_id, model=model, wallet=wallet,
-            is_trial_model=is_trial_model, repository=repository,
-            reservation_id=reservation_id,
-        )
         openai_service = OpenAIService()
 
         try:
@@ -5366,11 +5280,6 @@ async def generate_chat_revision(
         if web:
             response_text += _oria_openrouter_citation_text(provider.get("citations"))
     else:
-        _discovery_claim_terra(
-            uid=owner, model=model, wallet=wallet,
-            is_trial_model=is_trial_model, repository=repository,
-            reservation_id=reservation_id,
-        )
         try:
             provider = OpenAIService().chat(
                 model=MODEL_OPENAI_IDS[model],
@@ -7459,16 +7368,6 @@ async def chat_stream(
             pass
         raise
 
-    try:
-        _discovery_claim_terra(
-            uid=authenticated_user_id, model=model, wallet=wallet,
-            is_trial_model=is_trial_model, repository=repository,
-            reservation_id=reservation_id,
-        )
-    except Exception:
-        _close_active_generation(generation_id, generation_state)
-        raise
-
     async def event_stream():
         nonlocal artifact_requests
         full_response = ""
@@ -9126,9 +9025,9 @@ def _or_discovery_caps(wallet) -> dict[str, Any]:
                                                "max": 4 if video_options else 0},
                 "short_clip_actions_available_now": ["video_4s"] if active and video_options else [],
                 "long_projects_generation_available": False,
-                "video_quota_total": 2},
-            "notice": "Découverte : image Recraft 1K, deux clips Grok 480p 4s maximum. "
-                      "Devis sous réserve de la disponibilité du fournisseur et du quota SQL."}
+                "video_quota_total": None},
+            "notice": "Découverte : Recraft 1K et Grok 480p/4s facturés en crédits, "
+                      "sans quota de générations. Les devis restent obligatoires."}
 
 
 def _or_caps_for(wallet) -> dict[str, Any]:
@@ -9411,10 +9310,6 @@ async def openrouter_media_image(
     _google_require_consent(SimpleNamespace(reservation_credits=reserve),
                             payload.accepted_max_credits, wallet.balance)
     _or_db_ready()
-    if wallet.pack_id == _DISCOVERY_PACK:
-        # Quota SQL à vie avant le POST OpenRouter, idempotent par request_id.
-        # Le conserver en cas d'incertitude sur l'appel fournisseur.
-        _discovery_image_claim(user_id=uid, request_id=request_id)
     existing = _or_start_record(uid, request_id, "image", action, model, prompt, reserve, mode)
     if existing:
         return _or_public_job(existing)
@@ -9475,10 +9370,6 @@ async def openrouter_media_video(
     _google_require_consent(SimpleNamespace(reservation_credits=reserve),
                             payload.accepted_max_credits, wallet.balance)
     _or_db_ready()
-    if wallet.pack_id == _DISCOVERY_PACK:
-        # Quota SQL atomique AVANT l'appel vidéo potentiellement facturé.
-        # Un request_id déjà réclamé est idempotent ; jamais de release sur timeout.
-        _discovery_video_claim(user_id=uid, request_id=request_id)
     existing = _or_start_record(uid, request_id, "video", action, model, prompt, reserve, mode)
     if existing:
         return _or_public_job(existing)

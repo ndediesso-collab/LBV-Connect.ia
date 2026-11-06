@@ -2365,8 +2365,8 @@ export default function PacksPage() {
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">{language === "fr" ? "Offre de bienvenue · achat unique" : "Welcome offer · one-time purchase"}</p>
                 <h2 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{language === "fr" ? "Pack Découverte" : "Discovery Pass"}</h2>
                 <p className="mt-3 text-sm leading-7 text-muted-strong">{language === "fr"
-                  ? "8 000 crédits sans expiration. GPT-6 Luna, 2 essais GPT-5.6 Terra, 1 création d’image 1K avec Recraft et jusqu’à 2 vidéos de 4 secondes en 480p avec Grok. Fonctions avancées limitées."
-                  : "8,000 non-expiring credits. GPT-6 Luna, 2 GPT-5.6 Terra trials, one 1K image creation with Recraft and up to two 4-second 480p Grok videos. Advanced features are limited."}</p>
+                  ? "8 000 crédits sans expiration. GPT-6 Luna, GPT-5.6 Terra, images Recraft 1K et vidéos Grok 480p de 4 secondes. Utilisez ces fonctions autant que vos crédits le permettent. Fonctions avancées réservées aux autres packs."
+                  : "8,000 non-expiring credits. GPT-6 Luna, GPT-5.6 Terra, 1K Recraft images and 4-second 480p Grok videos. Use these features as often as your credits allow. Advanced features require another plan."}</p>
                 <p className="mt-2 text-xs text-muted">{language === "fr" ? "Une seule recharge possible : 1 000 crédits pour 600 FCFA. Le devis en crédits est présenté avant les créations." : "One dedicated top-up: 1,000 credits for 600 XAF. Credit estimates are shown before media creation."}</p>
               </div>
               <div className="min-w-[190px]">

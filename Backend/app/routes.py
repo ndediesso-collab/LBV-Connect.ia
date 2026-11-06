@@ -2071,7 +2071,7 @@ def authorize_ai_request(
     # 5. VÉRIFICATION DATE D'ÉCHÉANCE
     # ========================================================
 
-    if wallet.pack_expires_at is None:
+    if wallet.pack_expires_at is None and wallet.pack_id != "discovery_pack":
         raise HTTPException(
             status_code=403,
             detail=(

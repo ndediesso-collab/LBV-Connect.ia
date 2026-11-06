@@ -261,9 +261,8 @@ OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK: dict[str, frozenset[str]] = {
         "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra",
         "claude-haiku-5.5", "claude-sonnet-5.5", "claude-opus-5.5",
     }),
-    # Luna uniquement : Terra est accessible via les 2 essais persistants
-    # de model_trial_service.py, PAS comme modele illimite.
-    "discovery_pack": frozenset({"luna"}),
+    # Modèles facturés en crédits, sans compteur d’essais Découverte.
+    "discovery_pack": frozenset({"luna", "gpt-5.6-terra"}),
 }
 
 # A RENSEIGNER seulement après vérification via le catalogue OpenRouter.
@@ -607,8 +606,8 @@ BUSINESS_PACK_API_BUDGET_XAF = 20_000
 # ============================================================
 # PASS DÉCOUVERTE — NE MODIFIE PAS LES QUATRE PACKS CLASSIQUES
 # ============================================================
-# Droits commerciaux ; les controles réels doivent etre appliques par les
-# routes authentifiees et les RPC Supabase (quotas atomiques/idempotence).
+# Droits commerciaux ; autorisation, crédits et idempotence sont vérifiés
+# par les routes authentifiées, le portefeuille et les jobs Supabase.
 # Les montants et identifiants Chariow sont geres dans config/payments.py.
 DISCOVERY_PACK_CREDITS = 8_000
 DISCOVERY_PACK_PRICE_XAF = 1_000
@@ -625,12 +624,12 @@ DISCOVERY_PACK_API_BUDGET_XAF = 900
 
 DISCOVERY_IMAGE_MODEL_ID = "recraft/recraft-v4.1-flash"
 DISCOVERY_IMAGE_RESOLUTION = "1K"
-DISCOVERY_IMAGE_MAX_GENERATIONS = 1
+DISCOVERY_IMAGE_MAX_GENERATIONS: int | None = None  # crédits uniquement, pas de quota
 DISCOVERY_IMAGE_ALLOW_REFERENCE = False
 DISCOVERY_VIDEO_MODEL_ID = "x-ai/grok-imagine-video-1.5-lite"
 DISCOVERY_VIDEO_RESOLUTION = "480p"
 DISCOVERY_VIDEO_DURATION_SECONDS = 4
-DISCOVERY_VIDEO_MAX_GENERATIONS = 2
+DISCOVERY_VIDEO_MAX_GENERATIONS: int | None = None  # crédits uniquement, pas de quota
 
 # Tarifs publics de REFERENCE au 06/11/2026, sans garantie de prix fixe :
 # https://openrouter.ai/recraft/recraft-v4.1-flash

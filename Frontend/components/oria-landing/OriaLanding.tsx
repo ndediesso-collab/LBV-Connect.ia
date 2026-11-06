@@ -59,20 +59,67 @@ export default function OriaLanding() {
     <main className={styles.page} id="haut">
       {/* Styles additionnels isolés : aucune modification du CSS historique nécessaire. */}
       <style>{`
-        .oria-discovery-hero {
-          display: flex; align-items: center; justify-content: space-between; gap: 16px;
-          max-width: 620px; margin-top: 24px; padding: 15px 18px;
-          border: 1px solid #dad9d4; border-radius: 16px;
-          background: #efeee9; color: #151515; text-decoration: none;
-          transition: border-color .18s ease, background .18s ease;
+        /* Bandeau éditorial : visible dès l'arrivée, sans changer le héros historique. */
+        .oria-discovery-announcement {
+          width: 100%; background: #171717; color: #fff;
+          border-bottom: 1px solid #2d2d2d;
         }
-        .oria-discovery-hero:hover, .oria-discovery-hero:focus-visible {
-          background: #e8e7e1; border-color: #989892;
+        .oria-discovery-announcement-inner {
+          max-width: 1420px; margin: 0 auto; padding: 27px 5.2%;
+          display: flex; align-items: center; justify-content: space-between;
+          gap: clamp(24px, 4vw, 68px);
         }
-        .oria-discovery-hero-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-        .oria-discovery-hero-label { font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
-        .oria-discovery-hero-text strong { font-size: 14px; font-weight: 650; line-height: 1.4; }
-        .oria-discovery-hero-price { display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0; font-size: 14px; font-weight: 750; white-space: nowrap; }
+        .oria-discovery-announcement-main { min-width: 0; }
+        .oria-discovery-announcement-kicker {
+          display: inline-flex; align-items: center; gap: 9px;
+          color: #cccac5; font-size: 11px; letter-spacing: .14em;
+          font-weight: 700; text-transform: uppercase;
+        }
+        .oria-discovery-announcement h2 {
+          margin: 12px 0 7px; font-size: clamp(24px, 2.65vw, 37px);
+          font-weight: 800; letter-spacing: -.045em; line-height: 1.13;
+        }
+        .oria-discovery-announcement h2 span { color: #a7a7a1; }
+        .oria-discovery-announcement p {
+          max-width: 700px; margin: 0; color: #cecec8;
+          font-size: 14px; line-height: 1.5;
+        }
+        .oria-discovery-announcement-action {
+          display: flex; align-items: center; gap: 26px; flex-shrink: 0;
+        }
+        .oria-discovery-announcement-price { display: flex; flex-direction: column; gap: 4px; }
+        .oria-discovery-announcement-price strong {
+          white-space: nowrap; font-size: clamp(29px, 2.55vw, 38px);
+          line-height: 1; letter-spacing: -.05em;
+        }
+        .oria-discovery-announcement-price small {
+          font-size: 14px; font-weight: 600; letter-spacing: 0;
+        }
+        .oria-discovery-announcement-price span {
+          max-width: 195px; color: #b8b8b2; font-size: 11px; line-height: 1.35;
+        }
+        .oria-discovery-announcement-link {
+          display: inline-flex; justify-content: center; align-items: center;
+          gap: 11px; border-radius: 999px; padding: 14px 19px;
+          background: #f8f8f5; color: #171717 !important;
+          font-size: 13px; font-weight: 750; white-space: nowrap;
+          transition: background .2s ease, transform .2s ease;
+        }
+        .oria-discovery-announcement-link:hover,
+        .oria-discovery-announcement-link:focus-visible {
+          background: #e3e3dc; transform: translateY(-1px);
+        }
+        @media (max-width: 1010px) {
+          .oria-discovery-announcement-inner { align-items: flex-start; flex-direction: column; gap: 17px; }
+          .oria-discovery-announcement-action { width: 100%; justify-content: space-between; }
+        }
+        @media (max-width: 600px) {
+          .oria-discovery-announcement-inner { padding: 22px 5.2% 24px; }
+          .oria-discovery-announcement h2 { font-size: clamp(24px, 6.2vw, 32px); }
+          .oria-discovery-announcement-action { align-items: stretch; flex-wrap: wrap; gap: 14px; }
+          .oria-discovery-announcement-price { flex: 1 1 130px; }
+          .oria-discovery-announcement-link { flex: 1 1 auto; min-height: 48px; }
+        }
         .oria-discovery-offer {
           display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(240px, .6fr);
           gap: 30px; align-items: stretch; margin: 32px 0 36px;
@@ -102,10 +149,6 @@ export default function OriaLanding() {
           .oria-discovery-copy { padding: 25px 23px; }
           .oria-discovery-side { padding: 26px 23px; }
         }
-        @media (max-width: 430px) {
-          .oria-discovery-hero { flex-wrap: wrap; gap: 8px; padding: 13px 14px; }
-          .oria-discovery-hero-price { width: 100%; justify-content: space-between; }
-        }
       `}</style>
       <header className={styles.header}>
         <div className={styles.navInner}>
@@ -133,20 +176,36 @@ export default function OriaLanding() {
         </div>
       </header>
 
+      {DISCOVERY_PUBLIC && (
+        <section className="oria-discovery-announcement" aria-labelledby="oria-discovery-announcement-title">
+          <div className="oria-discovery-announcement-inner">
+            <div className="oria-discovery-announcement-main">
+              <span className="oria-discovery-announcement-kicker">
+                <Sparkles size={15} aria-hidden="true" /> NOUVEAU · OFFRE DE BIENVENUE
+              </span>
+              <h2 id="oria-discovery-announcement-title">
+                Le Pack Découverte. <span>Votre premier pas avec ORIA.</span>
+              </h2>
+              <p>8 000 crédits sans expiration pour utiliser les fonctionnalités incluses, à votre rythme.</p>
+            </div>
+            <div className="oria-discovery-announcement-action">
+              <div className="oria-discovery-announcement-price">
+                <strong>1 000 <small>FCFA</small></strong>
+                <span>Un seul achat par compte · Sous réserve d’éligibilité</span>
+              </div>
+              <Link className="oria-discovery-announcement-link" href="/packs">
+                Découvrir l’offre <ArrowUpRight size={18} strokeWidth={1.8} aria-hidden="true" />
+              </Link>
+            </div>
+          </div>
+        </section>
+      )}
+
       <section className={styles.hero} aria-labelledby="hero-title">
         <div className={styles.heroContent}>
           <span className={styles.eyebrow}><span className={styles.eyebrowLine}/> VOTRE ESPACE IA, À VOTRE RYTHME</span>
           <h1 id="hero-title">Plusieurs intelligences.<br/><span>Une seule expérience.</span></h1>
           <p className={styles.heroText}>Échangez, apprenez, créez et faites avancer vos projets. ORIA réunit différents modèles d’intelligence artificielle dans un espace simple, pensé pour passer de l’idée au résultat.</p>
-          {DISCOVERY_PUBLIC && (
-            <Link href="/packs" className="oria-discovery-hero" aria-label="Découvrir le Pack Découverte ORIA à 1 000 FCFA">
-              <span className="oria-discovery-hero-text">
-                <span className="oria-discovery-hero-label">NOUVEAU · PACK DÉCOUVERTE</span>
-                <strong>8 000 crédits sans expiration · achat unique</strong>
-              </span>
-              <span className="oria-discovery-hero-price">1 000 FCFA <ArrowUpRight size={17} aria-hidden="true" /></span>
-            </Link>
-          )}
           <div className={styles.heroActions}>
             <Link href="/chat" className={styles.primaryButton}>Découvrir ORIA <ArrowUpRight size={19} strokeWidth={1.8}/></Link>
             <a href="#fonctionnalites" className={styles.secondaryButton}>Explorer les possibilités <ArrowRight size={18} strokeWidth={1.7}/></a>
@@ -213,12 +272,12 @@ export default function OriaLanding() {
             <div className="oria-discovery-copy">
               <span className="oria-discovery-kicker">OFFRE DE BIENVENUE · UNE SEULE FOIS PAR COMPTE</span>
               <h3 id="discovery-offer-title">Découvrez ORIA.<br/><span>Gardez votre temps.</span></h3>
-              <p>Le Pack Découverte vous permet de commencer avec 8 000 crédits qui ne périment pas. Vous accédez à une sélection de fonctionnalités, avec des quotas spécifiques pour les modèles et les créations multimédias.</p>
+              <p>Le Pack Découverte vous permet de commencer avec 8 000 crédits qui ne périment pas. Les modèles et créations autorisés restent utilisables tant que le solde suffit, sans quota fixe par fonctionnalité.</p>
               <div className="oria-discovery-chips" aria-label="Fonctions prévues dans le Pack Découverte">
                 <span>GPT-6 Luna</span>
-                <span>2 essais Terra</span>
-                <span>1 image Recraft · 1K</span>
-                <span>2 vidéos Grok · 4 s / 480p</span>
+                <span>GPT-5.6 Terra</span>
+                <span>Images Recraft · 1K</span>
+                <span>Vidéos Grok · 4 s / 480p</span>
               </div>
             </div>
             <div className="oria-discovery-side">

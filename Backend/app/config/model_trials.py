@@ -5,12 +5,6 @@
 # Quotas historiques inchangés pour les packs classiques.
 TRIAL_MAX_USES = 5
 
-# Paramètre dédié au Pass Découverte.
-# À faire appliquer côté serveur dans model_trial_service.py et ai.py.
-# ATTENTION : ce paramètre seul ne limite pas encore les essais.
-DISCOVERY_TRIAL_MAX_USES = 2
-
-
 # Modèle supérieur accessible en découverte
 # pour chaque pack inférieur.
 TRIAL_MODELS_BY_PACK = {
@@ -18,7 +12,7 @@ TRIAL_MODELS_BY_PACK = {
     "intermediate_pack": "gpt-5.6-terra",
     "pro_pack": "gpt-5.6-sol",
     "business_pack": None,
-    "discovery_pack": "gpt-5.6-terra",
+    "discovery_pack": None,  # Terra est désormais un modèle standard payé en crédits.
 }
 
 

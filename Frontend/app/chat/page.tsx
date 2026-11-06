@@ -1215,7 +1215,6 @@ const TRIAL_MODEL_BY_PACK: Record<string, string> = {
   light_pack: "gpt-5",
   intermediate_pack: "gpt-5.6-terra",
   pro_pack: "gpt-6-astra",
-  discovery_pack: "gpt-5.6-terra",
 };
 
 function getSelectableModels(
@@ -4044,7 +4043,7 @@ export default function ChatPage() {
 
   // Le Chat ne conserve que le déclencheur : tout le Mini-Studio est isolé.
   const [isMiniStudioOpen, setIsMiniStudioOpen] = useState(false);
-  // Confirmation des limites Découverte avant ouverture du Mini-Studio.
+  // Confirmation des coûts et paramètres Découverte avant ouverture du Mini-Studio.
   const [discoveryStudioConfirm, setDiscoveryStudioConfirm] = useState(false);
 
   const [
@@ -7179,8 +7178,8 @@ export default function ChatPage() {
           <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-2xl">
             <h2 id="discovery-media-title" className="text-lg font-semibold">{language === "fr" ? "Créations Découverte" : "Discovery creations"}</h2>
             <p className="mt-3 text-sm leading-7 text-muted-strong">{language === "fr"
-              ? "Votre formule limite les créations à une image 1K avec Recraft et deux vidéos Grok de 4 secondes en 480p. Une création vidéo peut consommer une part importante de vos crédits. Vérifiez le devis en crédits avant de confirmer."
-              : "Your plan allows one 1K Recraft image and two 4-second 480p Grok videos. Video can consume a large part of your credits. Check the credit quote before confirming."}</p>
+              ? "Votre pack permet les images Recraft en 1K et les vidéos Grok de 4 secondes en 480p, sans limite de nombre tant que vos crédits suffisent. Une vidéo peut consommer une part importante du solde : vérifiez le devis avant chaque création."
+              : "Your plan includes 1K Recraft images and 4-second 480p Grok videos, with no generation-count limit while your balance covers the cost. Videos can use many credits: check the quote before creating."}</p>
             <div className="mt-6 flex flex-wrap gap-3">
               <button type="button" className="rounded-xl border border-border px-4 py-2 text-sm" onClick={() => setDiscoveryStudioConfirm(false)}>{language === "fr" ? "Annuler" : "Cancel"}</button>
               <button type="button" className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground"
