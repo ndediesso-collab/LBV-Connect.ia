@@ -133,7 +133,7 @@ const UI = {
 
 
       "Les packs classiques peuvent être rechargés selon leurs options. Découverte possède une recharge unique dédiée.",
-    startingAt: "À partir de 563 XAF pour 1 000 crédits",
+    startingAt: "À partir de 600 XAF pour 1 000 crédits",
 
 
 
@@ -333,7 +333,7 @@ const UI = {
 
 
       "Classic packs have their own top-up options. Discovery Pass has a separate one-time top-up.",
-    startingAt: "Starting at 563 XAF for 1,000 credits",
+    startingAt: "Starting at 600 XAF for 1,000 credits",
 
 
 
@@ -1046,7 +1046,7 @@ const FAQS_EN = [
   { question: "What happens when my pack expires?", answer: "The linked wallet becomes inactive at expiration, and its remaining credits can no longer be used." },
   { question: "How many credits are included in each pack?", answer: "Light: 15,000; Intermediate: 27,000; Pro: 36,000; Business: 120,000 credits." },
   { question: "Do all actions cost the same number of credits?", answer: "No. Costs vary by model, resolution and duration. Mini-Studio displays a credit quote before each creation." },
-  { question: "Can I buy extra credits?", answer: "You can top up your balance: 1,000 credits (563 XAF), 2,000 (1,000 XAF), 4,000 (2,000 XAF), or 10,000 (5,000 XAF)." },
+  { question: "Can I buy extra credits?", answer: "You can top up your balance: 1,000 credits (600 XAF), 2,000 (1,000 XAF), 4,000 (2,000 XAF), or 10,000 (5,000 XAF)." },
   { question: "Which Chat models are included in each pack?", answer: "Light: GPT-6 Luna; Intermediate: Luna and GPT-5; Pro: Luna, GPT-5.6 Terra and GPT-6 Sol; Business: Terra, Sol and GPT-6 Astra." },
   { question: "What can I create with Mini-Studio on my pack?", answer: "Each pack offers image creation, photo editing and video. Depending on your tier, images reach 1K, 2K or 4K, and video projects can combine multiple clips." },
   { question: "How do I know which settings my pack allows?", answer: "Mini-Studio adapts models, resolutions, durations and editing options to your active pack, and shows the credit quote before confirmation." },
@@ -1074,7 +1074,7 @@ const complementaryCredits: CreditTopUp[] = [
 
 
 
-    price: "563 XAF",
+    price: "600 XAF",
 
 
 
@@ -1330,7 +1330,7 @@ const faqs = [
   { question: "Que se passe-t-il lorsque mon pack expire ?", answer: "Le portefeuille associé devient inactif à la date d'expiration ; les crédits restants de ce pack ne sont plus consommables." },
   { question: "Combien de crédits contient chaque pack ?", answer: "Léger : 15 000 ; Intermédiaire : 27 000 ; Pro : 36 000 ; Business : 120 000 crédits." },
   { question: "Toutes les actions consomment-elles le même nombre de crédits ?", answer: "Non. Le coût dépend notamment du modèle, de la résolution et de la durée. Le Mini-Studio affiche un devis en crédits avant chaque création." },
-  { question: "Puis-je acheter des crédits supplémentaires ?", answer: "Vous pouvez recharger votre solde : 1 000 crédits (563 XAF), 2 000 (1 000 XAF), 4 000 (2 000 XAF) ou 10 000 (5 000 XAF)." },
+  { question: "Puis-je acheter des crédits supplémentaires ?", answer: "Vous pouvez recharger votre solde : 1 000 crédits (600 XAF), 2 000 (1 000 XAF), 4 000 (2 000 XAF) ou 10 000 (5 000 XAF)." },
   { question: "Quels modèles Chat sont inclus dans chaque pack ?", answer: "Léger : GPT-6 Luna ; Intermédiaire : Luna et GPT-5 ; Pro : Luna, GPT-5.6 Terra et GPT-6 Sol ; Business : Terra, Sol et GPT-6 Astra." },
   { question: "Quelles sont les possibilités du Mini-Studio selon mon pack ?", answer: "Chaque pack propose la création d’images, la retouche photo et la vidéo. Selon votre formule, les images atteignent 1K, 2K ou 4K, et les projets vidéo peuvent combiner plusieurs séquences." },
   { question: "Comment connaître les options accessibles avec mon pack ?", answer: "Le Mini-Studio adapte les modèles, résolutions, durées et options de retouche à votre pack actif et affiche le devis avant confirmation." },
@@ -1598,10 +1598,14 @@ export default function PacksPage() {
     if (new URLSearchParams(window.location.search).get("recharge") === "decouverte") setActivePackTab("addon");
   }, []);
   const discoveryWallet = walletPackId === DISCOVERY_PACK_ID;
+  // Après achat confirmé, l'offre disparaît définitivement pour ce compte.
+  // Avant achat, elle reste visible pour expliquer une éventuelle inéligibilité.
+  // L'affichage ne remplace jamais le contrôle serveur can_buy au checkout.
   const discoveryBuyVisible = DISCOVERY_PUBLIC && (
     discoverySession === "guest" ||
-    discoverySession === "error" || // Garder l'offre visible, mais bloquer le paiement.
-    (discoverySession === "authenticated" && discoveryStatus?.enabled && discoveryStatus.can_buy)
+    discoverySession === "error" || // Offrir un diagnostic sans permettre de payer.
+    (discoverySession === "authenticated" && discoveryStatus?.enabled === true &&
+      !discoveryStatus.purchased && !discoveryWallet)
   );
   const discoveryTopupVisible = DISCOVERY_PUBLIC && discoverySession === "authenticated" &&
     discoveryStatus?.enabled && discoveryWallet && discoveryStatus.topup_available;
@@ -2372,14 +2376,36 @@ export default function PacksPage() {
               <div className="min-w-[190px]">
                 <p className="text-3xl font-semibold tabular-nums">1 000 <span className="text-base">FCFA</span></p>
                 <p className="mt-1 text-xs text-muted">{language === "fr" ? "Une fois par compte" : "Once per account"}</p>
-                <button type="button" disabled={isPaying !== null || discoverySession === "error"}
+                <button type="button"
+                  disabled={isPaying !== null || discoverySession === "error" ||
+                    (discoverySession === "authenticated" && discoveryStatus?.can_buy !== true)}
                   onClick={() => void startPayment({ type: "primary_pack", id: DISCOVERY_PACK_ID })}
                   className="mt-4 w-full rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
                   {discoverySession === "error"
                     ? language === "fr" ? "Vérification nécessaire" : "Verification required"
+                    : discoverySession === "authenticated" && discoveryStatus?.can_buy !== true
+                      ? discoveryStatus?.purchase_pending
+                        ? language === "fr" ? "Paiement en attente" : "Payment pending"
+                        : language === "fr" ? "Non éligible" : "Not eligible"
                     : isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting
                     : language === "fr" ? "Découvrir ORIA" : "Try ORIA"}
                 </button>
+                {discoverySession === "authenticated" && discoveryStatus?.enabled &&
+                  !discoveryStatus.can_buy && !discoveryStatus.purchased && (
+                  <p role="status" className="mt-2 max-w-xs text-xs leading-5 text-muted">
+                    {discoveryStatus.purchase_pending
+                      ? language === "fr"
+                        ? "Une commande Découverte est déjà en attente de confirmation."
+                        : "A Discovery order is already awaiting confirmation."
+                      : walletPackId
+                        ? language === "fr"
+                          ? "Un autre pack est déjà associé à ce compte. L'offre de bienvenue ne peut pas être achetée."
+                          : "Another pack is already associated with this account. The welcome offer cannot be purchased."
+                        : language === "fr"
+                          ? "Ce compte ne remplit pas actuellement les conditions de l'offre de bienvenue."
+                          : "This account is not currently eligible for the welcome offer."}
+                  </p>
+                )}
               </div>
             </div>
           </section>
