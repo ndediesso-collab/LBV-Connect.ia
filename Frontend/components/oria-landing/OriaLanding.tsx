@@ -120,6 +120,25 @@ export default function OriaLanding() {
           .oria-discovery-announcement-price { flex: 1 1 130px; }
           .oria-discovery-announcement-link { flex: 1 1 auto; min-height: 48px; }
         }
+        /* Flottement de la maquette du héros : aucune modification du design. */
+        .oria-floating-preview {
+          animation: oria-preview-float 5s ease-in-out infinite;
+          will-change: translate;
+        }
+        @keyframes oria-preview-float {
+          0%, 100% { translate: 0 0; }
+          50% { translate: 0 -14px; }
+        }
+        @media (max-width: 530px) {
+          .oria-floating-preview { animation-name: oria-preview-float-mobile; }
+        }
+        @keyframes oria-preview-float-mobile {
+          0%, 100% { translate: 0 0; }
+          50% { translate: 0 -9px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .oria-floating-preview { animation: none !important; will-change: auto; }
+        }
         .oria-discovery-offer {
           display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(240px, .6fr);
           gap: 30px; align-items: stretch; margin: 32px 0 36px;
@@ -212,7 +231,7 @@ export default function OriaLanding() {
           </div>
           <div className={styles.heroBottomNote}><span className={styles.noteDot}/><span>Chat · Documents · Images · Vidéos · Recherche Web</span></div>
         </div>
-        <div className={styles.heroVisual} aria-label="Aperçu illustratif de l'interface ORIA">
+        <div className={`${styles.heroVisual} oria-floating-preview`} aria-label="Aperçu illustratif de l'interface ORIA">
           <div className={styles.visualTop}><span className={styles.visualLabel}>UN SEUL ESPACE POUR TOUT FAIRE</span><span>01 / 04</span></div>
           <div className={styles.mockApp}>
             <aside className={styles.mockSidebar}>
