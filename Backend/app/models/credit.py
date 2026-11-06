@@ -38,10 +38,18 @@ class CreditWallet:
 
     @property
     def is_pack_active(self) -> bool:
-        if (
-            self.pack_activated_at is None
-            or self.pack_expires_at is None
-        ):
+        # Aucune offre n'est active avant l'activation du portefeuille.
+        if self.pack_activated_at is None:
+            return False
+
+        # Exception limitée au Pass Découverte : ses crédits n'expirent pas.
+        # La disponibilité du solde est vérifiée séparément par les services.
+        if self.pack_id == "discovery_pack":
+            now = datetime.now(tz=self.pack_activated_at.tzinfo)
+            return self.pack_activated_at <= now
+
+        # Comportement historique conservé pour les quatre packs classiques.
+        if self.pack_expires_at is None:
             return False
 
         now = datetime.now(
@@ -53,6 +61,10 @@ class CreditWallet:
             <= now
             < self.pack_expires_at
         )
+
+    @property
+    def is_discovery_pack(self) -> bool:
+        return self.pack_id == "discovery_pack"
 
     @property
     def is_light_pack(self) -> bool:

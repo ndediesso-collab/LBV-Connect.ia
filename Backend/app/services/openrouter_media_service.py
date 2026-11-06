@@ -49,12 +49,16 @@ ORIA_V2_IMAGE_MODELS = (
     "google/gemini-3.1-flash-image",
     "black-forest-labs/flux-3-image",
     "openai/gpt-image-2.5-sunburst",
+    # Pass Decouverte uniquement : generation texte-vers-image ~1K.
+    "recraft/recraft-v4.1-flash",
 )
 ORIA_V2_VIDEO_MODELS = (
     "alibaba/wan-3.0",
     "google/veo-3.1-lite",
     "bytedance/seedance-2.5",
     "kwaivgi/kling-v3.0-pro",
+    # Pass Decouverte uniquement : 4 secondes et 480p (garde dans ai.py).
+    "x-ai/grok-imagine-video-1.5-lite",
 )
 ORIA_V2_PACK_MODEL_COUNT = {
     "light": 1,

@@ -261,6 +261,9 @@ OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK: dict[str, frozenset[str]] = {
         "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra",
         "claude-haiku-5.5", "claude-sonnet-5.5", "claude-opus-5.5",
     }),
+    # Luna uniquement : Terra est accessible via les 2 essais persistants
+    # de model_trial_service.py, PAS comme modele illimite.
+    "discovery_pack": frozenset({"luna"}),
 }
 
 # A RENSEIGNER seulement après vérification via le catalogue OpenRouter.
@@ -602,6 +605,43 @@ BUSINESS_PACK_DURATION_DAYS = 35
 BUSINESS_PACK_API_BUDGET_XAF = 20_000
 
 # ============================================================
+# PASS DÉCOUVERTE — NE MODIFIE PAS LES QUATRE PACKS CLASSIQUES
+# ============================================================
+# Droits commerciaux ; les controles réels doivent etre appliques par les
+# routes authentifiees et les RPC Supabase (quotas atomiques/idempotence).
+# Les montants et identifiants Chariow sont geres dans config/payments.py.
+DISCOVERY_PACK_CREDITS = 8_000
+DISCOVERY_PACK_PRICE_XAF = 1_000
+DISCOVERY_PACK_DURATION_DAYS: int | None = None  # aucune expiration
+DISCOVERY_PACK_MAX_PURCHASES = 1  # limite a faire appliquer par SQL
+
+DISCOVERY_TOPUP_CREDITS = 1_000
+DISCOVERY_TOPUP_PRICE_XAF = 600
+DISCOVERY_TOPUP_MAX_PURCHASES = 1  # limite a faire appliquer par SQL
+
+# Plafond fournisseur PROVISOIRE, coherent avec le repository (900 XAF).
+# Ne s'applique pas si ORIA_ENFORCE_PACK_API_BUDGET=0 ; validation SQL requise.
+DISCOVERY_PACK_API_BUDGET_XAF = 900
+
+DISCOVERY_IMAGE_MODEL_ID = "recraft/recraft-v4.1-flash"
+DISCOVERY_IMAGE_RESOLUTION = "1K"
+DISCOVERY_IMAGE_MAX_GENERATIONS = 1
+DISCOVERY_IMAGE_ALLOW_REFERENCE = False
+DISCOVERY_VIDEO_MODEL_ID = "x-ai/grok-imagine-video-1.5-lite"
+DISCOVERY_VIDEO_RESOLUTION = "480p"
+DISCOVERY_VIDEO_DURATION_SECONDS = 4
+DISCOVERY_VIDEO_MAX_GENERATIONS = 2
+
+# Tarifs publics de REFERENCE au 06/11/2026, sans garantie de prix fixe :
+# https://openrouter.ai/recraft/recraft-v4.1-flash
+# https://openrouter.ai/x-ai/grok-imagine-video-1.5-lite
+# Ces tarifs ne remplacent JAMAIS la reservation prudente ni le cout reel
+# (usage.cost) du fournisseur, y compris frais d'entree image ou surcouts.
+DISCOVERY_RECRAFT_REFERENCE_USD_PER_IMAGE = "0.007"
+DISCOVERY_GROK_LITE_REFERENCE_USD_PER_SECOND_480P = "0.02"
+DISCOVERY_GROK_LITE_REFERENCE_USD_PER_INPUT_IMAGE = "0.01"
+
+# ============================================================
 
 # PACKS DE CRÉDITS COMPLÉMENTAIRES
 
@@ -613,7 +653,7 @@ COMPLEMENTARY_CREDIT_PACKS = {
 
         "credits": 1_000,
 
-        "price_xaf": 563,
+        "price_xaf": 600,
 
     },
 

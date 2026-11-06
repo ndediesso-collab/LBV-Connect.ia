@@ -51,10 +51,7 @@ import Link from "next/link";
 
 
 
-import { useEffect, useState } from "react";
-
-
-
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 
@@ -135,10 +132,7 @@ const UI = {
 
 
 
-      "Rechargez votre solde sans changer de pack. Les crédits complémentaires sont ajoutés directement à votre portefeuille.",
-
-
-
+      "Les packs classiques peuvent être rechargés selon leurs options. Découverte possède une recharge unique dédiée.",
     startingAt: "À partir de 563 XAF pour 1 000 crédits",
 
 
@@ -338,10 +332,7 @@ const UI = {
 
 
 
-      "Top up your balance without changing your pack. Additional credits are added directly to your wallet.",
-
-
-
+      "Classic packs have their own top-up options. Discovery Pass has a separate one-time top-up.",
     startingAt: "Starting at 563 XAF for 1,000 credits",
 
 
@@ -747,6 +738,23 @@ type Pack = {
 
 
 
+// Source de vérité commerciale : GET /payments/discovery/status.
+// Une erreur de statut ne doit jamais déclencher de checkout Découverte.
+type DiscoveryStatus = {
+  enabled: boolean;
+  can_buy: boolean;
+  purchased: boolean;
+  purchase_pending?: boolean;
+  active_discovery: boolean;
+  balance?: number;
+  topup_available: boolean;
+  topup_pending?: boolean;
+  topup_used: boolean;
+};
+const DISCOVERY_PUBLIC = process.env.NEXT_PUBLIC_ORIA_DISCOVERY_ENABLED === "1";
+const DISCOVERY_PACK_ID = "discovery_pack";
+const DISCOVERY_TOPUP_ID = "discovery_topup_1000";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "https://lbv-connect-api.onrender.com").replace(/\/$/, "");
 type CreditTopUp = {
 
 
@@ -1450,6 +1458,107 @@ export default function PacksPage() {
 
 
 
+  // Le compte ne voit jamais l'offre avant confirmation de ses droits backend.
+  const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
+  const [discoverySession, setDiscoverySession] = useState<"loading" | "guest" | "authenticated" | "error">("loading");
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveryNotice, setDiscoveryNotice] = useState<string | null>(null);
+  const [walletPackId, setWalletPackId] = useState<string | null>(null);
+  const previousDiscoveryStatus = useRef<DiscoveryStatus | null>(null);
+  const discoveryRequest = useRef(0);
+  const discoveryLoginCheckout = useRef(false);
+  async function refreshDiscoveryStatus() {
+    if (!DISCOVERY_PUBLIC) { setDiscoverySession("guest"); return; }
+    const requestId = ++discoveryRequest.current;
+    try {
+      const client = createClient();
+      const { data: { session } } = await client.auth.getSession();
+      if (requestId !== discoveryRequest.current) return;
+      if (!session?.access_token) {
+        setDiscoveryStatus(null);
+        setDiscoverySession("guest");
+        setWalletPackId(null);
+        return;
+      }
+      setDiscoverySession("authenticated");
+      const headers = { Authorization: `Bearer ${session.access_token}`, "user-id": session.user.id };
+      // Le portefeuille détermine quelles recharges afficher, même après épuisement.
+      const [statusResponse, walletResponse] = await Promise.all([
+        fetch(`${API_URL}/payments/discovery/status`, { headers, cache: "no-store" }),
+        fetch(`${API_URL}/credits/me`, { headers, cache: "no-store" }),
+      ]);
+      if (!statusResponse.ok) throw new Error("Statut Découverte indisponible.");
+      const status = await statusResponse.json() as DiscoveryStatus;
+      if (!status || typeof status.enabled !== "boolean" || typeof status.can_buy !== "boolean" ||
+          typeof status.purchased !== "boolean" || typeof status.topup_available !== "boolean") {
+        throw new Error("Statut Découverte incomplet.");
+      }
+      if (requestId !== discoveryRequest.current) return;
+      let packId: string | null = null;
+      if (walletResponse.ok) {
+        const walletData = await walletResponse.json();
+        packId = typeof walletData?.wallet?.pack_id === "string" ? walletData.wallet.pack_id : null;
+      } else if (walletResponse.status !== 404) {
+        // 404 est normal sur un nouveau compte, avant son tout premier achat.
+        throw new Error("Portefeuille indisponible.");
+      }
+      if (requestId !== discoveryRequest.current) return;
+      const previous = previousDiscoveryStatus.current;
+      if (previous?.purchase_pending && status.purchased && !status.purchase_pending) {
+        setDiscoveryNotice("Votre Pack Découverte a été activé. Vos 8 000 crédits sont disponibles.");
+      } else if (previous?.topup_pending && status.topup_used && !status.topup_pending) {
+        setDiscoveryNotice("Recharge confirmée : 1 000 crédits ont été ajoutés.");
+      }
+      previousDiscoveryStatus.current = status;
+      setWalletPackId(packId);
+      setDiscoveryStatus(status);
+      setDiscoveryError(null);
+    } catch (cause) {
+      if (requestId !== discoveryRequest.current) return;
+      setDiscoveryStatus(null);
+      setWalletPackId(null);
+      setDiscoveryError(cause instanceof Error ? cause.message : "Statut Découverte indisponible.");
+      setDiscoverySession("error");
+    }
+  }
+  useEffect(() => {
+    void refreshDiscoveryStatus();
+    if (!DISCOVERY_PUBLIC) return;
+    const onFocus = () => { void refreshDiscoveryStatus(); };
+    const onVisibility = () => { if (document.visibilityState === "visible") onFocus(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      discoveryRequest.current++;
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+  useEffect(() => {
+    if (!DISCOVERY_PUBLIC || !discoveryStatus?.purchase_pending && !discoveryStatus?.topup_pending) return;
+    const timer = window.setInterval(() => { void refreshDiscoveryStatus(); }, 9000);
+    return () => window.clearInterval(timer);
+  }, [discoveryStatus?.purchase_pending, discoveryStatus?.topup_pending]);
+  useEffect(() => {
+    if (!DISCOVERY_PUBLIC || discoveryLoginCheckout.current || discoverySession !== "authenticated" || !discoveryStatus?.enabled) return;
+    const requested = new URLSearchParams(window.location.search).get("checkout");
+    if (requested !== DISCOVERY_PACK_ID || !discoveryStatus.can_buy) return;
+    discoveryLoginCheckout.current = true;
+    // Le clic initial, avant connexion, a déjà exprimé l'intention d'acheter.
+    window.history.replaceState(null, "", "/packs");
+    void startPayment({ type: "primary_pack", id: DISCOVERY_PACK_ID });
+  }, [discoverySession, discoveryStatus]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (new URLSearchParams(window.location.search).get("recharge") === "decouverte") setActivePackTab("addon");
+  }, []);
+  const discoveryWallet = walletPackId === DISCOVERY_PACK_ID;
+  const discoveryBuyVisible = DISCOVERY_PUBLIC && (
+    discoverySession === "guest" ||
+    (discoverySession === "authenticated" && discoveryStatus?.enabled && discoveryStatus.can_buy)
+  );
+  const discoveryTopupVisible = DISCOVERY_PUBLIC && discoverySession === "authenticated" &&
+    discoveryStatus?.enabled && discoveryWallet && discoveryStatus.topup_available;
   const displayedPacks = packs.map((pack) =>
 
 
@@ -1562,6 +1671,30 @@ export default function PacksPage() {
 
 
 
+    }
+    // Ne jamais déclencher une commande Découverte sur un statut périmé.
+    const discoveryTarget = target.id === DISCOVERY_PACK_ID || target.id === DISCOVERY_TOPUP_ID;
+    if (discoveryTarget) {
+      if (!DISCOVERY_PUBLIC) return;
+      if (discoverySession !== "authenticated") return;
+      try {
+        const statusResponse = await fetch(`${API_URL}/payments/discovery/status`, {
+          headers: { Authorization: `Bearer ${session.access_token}`, "user-id": session.user.id },
+          cache: "no-store",
+        });
+        if (!statusResponse.ok) throw new Error("Impossible de vérifier l'éligibilité Découverte.");
+        const verified = await statusResponse.json() as DiscoveryStatus;
+        const allowed = verified.enabled && (target.id === DISCOVERY_PACK_ID
+          ? verified.can_buy : verified.topup_available);
+        if (!allowed) {
+          void refreshDiscoveryStatus();
+          setDiscoveryNotice("Cette offre n'est plus disponible pour ce compte.");
+          return;
+        }
+      } catch (cause) {
+        setDiscoveryNotice(cause instanceof Error ? cause.message : "Vérification impossible.");
+        return;
+      }
     }
 
 
@@ -1874,6 +2007,8 @@ export default function PacksPage() {
 
 
 
+    if (DISCOVERY_PUBLIC && (discoveryWallet || discoverySession === "loading" || discoverySession === "error" ||
+        (discoverySession === "authenticated" && !discoveryStatus))) return;
     void startPayment({
 
 
@@ -2162,6 +2297,50 @@ export default function PacksPage() {
 
 
 
+        {DISCOVERY_PUBLIC && discoveryNotice && (
+          <div role="status" className="mt-6 flex items-center justify-between gap-4 rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm">
+            <span>{discoveryNotice}</span>
+            <button type="button" className="shrink-0 text-muted underline" onClick={() => setDiscoveryNotice(null)}>{language === "fr" ? "Fermer" : "Close"}</button>
+          </div>
+        )}
+        {DISCOVERY_PUBLIC && discoveryError && discoverySession !== "guest" && (
+          <p role="status" className="mt-5 text-sm text-muted">{language === "fr" ? "Pack Découverte temporairement indisponible : éligibilité non vérifiée." : "Discovery Pass unavailable: eligibility could not be checked."}</p>
+        )}
+        {discoveryBuyVisible && (
+          <section id="offre-decouverte" className="mt-9 border-y border-border/70 py-7 sm:py-9">
+            <div className="flex flex-wrap items-start justify-between gap-6 sm:items-center">
+              <div className="max-w-2xl">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">{language === "fr" ? "Offre de bienvenue · achat unique" : "Welcome offer · one-time purchase"}</p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{language === "fr" ? "Pack Découverte" : "Discovery Pass"}</h2>
+                <p className="mt-3 text-sm leading-7 text-muted-strong">{language === "fr"
+                  ? "8 000 crédits sans expiration. GPT-6 Luna, 2 essais GPT-5.6 Terra, 1 création d’image 1K avec Recraft et jusqu’à 2 vidéos de 4 secondes en 480p avec Grok. Fonctions avancées limitées."
+                  : "8,000 non-expiring credits. GPT-6 Luna, 2 GPT-5.6 Terra trials, one 1K image creation with Recraft and up to two 4-second 480p Grok videos. Advanced features are limited."}</p>
+                <p className="mt-2 text-xs text-muted">{language === "fr" ? "Une seule recharge possible : 1 000 crédits pour 600 FCFA. Le devis en crédits est présenté avant les créations." : "One dedicated top-up: 1,000 credits for 600 XAF. Credit estimates are shown before media creation."}</p>
+              </div>
+              <div className="min-w-[190px]">
+                <p className="text-3xl font-semibold tabular-nums">1 000 <span className="text-base">FCFA</span></p>
+                <p className="mt-1 text-xs text-muted">{language === "fr" ? "Une fois par compte" : "Once per account"}</p>
+                <button type="button" disabled={isPaying !== null}
+                  onClick={() => void startPayment({ type: "primary_pack", id: DISCOVERY_PACK_ID })}
+                  className="mt-4 w-full rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-90 disabled:opacity-50">
+                  {isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting : language === "fr" ? "Découvrir ORIA" : "Try ORIA"}
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+        {DISCOVERY_PUBLIC && discoveryStatus?.enabled && discoveryStatus.purchase_pending && (
+          <p role="status" className="mt-6 rounded-2xl border border-border bg-surface-secondary p-4 text-sm">
+            {language === "fr" ? "Paiement Découverte en attente de confirmation. Aucun nouvel achat ne peut être initié." : "Discovery payment awaiting confirmation. No new checkout is available."}
+            <button type="button" onClick={() => void refreshDiscoveryStatus()} className="ml-3 underline">{language === "fr" ? "Actualiser" : "Refresh"}</button>
+          </p>
+        )}
+        {DISCOVERY_PUBLIC && discoveryWallet && discoveryStatus?.enabled && (
+          <p role="status" className="mt-6 rounded-2xl border border-border bg-surface-secondary p-4 text-sm">
+            {language === "fr" ? `Pack Découverte : ${discoveryStatus.balance ?? 0} crédits disponibles, sans expiration.` : `Discovery Pass: ${discoveryStatus.balance ?? 0} credits available, no expiry.`}
+            {discoveryStatus.topup_available ? <button type="button" className="ml-3 font-semibold underline" onClick={() => setActivePackTab("addon")}>{language === "fr" ? "Voir ma recharge unique" : "See my one-time top-up"}</button> : null}
+          </p>
+        )}
         {/* Deux offres commerciales visibles au même niveau */}
         <div className="mt-10 grid grid-cols-2 gap-2 rounded-[22px] border border-border/70 bg-surface-secondary/65 p-1.5 oria-reveal oria-delay-1" role="tablist" aria-label={language === "fr" ? "Catégories de crédits" : "Credit categories"}>
           <button type="button" role="tab" aria-selected={activePackTab === "primary"} onClick={() => setActivePackTab("primary")}
@@ -2196,8 +2375,31 @@ export default function PacksPage() {
               <h2 className="text-2xl font-semibold tracking-tight">{UI[language].topUpBalance}</h2>
               <p className="mt-2 text-sm leading-6 text-muted">{UI[language].topUpDescription}</p>
             </div>
+            {discoveryWallet ? (
+              <div className="max-w-lg rounded-[27px] border border-border/70 bg-surface/75 p-6">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted">{language === "fr" ? "Recharge réservée au Pack Découverte" : "Discovery Pass top-up"}</p>
+                <h3 className="mt-3 text-2xl font-semibold">1 000 {UI[language].credits}</h3>
+                <p className="mt-2 text-sm text-muted">{language === "fr" ? "600 FCFA · utilisable une seule fois · sans expiration" : "600 XAF · once per account · no expiry"}</p>
+                {discoveryTopupVisible ? (
+                  <button type="button" disabled={isPaying !== null} onClick={() => void startPayment({ type: "addon", id: DISCOVERY_TOPUP_ID })}
+                    className="mt-5 rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground disabled:opacity-50">
+                    {isPaying === DISCOVERY_TOPUP_ID ? UI[language].redirecting : language === "fr" ? "Recharger une seule fois" : "Buy one-time top-up"}
+                  </button>
+                ) : (
+                  <p role="status" className="mt-4 text-sm text-muted">{discoveryStatus?.topup_pending
+                    ? language === "fr" ? "Recharge en attente de confirmation." : "Top-up awaiting confirmation."
+                    : discoveryStatus?.topup_used
+                      ? language === "fr" ? "Votre recharge Découverte a déjà été utilisée. Choisissez un pack classique pour continuer." : "Your Discovery top-up has already been purchased. Choose a classic pack to continue."
+                      : language === "fr" ? "Recharge actuellement indisponible." : "Top-up currently unavailable."}</p>
+                )}
+                <button type="button" className="mt-3 block text-xs underline" onClick={() => void refreshDiscoveryStatus()}>{language === "fr" ? "Actualiser mon solde" : "Refresh balance"}</button>
+              </div>
+            ) : DISCOVERY_PUBLIC && (discoverySession === "error" || discoverySession === "loading" ||
+                (discoverySession === "authenticated" && !discoveryStatus)) ? (
+              <p role="status" className="text-sm text-muted">{language === "fr" ? "Recharges indisponibles tant que le portefeuille n’a pas été vérifié." : "Top-ups unavailable until your wallet is verified."}</p>
+            ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 oria-stagger-cards">
-              {complementaryCredits.map((topUp) => (
+              {(DISCOVERY_PUBLIC && discoverySession === "loading" ? [] : complementaryCredits).map((topUp) => (
                 <article key={topUp.id} className="flex flex-col rounded-[27px] border border-border/70 bg-surface/75 p-6 shadow-[0_16px_42px_-32px_var(--shadow-color)] transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-[0_22px_45px_-29px_var(--shadow-color)]">
                   <Zap size={22} className="text-muted-strong" />
                   <p className="mt-5 text-3xl font-semibold tracking-tight">{topUp.credits.toLocaleString(language === "en" ? "en-US" : "fr-FR")}</p>
@@ -2216,6 +2418,7 @@ export default function PacksPage() {
                 </article>
               ))}
             </div>
+            )}
             <p className="mt-5 rounded-[20px] border border-border/70 bg-surface-secondary/65 p-4 text-xs leading-6 text-muted">{UI[language].paymentNotice}</p>
           </section>
         )}

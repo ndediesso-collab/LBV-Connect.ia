@@ -20,6 +20,10 @@ const etapes = [
   { n: "03", titre: "Utilisez ORIA selon vos besoins", texte: "Choisissez un outil, envoyez votre demande et suivez votre consommation de crédits. Le coût des créations multimédias est présenté avant confirmation." },
 ] as const;
 
+// Cette page est /fonctionnement, distincte de la vraie landing / (OriaLanding.tsx).
+// Aucune clé privée ni vérification d'éligibilité utilisateur ici : cela reste dans /packs.
+const discoveryPublic = process.env.NEXT_PUBLIC_ORIA_DISCOVERY_ENABLED === "1";
+
 export default function FonctionnementPage() {
   return (
     <main className="min-h-dvh bg-background text-foreground">
@@ -44,6 +48,25 @@ export default function FonctionnementPage() {
           <Link href="/help" className="rounded-2xl border border-border px-6 py-3.5 text-sm font-semibold hover:bg-surface-secondary">Consulter l'aide</Link>
         </div>
       </section>
+      {discoveryPublic && (
+        <section aria-labelledby="offre-decouverte-titre" className="border-y border-border/70 px-5 py-12 sm:px-8">
+          <div className="mx-auto flex max-w-6xl flex-col justify-between gap-6 md:flex-row md:items-center">
+            <div className="max-w-2xl">
+              <p className="text-xs font-semibold uppercase tracking-[0.17em] text-muted-strong">Offre de bienvenue · une fois par compte</p>
+              <h2 id="offre-decouverte-titre" className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">Commencez avec le Pack Découverte.</h2>
+              <p className="mt-3 text-sm leading-7 text-muted-strong">
+                8 000 crédits sans expiration, GPT-6 Luna et deux essais GPT-5.6 Terra. Découvrez aussi la création d'une image Recraft en 1K et jusqu'à deux vidéos Grok de 4 secondes en 480p. Les fonctionnalités avancées restent réservées aux autres formules.
+              </p>
+              <p className="mt-2 text-xs text-muted-strong">Recharge supplémentaire unique : 1 000 crédits pour 600 FCFA, sans date d'expiration. L'éligibilité est vérifiée avant l'achat.</p>
+            </div>
+            <div className="shrink-0 md:text-right">
+              <p className="text-3xl font-semibold tracking-tight">1 000 FCFA</p>
+              <p className="mt-1 text-sm text-muted-strong">Paiement unique</p>
+              <Link href="/packs#offre-decouverte" className="mt-4 inline-flex rounded-2xl bg-foreground px-5 py-3 text-sm font-semibold text-background">Découvrir l'offre</Link>
+            </div>
+          </div>
+        </section>
+      )}
       <section className="border-y border-border/70 bg-surface-secondary/35 px-5 py-16 sm:px-8">
         <div className="mx-auto max-w-6xl">
           <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Trois étapes pour commencer</h2>
@@ -80,7 +103,6 @@ export default function FonctionnementPage() {
             </figure>
           </div>
         </section>
-
         <div className="mt-12 flex flex-wrap gap-6 text-sm text-muted-strong">
           <Link href="/packs" className="font-semibold text-foreground underline underline-offset-4">Découvrir les tarifs</Link>
           <Link href="/help" className="hover:text-foreground">Questions fréquentes</Link>

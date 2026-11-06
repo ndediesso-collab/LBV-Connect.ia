@@ -2,18 +2,26 @@
 
 IMPORTANT : une contrainte UNIQUE(user_id, model_id) doit exister sur
 public.model_trials pour la création concurrente sans doublon.
+
+Pour ORIA Découverte, la cle persistée « discovery_pack:gpt-5.6-terra »
+est séparée du compteur Terra historique (5 essais). Aucun compteur
+existant n'est renommé, migré ou remis à zéro.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from app.config.model_trials import (
+    DISCOVERY_TRIAL_MAX_USES,
     TRIAL_COSTS,
     TRIAL_MAX_USES,
     TRIAL_MODELS_BY_PACK,
 )
 from app.core.supabase import supabase
 from app.services.supabase_read_retry import execute_supabase_read
+
+
+_DISCOVERY_PACK_ID = "discovery_pack"
 
 
 class ModelTrialService:
@@ -33,14 +41,49 @@ class ModelTrialService:
         return model_costs["web" if web else "normal"]
 
     @staticmethod
-    def get_trial(user_id: str, model_id: str) -> dict | None:
+    def _counter_model_id(model_id: str, pack_id: str | None) -> str:
+        """Isoler le quota Découverte sans modifier les compteurs historiques.
+
+        model_trials.model_id est une colonne TEXT avec UNIQUE(user_id,model_id).
+        La clé spéciale n'est jamais envoyée à OpenAI / OpenRouter.
+        """
+        if pack_id == _DISCOVERY_PACK_ID:
+            if TRIAL_MODELS_BY_PACK.get(_DISCOVERY_PACK_ID) != model_id:
+                raise ValueError("Ce modèle n'est pas un essai du Pass Découverte.")
+            return f"{_DISCOVERY_PACK_ID}:{model_id}"
+        return model_id
+
+    @staticmethod
+    def _expected_maximum(pack_id: str | None) -> int:
+        if pack_id == _DISCOVERY_PACK_ID:
+            return DISCOVERY_TRIAL_MAX_USES
+        return TRIAL_MAX_USES
+
+    @staticmethod
+    def _check_discovery_quota(trial: dict, pack_id: str | None) -> None:
+        """Refuser toute ligne Découverte mal configurée plutôt que donner 5 essais."""
+        if pack_id != _DISCOVERY_PACK_ID:
+            return
+        try:
+            maximum = int(trial["max_trials"])
+            used = int(trial["used_trials"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Compteur du Pass Découverte invalide.") from exc
+        if maximum != DISCOVERY_TRIAL_MAX_USES or not 0 <= used <= maximum:
+            raise RuntimeError("Quota du Pass Découverte incohérent dans Supabase.")
+
+    @staticmethod
+    def get_trial(
+        user_id: str, model_id: str, pack_id: str | None = None
+    ) -> dict | None:
+        stored_model_id = ModelTrialService._counter_model_id(model_id, pack_id)
         # Ne JAMAIS interpréter une erreur réseau comme un compteur inexistant.
         response = execute_supabase_read(
             lambda: (
                 supabase.table("model_trials")
                 .select("*")
                 .eq("user_id", user_id)
-                .eq("model_id", model_id)
+                .eq("model_id", stored_model_id)
                 .maybe_single()
             ),
             label="model_trials.get",
@@ -49,11 +92,16 @@ class ModelTrialService:
             # Compatibilité avec les versions de postgrest qui renvoient None
             # quand maybe_single() ne trouve aucune ligne.
             return None
-        return response.data
+        trial = response.data
+        if trial is not None:
+            ModelTrialService._check_discovery_quota(trial, pack_id)
+        return trial
 
     @staticmethod
-    def get_or_create_trial(user_id: str, model_id: str) -> dict:
-        existing = ModelTrialService.get_trial(user_id, model_id)
+    def get_or_create_trial(
+        user_id: str, model_id: str, pack_id: str | None = None
+    ) -> dict:
+        existing = ModelTrialService.get_trial(user_id, model_id, pack_id)
         if existing is not None:
             return existing
 
@@ -62,33 +110,37 @@ class ModelTrialService:
         supabase.table("model_trials").upsert(
             {
                 "user_id": user_id,
-                "model_id": model_id,
-                "max_trials": TRIAL_MAX_USES,
+                "model_id": ModelTrialService._counter_model_id(model_id, pack_id),
+                "max_trials": ModelTrialService._expected_maximum(pack_id),
                 "used_trials": 0,
             },
             on_conflict="user_id,model_id",
             ignore_duplicates=True,
         ).execute()
 
-        trial = ModelTrialService.get_trial(user_id, model_id)
+        trial = ModelTrialService.get_trial(user_id, model_id, pack_id)
         if trial is None:
             raise RuntimeError("Compteur d'essais introuvable après initialisation")
         return trial
 
     @staticmethod
-    def get_remaining(user_id: str, model_id: str) -> int:
-        trial = ModelTrialService.get_or_create_trial(user_id, model_id)
+    def get_remaining(
+        user_id: str, model_id: str, pack_id: str | None = None
+    ) -> int:
+        trial = ModelTrialService.get_or_create_trial(user_id, model_id, pack_id)
         return max(0, int(trial["max_trials"]) - int(trial["used_trials"]))
 
     @staticmethod
     def can_use_trial(user_id: str, pack_id: str | None, model_id: str) -> bool:
         if ModelTrialService.get_trial_model(pack_id) != model_id:
             return False
-        return ModelTrialService.get_remaining(user_id, model_id) > 0
+        return ModelTrialService.get_remaining(user_id, model_id, pack_id) > 0
 
     @staticmethod
-    def consume_trial(user_id: str, model_id: str) -> dict:
-        trial = ModelTrialService.get_or_create_trial(user_id, model_id)
+    def consume_trial(
+        user_id: str, model_id: str, pack_id: str | None = None
+    ) -> dict:
+        trial = ModelTrialService.get_or_create_trial(user_id, model_id, pack_id)
         used = int(trial["used_trials"])
         maximum = int(trial["max_trials"])
         if used >= maximum:
@@ -104,7 +156,7 @@ class ModelTrialService:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             })
             .eq("user_id", user_id)
-            .eq("model_id", model_id)
+            .eq("model_id", ModelTrialService._counter_model_id(model_id, pack_id))
             .eq("used_trials", used)
             .lt("used_trials", maximum)
             .execute()
@@ -114,4 +166,7 @@ class ModelTrialService:
                 "Mise à jour non confirmée : le compteur a peut-être changé. "
                 "Relire son état avant toute nouvelle consommation."
             )
-        return response.data[0]
+        result = response.data[0]
+        ModelTrialService._check_discovery_quota(result, pack_id)
+        return result
+[0]

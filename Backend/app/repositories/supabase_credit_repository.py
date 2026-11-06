@@ -54,6 +54,8 @@ _PACK_API_LIMIT_XAF = {
     "intermediate_pack": INTERMEDIATE_PACK_API_BUDGET_XAF,
     "pro_pack": PRO_PACK_API_BUDGET_XAF,
     "business_pack": BUSINESS_PACK_API_BUDGET_XAF,
+    # Découverte uniquement : plafond coordonné avec la migration SQL à valider.
+    "discovery_pack": 900,
 }
 _COURSE_ACTIONS = frozenset({
     getattr(CreditAction, "COURSE_TRANSCRIPTION", None),
@@ -497,6 +499,16 @@ class SupabaseCreditRepository(CreditRepository):
 
         Les anciennes lignes de credit_transactions sont conservées.
         """
+
+        # Le Pass Découverte a un premier achat unique, sans expiration.
+        # Il ne doit jamais transiter par la création/écrasement historique :
+        # seule la RPC SQL spécifique valide paiement, unicité et crédits
+        # atomiquement. Cette protection ne concerne PAS les 4 anciens packs.
+        if wallet.pack_id == "discovery_pack":
+            raise ValueError(
+                "Le Pass Découverte doit être activé par "
+                "oria_discovery_finalize_paid (RPC atomique)."
+            )
 
         if self._api_budget_enabled():
             # Renouvellement et budget API remis à zéro dans UNE transaction.

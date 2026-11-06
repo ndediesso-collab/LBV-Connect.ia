@@ -18,12 +18,18 @@ PRIMARY_PACKS = {
         "price": 45000,
         "credits": 120000,
     },
+
+    # Offre unique : validation d'eligibilite dans le backend et Supabase.
+    "discovery_pack": {
+        "price": 1000,
+        "credits": 8000,
+    },
 }
 
 
 ADDON_PACKS = {
     "credits_1000_563": {
-        "price": 563,
+        "price": 600,
         "credits": 1000,
     },
 
@@ -40,5 +46,11 @@ ADDON_PACKS = {
     "credits_10000": {
         "price": 5000,
         "credits": 10000,
+    },
+
+    # Reserve aux utilisateurs du Pass Decouverte : achat unique.
+    "discovery_topup_1000": {
+        "price": 600,
+        "credits": 1000,
     },
 }

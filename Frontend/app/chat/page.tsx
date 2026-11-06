@@ -503,7 +503,7 @@ const UI = {
     copied: "Copié",
     copyMessage: "Copier le message",
     mathExpression: "Expression mathématique",
-    trialExhausted: "Les 5 essais de ce modèle sont épuisés.",
+    trialExhausted: "Les essais de ce modèle sont épuisés.",
     superiorModelTrial: "{UI[language].superiorModelTrial}",
   },
   en: {
@@ -544,7 +544,7 @@ const UI = {
     copied: "Copied",
     copyMessage: "Copy message",
     mathExpression: "Math expression",
-    trialExhausted: "The 5 trials for this model have been used.",
+    trialExhausted: "The trials for this model have been used.",
     superiorModelTrial: "Higher model · 5 trials maximum",
   },
 } as const;
@@ -1215,6 +1215,7 @@ const TRIAL_MODEL_BY_PACK: Record<string, string> = {
   light_pack: "gpt-5",
   intermediate_pack: "gpt-5.6-terra",
   pro_pack: "gpt-6-astra",
+  discovery_pack: "gpt-5.6-terra",
 };
 
 function getSelectableModels(
@@ -4043,6 +4044,8 @@ export default function ChatPage() {
 
   // Le Chat ne conserve que le déclencheur : tout le Mini-Studio est isolé.
   const [isMiniStudioOpen, setIsMiniStudioOpen] = useState(false);
+  // Confirmation des limites Découverte avant ouverture du Mini-Studio.
+  const [discoveryStudioConfirm, setDiscoveryStudioConfirm] = useState(false);
 
   const [
     isInitialized,
@@ -4054,13 +4057,37 @@ export default function ChatPage() {
     setCurrentUserId,
   ] = useState<string | null>(null);
 
+  // Les droits Découverte sont toujours vérifiés côté backend.
+  const [discoveryStatus, setDiscoveryStatus] = useState<{
+    enabled: boolean; purchased: boolean; topup_available: boolean; topup_used: boolean;
+  } | null>(null);
+  const [discoveryNotice, setDiscoveryNotice] = useState<string | null>(null);
+  const discoveryWallet = wallet?.pack_id === "discovery_pack";
+  useEffect(() => {
+    if (!discoveryWallet || !currentUserId) { setDiscoveryStatus(null); return; }
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const data = await apiFetch<{ enabled: boolean; purchased: boolean; topup_available: boolean; topup_used: boolean }>("/payments/discovery/status");
+        if (!cancelled) setDiscoveryStatus(data);
+      } catch { if (!cancelled) setDiscoveryStatus(null); }
+    };
+    void refresh();
+    const onFocus = () => { void refresh(); };
+    window.addEventListener("focus", onFocus);
+    return () => { cancelled = true; window.removeEventListener("focus", onFocus); };
+  }, [discoveryWallet, currentUserId]);
+  useEffect(() => {
+    if (discoveryWallet && activeCapability === "Cours") setActiveCapability(null);
+  }, [discoveryWallet, activeCapability]);
   // Alerte locale, une seule fois par seuil et par activation de pack.
   const [creditAlert, setCreditAlert] = useState<number | null>(null);
   const creditAlertCycleRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!wallet || !currentUserId || !wallet.is_pack_active ||
-        !wallet.pack_expires_at || new Date(wallet.pack_expires_at).getTime() <= Date.now()) {
+        (wallet.pack_id !== "discovery_pack" &&
+          (!wallet.pack_expires_at || new Date(wallet.pack_expires_at).getTime() <= Date.now()))) {
       setCreditAlert(null);
       return;
     }
@@ -5321,6 +5348,12 @@ export default function ChatPage() {
   }
 
   async function startVoiceRecording() {
+    if (discoveryWallet) {
+      setDiscoveryNotice(language === "fr"
+        ? "Les notes vocales ne sont pas incluses dans le Pack Découverte. Consultez les packs classiques."
+        : "Voice notes are not included in Discovery Pass. See classic packs.");
+      return;
+    }
     if (isThinking || recording || voiceDraft || audioUploadBusyRef.current) return;
     try {
       if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
@@ -5369,6 +5402,10 @@ export default function ChatPage() {
   }
 
   async function uploadVoiceDraft(blob: Blob) {
+    if (discoveryWallet) {
+      setDiscoveryNotice(language === "fr" ? "Transcription audio réservée aux packs classiques." : "Audio transcription requires a classic plan.");
+      return;
+    }
     if (audioUploadBusyRef.current || voiceDraft?.transcription_status !== "local") return;
     // La vérification n'empêche jamais d'enregistrer et de réécouter en local.
     // Le backend revalide indépendamment le pack avant toute transcription.
@@ -5519,6 +5556,12 @@ export default function ChatPage() {
     label: string,
   ) {
     if (label === "Cours") {
+      if (discoveryWallet) {
+        setDiscoveryNotice(language === "fr"
+          ? "La création de cours audio n'est pas disponible avec Découverte. Choisissez un pack classique."
+          : "Audio course generation is not included in Discovery Pass. Choose a classic plan.");
+        return;
+      }
       setActiveCapability((current) => current === "Cours" ? null : "Cours");
       setError(null);
       return;
@@ -5544,7 +5587,11 @@ export default function ChatPage() {
     }
 
     if (label === "Création") {
-      setIsMiniStudioOpen(true);
+      if (discoveryWallet) {
+        setDiscoveryStudioConfirm(true);
+      } else {
+        setIsMiniStudioOpen(true);
+      }
       setError(null);
       return;
     }
@@ -6978,7 +7025,7 @@ export default function ChatPage() {
    */
 
   const remainingDays =
-    wallet?.pack_expires_at
+    wallet?.pack_id === "discovery_pack" ? null : wallet?.pack_expires_at
       ? Math.max(
           0,
           Math.ceil(
@@ -7012,7 +7059,12 @@ export default function ChatPage() {
     wallet?.is_pack_active === false ||
     (wallet?.is_pack_active === true && availableBalance <= 0)
   );
-  const packCtaLabel = isLoadingWallet || !wallet
+  const packCtaHref = discoveryWallet && discoveryStatus?.topup_available ? "/packs?recharge=decouverte" : "/packs";
+  const packCtaLabel = discoveryWallet && availableBalance <= 0
+    ? (discoveryStatus?.topup_available
+      ? language === "fr" ? "Recharge unique Découverte" : "Discovery one-time top-up"
+      : language === "fr" ? "Découvrir les autres packs" : "See other plans")
+    : isLoadingWallet || !wallet
     ? (language === "fr" ? "Voir les packs" : "View plans")
     : !wallet.is_pack_active
       ? (language === "fr" ? "Acheter un pack pour discuter" : "Buy a plan to chat")
@@ -7028,6 +7080,18 @@ export default function ChatPage() {
 
   return (
     <main className="min-h-dvh w-full min-w-0 overflow-x-clip bg-background text-foreground oria-chat-page">
+      {discoveryNotice && (
+        <div role="alert" className="fixed bottom-5 left-1/2 z-[100] flex w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 items-start justify-between gap-3 rounded-2xl border border-border bg-surface p-4 text-sm shadow-xl">
+          <div><p>{discoveryNotice}</p><Link className="mt-2 inline-block font-semibold underline" href="/packs">{language === "fr" ? "Voir les packs" : "See plans"}</Link></div>
+          <button type="button" aria-label={language === "fr" ? "Fermer" : "Close"} className="text-muted" onClick={() => setDiscoveryNotice(null)}><X size={18}/></button>
+        </div>
+      )}
+      {discoveryWallet && wallet && wallet.balance <= 0 && (
+        <div role="status" className="mx-auto max-w-3xl border-b border-border px-4 py-3 text-sm">
+          {language === "fr" ? "Vos crédits Découverte sont épuisés." : "Your Discovery credits are exhausted."}{" "}
+          <Link className="font-semibold underline" href={packCtaHref}>{packCtaLabel}</Link>
+        </div>
+      )}
       {creditAlert !== null && wallet?.is_pack_active && (
         <div role="status" aria-live="polite" className="fixed bottom-5 left-1/2 z-[80] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-2xl border border-border bg-surface p-4 shadow-2xl sm:left-auto sm:right-6 sm:translate-x-0">
           <div className="flex items-start justify-between gap-3">
@@ -7035,8 +7099,14 @@ export default function ChatPage() {
               <Wallet size={19} className="mt-0.5 shrink-0 text-muted-strong" />
               <div>
                 <p className="text-sm font-semibold">{language === "fr" ? (creditAlert === 0 ? "Crédits épuisés" : "Votre solde de crédits diminue") : (creditAlert === 0 ? "Credits exhausted" : "Your credit balance is running low")}</p>
-                <p className="mt-1 text-xs leading-5 text-muted">{language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Rechargez votre portefeuille pour continuer à utiliser ORIA.` : `You have ${wallet.balance.toLocaleString("en-US")} credits left. Top up to keep using ORIA.`}</p>
-                <Link href="/packs" onClick={() => setCreditAlert(null)} className="mt-3 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground hover:opacity-85">{language === "fr" ? "Recharger mes crédits" : "Top up credits"}</Link>
+                <p className="mt-1 text-xs leading-5 text-muted">{discoveryWallet
+                  ? (discoveryStatus?.topup_available
+                      ? language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Votre recharge unique de 1 000 crédits est disponible pour 600 FCFA.` : `You have ${wallet.balance.toLocaleString("en-US")} credits. Your one-time 1,000-credit top-up is available for 600 XAF.`
+                      : language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Votre recharge Découverte n'est plus disponible ; choisissez un pack classique si nécessaire.` : `You have ${wallet.balance.toLocaleString("en-US")} credits. Your Discovery top-up is unavailable; choose a classic plan if needed.`)
+                  : language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Rechargez votre portefeuille pour continuer à utiliser ORIA.` : `You have ${wallet.balance.toLocaleString("en-US")} credits left. Top up to keep using ORIA.`}</p>
+                <Link href={packCtaHref} onClick={() => setCreditAlert(null)} className="mt-3 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground hover:opacity-85">{discoveryWallet && !discoveryStatus?.topup_available
+                  ? language === "fr" ? "Voir les packs classiques" : "See classic plans"
+                  : language === "fr" ? "Recharger mes crédits" : "Top up credits"}</Link>
               </div>
             </div>
             <button type="button" onClick={() => setCreditAlert(null)} aria-label={language === "fr" ? "Fermer la notification" : "Dismiss notification"} className="rounded-lg p-1 text-muted hover:bg-surface-secondary"><X size={17}/></button>
@@ -7103,6 +7173,24 @@ export default function ChatPage() {
           const artifact = generatedArtifacts.find((item) => item.id === spreadsheetPreview.id);
           if (artifact) void downloadArtifact(artifact);
         }}/>: null}
+      {discoveryStudioConfirm && discoveryWallet && (
+        <div role="dialog" aria-modal="true" aria-labelledby="discovery-media-title"
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/65 p-5">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 shadow-2xl">
+            <h2 id="discovery-media-title" className="text-lg font-semibold">{language === "fr" ? "Créations Découverte" : "Discovery creations"}</h2>
+            <p className="mt-3 text-sm leading-7 text-muted-strong">{language === "fr"
+              ? "Votre formule limite les créations à une image 1K avec Recraft et deux vidéos Grok de 4 secondes en 480p. Une création vidéo peut consommer une part importante de vos crédits. Vérifiez le devis en crédits avant de confirmer."
+              : "Your plan allows one 1K Recraft image and two 4-second 480p Grok videos. Video can consume a large part of your credits. Check the credit quote before confirming."}</p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button type="button" className="rounded-xl border border-border px-4 py-2 text-sm" onClick={() => setDiscoveryStudioConfirm(false)}>{language === "fr" ? "Annuler" : "Cancel"}</button>
+              <button type="button" className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-accent-foreground"
+                onClick={() => { setDiscoveryStudioConfirm(false); setIsMiniStudioOpen(true); }}>
+                {language === "fr" ? "Ouvrir le Mini-Studio" : "Open Mini-Studio"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {isMiniStudioOpen && (
         <OriaMiniStudio
           language={language}
@@ -7246,7 +7334,9 @@ export default function ChatPage() {
             </p>
 
             <p className="mt-1 text-[11px] text-muted">
-              {wallet && !wallet.is_pack_active
+              {wallet?.pack_id === "discovery_pack"
+                ? language === "fr" ? "Crédits sans expiration" : "Credits never expire"
+                : wallet && !wallet.is_pack_active
                 ? UI[language].packExpired
                 : remainingDays !== null
                   ? `${remainingDays} ${UI[language].daysRemaining}`
@@ -7339,7 +7429,7 @@ export default function ChatPage() {
 
           <div className="flex items-center gap-2">
             <Link
-              href="/packs"
+              href={packCtaHref}
               data-oria-pack-cta="desktop"
               aria-label={packCtaLabel}
               className={`hidden min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold shadow-sm transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:inline-flex ${packCtaIsPrimary ? "bg-accent text-accent-foreground" : "border border-border bg-surface text-foreground"}`}
@@ -7377,7 +7467,7 @@ export default function ChatPage() {
         {/* Sur mobile, le CTA complet reste visible sans comprimer l'en-tete. */}
         <div className="border-b border-border/50 px-3 py-2 sm:hidden">
           <Link
-            href="/packs"
+            href={packCtaHref}
             data-oria-pack-cta="mobile"
             aria-label={packCtaLabel}
             className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-center text-sm font-semibold shadow-sm transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${packCtaIsPrimary ? "bg-accent text-accent-foreground" : "border border-border bg-surface text-foreground"}`}
@@ -8615,7 +8705,7 @@ function ModelOption({
 
       {isTrial && (
         <p className="mt-1 text-[10px] text-muted">
-          Modèle supérieur · 5 essais maximum
+          {language === "fr" ? `Modèle supérieur · ${trial?.max ?? 5} essais maximum` : `Higher model · ${trial?.max ?? 5} trials maximum`}
         </p>
       )}
     </button>

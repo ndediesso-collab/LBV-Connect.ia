@@ -1,5 +1,6 @@
 import re
 import os
+from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
@@ -55,6 +56,7 @@ from app.services.payment_service import (
     generate_payment_reference,
     get_country_phone_config,
     get_payment_product,
+    get_chariow_product_id,
     validate_addon_purchase,
     validate_provider,
 )
@@ -507,6 +509,201 @@ def _wallet_response(wallet):
     }
 
 # ============================================================
+# ORIA DÉCOUVERTE — PAIEMENT ISOLÉ DES QUATRE PACKS
+# ============================================================
+# Ce bloc ne s'exécute que pour l'offre Découverte ou une recharge
+# incompatible avec elle. Ne change ni prix ni activation historiques.
+_DISCOVERY_PRIMARY_ID = "discovery_pack"
+_DISCOVERY_TOPUP_ID = "discovery_topup_1000"
+_DISCOVERY_IDS = frozenset({_DISCOVERY_PRIMARY_ID, _DISCOVERY_TOPUP_ID})
+
+
+def _discovery_enabled() -> bool:
+    return os.getenv("ORIA_DISCOVERY_ENABLED", "0").strip() == "1"
+
+
+def _discovery_schema_row(user_id: str) -> dict | None:
+    """Source historique d'unicité; si la migration manque, REFUSER."""
+    try:
+        result = (
+            supabase.table("oria_discovery_once")
+            .select("purchase_reference,topup_reference")
+            .eq("user_id", user_id).limit(1).execute()
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Le registre des achats Découverte n'est pas prêt.",
+        ) from error
+    return (result.data or [None])[0]
+
+
+def _discovery_has_transaction(user_id: str, *, column: str, product_id: str,
+                               statuses: tuple[str, ...] = ("pending", "processing", "success", "paid")) -> bool:
+    """Contrôle de confort; un index UNIQUE SQL est requis contre les courses."""
+    if column not in {"pack_id", "addon_id"}:
+        raise RuntimeError("Colonne transaction non autorisée")
+    response = (
+        supabase.table("payment_transactions")
+        .select("reference").eq("user_id", user_id)
+        .eq(column, product_id).in_("status", list(statuses))
+        .limit(1).execute()
+    )
+    return bool(response.data)
+
+
+def _discovery_has_prior_paid_pack(user_id: str) -> bool:
+    response = (
+        supabase.table("payment_transactions")
+        .select("reference").eq("user_id", user_id)
+        .eq("payment_type", "primary_pack")
+        .in_("status", ["paid", "success"]).limit(1).execute()
+    )
+    return bool(response.data)
+
+
+def _discovery_require_ready() -> None:
+    """Garde de lancement: les achats sont impossibles sans RPC SQL atomique.
+
+    La RPC oria_discovery_backend_ready() valide le lancement côté SQL.
+    Tant qu'elle retourne false, aucun achat Découverte n'est autorisé.
+    """
+    if not _discovery_enabled():
+        raise HTTPException(403, "L'offre Découverte n'est pas encore disponible.")
+    try:
+        ready = supabase.rpc("oria_discovery_backend_ready", {}).execute()
+    except Exception as error:
+        raise HTTPException(503, "Activation atomique Découverte indisponible.") from error
+    if ready is None or ready.data is not True:
+        raise HTTPException(503, "Migration Découverte non validée.")
+
+
+def _discovery_validate_checkout(user_id: str, payment_type: str,
+                                 product_id: str, wallet) -> None:
+    """Autorisation consultative; le SQL impose AUSSI l'unicité en concurrence."""
+    if product_id not in _DISCOVERY_IDS:
+        # Un Pass Découverte ne peut pas recevoir les addons habituels.
+        if (payment_type == "addon" and wallet is not None
+                and wallet.pack_id == _DISCOVERY_PRIMARY_ID):
+            raise HTTPException(403, "Seule la recharge Découverte est autorisée.")
+        return
+
+    _discovery_require_ready()
+    row = _discovery_schema_row(user_id)
+    if product_id == _DISCOVERY_PRIMARY_ID:
+        if payment_type != "primary_pack":
+            raise HTTPException(400, "Type de commande Découverte invalide.")
+        if (row is not None or (wallet is not None and wallet.pack_id)
+                or _discovery_has_prior_paid_pack(user_id)
+                or _discovery_has_transaction(user_id, column="pack_id",
+                                              product_id=product_id)):
+            raise HTTPException(409, "Pass Découverte déjà acheté ou en cours de paiement.")
+        return
+
+    if payment_type != "addon":
+        raise HTTPException(400, "Type de recharge Découverte invalide.")
+    if (row is None or not row.get("purchase_reference") or row.get("topup_reference")
+            or wallet is None or wallet.pack_id != _DISCOVERY_PRIMARY_ID
+            or not wallet.is_pack_active
+            or _discovery_has_transaction(user_id, column="addon_id",
+                                          product_id=product_id)):
+        raise HTTPException(409, "Recharge Découverte utilisée, en attente ou non autorisée.")
+
+
+def _discovery_validate_webhook_transaction(event: dict,
+                                            transaction: dict) -> None:
+    """Contrôles de cohérence du produit Découverte dans le webhook commun.
+
+    Ne requiert aucun token Découverte supplémentaire. Vérifie seulement les
+    données métier ; ceci NE prouve PAS qu'un webhook vient de Chariow.
+    La confirmation fournisseur du webhook partagé reste indispensable.
+    """
+    # Les données locales, jamais les montants du navigateur, déterminent les droits.
+    product_id = transaction.get("pack_id") or transaction.get("addon_id")
+    ref = str(transaction.get("reference") or "")
+    if not ref or str(event.get("reference") or "") != ref:
+        raise HTTPException(409, "Référence Découverte incohérente.")
+    # Utilise la même source de vérité que /payments/checkout :
+    # identifiants fournis, sauf remplacement explicite par ENV.
+    expected_provider_id = get_chariow_product_id(product_id)
+    provider_product = str(event.get("product_id") or "")
+    if (not provider_product or provider_product not in {product_id, expected_provider_id}):
+        raise HTTPException(409, "Produit Découverte non vérifié.")
+    if event.get("amount") is None:
+        raise HTTPException(409, "Montant Chariow Découverte absent.")
+    try:
+        amount = Decimal(str(event["amount"]).replace(" ", "").replace(",", "."))
+        expected_amount = Decimal(str(transaction["amount"]))
+        if not amount.is_finite() or amount != expected_amount:
+            raise ValueError("amount mismatch")
+    except (InvalidOperation, ValueError, KeyError, TypeError) as error:
+        raise HTTPException(409, "Montant Découverte différent de la commande.") from error
+    catalog = PRIMARY_PACKS if product_id == _DISCOVERY_PRIMARY_ID else ADDON_PACKS
+    commercial = catalog.get(product_id)
+    expected_type = "primary_pack" if product_id == _DISCOVERY_PRIMARY_ID else "addon"
+    try:
+        commercial_valid = (commercial is not None
+            and transaction.get("payment_type") == expected_type
+            and int(transaction.get("credits") or -1) == commercial["credits"]
+            and int(transaction.get("amount") or -1) == commercial["price"])
+    except (TypeError, ValueError):
+        commercial_valid = False
+    if not commercial_valid:
+        raise HTTPException(409, "Commande Découverte incohérente avec le catalogue.")
+
+
+def _discovery_finalize_paid(reference: str) -> dict:
+    """Une seule transaction PostgreSQL doit activer wallet, crédits et reçu.
+
+    La RPC doit vérifier une transaction réellement marquée paid, imposer
+    l'unicité, créer/recharger et marquer completed de manière atomique,
+    puis retourner {success: true, processed: bool}. Aucun fallback Python.
+    """
+    try:
+        response = supabase.rpc("oria_discovery_finalize_paid", {
+            "p_reference": reference,
+        }).execute()
+    except Exception as error:
+        raise HTTPException(
+            503, "Paiement confirmé, activation Découverte en attente de rapprochement."
+        ) from error
+    data = response.data if response is not None else None
+    if not isinstance(data, dict) or data.get("success") is not True:
+        raise HTTPException(503, "Activation atomique Découverte non confirmée.")
+    return data
+
+
+@router.get("/payments/discovery/status")
+def get_discovery_payment_status(
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Éligibilité serveur pour /packs, sans exposer de données d'un autre compte."""
+    uid = _get_authenticated_user_id(user_id=user_id, authorization=authorization)
+    if not _discovery_enabled():
+        return {"enabled": False, "can_buy": False, "active_discovery": False,
+                "topup_available": False, "purchased": False, "topup_used": False}
+    _discovery_require_ready()
+    wallet = _get_repository().get_wallet(uid)
+    row = _discovery_schema_row(uid)
+    purchased = bool(row) or _discovery_has_transaction(
+        uid, column="pack_id", product_id=_DISCOVERY_PRIMARY_ID, statuses=("paid", "success"))
+    pending_purchase = _discovery_has_transaction(
+        uid, column="pack_id", product_id=_DISCOVERY_PRIMARY_ID, statuses=("pending", "processing"))
+    pending_topup = _discovery_has_transaction(
+        uid, column="addon_id", product_id=_DISCOVERY_TOPUP_ID, statuses=("pending", "processing"))
+    active = bool(wallet and wallet.pack_id == _DISCOVERY_PRIMARY_ID and wallet.is_pack_active)
+    topup_used = bool(row and row.get("topup_reference")) or _discovery_has_transaction(
+        uid, column="addon_id", product_id=_DISCOVERY_TOPUP_ID, statuses=("paid", "success"))
+    return {"enabled": True, "can_buy": bool(not purchased and not pending_purchase and
+            not _discovery_has_prior_paid_pack(uid) and not (wallet and wallet.pack_id)),
+            "purchased": purchased, "purchase_pending": pending_purchase,
+            "active_discovery": active, "topup_used": topup_used,
+            "topup_available": bool(active and purchased and not topup_used and not pending_topup),
+            "topup_pending": pending_topup, "balance": wallet.balance if active else 0}
+
+
+# ============================================================
 # PAIEMENTS — CRÉATION D'UNE COMMANDE
 # ============================================================
 
@@ -565,6 +762,9 @@ def create_payment(
         payment_type=request.payment_type,
         product_id=request.product_id,
     )
+    if request.product_id in _DISCOVERY_IDS:
+        # Seule la route commune de checkout déclenche Chariow.
+        raise HTTPException(405, "Utiliser /payments/checkout pour l'offre Découverte.")
 
     # ========================================================
     # 4. WALLET
@@ -589,6 +789,9 @@ def create_payment(
     # En revanche, un addon nécessite obligatoirement un wallet
     # déjà actif puisqu'il recharge un pack existant.
     # ========================================================
+
+    _discovery_validate_checkout(authenticated_user_id, request.payment_type,
+                                 request.product_id, wallet)
 
     if request.payment_type == "addon":
 
@@ -864,6 +1067,11 @@ def checkout_payment(
     # ========================================================
     # 5. VALIDATION ADDON
     # ========================================================
+
+    # Même commande Chariow pour tous les packs ; vérification additionnelle
+    # uniquement quand le produit (ou wallet) concerne Découverte.
+    _discovery_validate_checkout(authenticated_user_id, request.payment_type,
+                                 request.product_id, wallet)
 
     if request.payment_type == "addon":
 
@@ -3340,6 +3548,17 @@ def chariow_webhook(
             ),
         )
 
+    # Même webhook pour les cinq packs. Aucun secret / URL Découverte.
+    # Validation métier avant écriture pour ce produit uniquement.
+    _webhook_product = (payment_transaction.get("pack_id")
+                        or payment_transaction.get("addon_id"))
+    if _webhook_product in _DISCOVERY_IDS:
+        _discovery_validate_webhook_transaction(event, payment_transaction)
+        if (not success and str(payment_transaction.get("status") or "").lower() == "paid"):
+            # Une notification tardive ne dégrade pas un paiement confirmé.
+            return {"success": True, "processed": False, "status": "paid",
+                    "message": "Paiement Découverte déjà confirmé."}
+
     print(
         "[CHARIOW WEBHOOK] "
         "local_transaction_found=True "
@@ -3536,6 +3755,22 @@ def chariow_webhook(
         f"paid_at={updated_payment_transaction.get('paid_at')!r}",
         flush=True,
     )
+
+    # Découverte : le débit/ajout de crédits n'a jamais lieu en Python.
+    # Une unique RPC transactionnelle garantit l'achat et la recharge uniques.
+    if product_id in _DISCOVERY_IDS:
+        outcome = _discovery_finalize_paid(str(reference_id))
+        wallet = _get_repository().get_wallet(str(user_id))
+        return {
+            "success": True,
+            "processed": bool(outcome.get("processed")),
+            "payment_type": payment_type,
+            "product_id": product_id,
+            "reference_id": str(reference_id),
+            "credits": transaction_credits,
+            "wallet": _wallet_response(wallet),
+            "message": "Paiement Découverte rapproché atomiquement.",
+        }
 
     # --------------------------------------------------------
     # 6. IDEMPOTENCE
@@ -3820,6 +4055,7 @@ def _oria_load_conversation_attachments(*, user_id: str, conversation_id: str) -
             break
         offset += 100
     return rows
+
 
 def _get_conversation(
     conversation_id: str,

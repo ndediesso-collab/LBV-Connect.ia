@@ -1,5 +1,6 @@
 from json import dumps
 import logging
+import os
 from decimal import Decimal, InvalidOperation
 
 import asyncio
@@ -2095,6 +2096,9 @@ PACK_ALLOWED_MODELS = {
         "gpt-6-astra",
     },
 
+    # ORIA Découverte : Terra reste UNIQUEMENT un modèle d'essai.
+    "discovery_pack": {"luna"},
+
 }
 
 
@@ -2167,10 +2171,96 @@ PACK_ALLOWED_MEDIA = {
 
     },
 
+    # Les deux actions ci-dessous ne sont accessibles QU'au mini-studio OpenRouter.
+    "discovery_pack": {CreditAction.IMAGE_480, CreditAction.VIDEO_4S},
 }
 
 
 
+
+
+# ============================================================
+# ORIA DÉCOUVERTE — autorisations isolées et désactivées par défaut
+# ============================================================
+_DISCOVERY_PACK = "discovery_pack"
+_DISCOVERY_IMAGE_MODEL = "recraft/recraft-v4.1-flash"
+_DISCOVERY_VIDEO_MODEL = "x-ai/grok-imagine-video-1.5-lite"
+
+
+def _discovery_require_enabled(pack_id: str | None) -> None:
+    # Le drapeau est vérifié côté serveur sur CHAQUE opération payante.
+    if pack_id == _DISCOVERY_PACK and os.getenv("ORIA_DISCOVERY_ENABLED", "0") != "1":
+        raise HTTPException(503, "Pass Découverte non encore disponible.")
+
+
+def _discovery_chat_rights(provider: ChatProvider):
+    """Copie légère de la table de droits, sans mutation des packs classiques."""
+    if provider is ChatProvider.OPENAI:
+        return PACK_ALLOWED_MODELS
+    # Le fichier credit_costs.py sera raccordé ultérieurement. Pour l'instant,
+    # on ne fait pas apparaître le pack dans ses constantes historiques.
+    return {**OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK,
+            _DISCOVERY_PACK: frozenset({"luna"})}
+
+
+def _discovery_claim_terra(*, uid: str, model: str, wallet,
+                           is_trial_model: bool, repository,
+                           reservation_id: str) -> None:
+    """Consomme une place AVANT l'appel fournisseur, jamais après.
+
+    Le CAS SQL de model_trials garantit au plus 2 réclamations réussies.
+    Une tentative incertaine conserve sa place : ne pas réattribuer une
+    tentative potentiellement facturée sans rapprochement administratif.
+    """
+    if wallet.pack_id != _DISCOVERY_PACK or not is_trial_model:
+        return
+    try:
+        ModelTrialService.consume_trial(uid, model, pack_id=wallet.pack_id)
+    except Exception as exc:
+        # Aucun appel IA n'a eu lieu : on libère les crédits provisionnés.
+        try:
+            repository.release_credit_reservation(user_id=uid,
+                                                   reference_id=reservation_id)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "ORIA_DISCOVERY_TERRA_RESERVATION_RELEASE_FAILED ref=%s", reservation_id)
+        raise HTTPException(403, "Essais Terra indisponibles ou quota épuisé.") from exc
+
+
+def _discovery_image_claim(*, user_id: str, request_id: str) -> None:
+    """Réserve l'image unique du Pass Découverte AVANT tout appel facturable.
+
+    L'unicité et le verrou concurrent sont assurés par la RPC Supabase
+    oria_discovery_image_try(uuid, text). Réutiliser le même request_id
+    ne débite pas de quota supplémentaire. En cas de réponse réseau
+    incertaine, conserver le quota jusqu'à rapprochement administratif.
+    """
+    try:
+        response = supabase.rpc("oria_discovery_image_try", {
+            "p_user_id": user_id, "p_request_id": request_id,
+        }).execute()
+    except Exception as exc:
+        raise HTTPException(503, "Quota image Découverte indisponible.") from exc
+    if getattr(response, "data", None) is not True:
+        raise HTTPException(403, "Image unique du Pass Découverte déjà utilisée.")
+
+
+def _discovery_video_claim(*, user_id: str, request_id: str) -> None:
+    """Quota concurrent de deux clips, via RPC PostgreSQL atomique.
+
+    Cette RPC est une DÉPENDANCE OBLIGATOIRE non présente dans ai.py :
+    oria_discovery_video_try(p_user_id uuid,p_request_id text) RETURNS boolean.
+    Aucune requête fournisseur n'est autorisée si la fonction est absente.
+    """
+    try:
+        response = supabase.rpc("oria_discovery_video_try", {
+            "p_user_id": user_id, "p_request_id": request_id,
+        }).execute()
+    except Exception as exc:
+        raise HTTPException(503, "Quota vidéo Découverte indisponible.") from exc
+    result = getattr(response, "data", None)
+    if result is not True:
+        raise HTTPException(403, "Limite de deux vidéos Découverte atteinte.")
 
 
 IMAGE_ACTIONS = {
@@ -2311,6 +2401,13 @@ def get_media_capabilities(
 
 
 
+    # Le mini-studio Découverte n'utilise pas les endpoints Legacy.
+    if wallet.pack_id == _DISCOVERY_PACK:
+        _discovery_require_enabled(wallet.pack_id)
+        return {"success": True, "user_id": authenticated_user_id,
+                "pack_id": wallet.pack_id, "pack_active": True,
+                "images": [], "videos": [], "media": []}
+
     allowed_media = PACK_ALLOWED_MEDIA.get(wallet.pack_id, set())
 
 
@@ -2422,6 +2519,7 @@ def _google_pricing_config():
 
 def _google_wallet_for_quote(
     *, user_id: str | None, authorization: str | None,
+    allow_discovery: bool = False,
 ):
     """Pack et solde verifies par Supabase, jamais declares par le client."""
     authenticated_user_id = _authenticate_chat_user(
@@ -2432,6 +2530,9 @@ def _google_wallet_for_quote(
         raise HTTPException(status_code=404, detail="Portefeuille ORIA introuvable.")
     if not wallet.is_pack_active:
         raise HTTPException(status_code=403, detail="Un pack actif est necessaire.")
+    _discovery_require_enabled(wallet.pack_id)
+    if wallet.pack_id == _DISCOVERY_PACK and not allow_discovery:
+        raise HTTPException(403, "Le Pass Découverte n'autorise pas les médias Google/film.")
     return wallet
 
 
@@ -2448,6 +2549,8 @@ def get_google_media_capabilities(
     cfg = _google_pricing_config()
     _google_billing_engine()  # Echoue clairement si le calculateur manque.
     wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization)
+    if wallet.pack_id == _DISCOVERY_PACK:
+        raise HTTPException(403, "Les médias Découverte utilisent uniquement OpenRouter.")
     rights = cfg.google_media_capabilities_for_pack(wallet.pack_id)
     enabled = _google_generations_active()
     image_models = [
@@ -2517,6 +2620,8 @@ def quote_google_media(
     cfg = _google_pricing_config()
     engine = _google_billing_engine()
     wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization)
+    if wallet.pack_id == _DISCOVERY_PACK:
+        raise HTTPException(403, "Les médias Découverte utilisent uniquement OpenRouter.")
     media_type = str(payload.media_type or "").strip().lower()
     mode = str(payload.mode or "").strip().lower()
     available_now = False
@@ -3838,10 +3943,8 @@ def _prepare_chat(
         active_provider = active_chat_provider()
     except ChatProviderConfigurationError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-    allowed_models = (
-        PACK_ALLOWED_MODELS if active_provider is ChatProvider.OPENAI
-        else OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK
-    ).get(wallet.pack_id, set())
+    _discovery_require_enabled(wallet.pack_id)
+    allowed_models = _discovery_chat_rights(active_provider).get(wallet.pack_id, set())
 
     is_normal_model = (
         model in allowed_models
@@ -3875,6 +3978,7 @@ def _prepare_chat(
             ModelTrialService.get_remaining(
                 authenticated_user_id,
                 model,
+                pack_id=wallet.pack_id,
             )
         )
 
@@ -3882,8 +3986,8 @@ def _prepare_chat(
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    f"Vous avez utilisé vos 5 essais "
-                    f"de {model}."
+                    f"Vous avez utilisé tous vos "
+                    f"{2 if wallet.pack_id == _DISCOVERY_PACK else 5} essais de {model}."
                 ),
             )
 
@@ -4063,14 +4167,17 @@ def _settle_chat_reservation(
     trials_remaining = None
 
     if is_trial_model:
-        trial = ModelTrialService.consume_trial(
-            authenticated_user_id,
-            model_id,
-        )
-        trials_remaining = max(
-            0,
-            trial["max_trials"] - trial["used_trials"],
-        )
+        if wallet_before_reservation.pack_id == _DISCOVERY_PACK:
+            # Déjà consommé via CAS avant appel fournisseur.
+            trials_remaining = ModelTrialService.get_remaining(
+                authenticated_user_id, model_id,
+                pack_id=wallet_before_reservation.pack_id,
+            )
+        else:
+            trial = ModelTrialService.consume_trial(
+                authenticated_user_id, model_id,
+            )
+            trials_remaining = max(0, trial["max_trials"] - trial["used_trials"])
 
     return result, trials_remaining
 
@@ -4106,13 +4213,20 @@ def get_chat_capabilities(
         provider = active_chat_provider()
     except ChatProviderConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    rights = (PACK_ALLOWED_MODELS if provider is ChatProvider.OPENAI
-              else OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK)
+    _discovery_require_enabled(wallet.pack_id)
+    rights = _discovery_chat_rights(provider)
     models = rights.get(wallet.pack_id)
     if models is None:
         raise HTTPException(status_code=403, detail="Pack ORIA non reconnu.")
     catalog = (MODEL_OPENAI_IDS if provider is ChatProvider.OPENAI
                else OPENROUTER_CHAT_MODEL_IDS)
+    visible_models = set(models)
+    if wallet.pack_id == _DISCOVERY_PACK:
+        # Terra n'est visible qu'avec ses deux essais séparés disponibles.
+        if ModelTrialService.get_remaining(
+            uid, "gpt-5.6-terra", pack_id=wallet.pack_id
+        ) > 0:
+            visible_models.add("gpt-5.6-terra")
     return {
         "success": True,
         "provider": provider.value,
@@ -4121,7 +4235,7 @@ def get_chat_capabilities(
             {"id": key, "label": _ORIA_CHAT_DISPLAY_NAMES[key],
              "reasoning_modes": ["fast", "balanced", "deep"]}
             for key in _ORIA_CHAT_DISPLAY_NAMES
-            if key in models and key in catalog
+            if key in visible_models and key in catalog
         ],
         "streaming": True,
         "live_modify": True if provider is ChatProvider.OPENROUTER else None,
@@ -4147,10 +4261,7 @@ def _oria_chat_selection(model: str, wallet, is_trial_model: bool):
             oria_model=model,
             environ=switches,
             pack_id=wallet.pack_id,
-            allowed_models_by_pack=(
-                PACK_ALLOWED_MODELS if active is ChatProvider.OPENAI
-                else OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK
-            ),
+            allowed_models_by_pack=_discovery_chat_rights(active),
             openai_model_ids=MODEL_OPENAI_IDS,
             openrouter_model_ids=OPENROUTER_CHAT_MODEL_IDS,
             trial_model=ModelTrialService.get_trial_model(wallet.pack_id),
@@ -4282,6 +4393,11 @@ async def _oria_openrouter_execute_classic(*, service, selection, repository,
     reservation_id = reservation_id or _oria_openrouter_reserve(
         repository=repository, uid=uid, action=action, quote=quote,
     )
+    _discovery_claim_terra(
+        uid=uid, model=selection.oria_model, wallet=wallet,
+        is_trial_model=is_trial_model, repository=repository,
+        reservation_id=reservation_id,
+    )
     try:
         response = await asyncio.to_thread(
             service.chat, model=selection.api_model, message=message,
@@ -4361,6 +4477,11 @@ async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: s
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     reservation_id = _oria_openrouter_reserve(
         repository=repository, uid=uid, action=action, quote=quote,
+    )
+    _discovery_claim_terra(
+        uid=uid, model=model, wallet=wallet,
+        is_trial_model=is_trial_model, repository=repository,
+        reservation_id=reservation_id,
     )
     try:
         state = _register_active_generation(
@@ -4676,8 +4797,13 @@ async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: s
                 else:
                     artifact_errors.append("Réponse incomplète : aucun fichier exporté.")
                 if is_trial_model:
-                    trial = ModelTrialService.consume_trial(uid, model)
-                    remaining = max(0, trial["max_trials"] - trial["used_trials"])
+                    if wallet.pack_id == _DISCOVERY_PACK:
+                        # Place déjà prélevée avant le premier appel fournisseur.
+                        remaining = ModelTrialService.get_remaining(
+                            uid, model, pack_id=wallet.pack_id)
+                    else:
+                        trial = ModelTrialService.consume_trial(uid, model)
+                        remaining = max(0, trial["max_trials"] - trial["used_trials"])
                 yield _oria_chat_status("clear", generation_id=generation_id,
                                         attempt_id=attempt_id)
                 yield _sse("done", {
@@ -4855,6 +4981,11 @@ async def chat(
             web=web,
         )
 
+        _discovery_claim_terra(
+            uid=authenticated_user_id, model=model, wallet=wallet,
+            is_trial_model=is_trial_model, repository=repository,
+            reservation_id=reservation_id,
+        )
         openai_service = OpenAIService()
 
         try:
@@ -5235,6 +5366,11 @@ async def generate_chat_revision(
         if web:
             response_text += _oria_openrouter_citation_text(provider.get("citations"))
     else:
+        _discovery_claim_terra(
+            uid=owner, model=model, wallet=wallet,
+            is_trial_model=is_trial_model, repository=repository,
+            reservation_id=reservation_id,
+        )
         try:
             provider = OpenAIService().chat(
                 model=MODEL_OPENAI_IDS[model],
@@ -5377,6 +5513,8 @@ def _prepare_media(
     prompt: str,
     user_id: str | None,
     authorization: str | None,
+    *,
+    provider: str = "legacy",
 ):
     """
     Authentifie et valide une création média.
@@ -5432,6 +5570,9 @@ def _prepare_media(
             status_code=403,
             detail="Le pack de crédits est expiré ou inactif.",
         )
+    _discovery_require_enabled(wallet.pack_id)
+    if wallet.pack_id == _DISCOVERY_PACK and provider != "openrouter":
+        raise HTTPException(403, "Le Pass Découverte utilise uniquement le Mini-studio OpenRouter.")
 
     if wallet.balance <= 0:
         raise HTTPException(
@@ -6623,6 +6764,7 @@ def get_trials(
 
 
 
+    _discovery_require_enabled(wallet.pack_id)
     trial_model = (
 
         ModelTrialService.get_trial_model(
@@ -6650,6 +6792,8 @@ def get_trials(
                 authenticated_user_id,
 
                 trial_model,
+
+                pack_id=wallet.pack_id,
 
             )
 
@@ -6762,6 +6906,13 @@ def _process_audio_in_background(service: Any, *, user_id: str, audio_id: str) -
         )
 
 
+def _discovery_block_audio(uid: str) -> None:
+    # Le droit audio dépend du portefeuille serveur, pas de la préférence UI.
+    wallet = SupabaseCreditRepository(supabase).get_wallet(uid)
+    if wallet is not None and wallet.pack_id == _DISCOVERY_PACK:
+        raise HTTPException(403, "Les notes vocales ne sont pas incluses dans le Pass Découverte.")
+
+
 @router.post("/audio/prepare")
 async def prepare_voice_note(
     background_tasks: BackgroundTasks,
@@ -6777,6 +6928,7 @@ async def prepare_voice_note(
     des crédits par AudioService.process_audio().
     """
     authenticated_user_id = _authenticated_audio_user(user_id, authorization)
+    _discovery_block_audio(authenticated_user_id)
     if conversation_id:
         owned = (supabase.table("conversations").select("id")
                  .eq("id", conversation_id).eq("user_id", authenticated_user_id)
@@ -6948,6 +7100,7 @@ async def retry_voice_transcription(
     authorization: str | None = Header(default=None, alias="authorization"),
 ):
     uid = _authenticated_audio_user(user_id, authorization)
+    _discovery_block_audio(uid)
     service = _audio_service()
     try:
         result = await asyncio.to_thread(service.queue_retry, user_id=uid, audio_id=audio_id)
@@ -7304,6 +7457,16 @@ async def chat_stream(
             )
         except Exception:
             pass
+        raise
+
+    try:
+        _discovery_claim_terra(
+            uid=authenticated_user_id, model=model, wallet=wallet,
+            is_trial_model=is_trial_model, repository=repository,
+            reservation_id=reservation_id,
+        )
+    except Exception:
+        _close_active_generation(generation_id, generation_state)
         raise
 
     async def event_stream():
@@ -8602,6 +8765,7 @@ _OR_IMAGE_BY_PACK = {
         "black-forest-labs/flux-3-image",
         "openai/gpt-image-2.5-sunburst",
     ),
+    "discovery_pack": (_DISCOVERY_IMAGE_MODEL,),
 }
 _OR_VIDEO_BY_PACK = {
     "light_pack": (
@@ -8622,12 +8786,14 @@ _OR_VIDEO_BY_PACK = {
         "bytedance/seedance-2.5",
         "kwaivgi/kling-v3.0-pro",
     ),
+    "discovery_pack": (_DISCOVERY_VIDEO_MODEL,),
 }
 _OR_SHORT_ACTIONS = {
     "light_pack": ("video_4s", "video_8s"),
     "intermediate_pack": ("video_lite",),
     "pro_pack": ("video_pro_fast", "video_pro_standard"),
     "business_pack": ("video_business_fast", "video_business_standard"),
+    "discovery_pack": ("video_4s",),
 }
 _OR_SAFE_MODES = {"image": ("text_to_image", "image_edit"),
                   "video": ("text_to_video", "image_to_video")}
@@ -8717,7 +8883,19 @@ def _or_reservation(kind: str) -> tuple[int, int, Decimal]:
 def _or_verify_config(kind: str, *, pack_id: str, action: CreditAction | None,
                       model: str | None, resolution: str, mode: str,
                       ref_count: int, duration: int | None = None) -> dict[str, Any]:
+    _discovery_require_enabled(pack_id)
     catalog = _or_catalog(_or_service(), kind)
+    if pack_id == _DISCOVERY_PACK:
+        # Choix du modèle et de la qualité strictement côté serveur.
+        if kind == "image" and (model != _DISCOVERY_IMAGE_MODEL
+                                or resolution != "1K" or mode != "text_to_image"
+                                or ref_count != 0):
+            raise HTTPException(403, "Découverte : Recraft 1K, texte vers image uniquement.")
+        if kind == "video" and (model not in (None, _DISCOVERY_VIDEO_MODEL)
+                                or resolution != "480p" or duration != 4
+                                or mode not in ("text_to_video", "image_to_video")
+                                or ref_count not in (0, 1)):
+            raise HTTPException(403, "Découverte : Grok Lite, 480p et 4 secondes uniquement.")
     if mode not in _OR_SAFE_MODES[kind]:
         raise HTTPException(501, "Ce mode nécessite un moteur non disponible.")
     if ref_count != (1 if mode.endswith("edit") or mode == "image_to_video" else 0):
@@ -8733,7 +8911,11 @@ def _or_verify_config(kind: str, *, pack_id: str, action: CreditAction | None,
         if not provider_resolutions and resolution != "1K":
             raise HTTPException(400, "Ce modèle ne permet pas de choisir une résolution supérieure.")
         if action is not None:
-            _google_action_resolution(pack_id, action, resolution)
+            if pack_id == _DISCOVERY_PACK:
+                if action != CreditAction.IMAGE_480:
+                    raise HTTPException(403, "Action image interdite pour Découverte.")
+            else:
+                _google_action_resolution(pack_id, action, resolution)
         if ref_count and "input_references" not in (chosen.get("supported_parameters") or {}):
             raise HTTPException(400, "Ce modèle ne prend pas en charge les retouches.")
         return chosen
@@ -8894,7 +9076,64 @@ def _or_public_job(item: dict[str, Any]) -> dict[str, Any]:
             "url": item.get("media_url")}
 
 
+def _or_discovery_caps(wallet) -> dict[str, Any]:
+    """Catalogue Découverte isolé des modèles Google et des anciens packs."""
+    _discovery_require_enabled(wallet.pack_id)
+    service = _or_service()
+    images = _or_allowed_images(wallet.pack_id, _or_catalog(service, "image"))
+    videos = _or_allowed_video_models(wallet.pack_id, _or_catalog(service, "video"))
+    image_options = []
+    for entry in images:
+        choices = _or_image_choices(entry, "resolution")
+        if choices and "1K" not in choices:
+            continue
+        image_options.append({"model": entry["id"], "resolutions": ["1K"],
+                              "aspect_ratios": _or_image_choices(entry, "aspect_ratio") or ["1:1"],
+                              "max_references_supported_now": 0})
+    video_options = []
+    for entry in videos:
+        if (4 not in (entry.get("supported_durations") or [])
+                or "480p" not in (entry.get("supported_resolutions") or [])):
+            continue
+        video_options.append({"model": entry["id"], "duration_choices_seconds": [4],
+                              "billable_resolutions": ["480p"],
+                              "aspect_ratios": list(entry.get("supported_aspect_ratios") or []),
+                              "supports_audio": False,
+                              "supports_first_frame": any(
+                                  v == "first_frame" if isinstance(v, str) else
+                                  isinstance(v, dict) and v.get("frame_type") == "first_frame"
+                                  for v in (entry.get("supported_frame_images") or []))})
+    active = _or_switch()
+    return {"success": True, "provider": "openrouter", "pack_id": wallet.pack_id,
+            "pack_active": True,
+            "quote_available": bool(image_options or video_options),
+            "generation_available": active,
+            "images": {"models": image_options, "resolutions": ["1K"],
+                "allowed_modes": ["text_to_image"],
+                "available_now_modes": ["text_to_image"] if active and image_options else [],
+                "max_reference_images_in_pack": 0,
+                "max_reference_images_per_call_now": 0,
+                "max_images_per_call_now": 1},
+            "video": {"model": video_options[0]["model"] if video_options else "",
+                "models": video_options,
+                "allowed_modes": ["text_to_video", "image_to_video"],
+                "available_now_modes": (["text_to_video", "image_to_video"]
+                                        if active and video_options else []),
+                "duration_choices_seconds": [4] if video_options else [],
+                "max_project_seconds": 4, "max_project_scenes": 1,
+                "billable_resolutions": ["480p"] if video_options else [],
+                "provider_per_call_seconds": {"min": 4 if video_options else 0,
+                                               "max": 4 if video_options else 0},
+                "short_clip_actions_available_now": ["video_4s"] if active and video_options else [],
+                "long_projects_generation_available": False,
+                "video_quota_total": 2},
+            "notice": "Découverte : image Recraft 1K, deux clips Grok 480p 4s maximum. "
+                      "Devis sous réserve de la disponibilité du fournisseur et du quota SQL."}
+
+
 def _or_caps_for(wallet) -> dict[str, Any]:
+    if wallet.pack_id == _DISCOVERY_PACK:
+        return _or_discovery_caps(wallet)
     cfg = _google_pricing_config()
     rights = cfg.google_media_capabilities_for_pack(wallet.pack_id)
     service = _or_service()
@@ -8970,7 +9209,8 @@ async def openrouter_media_capabilities(
     user_id: str | None = Header(default=None, alias="user-id"),
     authorization: str | None = Header(default=None, alias="authorization"),
 ):
-    wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization)
+    wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization,
+                                      allow_discovery=True)
     return await asyncio.to_thread(_or_caps_for, wallet)
 
 
@@ -8980,7 +9220,8 @@ async def openrouter_media_quote(
     user_id: str | None = Header(default=None, alias="user-id"),
     authorization: str | None = Header(default=None, alias="authorization"),
 ):
-    wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization)
+    wallet = _google_wallet_for_quote(user_id=user_id, authorization=authorization,
+                                      allow_discovery=True)
     kind = str(payload.media_type).lower().strip()
     if kind not in ("image", "video") or payload.count != 1:
         raise HTTPException(400, "Devis limité à une image ou un clip à la fois.")
@@ -8997,7 +9238,8 @@ async def openrouter_media_quote(
         if len(payload.scene_durations_seconds or []) != 1 or (
             payload.scene_durations_seconds or [None])[0] != payload.final_duration_seconds:
             raise HTTPException(400, "Devis vidéo réservé aux clips courts d'une seule scène.")
-        resolution = str(payload.resolution or "720p")
+        default_resolution = "480p" if wallet.pack_id == _DISCOVERY_PACK else "720p"
+        resolution = str(payload.resolution or default_resolution)
         chosen = await asyncio.to_thread(_or_verify_config, kind, pack_id=wallet.pack_id,
             action=None, model=str(payload.model or "") or None, resolution=resolution, mode=mode,
             ref_count=payload.reference_count, duration=payload.final_duration_seconds)
@@ -9151,7 +9393,8 @@ async def openrouter_media_image(
         raise HTTPException(503, "OpenRouter payant désactivé (contrôles stockage/crédits requis).")
     request_id = _or_request_id(payload.request_id)
     uid, repo, wallet, action, prompt = _prepare_media(payload.action, payload.prompt,
-                                                        user_id, authorization)
+                                                        user_id, authorization,
+                                                        provider="openrouter")
     if action not in IMAGE_ACTIONS or len(prompt) > 8000:
         raise HTTPException(400, "Action image ou description invalide.")
     mode = payload.mode or ("image_edit" if payload.reference_image_b64 else "text_to_image")
@@ -9168,6 +9411,10 @@ async def openrouter_media_image(
     _google_require_consent(SimpleNamespace(reservation_credits=reserve),
                             payload.accepted_max_credits, wallet.balance)
     _or_db_ready()
+    if wallet.pack_id == _DISCOVERY_PACK:
+        # Quota SQL à vie avant le POST OpenRouter, idempotent par request_id.
+        # Le conserver en cas d'incertitude sur l'appel fournisseur.
+        _discovery_image_claim(user_id=uid, request_id=request_id)
     existing = _or_start_record(uid, request_id, "image", action, model, prompt, reserve, mode)
     if existing:
         return _or_public_job(existing)
@@ -9211,12 +9458,14 @@ async def openrouter_media_video(
         raise HTTPException(503, "OpenRouter vidéo désactivé (suivi durable requis).")
     request_id = _or_request_id(payload.request_id)
     uid, repo, wallet, action, prompt = _prepare_media(payload.action, payload.prompt,
-                                                        user_id, authorization)
+                                                        user_id, authorization,
+                                                        provider="openrouter")
     if action not in VIDEO_ACTIONS or len(prompt) > 8000:
         raise HTTPException(400, "Action vidéo ou description invalide.")
     mode = payload.mode or ("image_to_video" if payload.reference_image_b64 else "text_to_video")
+    media_resolution = "480p" if wallet.pack_id == _DISCOVERY_PACK else "720p"
     chosen = await asyncio.to_thread(_or_verify_config, "video", pack_id=wallet.pack_id,
-        action=action, model=str(payload.model or "") or None, resolution="720p", mode=mode,
+        action=action, model=str(payload.model or "") or None, resolution=media_resolution, mode=mode,
         ref_count=int(bool(payload.reference_image_b64)), duration=payload.requested_seconds)
     if payload.aspect_ratio not in (chosen.get("supported_aspect_ratios") or []):
         raise HTTPException(400, "Format vidéo indisponible pour ce modèle.")
@@ -9226,6 +9475,10 @@ async def openrouter_media_video(
     _google_require_consent(SimpleNamespace(reservation_credits=reserve),
                             payload.accepted_max_credits, wallet.balance)
     _or_db_ready()
+    if wallet.pack_id == _DISCOVERY_PACK:
+        # Quota SQL atomique AVANT l'appel vidéo potentiellement facturé.
+        # Un request_id déjà réclamé est idempotent ; jamais de release sur timeout.
+        _discovery_video_claim(user_id=uid, request_id=request_id)
     existing = _or_start_record(uid, request_id, "video", action, model, prompt, reserve, mode)
     if existing:
         return _or_public_job(existing)
@@ -9236,7 +9489,7 @@ async def openrouter_media_video(
                 raise RuntimeError("État de soumission vidéo non confirmé.")
             job = await asyncio.to_thread(_or_service().submit_video,
                 model=model, prompt=prompt, duration=payload.requested_seconds,
-                resolution="720p", aspect_ratio=payload.aspect_ratio,
+                resolution=media_resolution, aspect_ratio=payload.aspect_ratio,
                 first_frame=ref_bytes, first_frame_mime=payload.reference_mime_type or "image/png")
             if not _or_job_update(uid, request_id, {"status": "submitted", "job_id": job["job_id"]}, "submitting"):
                 raise RuntimeError("Job vidéo créé mais son enregistrement est incertain.")

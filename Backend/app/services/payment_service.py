@@ -202,12 +202,42 @@ CHARIOW_PRODUCTS = {
     "pro_pack": "prd_2cvlitcn",
     "business_pack": "prd_cxq3ljlo",
 
+    # ORIA DÉCOUVERTE — identifiant du produit créé sur Chariow
+    # Le produit fourni est utilise par defaut ; un override ENV vide bloque l'achat.
+    "discovery_pack": os.getenv("CHARIOW_DISCOVERY_PRODUCT_ID", "prd_po0yxuxf").strip(),
+
     # PACKS COMPLÉMENTAIRES
     "credits_1000_563": "prd_4lgc2hbs",
     "credits_2000": "prd_mfrpb7jz",
     "credits_4000": "prd_ab0u0n7q",
     "credits_10000": "prd_iapt4thh",
+
+    # ORIA DÉCOUVERTE — recharge exceptionnelle (un seul achat).
+    # L'unicité sera imposée par Supabase et la route de paiement.
+    "discovery_topup_1000": os.getenv("CHARIOW_DISCOVERY_TOPUP_PRODUCT_ID", "prd_zzdfmb2g").strip(),
 }
+
+
+# ============================================================
+# GOUVERNANCE DE L'OFFRE DÉCOUVERTE
+# ============================================================
+
+DISCOVERY_PRODUCT_IDS = frozenset({"discovery_pack", "discovery_topup_1000"})
+
+
+def require_discovery_enabled(product_id: str) -> None:
+    """Aucune commande Découverte tant que l'offre n'est pas lancée.
+
+    Le contrôle d'éligibilité (achat unique / recharge unique) appartient
+    aux routes de paiement et aux RPC atomiques Supabase, pas à ce fichier.
+    """
+    if product_id in DISCOVERY_PRODUCT_IDS and os.getenv(
+        "ORIA_DISCOVERY_ENABLED", "0"
+    ).strip() != "1":
+        raise HTTPException(
+            status_code=403,
+            detail="Le Pass Découverte ORIA n'est pas encore disponible.",
+        )
 
 
 # ============================================================
@@ -221,7 +251,8 @@ CHARIOW_PRODUCTS = {
 #
 #     credits_1000_563
 #
-# pour 1 000 crédits à 563 XAF.
+# pour 1 000 crédits à 600 XAF.
+# Le suffixe historique _563 est conservé pour la compatibilité.
 # ============================================================
 
 PRODUCT_ALIASES = {
@@ -292,6 +323,9 @@ def get_payment_product(
         product_id
     )
 
+    # Le flag est lu au moment de la demande, sans modifier les autres packs.
+    require_discovery_enabled(normalized_product_id)
+
     if payment_type == "primary_pack":
 
         product = PRIMARY_PACKS.get(
@@ -320,6 +354,11 @@ def get_payment_product(
             ),
         )
 
+    # Vérification AVANT que la route crée une commande pending Supabase.
+    # Tous les produits historiques conservent leur parcours inchangé.
+    if normalized_product_id in DISCOVERY_PRODUCT_IDS:
+        get_chariow_product_id(normalized_product_id)
+
     return product
 
 
@@ -339,9 +378,33 @@ def get_chariow_product_id(
         product_id
     )
 
+    require_discovery_enabled(normalized_product_id)
+
     chariow_product_id = CHARIOW_PRODUCTS.get(
         normalized_product_id
     )
+
+    if normalized_product_id in DISCOVERY_PRODUCT_IDS and not chariow_product_id:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Le produit Découverte n'est pas encore configuré "
+                "sur Chariow. Aucun paiement n'a été lancé."
+            ),
+        )
+
+    if normalized_product_id in DISCOVERY_PRODUCT_IDS and chariow_product_id:
+        # Un ID Chariow ne peut pas être associé à plusieurs offres.
+        # Évite notamment qu'une mauvaise variable pointe vers un pack ancien.
+        if (not re.fullmatch(r"prd_[A-Za-z0-9_-]+", chariow_product_id)
+                or any(
+                    other_id != normalized_product_id and other_chariow_id == chariow_product_id
+                    for other_id, other_chariow_id in CHARIOW_PRODUCTS.items()
+                )):
+            raise HTTPException(
+                status_code=503,
+                detail="Identifiant Chariow Découverte invalide ou déjà utilisé.",
+            )
 
     if chariow_product_id is None:
 
