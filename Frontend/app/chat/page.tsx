@@ -4113,6 +4113,18 @@ export default function ChatPage() {
 
 
   // Ajouts Chat Web : lecteur source, images de recherche, notes vocales.
+  const [universalPreview, setUniversalPreview] = useState<{
+    id: string;
+    filename: string;
+    kind: string;
+    text?: string;
+    note?: string;
+    truncated?: boolean;
+    slides?: Array<{ title: string; texts: string[] }>;
+    tables?: Array<{ name: string; rows: string[][] }>;
+    entries?: Array<{ name: string; size: number }>;
+  } | null>(null);
+  const [universalPreviewBusyId, setUniversalPreviewBusyId] = useState<string | null>(null);
   const [codePreview, setCodePreview] = useState<CodePreviewData | null>(null);
   const [documentPreview, setDocumentPreview] = useState<DocumentPreviewData | null>(null);
   const [wordPreview, setWordPreview] = useState<WordPreviewData | null>(null);
@@ -5315,6 +5327,27 @@ export default function ChatPage() {
       setCodePreview({ title: artifact.filename, language: artifact.extension, code: await blob.text() });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Impossible d'ouvrir le fichier.");
+    }
+  }
+
+  async function openUniversalArtifactPreview(artifact: GeneratedArtifact): Promise<void> {
+    if (universalPreviewBusyId) return;
+    setUniversalPreviewBusyId(artifact.id);
+    try {
+      const response = await apiFetch<{
+        success: boolean; artifact_id: string; filename: string; kind: string;
+        text?: string; note?: string; truncated?: boolean;
+        slides?: Array<{ title: string; texts: string[] }>;
+        tables?: Array<{ name: string; rows: string[][] }>;
+        entries?: Array<{ name: string; size: number }>;
+      }>(`/ai/artifacts/${encodeURIComponent(artifact.id)}/universal-preview`);
+      if (!response.success || !response.kind) throw new Error("Aperçu non disponible.");
+      setUniversalPreview({ ...response, id: artifact.id });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message :
+        language === "fr" ? "Aperçu indisponible pour ce fichier." : "Preview unavailable.");
+    } finally {
+      setUniversalPreviewBusyId(null);
     }
   }
 
@@ -7112,6 +7145,63 @@ export default function ChatPage() {
           </div>
         </div>
       )}
+      {universalPreview && (
+        <div role="dialog" aria-modal="true" aria-label={universalPreview.filename}
+          className="fixed inset-0 z-[115] flex items-center justify-center bg-black/70 p-3 sm:p-6">
+          <div className="flex h-[min(88vh,950px)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl">
+            <div className="flex items-center gap-3 border-b border-border px-4 py-3">
+              <FileText size={18} className="shrink-0 text-muted"/>
+              <p className="min-w-0 flex-1 truncate text-sm font-semibold">{universalPreview.filename}</p>
+              <button type="button" className="rounded-lg p-2 hover:bg-surface-tertiary"
+                aria-label={language === "fr" ? "Fermer" : "Close"}
+                onClick={() => setUniversalPreview(null)}><X size={18}/></button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto bg-surface-secondary p-4 sm:p-6">
+              {universalPreview.kind === "slides" && (universalPreview.slides || []).map((slide, index) => (
+                <div key={index} className="mb-4 rounded-xl border border-border bg-surface p-5">
+                  <p className="mb-3 text-xs text-muted">{language === "fr" ? "Diapositive" : "Slide"} {index + 1}</p>
+                  <h3 className="mb-3 text-lg font-semibold">{slide.title}</h3>
+                  {(slide.texts || []).map((line, i) => <p key={i} className="mb-2 whitespace-pre-wrap text-sm leading-6">{line}</p>)}
+                </div>
+              ))}
+              {universalPreview.kind === "tables" && (universalPreview.tables || []).map((table, index) => (
+                <section key={index} className="mb-6 overflow-hidden rounded-xl border border-border bg-surface">
+                  <h3 className="border-b border-border p-3 text-sm font-semibold">{table.name}</h3>
+                  <div className="overflow-x-auto"><table className="w-full border-collapse text-left text-xs">
+                    <tbody>{(table.rows || []).map((row, r) => <tr key={r} className="border-b border-border">
+                      {row.map((cell, c) => <td key={c} className="max-w-72 whitespace-pre-wrap break-words border-r border-border p-2 align-top">{String(cell)}</td>)}
+                    </tr>)}</tbody>
+                  </table></div>
+                </section>
+              ))}
+              {universalPreview.kind === "archive" && (
+                <div className="rounded-xl border border-border bg-surface p-4">
+                  {(universalPreview.entries || []).map((entry, i) => (
+                    <div key={i} className="flex flex-wrap justify-between gap-3 border-b border-border py-2 text-xs last:border-0">
+                      <span className="break-all">{entry.name}</span><span className="text-muted">{formatArtifactSize(entry.size, language)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {universalPreview.kind === "text" && (
+                <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-surface p-4 font-mono text-xs leading-6">{universalPreview.text || ""}</pre>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 text-xs">
+              <p className="max-w-xl text-muted">{universalPreview.note || "Aperçu simplifié."}{universalPreview.truncated ? " · Aperçu partiel." : ""}</p>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setUniversalPreview(null)} className="rounded-lg border border-border px-3 py-2">{language === "fr" ? "Fermer" : "Close"}</button>
+                <button type="button" onClick={() => {
+                  const file = generatedArtifacts.find((item) => item.id === universalPreview.id);
+                  if (file) void downloadArtifact(file);
+                }} className="rounded-lg bg-accent px-3 py-2 font-semibold text-accent-foreground">
+                  {language === "fr" ? "Télécharger" : "Download"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {codePreview ? <CodePreviewModal preview={codePreview} onClose={() => setCodePreview(null)} language={language}/> : null}
       {documentPreview ? <DocumentPreviewModal
         preview={documentPreview}
@@ -7951,6 +8041,16 @@ export default function ChatPage() {
                                         <Code2 size={14}/><span className="hidden sm:inline">{language === "fr" ? "Lire" : "View"}</span>
                                       </button>
                                     ) : null}
+                                    {!(["pdf", "docx", "xlsx"].includes(artifact.extension.toLowerCase()) ||
+                                        CODE_PREVIEW_EXTENSIONS.has(artifact.extension.toLowerCase())) && (
+                                      <button type="button" disabled={universalPreviewBusyId !== null}
+                                        onClick={() => void openUniversalArtifactPreview(artifact)}
+                                        className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-xs font-medium transition hover:bg-surface-tertiary disabled:opacity-50"
+                                        aria-label={`${language === "fr" ? "Aperçu" : "Preview"} ${artifact.filename}`}>
+                                        {universalPreviewBusyId === artifact.id ? <Loader2 size={14} className="animate-spin"/> : <Eye size={14}/>}
+                                        <span className="hidden sm:inline">{language === "fr" ? "Aperçu" : "Preview"}</span>
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       onClick={() =>

@@ -2833,6 +2833,193 @@ class ArtifactService:
         if len(slides)>50:raise ArtifactError('Presentation trop longue (50 slides maximum).')
         return slides
 
+    @staticmethod
+    def _normalize_pptx_slide_spec(original: dict[str, Any]) -> dict[str, Any]:
+        """Compatibilite PPTX des plans descriptifs, sans perte silencieuse.
+
+        Le JSON du modele utilise parfois background/layout/objects alors que
+        le compilateur historique attend elements et une mise en page fixe.
+        On traduit uniquement les objets que le moteur sait effectivement
+        rendre ; tout objet inconnu reste une erreur explicite.
+        """
+        if not isinstance(original, dict):
+            raise ArtifactError('Definition de diapositive invalide.')
+        spec = dict(original)
+        if '__oria_background' in spec or '__oria_layout' in spec:
+            raise ArtifactError('Champ interne PPTX non autorise dans la source.')
+
+        palette = {
+            'white': 'FFFFFF', 'black': '000000', 'navy': '18335D',
+            'dark': '181818', 'light': 'FAFCFF', 'gray': '808080',
+            'grey': '808080', 'lightgray': 'F2F2F2', 'lightgrey': 'F2F2F2',
+            'blue': '2666C8', 'red': 'D32F2F', 'green': '24844C',
+            'orange': 'EF7D32', 'beige': 'F3E8D7', 'purple': '7351AA',
+        }
+
+        def rgb_hex(raw: Any, field: str) -> str:
+            if isinstance(raw, dict):
+                if raw.get('type') not in (None, '', 'solid', 'color'):
+                    raise ArtifactError(f'{field} PPTX ne prend en charge que les couleurs unies.')
+                raw = raw.get('color', raw.get('fill', raw.get('value')))
+            if not isinstance(raw, str):
+                raise ArtifactError(f'{field} PPTX doit etre une couleur.')
+            raw = raw.strip().lower().replace(' ', '')
+            result = palette.get(raw, raw.removeprefix('#'))
+            if re.fullmatch(r'[0-9a-f]{3}', result):
+                result = ''.join(ch * 2 for ch in result)
+            if re.fullmatch(r'[0-9a-f]{6}', result) is None:
+                raise ArtifactError(f'{field} PPTX : couleur non prise en charge.')
+            return result.upper()
+
+        background = spec.pop('background', None)
+        spec['__oria_background'] = (
+            rgb_hex(background, 'Fond de diapositive') if background is not None
+            else 'FAFCFF'
+        )
+        layout = spec.pop('layout', None)
+        if isinstance(layout, dict):
+            layout = layout.get('type', layout.get('name', 'default'))
+        if layout is not None and (not isinstance(layout, str) or len(layout) > 100):
+            raise ArtifactError('Disposition de diapositive invalide.')
+        layout_name = str(layout or 'default').lower().replace('-', '_').replace(' ', '_')
+        spec['__oria_layout'] = ('two_column' if layout_name in {
+            'two_column', 'two_columns', '2_columns', 'comparison', 'double_column',
+        } else 'default')
+
+        raw_objects = spec.pop('objects', None)
+        if isinstance(raw_objects, dict) and isinstance(raw_objects.get('items'), list):
+            raw_objects = raw_objects['items']
+        if raw_objects is None:
+            return spec
+        if not isinstance(raw_objects, list) or len(raw_objects) > 30:
+            raise ArtifactError('Objets de diapositive invalides (30 maximum).')
+        current = spec.get('elements', [])
+        if not isinstance(current, list) or len(current) + len(raw_objects) > 30:
+            raise ArtifactError('Trop d elements PPTX ou elements invalides.')
+        canonical = list(current)
+        aliases = {
+            'textbox': 'text', 'text_box': 'text', 'text-box': 'text',
+            'label': 'text', 'paragraph': 'text', 'heading': 'text',
+            'title': 'text', 'subtitle': 'text',
+            'bullets': 'text', 'bullet_list': 'text', 'shape': 'rectangle',
+            'box': 'rectangle', 'square': 'rectangle', 'rect': 'rectangle',
+            'picture': 'image', 'photo': 'image', 'graph': 'chart',
+        }
+        for index, obj in enumerate(raw_objects):
+            if not isinstance(obj, dict):
+                raise ArtifactError('Objet PPTX non structure.')
+            candidate = dict(obj)
+            kind = str(candidate.get('type') or candidate.get('kind') or '').strip().lower()
+            if not kind:
+                kind = 'text' if any(k in candidate for k in ('text', 'content')) else ''
+            kind = aliases.get(kind, kind)
+            if kind not in {'text', 'rectangle', 'image', 'chart'}:
+                raise ArtifactError(f'Objet PPTX non pris en charge : {kind or "inconnu"}.')
+            if kind == 'rectangle' and str(candidate.get('shape', 'rectangle')).lower() not in {
+                'rectangle', 'rect', 'square', 'box',
+            }:
+                raise ArtifactError('Forme PPTX non prise en charge par le convertisseur.')
+            position = candidate.get('position', {})
+            if position is not None and not isinstance(position, dict):
+                raise ArtifactError('Position d objet PPTX invalide.')
+            position = position or {}
+            element = {'type': kind}
+            positions = {
+                'x': ('x', 'left'), 'y': ('y', 'top'),
+                'width': ('width', 'w'), 'height': ('height', 'h'),
+            }
+            for target, names in positions.items():
+                for field in names:
+                    if field in candidate or field in position:
+                        element[target] = candidate.get(field, position.get(field))
+                        break
+            # Les coordonnees sont en pouces. La grille evite que plusieurs
+            # objets sans position explicite se superposent exactement.
+            element.setdefault('x', .85 + (index % 2) * 6.25)
+            element.setdefault('y', 2.05 + (index // 2) * 1.18)
+            element.setdefault('width', 5.65)
+            element.setdefault('height', 1.05)
+            style = candidate.get('style', {})
+            if style is not None and not isinstance(style, dict):
+                raise ArtifactError('Style d objet PPTX invalide.')
+            style = style or {}
+            if kind == 'text':
+                value = candidate.get('text', candidate.get('content', candidate.get('value', '')))
+                if isinstance(value, list) and all(isinstance(v, str) for v in value):
+                    value = '\n'.join('•  ' + v for v in value)
+                if not isinstance(value, str):
+                    raise ArtifactError('Texte d objet PPTX invalide.')
+                element['text'] = value
+                for key, variants in {
+                    'font_size': ('font_size', 'fontSize', 'size'),
+                    'bold': ('bold',), 'color': ('color', 'text_color'),
+                }.items():
+                    for field in variants:
+                        if field in candidate or field in style:
+                            element[key] = candidate.get(field, style.get(field))
+                            break
+                if 'color' in element:
+                    element['color'] = rgb_hex(element['color'], 'Texte')
+                if isinstance(element.get('font_size'), str):
+                    try:
+                        element['font_size'] = float(element['font_size'])
+                    except ValueError as exc:
+                        raise ArtifactError('Taille de police PPTX invalide.') from exc
+            elif kind == 'rectangle':
+                element['fill'] = rgb_hex(candidate.get('fill', style.get('fill',
+                    candidate.get('color', style.get('color', '#EBF2FE')))), 'Fond d objet')
+            elif kind == 'image':
+                element['src'] = candidate.get('src', candidate.get('data_uri',
+                    candidate.get('data', '')))
+            elif kind == 'chart':
+                for key in ('chart_type', 'categories', 'series'):
+                    if key in candidate:
+                        element[key] = candidate[key]
+            canonical.append(element)
+        spec['elements'] = canonical
+        return spec
+
+    @staticmethod
+    def _expand_pptx_slide_content(slides: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Preserve toutes les donnees quand objets et contenu auto coexistent.
+
+        Deux dispositions incompatibles deviennent des diapositives consecutives,
+        plutot qu'une erreur ou qu'une superposition de contenu.
+        """
+        output: list[dict[str, Any]] = []
+        for original in slides:
+            spec = dict(original)
+            objects = (spec.get('elements') or []) or spec.get('chart') is not None
+            items = spec.get('bullets', spec.get('content', spec.get('paragraphs', [])))
+            if isinstance(items, str):
+                items = [items]
+            if not isinstance(items, list):
+                items = []
+            table = spec.get('table')
+            if not objects and not (table is not None and items):
+                output.append(spec)
+                continue
+            if objects:
+                visual = dict(spec)
+                for name in ('bullets', 'content', 'paragraphs', 'table'):
+                    visual.pop(name, None)
+                output.append(visual)
+            if table is not None:
+                output.append({
+                    'title': str(spec.get('title') or 'Tableau')[:167] + ' — tableau',
+                    'table': table, '__oria_background': spec['__oria_background'],
+                    '__oria_layout': 'default',
+                })
+            if items:
+                output.append({
+                    'title': str(spec.get('title') or 'Contenu')[:170] + ' — suite',
+                    'bullets': items, '__oria_background': spec['__oria_background'],
+                    '__oria_layout': spec['__oria_layout'],
+                })
+        if len(output) > 50:
+            raise ArtifactError('Presentation trop longue apres preservation des objets et du contenu.')
+        return output
+
     def _contract_pptx(self, kind: str | None, source: str | None, native: Any) -> bytes:
         try:
             from pptx import Presentation
@@ -2842,17 +3029,21 @@ class ArtifactService:
             from pptx.enum.shapes import MSO_SHAPE
         except ImportError as error:
             raise ArtifactDependencyError('PPTX : installer python-pptx.') from error
-        slides=self._contract_slides(kind,source,native)
+        slides=[self._normalize_pptx_slide_spec(spec)
+                for spec in self._contract_slides(kind,source,native)]
+        slides=self._expand_pptx_slide_content(slides)
         prs=Presentation();prs.slide_width=Inches(13.333);prs.slide_height=Inches(7.5)
         navy=RGBColor(24,51,93); accent=RGBColor(38,102,200)
         for index, spec in enumerate(slides,1):
             unsupported = set(spec) - {'title','subtitle','bullets','content','paragraphs',
-                                       'table','elements','chart'}
+                                       'table','elements','chart',
+                                       '__oria_background','__oria_layout'}
             if unsupported:
                 raise ArtifactError('Champ de diapositive non pris en charge : '
                                     + ', '.join(sorted(unsupported)))
             slide=prs.slides.add_slide(prs.slide_layouts[6])
-            bg=slide.background.fill;bg.solid();bg.fore_color.rgb=RGBColor(250,252,255)
+            bg=slide.background.fill;bg.solid();bg.fore_color.rgb=RGBColor.from_string(
+                spec.get('__oria_background', 'FAFCFF'))
             bar=slide.shapes.add_shape(MSO_SHAPE.RECTANGLE,0,0,prs.slide_width,Inches(.14))
             bar.fill.solid();bar.fill.fore_color.rgb=accent;bar.line.fill.background()
             title=str(spec.get('title') or f'Diapositive {index}')
@@ -2902,13 +3093,21 @@ class ArtifactService:
                                     run.font.size=Pt(13);run.font.color.rgb=(RGBColor(255,255,255) if r==0 else navy)
                     if items:raise ArtifactError('Diapositive avec tableau et liste : agencement non defini.')
             elif items:
-                tb=slide.shapes.add_textbox(Inches(1),Inches(start_y),Inches(11.35),Inches(4.6))
-                tf=tb.text_frame;tf.word_wrap=True;tf.clear()
-                font_size=Pt(22 if len(items)<=5 else (19 if len(items)<=7 else 16))
-                for rowno,item in enumerate(items):
-                    para=tf.paragraphs[0] if rowno==0 else tf.add_paragraph()
-                    para.text='•  '+str(item);para.font.size=font_size
-                    para.font.color.rgb=navy;para.space_after=Pt(14 if len(items)<=6 else 8)
+                # La disposition à deux colonnes reste entièrement éditable.
+                columns = ([items] if spec.get('__oria_layout') != 'two_column'
+                           else [items[:(len(items)+1)//2], items[(len(items)+1)//2:]])
+                for colno, column_items in enumerate(columns):
+                    if not column_items:
+                        continue
+                    left = 1 if len(columns) == 1 else (.8 if colno == 0 else 6.85)
+                    width = 11.35 if len(columns) == 1 else 5.65
+                    tb=slide.shapes.add_textbox(Inches(left),Inches(start_y),Inches(width),Inches(4.6))
+                    tf=tb.text_frame;tf.word_wrap=True;tf.clear()
+                    font_size=Pt(22 if len(column_items)<=5 else (19 if len(column_items)<=7 else 16))
+                    for rowno,item in enumerate(column_items):
+                        para=tf.paragraphs[0] if rowno==0 else tf.add_paragraph()
+                        para.text='•  '+str(item);para.font.size=font_size
+                        para.font.color.rgb=navy;para.space_after=Pt(14 if len(column_items)<=6 else 8)
             footer=slide.shapes.add_textbox(Inches(11.65),Inches(7.05),Inches(.9),Inches(.25))
             f=footer.text_frame.paragraphs[0];f.text=f'{index}/{len(slides)}'
             f.font.size=Pt(10);f.font.color.rgb=RGBColor(110,120,138)

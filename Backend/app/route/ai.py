@@ -1065,9 +1065,94 @@ def _resolve_artifact_requests(
             )
         )
 
-        if has_generation_intent or has_file_intent or direct_pdf_request:
+        # « Je le veux en PDF », « Fais-le au format PPTX », etc. :
+        # une demande d'export peut être une suite de conversation sans le
+        # mot « fichier ». Garder l'ancienne heuristique en complément.
+        direct_export_followup = bool(re.search(
+            r"\b(?:je\s+(?:le|la|les)\s+(?:veux|voudrais|souhaite)|"
+            r"(?:fais|faites|mets|mettez|passe|convertis|exporte)[-\s]*(?:le|la|les)?|"
+            r"(?:donne|envoie|renvoie)[-\s]*(?:le|la|les)?)[^.!?\n]{0,90}"
+            r"\b(?:en|au\s+format|sous\s+format)\s+"
+            r"(?:pdf|docx|word|pptx|power\s?point|xlsx|excel|odt|ods|odp|rtf|"
+            r"epub|csv|tsv|jsonl?|ndjson|sqlite|zip|txt|md)\b",
+            lower_message,
+        ))
+        # Une commande explicite « Je veux un ODS / EPUB / PDF ... » ne
+        # contient pas forcément le verbe « créer » ni le mot « fichier ».
+        # Utiliser UNIQUEMENT les noms de formats déjà reconnus par ORIA :
+        # éviter de détourner « Je veux comprendre le PDF » vers l'export.
+        known_format_names = sorted({
+            keyword for _, keywords in _ARTIFACT_FORMAT_PATTERNS
+            for keyword in keywords
+        }, key=len, reverse=True)
+        direct_named_format_request = bool(re.search(
+            r"\b(?:je\s+(?:veux|voudrais|souhaite|souhaiterais)|"
+            r"j['’]aimerais|il\s+me\s+faut)\s+"
+            r"(?:(?:un|une|le|la|du|des)\s+)?"
+            r"(?:(?:fichier|document|format|script|tableur|présentation)\s+)?"
+            r"(?:" + "|".join(re.escape(word) for word in known_format_names) + r")"
+            r"(?![a-z0-9à-ÿ])",
+            lower_message,
+        ))
+        # Demandes elliptiques normales dans un chat : le contexte est déjà
+        # dans la conversation. Exemple : « et en PDF ? », « une version EPUB »,
+        # « le même en ODS », « PDF stp ». Aucune décision de format sur une
+        # simple mention noyée dans une question explicative.
+        format_pattern = (r"(?:" + "|".join(
+            re.escape(word) for word in known_format_names
+        ) + r")")
+        direct_short_export = bool(re.fullmatch(
+            r"\s*(?:(?:et|ok|bon|alors|finalement|maintenant|plut[oô]t)\s*[,;:]?\s*)?"
+            r"(?:(?:le\s+m[êe]me|la\s+m[êe]me\s+chose|pareil)\s+)?"
+            r"(?:(?:un|une)\s+)?(?:(?:version|fichier)\s+)?"
+            r"(?:(?:en|au\s+format|sous\s+format|format)\s+)?"
+            + format_pattern +
+            r"(?:\s*[,;]?\s*(?:maintenant|stp|svp|please|s['’]il\s+te\s+pla[iî]t))?\s*[.!?]*\s*",
+            lower_message,
+        ))
+        direct_same_export = bool(re.search(
+            r"\b(?:(?:je\s+(?:veux|voudrais|souhaite|souhaiterais)\s+)|"
+            r"(?:donne|envoie|fais|mets)[-\s]*(?:moi|le|la)?\s+)?"
+            r"(?:le\s+m[êe]me|la\s+m[êe]me\s+chose|pareil)\s+"
+            r"(?:en|au\s+format)\s+" + format_pattern + r"(?![a-z0-9à-ÿ])",
+            lower_message,
+        ))
+        direct_alternative_export = bool(re.search(
+            r"\b(?:je\s+(?:veux|voudrais|souhaite|souhaiterais)|"
+            r"j['’]aimerais)\s+(?:plut[oô]t\s+)?"
+            r"(?:(?:un|une|le|la)\s+)?(?:version\s+)?"
+            + format_pattern + r"(?![a-z0-9à-ÿ])",
+            lower_message,
+        ))
+
+        # Une question sur la création d'un format n'est pas elle-même une
+        # commande de création. Cela évite « Comment créer un PDF ? » => PDF.
+        explanatory_question = bool(re.match(
+            r"\s*(?:comment\b|pourquoi\b|qu['’]est[- ]?ce\b|"
+            r"c['’]est\s+quoi\b|que\s+signifie\b|"
+            r"quelle\s+est\s+la\s+diff[ée]rence\b|"
+            r"explique[-\s]moi\b|peux[- ]tu\s+m['’]expliquer\b|"
+            r"je\s+(?:veux|voudrais)\s+comprendre\b)",
+            lower_message,
+        ))
+        if explanatory_question and not re.search(
+            r"(?:et|puis|ensuite)\s+(?:fais[- ]moi|cr[ée]e[- ]moi|"
+            r"g[ée]n[èe]re[- ]moi|exporte[- ]moi|envoie[- ]moi)\b",
+            lower_message,
+        ):
+            return []
+
+        if (has_generation_intent or has_file_intent or direct_pdf_request
+                or direct_export_followup or direct_named_format_request
+                or direct_short_export or direct_same_export
+                or direct_alternative_export):
             for extension, keywords in _ARTIFACT_FORMAT_PATTERNS:
-                if any(keyword in lower_message for keyword in keywords):
+                # Les sous-chaînes peuvent produire deux formats involontaires :
+                # json dans jsonl, js dans json, ts dans tsx, etc.
+                if any(re.search(
+                    r"(?<![a-z0-9à-ÿ])" + re.escape(keyword) + r"(?![a-z0-9à-ÿ])",
+                    lower_message,
+                ) for keyword in keywords):
                     if extension not in detected_types:
                         detected_types.append(extension)
 
@@ -1869,6 +1954,56 @@ def get_user_document_preview(
     return JSONResponse(content={
         "success": True, "artifact_id": artifact_id,
         "filename": str(artifact.get("filename") or "document.docx"),
+        **preview,
+    }, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/artifacts/{artifact_id}/universal-preview")
+def get_user_universal_preview(
+    artifact_id: str,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Aperçu privé, passif et borné des autres formats générés par ORIA.
+
+    PDF/DOCX/XLSX utilisent leurs lecteurs existants. Aucun moteur de
+    génération ni débit de crédit n'est impliqué dans cette lecture.
+    """
+    from app.services.artifact_universal_preview import (
+        MAX_PREVIEW_BYTES, UniversalPreviewError, preview_artifact_bytes,
+    )
+
+    owner = _authenticate_chat_user(user_id=user_id, authorization=authorization)
+    artifact = ARTIFACT_REPOSITORY.get_artifact(artifact_id=artifact_id, user_id=owner)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Fichier généré introuvable.")
+    ext = str(artifact.get("extension") or "").lower().lstrip(".")
+    if ext in {"pdf", "docx", "xlsx"}:
+        raise HTTPException(status_code=415, detail="Utilisez l'aperçu spécifique à ce format.")
+    if int(artifact.get("size_bytes") or 0) > MAX_PREVIEW_BYTES:
+        raise HTTPException(status_code=413, detail="Fichier trop volumineux pour l'aperçu.")
+    path = str(artifact.get("storage_path") or "")
+    ARTIFACT_REPOSITORY._assert_owned_storage_path(
+        storage_path=path, user_id=owner, artifact_id=artifact_id,
+    )
+    try:
+        binary = supabase.storage.from_(ARTIFACT_REPOSITORY.BUCKET_NAME).download(path)
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "ORIA_UNIVERSAL_PREVIEW_STORAGE type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Aperçu temporairement indisponible.") from exc
+    if not isinstance(binary, (bytes, bytearray)):
+        raise HTTPException(status_code=502, detail="Réponse de stockage invalide.")
+    try:
+        preview = preview_artifact_bytes(ext, bytes(binary))
+    except UniversalPreviewError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logging.getLogger(__name__).exception("ORIA_UNIVERSAL_PREVIEW_PARSER")
+        raise HTTPException(status_code=422, detail="Aperçu non lisible pour ce format.") from exc
+    return JSONResponse(content={
+        "success": True, "artifact_id": artifact_id,
+        "filename": str(artifact.get("filename") or f"document.{ext}"),
         **preview,
     }, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 

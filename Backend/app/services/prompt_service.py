@@ -449,6 +449,16 @@ CONTRAT DE SORTIE — STRICT ET EXCLUSIF
     représenter des données chiffrées présentes dans le classeur ;
   * PPTX/ODP : diapositives, objets, textes, tableaux, images autorisées,
     données de graphiques et organisation éditable ;
+    Pour un PPTX classique, privilégie une structure explicite simple :
+    native_data={"slides":[{"title":"Titre", "bullets":["Point A", "Point B"]},
+    {"title":"Autre titre", "bullets":["Point C"]}]}.
+    Par diapositive, limite-toi à 9 puces et 1 300 caractères de contenu,
+    avec un titre de 180 caractères maximum. N'ajoute aucun champ implicite
+    (layout, theme, background, notes, images) non prévu par le moteur.
+    Les champs pris en charge sont title, subtitle, bullets, content,
+    paragraphs, table, elements et chart. Ne mélange pas elements avec
+    bullets, table ou content dans une même diapositive.
+    Pour ODP, reste sur title et bullets, sans composition avancée.
   * CSV/TSV/JSON/JSONL/SQLite : données, colonnes, types et valeurs valides ;
   * PDF/DOCX/ODT/RTF/EPUB en mode natif : fournis
     native_data={"blocks":[{"type":"title","text":"Titre du document"},
