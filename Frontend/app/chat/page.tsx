@@ -7088,17 +7088,17 @@ export default function ChatPage() {
   // CTA d'achat visible depuis le Chat, sans modifier la facturation.
   // Un pack actif reste utilisable normalement : on ne le presente pas comme expire.
   const packCtaIsPrimary = !isLoadingWallet && (
-    wallet?.is_pack_active === false ||
-    (wallet?.is_pack_active === true && availableBalance <= 0)
+    !wallet || wallet.is_pack_active === false ||
+    (wallet.is_pack_active === true && availableBalance <= 0)
   );
   const packCtaHref = discoveryWallet && discoveryStatus?.topup_available ? "/packs?recharge=decouverte" : "/packs";
   const packCtaLabel = discoveryWallet && availableBalance <= 0
     ? (discoveryStatus?.topup_available
       ? language === "fr" ? "Recharge unique Découverte" : "Discovery one-time top-up"
       : language === "fr" ? "Découvrir les autres packs" : "See other plans")
-    : isLoadingWallet || !wallet
-    ? (language === "fr" ? "Voir les packs" : "View plans")
-    : !wallet.is_pack_active
+    : isLoadingWallet
+    ? (language === "fr" ? "Chargement…" : "Loading…")
+    : !wallet || !wallet.is_pack_active
       ? (language === "fr" ? "Acheter un pack pour discuter" : "Buy a plan to chat")
       : availableBalance <= 0
         ? (language === "fr" ? "Recharger mes crédits" : "Top up my credits")

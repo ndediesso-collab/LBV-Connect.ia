@@ -552,6 +552,43 @@ def _discovery_has_transaction(user_id: str, *, column: str, product_id: str,
     return bool(response.data)
 
 
+def _discovery_resume_checkout(user_id: str, *, column: str, product_id: str) -> dict:
+    """Reprend une commande en attente, SANS en créer une autre.
+
+    60 secondes = délai UX, PAS une expiration de paiement.
+    Une commande ancienne sans URL enregistrée exige une vérification Chariow.
+    """
+    if column not in {"pack_id", "addon_id"}:
+        raise RuntimeError("Colonne de produit invalide")
+    rows = (supabase.table("payment_transactions")
+            .select("created_at,metadata")
+            .eq("user_id", user_id).eq(column, product_id)
+            .in_("status", ["pending", "processing"])
+            .order("created_at", desc=True).limit(1).execute())
+    row = (rows.data or [None])[0]
+    if not row:
+        return {"url": None, "wait": 0, "needs_review": False}
+    created = row.get("created_at")
+    age = 0.0
+    try:
+        when = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        age = max(0.0, (datetime.now(timezone.utc) - when).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        pass  # Horodatage inconnu : jamais de reprise automatique.
+    wait = max(0, int(60 - age + 0.999))
+    data = row.get("metadata")
+    url = data.get("checkout_url") if isinstance(data, dict) else None
+    # Cette URL provient uniquement de l'API Chariow et a été enregistrée côté serveur.
+    valid_url = isinstance(url, str) and url.startswith("https://")
+    return {
+        "url": url if valid_url and wait == 0 else None,
+        "wait": wait,
+        "needs_review": wait == 0 and not valid_url,
+    }
+
+
 def _discovery_has_prior_paid_pack(user_id: str) -> bool:
     response = (
         supabase.table("payment_transactions")
@@ -692,6 +729,10 @@ def get_discovery_payment_status(
         uid, column="pack_id", product_id=_DISCOVERY_PRIMARY_ID, statuses=("pending", "processing"))
     pending_topup = _discovery_has_transaction(
         uid, column="addon_id", product_id=_DISCOVERY_TOPUP_ID, statuses=("pending", "processing"))
+    primary_resume = (_discovery_resume_checkout(uid, column="pack_id", product_id=_DISCOVERY_PRIMARY_ID)
+                      if pending_purchase else {"url": None, "wait": 0, "needs_review": False})
+    topup_resume = (_discovery_resume_checkout(uid, column="addon_id", product_id=_DISCOVERY_TOPUP_ID)
+                    if pending_topup else {"url": None, "wait": 0, "needs_review": False})
     active = bool(wallet and wallet.pack_id == _DISCOVERY_PRIMARY_ID and wallet.is_pack_active)
     topup_used = bool(row and row.get("topup_reference")) or _discovery_has_transaction(
         uid, column="addon_id", product_id=_DISCOVERY_TOPUP_ID, statuses=("paid", "success"))
@@ -700,7 +741,13 @@ def get_discovery_payment_status(
             "purchased": purchased, "purchase_pending": pending_purchase,
             "active_discovery": active, "topup_used": topup_used,
             "topup_available": bool(active and purchased and not topup_used and not pending_topup),
-            "topup_pending": pending_topup, "balance": wallet.balance if active else 0}
+            "topup_pending": pending_topup, "balance": wallet.balance if active else 0,
+            "resume_checkout_url": primary_resume["url"],
+            "resume_after_seconds": primary_resume["wait"],
+            "purchase_needs_review": primary_resume["needs_review"],
+            "resume_topup_url": topup_resume["url"],
+            "topup_resume_after_seconds": topup_resume["wait"],
+            "topup_needs_review": topup_resume["needs_review"]}
 
 
 # ============================================================
@@ -1447,6 +1494,25 @@ def checkout_payment(
     checkout_url = chariow_checkout[
         "checkout_url"
     ]
+
+    # Sauvegarder le lien de reprise privé sur LA transaction existante.
+    # Aucun nouveau paiement ni crédit n'est créé ici.
+    if request.product_id in _DISCOVERY_IDS and checkout_url:
+        try:
+            existing_metadata = transaction.get("metadata") or {}
+            if not isinstance(existing_metadata, dict):
+                existing_metadata = {}
+            updated = (supabase.table("payment_transactions")
+                .update({"metadata": {**existing_metadata, "checkout_url": checkout_url}})
+                .eq("reference", reference)
+                .eq("user_id", authenticated_user_id)
+                .eq("status", "pending").execute())
+            if not updated.data:
+                # Statut éventuellement déjà modifié par le webhook ; ne pas le réinitialiser.
+                print("[DISCOVERY CHECKOUT] lien non conservé (statut modifié)", flush=True)
+        except Exception:
+            # Checkout déjà ouvert : ne pas provoquer une deuxième commande.
+            print("[DISCOVERY CHECKOUT] lien de reprise indisponible", flush=True)
 
     # ========================================================
     # 16. RÉPONSE FRONTEND

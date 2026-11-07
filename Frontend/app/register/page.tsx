@@ -9,7 +9,7 @@ import {
   UserRound,
 } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 
@@ -404,6 +404,7 @@ export default function RegisterPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const submitInFlight = useRef(false);
 
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>,
@@ -493,11 +494,20 @@ export default function RegisterPage() {
       return;
     }
 
+    if (submitInFlight.current) return;
+    submitInFlight.current = true;
+    let navigated = false;
     setLoading(true);
 
     try {
-      const supabase =
-        createClient();
+      const supabase = createClient();
+      // Une inscription interrompue peut avoir déjà créé un compte et une session.
+      const existing = await supabase.auth.getSession();
+      if (existing.data.session?.user.email?.trim().toLowerCase() === email) {
+        navigated = true;
+        window.location.replace("/chat");
+        return;
+      }
 
       /*
        * Création du compte Supabase.
@@ -526,10 +536,16 @@ export default function RegisterPage() {
         });
 
       if (signUpError) {
-        setError(
-          signUpError.message ||
-            UI[language].createAccountError,
-        );
+        // Évite le faux "compte existant" après une inscription déjà réussie.
+        if (/already registered|user already registered/i.test(signUpError.message || "")) {
+          const resumed = await supabase.auth.signInWithPassword({ email, password });
+          if (!resumed.error && resumed.data.session?.user.email?.trim().toLowerCase() === email) {
+            navigated = true;
+            window.location.replace("/chat");
+            return;
+          }
+        }
+        setError(signUpError.message || UI[language].createAccountError);
         return;
       }
 
@@ -554,99 +570,28 @@ export default function RegisterPage() {
         return;
       }
 
-      const apiBaseUrl =
-        process.env.NEXT_PUBLIC_API_URL ||
+      // Le backend lit déjà le numéro dans user_metadata si auth.users.phone
+      // n'est pas encore synchronisé : ne jamais bloquer l'accès au chat.
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL ||
         process.env.NEXT_PUBLIC_BACKEND_URL;
-
-      if (!apiBaseUrl) {
-        console.error(
-          "NEXT_PUBLIC_API_URL / NEXT_PUBLIC_BACKEND_URL non configurée.",
-        );
-
-        setError(UI[language].phoneSyncNotConfigured);
-        return;
-      }
-
-      /*
-       * Synchronisation immédiate :
-       *
-       * /profile/phone
-       *        ↓
-       * Service Role
-       *        ↓
-       * auth.users.phone
-       */
-      const phoneResponse =
-        await fetch(
-          `${apiBaseUrl.replace(/\/$/, "")}/profile/phone`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization:
-                `Bearer ${data.session.access_token}`,
-              "user-id": data.user.id,
-            },
-            body: JSON.stringify({
-              phone: phoneInternational,
-              country_iso2: country.iso2,
-            }),
+      if (apiBaseUrl) {
+        void fetch(`${apiBaseUrl.replace(/\/$/, "")}/profile/phone`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${data.session.access_token}`,
+            "user-id": data.user.id,
           },
-        );
-
-      let phoneResult: {
-        detail?: string;
-        message?: string;
-        phone?: string;
-        success?: boolean;
-      } = {};
-
-      try {
-        phoneResult =
-          await phoneResponse.json();
-      } catch {
-        // Réponse non JSON : on utilisera le message générique.
-      }
-
-      if (!phoneResponse.ok) {
-        console.error(
-          "PHONE PROFILE SYNC ERROR:",
-          phoneResult,
-        );
-
-        setError(
-          phoneResult.detail ||
-            UI[language].phoneSaveError,
-        );
-        return;
-      }
-
-      /*
-       * Vérification de la réponse du backend.
-       * Le backend doit confirmer le numéro international attendu.
-       */
-      if (
-        phoneResult.phone &&
-        phoneResult.phone.replace(/\D/g, "") !==
-          phoneInternational.replace(/\D/g, "")
-      ) {
-        console.error(
-          "PHONE PROFILE SYNC MISMATCH:",
-          phoneResult,
-        );
-
-        setError(UI[language].phoneMismatch);
-        return;
+          body: JSON.stringify({ phone: phoneInternational, country_iso2: country.iso2 }),
+          keepalive: true,
+        }).then((response) => {
+          if (!response.ok) console.warn("ORIA: téléphone non synchronisé, métadonnées conservées.");
+        }).catch(() => console.warn("ORIA: synchronisation téléphone différée."));
       }
 
       setMessage(UI[language].accountCreated);
-
-      /*
-       * La session Supabase reste disponible : l'utilisateur
-       * peut accéder directement à son espace.
-       */
-      window.location.href = "/chat";
-
+      navigated = true;
+      window.location.replace("/chat");
       return;
     } catch (error) {
       console.error(
@@ -656,7 +601,10 @@ export default function RegisterPage() {
 
       setError(UI[language].unexpectedError);
     } finally {
-      setLoading(false);
+      if (!navigated) {
+        submitInFlight.current = false;
+        setLoading(false);
+      }
     }
   }
 

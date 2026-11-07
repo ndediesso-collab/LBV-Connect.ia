@@ -745,6 +745,12 @@ type DiscoveryStatus = {
   can_buy: boolean;
   purchased: boolean;
   purchase_pending?: boolean;
+  resume_checkout_url?: string | null;
+  resume_after_seconds?: number;
+  purchase_needs_review?: boolean;
+  resume_topup_url?: string | null;
+  topup_resume_after_seconds?: number;
+  topup_needs_review?: boolean;
   active_discovery: boolean;
   balance?: number;
   topup_available: boolean;
@@ -1781,7 +1787,11 @@ export default function PacksPage() {
 
 
 
-      const response = await fetch(
+      const checkoutController = new AbortController();
+      const checkoutTimer = discoveryTarget ? window.setTimeout(() => checkoutController.abort(), 60000) : null;
+      let response: Response;
+      try {
+      response = await fetch(
 
 
 
@@ -1794,6 +1804,7 @@ export default function PacksPage() {
 
 
           method: "POST",
+          signal: checkoutController.signal,
 
 
 
@@ -1850,6 +1861,9 @@ export default function PacksPage() {
 
 
       );
+      } finally {
+        if (checkoutTimer !== null) window.clearTimeout(checkoutTimer);
+      }
 
 
 
@@ -1986,22 +2000,11 @@ export default function PacksPage() {
 
 
       window.alert(
-
-
-
-        error instanceof Error
-
-
-
-          ? error.message
-
-
-
-          : "Impossible d'initialiser le paiement.",
-
-
-
+        error instanceof Error && error.name === "AbortError"
+          ? "Une minute sans réponse. ORIA vérifie la commande en cours ; ne lancez pas un second débit. Revenez sur cette page pour reprendre le paiement."
+          : error instanceof Error ? error.message : "Impossible d'initialiser le paiement.",
       );
+      if (discoveryTarget) void refreshDiscoveryStatus();
 
 
 
@@ -2378,14 +2381,23 @@ export default function PacksPage() {
                 <p className="mt-1 text-xs text-muted">{language === "fr" ? "Une fois par compte" : "Once per account"}</p>
                 <button type="button"
                   disabled={isPaying !== null || discoverySession === "error" ||
-                    (discoverySession === "authenticated" && discoveryStatus?.can_buy !== true)}
-                  onClick={() => void startPayment({ type: "primary_pack", id: DISCOVERY_PACK_ID })}
+                    (discoverySession === "authenticated" && discoveryStatus?.can_buy !== true &&
+                      !(discoveryStatus?.purchase_pending && discoveryStatus?.resume_checkout_url))}
+                  onClick={() => {
+                    if (discoveryStatus?.purchase_pending && discoveryStatus.resume_checkout_url) {
+                      window.location.assign(discoveryStatus.resume_checkout_url);
+                    } else {
+                      void startPayment({ type: "primary_pack", id: DISCOVERY_PACK_ID });
+                    }
+                  }}
                   className="mt-4 w-full rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
                   {discoverySession === "error"
                     ? language === "fr" ? "Vérification nécessaire" : "Verification required"
                     : discoverySession === "authenticated" && discoveryStatus?.can_buy !== true
                       ? discoveryStatus?.purchase_pending
-                        ? language === "fr" ? "Paiement en attente" : "Payment pending"
+                        ? discoveryStatus.resume_checkout_url
+                          ? language === "fr" ? "Reprendre le paiement" : "Resume payment"
+                          : language === "fr" ? "Paiement en attente" : "Payment pending"
                         : language === "fr" ? "Non éligible" : "Not eligible"
                     : isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting
                     : language === "fr" ? "Découvrir ORIA" : "Try ORIA"}
@@ -2395,8 +2407,16 @@ export default function PacksPage() {
                   <p role="status" className="mt-2 max-w-xs text-xs leading-5 text-muted">
                     {discoveryStatus.purchase_pending
                       ? language === "fr"
-                        ? "Une commande Découverte est déjà en attente de confirmation."
-                        : "A Discovery order is already awaiting confirmation."
+                        ? discoveryStatus.purchase_needs_review
+                          ? "Cette ancienne tentative doit être vérifiée avant de réessayer. Consultez l'assistance ORIA."
+                          : discoveryStatus.resume_checkout_url
+                            ? "Votre première commande est prête : reprenez le même paiement sans nouvel achat."
+                            : `Commande en attente : reprise possible après ${discoveryStatus.resume_after_seconds ?? 60} s si Chariow a fourni un lien.`
+                        : discoveryStatus.purchase_needs_review
+                          ? "The previous checkout needs verification before another attempt. Contact ORIA support."
+                          : discoveryStatus.resume_checkout_url
+                            ? "Resume your previous checkout without creating another order."
+                            : `Payment pending: retry in ${discoveryStatus.resume_after_seconds ?? 60}s if the checkout link is available.`
                       : walletPackId
                         ? language === "fr"
                           ? "Un autre pack est déjà associé à ce compte. L'offre de bienvenue ne peut pas être achetée."
@@ -2412,7 +2432,11 @@ export default function PacksPage() {
         )}
         {DISCOVERY_PUBLIC && discoveryStatus?.enabled && discoveryStatus.purchase_pending && (
           <p role="status" className="mt-6 rounded-2xl border border-border bg-surface-secondary p-4 text-sm">
-            {language === "fr" ? "Paiement Découverte en attente de confirmation. Aucun nouvel achat ne peut être initié." : "Discovery payment awaiting confirmation. No new checkout is available."}
+            {discoveryStatus.resume_checkout_url
+              ? (language === "fr" ? "Vous pouvez reprendre la même commande Chariow, sans nouvel achat." : "You can resume the same Chariow checkout without a new order.")
+              : discoveryStatus.purchase_needs_review
+                ? (language === "fr" ? "Cette commande ancienne exige une vérification avant toute nouvelle tentative." : "This older order requires verification before another attempt.")
+                : (language === "fr" ? "Paiement en attente : reprise disponible après une minute si le lien Chariow est enregistré." : "Pending payment: resume after one minute if the Chariow link is saved.")}
             <button type="button" onClick={() => void refreshDiscoveryStatus()} className="ml-3 underline">{language === "fr" ? "Actualiser" : "Refresh"}</button>
           </p>
         )}
@@ -2465,6 +2489,11 @@ export default function PacksPage() {
                   <button type="button" disabled={isPaying !== null} onClick={() => void startPayment({ type: "addon", id: DISCOVERY_TOPUP_ID })}
                     className="mt-5 rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground disabled:opacity-50">
                     {isPaying === DISCOVERY_TOPUP_ID ? UI[language].redirecting : language === "fr" ? "Recharger une seule fois" : "Buy one-time top-up"}
+                  </button>
+                ) : discoveryStatus?.topup_pending && discoveryStatus.resume_topup_url ? (
+                  <button type="button" onClick={() => window.location.assign(discoveryStatus.resume_topup_url!)}
+                    className="mt-5 rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground">
+                    {language === "fr" ? "Reprendre la recharge" : "Resume top-up"}
                   </button>
                 ) : (
                   <p role="status" className="mt-4 text-sm text-muted">{discoveryStatus?.topup_pending

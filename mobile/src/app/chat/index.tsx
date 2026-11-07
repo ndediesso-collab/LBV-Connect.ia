@@ -4501,8 +4501,15 @@ export default function ChatPage() {
       setChatCapabilities(null);
       setSelectedModel("");
       setIsLoadingChatCapabilities(false);
-      setError(requestError instanceof Error
-        ? requestError.message : "Impossible de charger les crédits.");
+      // 404 est normal pour un nouvel inscrit n'ayant jamais acheté de pack.
+      // Le Chat reste accessible en lecture, sans envoyer de requêtes IA payantes.
+      if (requestError instanceof Error &&
+          requestError.message === "Aucun portefeuille de crédits trouvé pour cet utilisateur.") {
+        setWallet(null);
+      } else {
+        setError(requestError instanceof Error
+          ? requestError.message : "Impossible de charger les crédits.");
+      }
     } finally {
       setIsLoadingWallet(false);
     }
@@ -7815,6 +7822,24 @@ export default function ChatPage() {
               <Text style={styles.emptyDescription}>
                 {t.welcomeDescription}
               </Text>
+              {!isLoadingWallet && !hasActivePack && currentUserId ? (
+                <View style={{ marginTop: 28, padding: 22, borderRadius: 20,
+                  backgroundColor: isDark ? "#202020" : "#F5F5F5", gap: 13 }}>
+                  <Text style={{ color: isDark ? "#FFFFFF" : "#171717", fontSize: 17,
+                    fontWeight: "700", lineHeight: 24 }}>
+                    {language === "fr" ? "Pour discuter avec ORIA, achetez d'abord un pack." :
+                      "To chat with ORIA, first purchase a plan."}
+                  </Text>
+                  <Pressable accessibilityRole="button" onPress={() => router.push("/packs" as any)}
+                    style={{ backgroundColor: isDark ? "#FFFFFF" : "#151515", borderRadius: 14,
+                      paddingVertical: 15, alignItems: "center" }}>
+                    <Text style={{ color: isDark ? "#111111" : "#FFFFFF", fontSize: 15,
+                      fontWeight: "700" }}>
+                      {language === "fr" ? "Acheter un pack pour discuter" : "Buy a plan to chat"}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
               {showReturnWelcome && activeConversationId ? (
                 <Pressable
                   onPress={() => void selectConversation(activeConversationId)}

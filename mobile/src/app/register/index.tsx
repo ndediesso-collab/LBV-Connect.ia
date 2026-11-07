@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import Animated, { FadeInDown, ReduceMotion } from "react-native-reanimated";
 import {
   ActivityIndicator,
@@ -581,6 +581,8 @@ export default function RegisterPage() {
     loading,
     setLoading,
   ] = useState(false);
+  // Empêche deux créations concurrentes avant le prochain rendu React.
+  const submitInFlight = useRef(false);
 
   /**
    * Configuration actuellement sélectionnée.
@@ -743,9 +745,19 @@ export default function RegisterPage() {
       return;
     }
 
+    if (submitInFlight.current) return;
+    submitInFlight.current = true;
+    let navigated = false;
     setLoading(true);
 
     try {
+      // Si une tentative précédente a créé la session, ne jamais relancer signUp.
+      const existing = await supabase.auth.getSession();
+      if (existing.data.session?.user.email?.trim().toLowerCase() === normalizedEmail) {
+        router.replace("/chat" as any);
+        navigated = true;
+        return;
+      }
       /*
        * Création du compte Supabase.
        *
@@ -786,10 +798,19 @@ export default function RegisterPage() {
         });
 
       if (signUpError) {
-        setError(
-          localizeRegisterError(signUpError.message || t.accountCreationFailed, language),
-        );
-
+        // Une inscription antérieure peut avoir réussi sans redirection (ancien bug).
+        // On se connecte avec le mot de passe saisi, sans créer un second compte.
+        if (/already registered|user already registered/i.test(signUpError.message || "")) {
+          const resumed = await supabase.auth.signInWithPassword({
+            email: normalizedEmail, password: passwordValue,
+          });
+          if (!resumed.error && resumed.data.session?.user.email?.trim().toLowerCase() === normalizedEmail) {
+            router.replace("/chat" as any);
+            navigated = true;
+            return;
+          }
+        }
+        setError(localizeRegisterError(signUpError.message || t.accountCreationFailed, language));
         return;
       }
 
@@ -821,146 +842,35 @@ export default function RegisterPage() {
         return;
       }
 
-      /*
-       * Dans l'application mobile, l'URL backend est fournie
-       * par EXPO_PUBLIC_API_URL.
-       *
-       * Une valeur de secours est conservée pour éviter qu'une
-       * configuration absente bloque complètement l'inscription
-       * lorsque l'API officielle du projet est utilisée.
-       */
-      const apiBaseUrl =
-        process.env
-          .EXPO_PUBLIC_API_URL ||
-        process.env
-          .EXPO_PUBLIC_BACKEND_URL ||
+      // Le compte ET la session sont créés : le téléphone est déjà conservé
+      // dans user_metadata, exploité par /payments/checkout en cas de besoin.
+      // Une erreur de PUT /profile/phone ne doit plus bloquer l'inscription.
+      const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL ||
+        process.env.EXPO_PUBLIC_BACKEND_URL ||
         "https://lbv-connect-api.onrender.com";
-
-      if (!apiBaseUrl) {
-        console.error(
-          "EXPO_PUBLIC_API_URL / EXPO_PUBLIC_BACKEND_URL non configurée.",
-        );
-
-        setError(
-          t.phoneSyncMissing,
-        );
-
-        return;
-      }
-
-      /*
-       * Synchronisation immédiate :
-       *
-       * /profile/phone
-       *        ↓
-       * Service Role
-       *        ↓
-       * auth.users.phone
-       */
-      const phoneResponse =
-        await fetch(
-          `${apiBaseUrl.replace(
-            /\/$/,
-            "",
-          )}/profile/phone`,
-          {
-            method: "PUT",
-
-            headers: {
-              "Content-Type":
-                "application/json",
-
-              Authorization:
-                `Bearer ${data.session.access_token}`,
-
-              "user-id":
-                data.user.id,
-            },
-
-            body: JSON.stringify({
-              phone:
-                phoneInternational,
-
-              country_iso2:
-                selectedCountry.iso2,
-            }),
+      if (apiBaseUrl) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12000);
+        void fetch(`${apiBaseUrl.replace(/\/$/, "")}/profile/phone`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${data.session.access_token}`,
+            "user-id": data.user.id,
           },
-        );
-
-      let phoneResult: {
-        detail?: string;
-        message?: string;
-        phone?: string;
-        success?: boolean;
-      } = {};
-
-      try {
-        phoneResult =
-          await phoneResponse.json();
-      } catch {
-        /*
-         * Réponse non JSON :
-         * on utilisera le message générique.
-         */
+          body: JSON.stringify({ phone: phoneInternational, country_iso2: selectedCountry.iso2 }),
+          signal: controller.signal,
+        }).then((response) => {
+          if (!response.ok) console.warn("ORIA: téléphone non synchronisé, métadonnées conservées.");
+        }).catch(() => {
+          console.warn("ORIA: synchronisation téléphone reportée, inscription validée.");
+        }).finally(() => clearTimeout(timer));
       }
 
-      if (!phoneResponse.ok) {
-        console.error(
-          "PHONE PROFILE SYNC ERROR:",
-          phoneResult,
-        );
-
-        setError(
-          phoneResult.detail || t.phoneSaveFailed,
-        );
-
-        return;
-      }
-
-      /*
-       * Vérification de la réponse du backend.
-       *
-       * Le backend doit confirmer le numéro international
-       * attendu.
-       */
-      if (
-        phoneResult.phone &&
-        phoneResult.phone.replace(
-          /\D/g,
-          "",
-        ) !==
-          phoneInternational.replace(
-            /\D/g,
-            "",
-          )
-      ) {
-        console.error(
-          "PHONE PROFILE SYNC MISMATCH:",
-          phoneResult,
-        );
-
-        setError(
-          t.phoneMismatch,
-        );
-
-        return;
-      }
-
-      setMessage(
-        t.success,
-      );
-
-      /*
-       * La session Supabase reste disponible :
-       * l'utilisateur peut accéder directement à son espace.
-       *
-       * Dans Expo Router, router.replace() remplace la page
-       * d'inscription dans l'historique de navigation.
-       */
-      router.replace(
-        "/chat" as any,
-      );
-
+      setMessage(t.success);
+      // La réussite de l'authentification suffit pour accéder directement au chat.
+      router.replace("/chat" as any);
+      navigated = true;
       return;
     } catch (caughtError) {
       console.error(
@@ -972,7 +882,11 @@ export default function RegisterPage() {
         t.unexpectedError,
       );
     } finally {
-      setLoading(false);
+      // Conserver le verrou jusqu'au démontage de l'écran après navigation.
+      if (!navigated) {
+        submitInFlight.current = false;
+        setLoading(false);
+      }
     }
   }
 
