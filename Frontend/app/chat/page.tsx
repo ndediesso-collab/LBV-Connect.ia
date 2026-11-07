@@ -4120,7 +4120,7 @@ export default function ChatPage() {
     text?: string;
     note?: string;
     truncated?: boolean;
-    slides?: Array<{ title: string; texts: string[] }>;
+    slides?: Array<{ title: string; texts: string[]; image_data?: string }>;
     tables?: Array<{ name: string; rows: string[][] }>;
     entries?: Array<{ name: string; size: number }>;
   } | null>(null);
@@ -5337,7 +5337,7 @@ export default function ChatPage() {
       const response = await apiFetch<{
         success: boolean; artifact_id: string; filename: string; kind: string;
         text?: string; note?: string; truncated?: boolean;
-        slides?: Array<{ title: string; texts: string[] }>;
+        slides?: Array<{ title: string; texts: string[]; image_data?: string }>;
         tables?: Array<{ name: string; rows: string[][] }>;
         entries?: Array<{ name: string; size: number }>;
       }>(`/ai/artifacts/${encodeURIComponent(artifact.id)}/universal-preview`);
@@ -7161,6 +7161,10 @@ export default function ChatPage() {
                 <div key={index} className="mb-4 rounded-xl border border-border bg-surface p-5">
                   <p className="mb-3 text-xs text-muted">{language === "fr" ? "Diapositive" : "Slide"} {index + 1}</p>
                   <h3 className="mb-3 text-lg font-semibold">{slide.title}</h3>
+                  {typeof slide.image_data === "string" && slide.image_data.startsWith("data:image/jpeg;base64,") ? (
+                    <img src={slide.image_data} alt={`${slide.title} — aperçu visuel`}
+                      className="mb-3 aspect-video w-full rounded-lg bg-white object-contain" />
+                  ) : null}
                   {(slide.texts || []).map((line, i) => <p key={i} className="mb-2 whitespace-pre-wrap text-sm leading-6">{line}</p>)}
                 </div>
               ))}

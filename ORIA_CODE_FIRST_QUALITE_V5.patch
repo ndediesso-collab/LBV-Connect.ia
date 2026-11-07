@@ -1,0 +1,506 @@
+--- a/Backend/app/services/artifact_service.py
++++ b/Backend/app/services/artifact_service.py
+@@ -7,8 +7,29 @@
+         if fmt in {'pdf','docx','rtf','odt','epub'} and source is None:
+             if not isinstance(native,dict) or not ({'blocks','chapters'} & set(native)):
+                 raise ArtifactError(
+                     f'{fmt.upper()} attend native_data.blocks ou native_data.chapters.')
++        # Opt-in Code-First : le HTML/CSS est composé en diapositives statiques,
++        # sans modifier les générateurs natifs ni les autres formats.
++        # La source HTML, le CSS et les images sont déjà vérifiés dans
++        # create_from_payload() ; le rendu PDF réapplique les contrôles.
++        if kind == 'html' and source and fmt in {'pptx', 'odp'} and 'oria-slide' in source:
++            from app.services.artifact_visual_deck import compile_visual_deck, VisualDeckError
++            try:
++                return compile_visual_deck(
++                    source, fmt=fmt,
++                    pdf_renderer=lambda fragment: self._contract_pdf('html', fragment, None, filename),
++                )
++            except VisualDeckError as error:
++                raise ArtifactError(str(error)) from error
++        if kind == 'html' and source and fmt == 'epub' and 'oria-chapter' in source:
++            from app.services.artifact_visual_book import compile_visual_epub, VisualBookError
++            try:
++                return compile_visual_epub(
++                    source, filename, image_reader=self._image_data_uri,
++                )
++            except VisualBookError as error:
++                raise ArtifactError(str(error)) from error
+         if fmt == 'odp' and isinstance(native,dict) and isinstance(native.get('slides'),list):
+             if any(set(slide) & {'table','chart','elements','subtitle'}
+                    for slide in native['slides'] if isinstance(slide,dict)):
+                 raise UnsupportedArtifactTypeError(
+--- a/Backend/app/services/artifact_universal_preview.py
++++ b/Backend/app/services/artifact_universal_preview.py
+@@ -217,8 +217,16 @@
+     if len(binary) > MAX_PREVIEW_BYTES:
+         raise UniversalPreviewError("Fichier trop volumineux pour l'aperçu, téléchargement disponible.")
+     binary = bytes(binary)
+ 
++    # Une présentation Code-First utilise des diapositives illustrées.
++    # Retourner de véritables miniatures, pas un tableau de texte vide.
++    # Les présentations historiques restent traitées par les lecteurs natifs.
++    if ext in {"pptx", "odp"}:
++        from app.services.artifact_visual_preview import preview_visual_deck
++        visual = preview_visual_deck(ext, binary)
++        if visual is not None:
++            return visual
+     if ext == "pptx":
+         return _pptx_preview(binary)
+     if ext == "odp":
+         return _odp_preview(binary)
+--- a/Backend/app/services/prompt_service.py
++++ b/Backend/app/services/prompt_service.py
+@@ -446,20 +446,34 @@
+     formules. Ne concentre pas des paragraphes entiers dans une cellule étroite.
+     Ne mélange pas des bilans statistiques non comparables sans signaler
+     clairement leurs périmètres et leurs sources. Les graphiques doivent
+     représenter des données chiffrées présentes dans le classeur ;
+-  * PPTX/ODP : diapositives, objets, textes, tableaux, images autorisées,
+-    données de graphiques et organisation éditable ;
+-    Pour un PPTX classique, privilégie une structure explicite simple :
+-    native_data={"slides":[{"title":"Titre", "bullets":["Point A", "Point B"]},
+-    {"title":"Autre titre", "bullets":["Point C"]}]}.
+-    Par diapositive, limite-toi à 9 puces et 1 300 caractères de contenu,
+-    avec un titre de 180 caractères maximum. N'ajoute aucun champ implicite
+-    (layout, theme, background, notes, images) non prévu par le moteur.
+-    Les champs pris en charge sont title, subtitle, bullets, content,
+-    paragraphs, table, elements et chart. Ne mélange pas elements avec
+-    bullets, table ou content dans une même diapositive.
+-    Pour ODP, reste sur title et bullets, sans composition avancée.
++  * PPTX/ODP : privilégie le MODE VISUEL CODE-FIRST lorsque l'utilisateur
++    demande une présentation aboutie. Fourni une source HTML/CSS unique,
++    statique, avec une section <section class="oria-slide"> par diapositive,
++    et un artifact source_id vers cette source (native_data=null).
++    Chaque diapositive est une composition 16:9 sur 1280x720 px : identite
++    graphique cohérente, couverture, sections variées, chiffres mis en valeur,
++    diagrammes réellement dessinés, visuels intégrés, lisibilité et respiration.
++    Évite les listes répétées et les mises en page identiques sur chaque page.
++    Ne fournis jamais les mentions « graphique à intégrer », « image suggérée »,
++    « à compléter » : chaque diapositive doit être entièrement composée.
++    Utilise des styles CSS autonomes et compatibles avec le moteur PDF HTML.
++    Aucun Javascript, controle interactif, animation, ressource distante,
++    URL d'image externe, iframe, ou contenu à insérer plus tard.
++    L'export PPTX/ODP Code-First conserve fidèlement l'apparence, mais ses
++    diapositives sont composées en images et non en objets modifiables.
++    Si l'utilisateur exige des éléments PowerPoint modifiables, utilise plutot
++    native_data.slides avec les champs natifs supportes et leurs limites.
++    La compatibilité native historique reste disponible, sans changement.
++    N'invente aucun graphique ni carte : représente seulement des données
++    fournies ou identifiées clairement comme exemples illustratifs.
++  * EPUB : pour un ouvrage éditorial élaboré, utilise une source HTML/CSS
++    statique avec <section class="oria-chapter"> par chapitre et un artifact
++    EPUB relié par source_id. Le moteur conserve la structure XHTML, les
++    styles de lecture et les images data: autorisées ; il n'exécute aucun JS.
++    Pour un contenu court/simple ou sans composition particulière, le format
++    native_data.blocks existant reste valide.
+   * CSV/TSV/JSON/JSONL/SQLite : données, colonnes, types et valeurs valides ;
+   * PDF/DOCX/ODT/RTF/EPUB en mode natif : fournis
+     native_data={"blocks":[{"type":"title","text":"Titre du document"},
+     {"type":"subtitle","text":"Sous-titre"},
+--- a/Frontend/app/chat/page.tsx
++++ b/Frontend/app/chat/page.tsx
+@@ -4120,9 +4120,9 @@
+     kind: string;
+     text?: string;
+     note?: string;
+     truncated?: boolean;
+-    slides?: Array<{ title: string; texts: string[] }>;
++    slides?: Array<{ title: string; texts: string[]; image_data?: string }>;
+     tables?: Array<{ name: string; rows: string[][] }>;
+     entries?: Array<{ name: string; size: number }>;
+   } | null>(null);
+   const [universalPreviewBusyId, setUniversalPreviewBusyId] = useState<string | null>(null);
+@@ -5337,9 +5337,9 @@
+     try {
+       const response = await apiFetch<{
+         success: boolean; artifact_id: string; filename: string; kind: string;
+         text?: string; note?: string; truncated?: boolean;
+-        slides?: Array<{ title: string; texts: string[] }>;
++        slides?: Array<{ title: string; texts: string[]; image_data?: string }>;
+         tables?: Array<{ name: string; rows: string[][] }>;
+         entries?: Array<{ name: string; size: number }>;
+       }>(`/ai/artifacts/${encodeURIComponent(artifact.id)}/universal-preview`);
+       if (!response.success || !response.kind) throw new Error("Aperçu non disponible.");
+@@ -7161,8 +7161,12 @@
+               {universalPreview.kind === "slides" && (universalPreview.slides || []).map((slide, index) => (
+                 <div key={index} className="mb-4 rounded-xl border border-border bg-surface p-5">
+                   <p className="mb-3 text-xs text-muted">{language === "fr" ? "Diapositive" : "Slide"} {index + 1}</p>
+                   <h3 className="mb-3 text-lg font-semibold">{slide.title}</h3>
++                  {typeof slide.image_data === "string" && slide.image_data.startsWith("data:image/jpeg;base64,") ? (
++                    <img src={slide.image_data} alt={`${slide.title} — aperçu visuel`}
++                      className="mb-3 aspect-video w-full rounded-lg bg-white object-contain" />
++                  ) : null}
+                   {(slide.texts || []).map((line, i) => <p key={i} className="mb-2 whitespace-pre-wrap text-sm leading-6">{line}</p>)}
+                 </div>
+               ))}
+               {universalPreview.kind === "tables" && (universalPreview.tables || []).map((table, index) => (
+--- /dev/null
++++ b/Backend/app/services/artifact_visual_deck.py
+@@ -0,0 +1,159 @@
++"""ORIA Code-First : export visuel statique HTML/CSS -> PPTX / ODP.
++
++Opt-in : uniquement les sources HTML documentaires comportant des sections
++<section class="oria-slide">. La validation HTML/CSS, les images data-URI
++et l'interdiction des ressources externes appartiennent à ArtifactService
++avant cet appel et à son moteur PDF pendant le rendu.
++
++Ce moteur privilégie la fidélité graphique : chaque diapositive est une image
++PNG générée depuis une page PDF. Les objets ne sont pas modifiables séparément.
++Le chemin natif et modifiable des PPTX/ODP existants reste inchangé.
++"""
++from __future__ import annotations
++
++import io
++from typing import Callable
++
++from bs4 import BeautifulSoup
++
++MAX_VISUAL_SLIDES = 50
++PAGE_WIDTH_INCHES = 13.333
++PAGE_HEIGHT_INCHES = 7.5
++RASTER_DPI = 108  # 1.5 x 72, lisibilité vs taille
++
++
++class VisualDeckError(ValueError):
++    """Le document statique ne respecte pas la convention de diapositives."""
++
++
++def _slide_pages(html: str) -> list[tuple[str, str]]:
++    """Isole les diapositives : une seule page PDF est autorisée par section."""
++    if not isinstance(html, str) or not html.strip():
++        raise VisualDeckError("Source de presentation HTML vide.")
++    soup = BeautifulSoup(html, "html.parser")
++    slides = soup.select("section.oria-slide")
++    if not 1 <= len(slides) <= MAX_VISUAL_SLIDES:
++        raise VisualDeckError("Presentation visuelle : entre 1 et 50 sections .oria-slide attendues.")
++    if any(s.find_parent("section", class_="oria-slide") for s in slides):
++        raise VisualDeckError("Les diapositives .oria-slide ne peuvent pas etre imbriquees.")
++    # Les sélecteurs CSS sont conservés. Le conteneur main.oria-deck est fixe
++    # et le moteur réutilise exclusivement les styles déjà contrôlés.
++    css = "\n".join(tag.get_text() for tag in soup.find_all("style"))
++    sizing = """
++@page {size: 13.333in 7.5in; margin: 0;}
++html,body {margin:0 !important; padding:0 !important; width:1280px;}
++main.oria-deck {margin:0 !important; padding:0 !important; display:block; width:1280px;}
++section.oria-slide {box-sizing:border-box; display:block; position:relative;
++  width:1280px; height:720px; max-height:720px;
++  margin:0; overflow:hidden; break-inside:avoid; page-break-inside:avoid;}
++"""
++    result = []
++    for index, slide in enumerate(slides, 1):
++        if not slide.get_text(" ", strip=True) and not slide.find("img"):
++            raise VisualDeckError(f"La diapositive {index} est vide.")
++        title = slide.find(["h1", "h2", "h3"])
++        label = title.get_text(" ", strip=True)[:180] if title else f"Diapositive {index}"
++        markup = str(slide)
++        # Le fragment n'hérite pas des boutons/JS/ressources non documentaires
++        # éventuellement présents hors des sections.
++        isolated = ('<!doctype html><html lang="fr"><head><meta charset="utf-8">'
++                    '<style>' + css + '\n' + sizing + '</style></head><body>'
++                    '<main class="oria-deck">' + markup + '</main></body></html>')
++        result.append((isolated, label))
++    return result
++
++
++def _render_slides(
++    html: str, *, pdf_renderer: Callable[[str], bytes],
++) -> list[tuple[bytes, str]]:
++    """Ne charge aucune URL : le pdf_renderer doit être le rendu isolé ORIA."""
++    try:
++        import fitz
++    except ImportError as exc:
++        raise VisualDeckError("Rendu visuel : PyMuPDF indisponible sur le serveur.") from exc
++    output: list[tuple[bytes, str]] = []
++    for index, (fragment, label) in enumerate(_slide_pages(html), 1):
++        pdf = pdf_renderer(fragment)
++        if not isinstance(pdf, bytes) or not pdf.startswith(b"%PDF"):
++            raise VisualDeckError("Le convertisseur PDF a retourne une sortie invalide.")
++        with fitz.open(stream=pdf, filetype="pdf") as document:
++            if len(document) != 1:
++                raise VisualDeckError(
++                    f"Diapositive {index} : composition debordante ({len(document)} pages). "
++                    "Reduire le contenu ou les tailles avant export."
++                )
++            page = document[0]
++            if abs(page.rect.width / page.rect.height - 16 / 9) > .02:
++                raise VisualDeckError("Le rendu de diapositive n'est pas au format 16:9.")
++            # Une règle CSS peut masquer le contenu sans créer de 2e page.
++            # Éviter de livrer silencieusement une diapositive presque vide.
++            slide_text = BeautifulSoup(fragment, "html.parser").select_one("section.oria-slide")
++            expected_length = len(slide_text.get_text(" ", strip=True)) if slide_text else 0
++            rendered_length = len(page.get_text().strip())
++            if expected_length >= 100 and rendered_length < expected_length * .55:
++                raise VisualDeckError(
++                    f"Diapositive {index} : une partie importante du texte n'a pas ete rendue."
++                )
++            pix = page.get_pixmap(matrix=fitz.Matrix(RASTER_DPI / 72, RASTER_DPI / 72), alpha=False)
++            data = pix.tobytes("png")
++            if len(data) > 5 * 1024 * 1024:
++                raise VisualDeckError("Image de diapositive trop volumineuse.")
++            output.append((data, label))
++    return output
++
++
++def _make_pptx(pages: list[tuple[bytes, str]]) -> bytes:
++    from pptx import Presentation
++    from pptx.util import Inches
++    prs = Presentation()
++    prs.slide_width = Inches(PAGE_WIDTH_INCHES)
++    prs.slide_height = Inches(PAGE_HEIGHT_INCHES)
++    for png, title in pages:
++        slide = prs.slides.add_slide(prs.slide_layouts[6])
++        picture = slide.shapes.add_picture(
++            io.BytesIO(png), 0, 0, width=prs.slide_width, height=prs.slide_height
++        )
++        picture.name = "ORIA_VISUAL_SLIDE"
++        # Notes non visuelles pour retrouver les titres lors de la relecture.
++        try:
++            note = slide.notes_slide.notes_text_frame
++            if note is not None:
++                note.text = title
++        except (AttributeError, ValueError):
++            pass
++    result = io.BytesIO()
++    prs.save(result)
++    return result.getvalue()
++
++
++def _make_odp(pages: list[tuple[bytes, str]]) -> bytes:
++    from odf.opendocument import OpenDocumentPresentation
++    from odf import draw, style
++    doc = OpenDocumentPresentation()
++    page_layout = style.PageLayout(name="OriaLandscape")
++    page_layout.addElement(style.PageLayoutProperties(
++        pagewidth="33.866cm", pageheight="19.05cm",
++        printorientation="landscape", margin="0cm"))
++    doc.automaticstyles.addElement(page_layout)
++    doc.masterstyles.addElement(style.MasterPage(
++        name="OriaMaster", pagelayoutname="OriaLandscape"))
++    for index, (png, title) in enumerate(pages, 1):
++        page = draw.Page(name=f"ORIA_VISUAL_{index}", masterpagename="OriaMaster")
++        image_name = doc.addPictureFromString(png, mediatype="image/png")
++        frame = draw.Frame(x="0cm", y="0cm", width="33.866cm", height="19.05cm")
++        frame.addElement(draw.Image(href=image_name, type="simple", show="embed", actuate="onLoad"))
++        page.addElement(frame)
++        doc.presentation.addElement(page)
++    result = io.BytesIO()
++    doc.save(result)
++    return result.getvalue()
++
++
++def compile_visual_deck(
++    html: str, *, fmt: str, pdf_renderer: Callable[[str], bytes],
++) -> bytes:
++    """Opt-in. Aucun repli silencieux vers des listes à puces."""
++    if fmt not in {"pptx", "odp"}:
++        raise VisualDeckError("Format de presentation visuelle non pris en charge.")
++    pages = _render_slides(html, pdf_renderer=pdf_renderer)
++    return _make_pptx(pages) if fmt == "pptx" else _make_odp(pages)
+--- /dev/null
++++ b/Backend/app/services/artifact_visual_book.py
+@@ -0,0 +1,123 @@
++"""EPUB Code-First sémantique : conserve la composition HTML/CSS sans JS.
++
++Opt-in seulement pour les sections HTML <section class="oria-chapter">.
++Les sources, styles et images ont déjà été validés par ArtifactService.
++"""
++from __future__ import annotations
++
++import io
++import re
++import zipfile
++from datetime import datetime, timezone
++from html import escape
++from pathlib import PurePosixPath
++from typing import Callable
++from uuid import uuid4
++
++from bs4 import BeautifulSoup
++from lxml import etree, html as lhtml
++
++
++class VisualBookError(ValueError):
++    pass
++
++
++def compile_visual_epub(
++    source: str, filename: str, *, image_reader: Callable[[str], tuple[str, bytes]],
++) -> bytes:
++    soup = BeautifulSoup(source, 'html.parser')
++    chapters = soup.select('section.oria-chapter')
++    if not 1 <= len(chapters) <= 60:
++        raise VisualBookError('EPUB Code-First : entre 1 et 60 chapitres .oria-chapter attendus.')
++    if any(ch.find_parent('section', class_='oria-chapter') for ch in chapters):
++        raise VisualBookError('Les chapitres EPUB ne peuvent pas être imbriqués.')
++    styles = '\n'.join(x.get_text() for x in soup.find_all('style'))
++    if len(styles) > 180000:
++        raise VisualBookError('Styles EPUB trop volumineux.')
++    base_css = (
++        'body{line-height:1.55;font-family:serif;color:#18243a;margin:1em}'
++        'h1,h2,h3{line-height:1.18;break-after:avoid}'
++        'img{max-width:100%;height:auto}'
++        'table{border-collapse:collapse;width:100%}'
++        'td,th{border:1px solid #ddd;padding:.45em}'
++        'blockquote{border-left:.2em solid #b44f3a;padding-left:1em}'
++    )
++    images: list[tuple[str, str, bytes]] = []
++    files: list[tuple[str, bytes]] = []
++    nav: list[str] = []
++    manifest: list[str] = []
++    spine: list[str] = []
++    for index, chapter in enumerate(chapters, 1):
++        title_tag = chapter.find(['h1','h2','h3'])
++        title = title_tag.get_text(' ', strip=True)[:160] if title_tag else f'Chapitre {index}'
++        if not chapter.get_text(' ', strip=True) and not chapter.find('img'):
++            raise VisualBookError(f'Chapitre EPUB {index} vide.')
++        frag = lhtml.fragment_fromstring(str(chapter), create_parent='div')
++        # Uniquement les images inline prévalidées. Aucune URL n'est téléchargée.
++        for img in frag.iter('img'):
++            src = img.get('src', '')
++            mime, data = image_reader(src)
++            if mime == 'webp':
++                from PIL import Image
++                with Image.open(io.BytesIO(data)) as source_image:
++                    out = io.BytesIO()
++                    source_image.save(out, format='PNG')
++                    data = out.getvalue()
++                mime = 'png'
++            suffix = 'jpg' if mime == 'jpeg' else mime
++            name = f'image{len(images)+1}.{suffix}'
++            images.append((name, f'image/{mime}', data))
++            img.set('src', name)
++        # Sérialisation XML : pas de code JS, aucune structure HTML exécutable.
++        body = etree.tostring(frag, encoding='unicode', method='xml')
++        xhtml = (
++            '<?xml version="1.0" encoding="utf-8"?>'
++            '<html xmlns="http://www.w3.org/1999/xhtml" lang="fr">'
++            '<head><meta charset="utf-8"/><title>' + escape(title) + '</title>'
++            '<link rel="stylesheet" type="text/css" href="style.css"/></head>'
++            '<body>' + body + '</body></html>'
++        )
++        try:
++            etree.fromstring(xhtml.encode('utf-8'))
++        except etree.XMLSyntaxError as exc:
++            raise VisualBookError(f'Chapitre EPUB {index} non valide en XHTML.') from exc
++        path = f'chapter{index}.xhtml'
++        files.append((path, xhtml.encode('utf-8')))
++        nav.append(f'<li><a href="{path}">{escape(title)}</a></li>')
++        manifest.append(f'<item id="chapter{index}" href="{path}" media-type="application/xhtml+xml"/>')
++        spine.append(f'<itemref idref="chapter{index}"/>')
++    book_id = str(uuid4())
++    modified = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
++    title = escape(PurePosixPath(filename).stem.replace('_', ' '))
++    opf = ('<?xml version="1.0" encoding="utf-8"?>'
++        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">'
++        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
++        f'<dc:identifier id="book-id">{book_id}</dc:identifier><dc:title>{title}</dc:title>'
++        f'<dc:language>fr</dc:language><meta property="dcterms:modified">{modified}</meta>'
++        '</metadata><manifest>'
++        '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
++        '<item id="style" href="style.css" media-type="text/css"/>'
++        + ''.join(manifest)
++        + ''.join(f'<item id="img{i}" href="{escape(name)}" media-type="{mime}"/>'
++                  for i,(name,mime,_) in enumerate(images,1))
++        + '</manifest><spine>' + ''.join(spine) + '</spine></package>')
++    toc = ('<?xml version="1.0" encoding="utf-8"?>'
++        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="fr">'
++        '<head><title>Sommaire</title></head><body><nav epub:type="toc" id="toc">'
++        '<h1>Sommaire</h1><ol>' + ''.join(nav) + '</ol></nav></body></html>')
++    container = ('<?xml version="1.0" encoding="utf-8"?>'
++        '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
++        '<rootfiles><rootfile full-path="EPUB/content.opf" media-type="application/oebps-package+xml"/>'
++        '</rootfiles></container>')
++    out = io.BytesIO()
++    with zipfile.ZipFile(out, 'w') as z:
++        z.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
++        for path, content in [('META-INF/container.xml', container),
++                              ('EPUB/content.opf', opf), ('EPUB/nav.xhtml', toc),
++                              ('EPUB/style.css', base_css + '\n' + styles)]:
++            z.writestr(path, content, compress_type=zipfile.ZIP_DEFLATED)
++        for path, content in files:
++            z.writestr('EPUB/' + path, content, compress_type=zipfile.ZIP_DEFLATED)
++        for name, _, data in images:
++            z.writestr('EPUB/' + name, data, compress_type=zipfile.ZIP_DEFLATED)
++    return out.getvalue()
+--- /dev/null
++++ b/Backend/app/services/artifact_visual_preview.py
+@@ -0,0 +1,78 @@
++"""Aperçu exact (miniatures) des présentations ORIA Code-First image-based.
++
++Appelé uniquement après authentification, contrôle propriétaire et chargement
++borné par la route universelle déjà en place dans ORIA.
++"""
++from __future__ import annotations
++
++import base64
++import io
++import zipfile
++from xml.etree import ElementTree as ET
++
++MAX_THUMBNAILS = 18
++MAX_PREVIEW_ZIP_MEMBERS = 1000
++MAX_DECOMPRESSED = 90 * 1024 * 1024
++
++
++def _thumbnail(image_bytes: bytes) -> str:
++    from PIL import Image
++    with Image.open(io.BytesIO(image_bytes)) as im:
++        if im.width * im.height > 9_000_000:
++            raise ValueError("Image de diapositive trop grande pour l'aperçu.")
++        rgb = im.convert("RGB")
++        rgb.thumbnail((960, 540), Image.Resampling.LANCZOS)
++        out = io.BytesIO()
++        rgb.save(out, format="JPEG", quality=83, optimize=True)
++    return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode("ascii")
++
++
++def _zip_safe(binary: bytes) -> None:
++    with zipfile.ZipFile(io.BytesIO(binary)) as z:
++        info = z.infolist()
++        if len(info) > MAX_PREVIEW_ZIP_MEMBERS or sum(e.file_size for e in info) > MAX_DECOMPRESSED:
++            raise ValueError("Archive de présentation trop volumineuse pour l'aperçu.")
++        if any(e.file_size > 12 * 1024 * 1024 for e in info):
++            raise ValueError("Élément de présentation trop volumineux.")
++
++
++def preview_visual_deck(extension: str, binary: bytes) -> dict | None:
++    """Retourne None pour les présentations natives existantes (aucun changement)."""
++    if extension not in {"pptx", "odp"} or not zipfile.is_zipfile(io.BytesIO(binary)):
++        return None
++    _zip_safe(binary)
++    slides: list[dict] = []
++    if extension == "pptx":
++        from pptx import Presentation
++        prs = Presentation(io.BytesIO(binary))
++        for slide in prs.slides:
++            if (len(slide.shapes) != 1 or
++                slide.shapes[0].name != "ORIA_VISUAL_SLIDE" or
++                not hasattr(slide.shapes[0], "image")):
++                return None
++        for i, slide in enumerate(prs.slides, 1):
++            if i > MAX_THUMBNAILS:
++                break
++            slides.append({"title": f"Diapositive {i}", "texts": [],
++                           "image_data": _thumbnail(slide.shapes[0].image.blob)})
++        count = len(prs.slides)
++    else:
++        with zipfile.ZipFile(io.BytesIO(binary)) as z:
++            doc = ET.fromstring(z.read("content.xml"))
++            pages = list(doc.iter("{urn:oasis:names:tc:opendocument:xmlns:drawing:1.0}page"))
++            draw_ns = "{urn:oasis:names:tc:opendocument:xmlns:drawing:1.0}"
++            link_ns = "{http://www.w3.org/1999/xlink}"
++            if not pages or not all((pg.get(draw_ns + "name") or "").startswith("ORIA_VISUAL_") for pg in pages):
++                return None
++            for i, page in enumerate(pages[:MAX_THUMBNAILS], 1):
++                imgs = list(page.iter(draw_ns + "image"))
++                if len(imgs) != 1:
++                    return None
++                href = imgs[0].get(link_ns + "href", "")
++                if not href.startswith("Pictures/") or ".." in href:
++                    return None
++                slides.append({"title": f"Diapositive {i}", "texts": [],
++                               "image_data": _thumbnail(z.read(href))})
++            count = len(pages)
++    return {"kind": "slides", "slides": slides, "truncated": count > MAX_THUMBNAILS,
++            "note": "Aperçu visuel fidèle en lecture seule. Les éléments graphiques de ce fichier ne sont pas modifiables séparément."}

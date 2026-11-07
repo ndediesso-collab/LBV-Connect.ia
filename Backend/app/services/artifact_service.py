@@ -2003,6 +2003,27 @@ class ArtifactService:
             if not isinstance(native,dict) or not ({'blocks','chapters'} & set(native)):
                 raise ArtifactError(
                     f'{fmt.upper()} attend native_data.blocks ou native_data.chapters.')
+        # Opt-in Code-First : le HTML/CSS est composé en diapositives statiques,
+        # sans modifier les générateurs natifs ni les autres formats.
+        # La source HTML, le CSS et les images sont déjà vérifiés dans
+        # create_from_payload() ; le rendu PDF réapplique les contrôles.
+        if kind == 'html' and source and fmt in {'pptx', 'odp'} and 'oria-slide' in source:
+            from app.services.artifact_visual_deck import compile_visual_deck, VisualDeckError
+            try:
+                return compile_visual_deck(
+                    source, fmt=fmt,
+                    pdf_renderer=lambda fragment: self._contract_pdf('html', fragment, None, filename),
+                )
+            except VisualDeckError as error:
+                raise ArtifactError(str(error)) from error
+        if kind == 'html' and source and fmt == 'epub' and 'oria-chapter' in source:
+            from app.services.artifact_visual_book import compile_visual_epub, VisualBookError
+            try:
+                return compile_visual_epub(
+                    source, filename, image_reader=self._image_data_uri,
+                )
+            except VisualBookError as error:
+                raise ArtifactError(str(error)) from error
         if fmt == 'odp' and isinstance(native,dict) and isinstance(native.get('slides'),list):
             if any(set(slide) & {'table','chart','elements','subtitle'}
                    for slide in native['slides'] if isinstance(slide,dict)):

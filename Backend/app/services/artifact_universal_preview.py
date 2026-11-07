@@ -218,6 +218,14 @@ def preview_artifact_bytes(extension: str, binary: bytes) -> dict:
         raise UniversalPreviewError("Fichier trop volumineux pour l'aperçu, téléchargement disponible.")
     binary = bytes(binary)
 
+    # Une présentation Code-First utilise des diapositives illustrées.
+    # Retourner de véritables miniatures, pas un tableau de texte vide.
+    # Les présentations historiques restent traitées par les lecteurs natifs.
+    if ext in {"pptx", "odp"}:
+        from app.services.artifact_visual_preview import preview_visual_deck
+        visual = preview_visual_deck(ext, binary)
+        if visual is not None:
+            return visual
     if ext == "pptx":
         return _pptx_preview(binary)
     if ext == "odp":

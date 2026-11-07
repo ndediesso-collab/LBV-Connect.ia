@@ -447,18 +447,32 @@ CONTRAT DE SORTIE — STRICT ET EXCLUSIF
     Ne mélange pas des bilans statistiques non comparables sans signaler
     clairement leurs périmètres et leurs sources. Les graphiques doivent
     représenter des données chiffrées présentes dans le classeur ;
-  * PPTX/ODP : diapositives, objets, textes, tableaux, images autorisées,
-    données de graphiques et organisation éditable ;
-    Pour un PPTX classique, privilégie une structure explicite simple :
-    native_data={"slides":[{"title":"Titre", "bullets":["Point A", "Point B"]},
-    {"title":"Autre titre", "bullets":["Point C"]}]}.
-    Par diapositive, limite-toi à 9 puces et 1 300 caractères de contenu,
-    avec un titre de 180 caractères maximum. N'ajoute aucun champ implicite
-    (layout, theme, background, notes, images) non prévu par le moteur.
-    Les champs pris en charge sont title, subtitle, bullets, content,
-    paragraphs, table, elements et chart. Ne mélange pas elements avec
-    bullets, table ou content dans une même diapositive.
-    Pour ODP, reste sur title et bullets, sans composition avancée.
+  * PPTX/ODP : privilégie le MODE VISUEL CODE-FIRST lorsque l'utilisateur
+    demande une présentation aboutie. Fourni une source HTML/CSS unique,
+    statique, avec une section <section class="oria-slide"> par diapositive,
+    et un artifact source_id vers cette source (native_data=null).
+    Chaque diapositive est une composition 16:9 sur 1280x720 px : identite
+    graphique cohérente, couverture, sections variées, chiffres mis en valeur,
+    diagrammes réellement dessinés, visuels intégrés, lisibilité et respiration.
+    Évite les listes répétées et les mises en page identiques sur chaque page.
+    Ne fournis jamais les mentions « graphique à intégrer », « image suggérée »,
+    « à compléter » : chaque diapositive doit être entièrement composée.
+    Utilise des styles CSS autonomes et compatibles avec le moteur PDF HTML.
+    Aucun Javascript, controle interactif, animation, ressource distante,
+    URL d'image externe, iframe, ou contenu à insérer plus tard.
+    L'export PPTX/ODP Code-First conserve fidèlement l'apparence, mais ses
+    diapositives sont composées en images et non en objets modifiables.
+    Si l'utilisateur exige des éléments PowerPoint modifiables, utilise plutot
+    native_data.slides avec les champs natifs supportes et leurs limites.
+    La compatibilité native historique reste disponible, sans changement.
+    N'invente aucun graphique ni carte : représente seulement des données
+    fournies ou identifiées clairement comme exemples illustratifs.
+  * EPUB : pour un ouvrage éditorial élaboré, utilise une source HTML/CSS
+    statique avec <section class="oria-chapter"> par chapitre et un artifact
+    EPUB relié par source_id. Le moteur conserve la structure XHTML, les
+    styles de lecture et les images data: autorisées ; il n'exécute aucun JS.
+    Pour un contenu court/simple ou sans composition particulière, le format
+    native_data.blocks existant reste valide.
   * CSV/TSV/JSON/JSONL/SQLite : données, colonnes, types et valeurs valides ;
   * PDF/DOCX/ODT/RTF/EPUB en mode natif : fournis
     native_data={"blocks":[{"type":"title","text":"Titre du document"},
