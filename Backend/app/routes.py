@@ -666,10 +666,21 @@ def _discovery_validate_webhook_transaction(event: dict,
     provider_product = str(event.get("product_id") or "")
     if (not provider_product or provider_product not in {product_id, expected_provider_id}):
         raise HTTPException(409, "Produit Découverte non vérifié.")
-    if event.get("amount") is None:
+    # Chariow transmet souvent sale.amount = {"value": 1000, "currency": "XAF", ...}.
+    # Ne PAS convertir le dict entier en Decimal : cela rejetait le webhook payé (409).
+    # On conserve ce contrôle uniquement sur le Pack Découverte (et sa recharge),
+    # sans modifier la logique des quatre packs classiques.
+    raw_amount = event.get("amount")
+    if raw_amount is None:
         raise HTTPException(409, "Montant Chariow Découverte absent.")
+    if isinstance(raw_amount, dict):
+        if str(raw_amount.get("currency") or "").strip().upper() != "XAF":
+            raise HTTPException(409, "Devise Chariow Découverte invalide.")
+        raw_amount = raw_amount.get("value")
     try:
-        amount = Decimal(str(event["amount"]).replace(" ", "").replace(",", "."))
+        if raw_amount is None or isinstance(raw_amount, bool):
+            raise ValueError("missing or invalid amount")
+        amount = Decimal(str(raw_amount).replace("\u00a0", "").replace(" ", "").replace(",", "."))
         expected_amount = Decimal(str(transaction["amount"]))
         if not amount.is_finite() or amount != expected_amount:
             raise ValueError("amount mismatch")
