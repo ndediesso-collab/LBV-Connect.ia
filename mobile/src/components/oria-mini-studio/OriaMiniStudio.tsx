@@ -116,17 +116,19 @@ const API_URL = process.env.EXPO_PUBLIC_API_URL?.replace(/\/$/, "") || "https://
 // Expo public config: jamais la clé API. Google reste actif par défaut.
 const MEDIA_PROVIDER: "google" | "openrouter" =
   process.env.EXPO_PUBLIC_ORIA_MEDIA_PROVIDER === "openrouter" ? "openrouter" : "google";
-const MEDIA_API = `/ai/${MEDIA_PROVIDER}-media`;
+// Résolu au chargement du portefeuille pour chaque utilisateur.
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const IMAGE_RATIOS = ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"];
 const VIDEO_RATIOS = ["16:9", "9:16"];
 const PACK_NAMES: Record<string, string> = {
   light_pack: "Léger", intermediate_pack: "Intermédiaire", pro_pack: "Pro", business_pack: "Business",
+  discovery_pack: "Découverte",
 };
 
 // Mapping d'offres : étiquettes uniquement. Le serveur reste l'unique autorité.
 const IMAGE_OFFERS: Record<string, Offer[]> = {
+  discovery_pack: [{ action: "image_480", label: "Image Découverte", resolution: "1K" }],
   light_pack: [
     { action: "image_480", label: "Image Essentielle", resolution: "1K" },
     { action: "image_720", label: "Image Plus", resolution: "1K" },
@@ -147,6 +149,7 @@ const IMAGE_OFFERS: Record<string, Offer[]> = {
   ],
 };
 const VIDEO_OFFERS: Record<string, Offer[]> = {
+  discovery_pack: [{ action: "video_4s", label: "Clip Découverte 4 s", seconds: 4 }],
   light_pack: [
     { action: "video_4s", label: "Vidéo 4 s", seconds: 4 },
     { action: "video_8s", label: "Vidéo 8 s", seconds: 8 },
@@ -307,6 +310,10 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
     chip: "#f6f6f6", active: "#000000", notice: "#f6f6f6", activeText: "#ffffff",
   }, [dark]);
   const tr = (fr: string, en: string) => language === "fr" ? fr : en;
+  // Sélection par wallet : Découverte -> OpenRouter ; les autres -> configuration existante.
+  const mediaProvider: "google" | "openrouter" =
+    wallet?.pack_id === "discovery_pack" ? "openrouter" : MEDIA_PROVIDER;
+  const mediaApi = `/ai/${mediaProvider}-media`;
   const kind: Kind = section === "video" ? "video" : "image";
   const mode: Mode = kind === "image" ? imageMode : videoMode;
   const needsPhoto = mode === "image_edit" || mode === "image_to_video";
@@ -336,6 +343,12 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
   // Un fournisseur Google actif pour les clips/images ne doit pas masquer les films existants.
   useEffect(() => {
     if (!visible || section !== "projects") return;
+    if (wallet?.pack_id === "discovery_pack") {
+      setOpenrouterFilmCaps(null);
+      setFilmError(tr("Les Projets vidéo sont réservés aux packs supérieurs.",
+        "Video projects require a higher-tier plan."));
+      return;
+    }
     let cancelled = false;
     setFilmLoading(true);
     setFilmError(null);
@@ -354,7 +367,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
       })
       .finally(() => { if (!cancelled) setFilmLoading(false); });
     return () => { cancelled = true; };
-  }, [visible, section, filmRetry]);
+  }, [visible, section, filmRetry, wallet?.pack_id]);
 
   const filmCaps = useMemo(() => ({
     max_project_seconds: openrouterFilmCaps?.video.max_project_seconds ?? 0,
@@ -426,15 +439,17 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
       if (!mounted.current) return;
       setWallet(current);
       if (!current?.is_pack_active) { setError(tr("Activez un pack ORIA pour créer.", "Activate an ORIA plan to create.")); return; }
-      const rights = await api<Capabilities>(`${MEDIA_API}/capabilities`);
-      if (!rights.success || rights.provider !== MEDIA_PROVIDER || !rights.pack_active || rights.pack_id !== current.pack_id) {
+      const providerForWallet: "google" | "openrouter" =
+        current.pack_id === "discovery_pack" ? "openrouter" : MEDIA_PROVIDER;
+      const rights = await api<Capabilities>(`/ai/${providerForWallet}-media/capabilities`);
+      if (!rights.success || rights.provider !== providerForWallet || !rights.pack_active || rights.pack_id !== current.pack_id) {
         throw new Error("Les droits du pack ne correspondent pas au portefeuille.");
       }
       if (!mounted.current) return;
       setCaps(rights);
-      if (MEDIA_PROVIDER === "openrouter") {
+      if (providerForWallet === "openrouter") {
         try {
-          const previous = await api<{ jobs: Generation[] }>(`${MEDIA_API}/jobs`);
+          const previous = await api<{ jobs: Generation[] }>(`${mediaApi}/jobs`);
           const active = previous.jobs?.find(item =>
             !["completed", "failed", "refunded"].includes(item.status || ""));
           if (active?.request_id) setPendingRequestId(active.request_id);
@@ -504,10 +519,12 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
         reference_count: needsPhoto ? 1 : 0, count: 1,
       } : {
         media_type: "video", mode: videoMode, reference_count: needsPhoto ? 1 : 0,
-        resolution: "720p", count: 1, final_duration_seconds: offerVideo.seconds,
+        resolution: wallet?.pack_id === "discovery_pack" ? "480p" : "720p",
+        ...(mediaProvider === "openrouter" ? { model: caps?.video.model } : {}),
+        count: 1, final_duration_seconds: offerVideo.seconds,
         scene_durations_seconds: [offerVideo.seconds],
       };
-      const result = await api<Quote>(`${MEDIA_API}/quote`, { method: "POST", body: JSON.stringify(payload) });
+      const result = await api<Quote>(`${mediaApi}/quote`, { method: "POST", body: JSON.stringify(payload) });
       if (!mounted.current || currentVersion !== quoteVersion.current) return;
       if (!result.success || result.pack_id !== wallet?.pack_id || result.media_type !== kind) {
         throw new Error("Le devis ne correspond pas à la sélection.");
@@ -534,20 +551,21 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
       const shared = {
         action: kind === "image" ? offerImage.action : offerVideo.action,
         prompt: prompt.trim(), accepted_max_credits: quote.reservation_credits,
-        ...(MEDIA_PROVIDER === "openrouter" ? { request_id } : {}),
+        ...(mediaProvider === "openrouter" ? { request_id } : {}),
       };
       const payload = kind === "image" ? {
         ...shared, mode: imageMode, model: imageModel, resolution, aspect_ratio: imageRatio,
         ...(photoB64 ? { reference_image_b64: photoB64, reference_mime_type: photo?.mimeType } : {}),
       } : {
         ...shared, mode: videoMode, requested_seconds: offerVideo.seconds, aspect_ratio: videoRatio,
+        ...(mediaProvider === "openrouter" ? { model: caps?.video.model } : {}),
         ...(photoB64 ? { reference_image_b64: photoB64, reference_mime_type: photo?.mimeType } : {}),
       };
       // En cas de timeout, le request_id doit survivre pour vérifier le job.
-      if (MEDIA_PROVIDER === "openrouter") setPendingRequestId(request_id);
-      const output = await api<Generation>(`${MEDIA_API}/${kind}`, { method: "POST", body: JSON.stringify(payload) });
+      if (mediaProvider === "openrouter") setPendingRequestId(request_id);
+      const output = await api<Generation>(`${mediaApi}/${kind}`, { method: "POST", body: JSON.stringify(payload) });
       if (!output.success) throw new Error("La génération n'a pas été confirmée.");
-      if (MEDIA_PROVIDER === "openrouter" && ["refunded", "failed"].includes(output.status || "")) {
+      if (mediaProvider === "openrouter" && ["refunded", "failed"].includes(output.status || "")) {
         setPendingRequestId(null);
         quoteVersion.current += 1; setQuote(null); setAccepted(false);
         setNotice(output.status === "refunded"
@@ -557,7 +575,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
         onWalletRefresh?.();
         return;
       }
-      if (MEDIA_PROVIDER === "openrouter" && output.status && output.status !== "completed") {
+      if (mediaProvider === "openrouter" && output.status && output.status !== "completed") {
         if (kind === "image" && (output.media_url || output.url)) {
           setLastResult({ id: output.media_id || request_id, type: "image",
             model: output.model, prompt: prompt.trim(), url: String(output.media_url || output.url),
@@ -575,7 +593,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
         quoteVersion.current += 1; setQuote(null); setAccepted(false);
         return;
       }
-      if (MEDIA_PROVIDER === "openrouter") setPendingRequestId(null);
+      if (mediaProvider === "openrouter") setPendingRequestId(null);
       // Ne jamais lancer automatiquement une seconde génération si la sauvegarde échoue.
       const url = String(output.media_url || output.url || output.public_url || "");
       if (!/^https:\/\//i.test(url)) {
@@ -633,7 +651,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
               <View style={{ flex: 1 }}>
                 <Text style={[styles.topEyebrow, mutedStyle]}>ORIA / ATELIER CRÉATIF</Text>
                 <Text style={[styles.h1, textStyle]}>{tr("Mini-Studio ORIA", "ORIA Mini-Studio")}</Text>
-                <Text style={[styles.subtitle, mutedStyle]}>{tr(`Images, retouches et vidéos · ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video · ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`)}</Text>
+                <Text style={[styles.subtitle, mutedStyle]}>{tr(`Images, retouches et vidéos · ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video · ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"}`)}</Text>
               </View>
               <Pressable accessibilityRole="button" accessibilityLabel={tr("Fermer", "Close")}
                 disabled={busy} onPress={requestClose} style={[styles.close, chipStyle]}>
@@ -643,13 +661,15 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
             <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroller} contentContainerStyle={styles.tabs}>
                 {(["image", "video", "projects", "gallery"] as Section[]).map((tab) => (
-                  <Pressable key={tab} disabled={busy} onPress={() => changeSection(tab)}
+                  <Pressable key={tab} disabled={busy || (wallet?.pack_id === "discovery_pack" && tab === "projects")}
+                    onPress={() => changeSection(tab)}
                     accessibilityRole="tab" accessibilityState={{ selected: section === tab }}
                     style={[styles.tab, chipStyle, section === tab && { backgroundColor: palette.active, borderColor: palette.active }]}>
                     <Ionicons name={tab === "image" ? "images-outline" : tab === "video" ? "videocam-outline" : tab === "projects" ? "film-outline" : "albums-outline"}
                       size={17} color={section === tab ? palette.activeText : palette.text} />
                     <Text style={[styles.tabText, { color: section === tab ? palette.activeText : palette.text }]}>
-                      {tab === "image" ? tr("Images", "Images") : tab === "video" ? tr("Vidéo", "Video") : tab === "projects" ? tr("Projets", "Projects") : tr("Galerie", "Gallery")}
+                      {tab === "image" ? tr("Images", "Images") : tab === "video" ? tr("Vidéo", "Video") : tab === "projects" ? (wallet?.pack_id === "discovery_pack"
+                        ? tr("Projets · verrouillé", "Projects · locked") : tr("Projets", "Projects")) : tr("Galerie", "Gallery")}
                     </Text>
                   </Pressable>
                 ))}
@@ -669,10 +689,10 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
               {loading ? <View style={styles.status}><ActivityIndicator color={palette.text}/><Text style={mutedStyle}>{tr("Chargement des droits…", "Loading permissions…")}</Text></View> : null}
               {error ? <View style={styles.error}><Text style={styles.errorText}>{error}</Text></View> : null}
               {notice ? <View style={[styles.info, { backgroundColor: palette.notice }]}><Text style={[styles.note, textStyle]}>{notice}</Text></View> : null}
-              {MEDIA_PROVIDER === "openrouter" && pendingRequestId ? (
+              {mediaProvider === "openrouter" && pendingRequestId ? (
                 <Pressable style={[styles.info, { backgroundColor: palette.notice }]} disabled={busy} onPress={async () => {
                   try {
-                    const job = await api<Generation>(`${MEDIA_API}/jobs/${encodeURIComponent(pendingRequestId)}`);
+                    const job = await api<Generation>(`${mediaApi}/jobs/${encodeURIComponent(pendingRequestId)}`);
                     if (job.media_url || job.url) {
                       setLastResult({ id: job.media_id || pendingRequestId,
                         type: job.type, model: job.model, prompt: prompt.trim(),
@@ -806,7 +826,7 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                     </View>
                     {kind === "image" ? (
                       <>
-                        <Text style={[styles.fieldLabel, mutedStyle]}>{tr("Modèle", "Model")} · {MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}</Text>
+                        <Text style={[styles.fieldLabel, mutedStyle]}>{tr("Modèle", "Model")} · {mediaProvider === "openrouter" ? "OpenRouter" : "Google"}</Text>
                         <View style={styles.flexWrap}>{caps?.images.models.map((model) => (
                           <Choice key={model.model} title={model.model} active={imageModel === model.model}
                             onPress={() => selectImageModel(model.model)}/>
@@ -851,8 +871,8 @@ export default function OriaMiniStudio({ visible, language, theme = "light", onC
                         <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: accepted }} disabled={busy || !quote.credits_sufficient}
                           onPress={() => setAccepted((v) => !v)} style={styles.acceptRow}>
                           <Ionicons name={accepted ? "checkbox" : "square-outline"} size={22} color={palette.text} />
-                          <Text style={[styles.note, { flex: 1, color: palette.text }]}>{tr(`J'accepte le plafond indiqué avant l'appel ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}.`,
-                            `I approve the indicated cap before the ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"} call.`)}</Text>
+                          <Text style={[styles.note, { flex: 1, color: palette.text }]}>{tr(`J'accepte le plafond indiqué avant l'appel ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"}.`,
+                            `I approve the indicated cap before the ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"} call.`)}</Text>
                         </Pressable>
                         {!quote.generation_available ? <Text style={[styles.note, mutedStyle]}>{tr("Devis seulement : génération non disponible actuellement.",
                           "Quote only: generation is not currently available.")}</Text> : null}

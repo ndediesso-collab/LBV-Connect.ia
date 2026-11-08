@@ -128,7 +128,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "https://
 // et de la grille maximale de réservation côté Render.
 const MEDIA_PROVIDER: "google" | "openrouter" =
   process.env.NEXT_PUBLIC_ORIA_MEDIA_PROVIDER === "openrouter" ? "openrouter" : "google";
-const MEDIA_API = `/ai/${MEDIA_PROVIDER}-media`;
+// Résolu au chargement du portefeuille pour chaque utilisateur.
 
 const supabase = createClient();
 const IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -137,12 +137,15 @@ const IMAGE_RATIOS = ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"] as cons
 const VIDEO_RATIOS = ["16:9", "9:16"] as const;
 const LABEL_PACK: Record<string, string> = {
   light_pack: "Léger", intermediate_pack: "Intermédiaire", pro_pack: "Pro", business_pack: "Business",
+  discovery_pack: "Découverte",
 };
 const MEDIA_MODEL_LABELS: Record<string, string> = {
   "bytedance-seed/seedream-5-0-flash": "Seedream 5.0 Flash",
   "google/gemini-3.1-flash-image": "Nano Banana 2",
   "black-forest-labs/flux-3-image": "FLUX.3 Image",
   "openai/gpt-image-2.5-sunburst": "GPT Image 2.5 Sunburst",
+  "recraft/recraft-v4.1-flash": "Recraft Flash 1K",
+  "x-ai/grok-imagine-video-1.5-lite": "Grok Lite 480p",
   "alibaba/wan-3.0": "Wan 3.0",
   "google/veo-3.1-lite": "Veo 3.1 Lite",
   "bytedance/seedance-2.5": "Seedance 2.5",
@@ -154,6 +157,7 @@ function modelLabel(model: string): string {
 // Les actions sont les identifiants historiques du backend ORIA.
 // Ce mapping n'accorde AUCUN droit : /capabilities et les RPC le vérifient toujours.
 const IMAGE_OFFERS: Record<string, { action: string; label: string; maxResolution: string }[]> = {
+  discovery_pack: [{ action: "image_480", label: "Image Découverte", maxResolution: "1K" }],
   light_pack: [
     { action: "image_480", label: "Image Essentielle", maxResolution: "1K" },
     { action: "image_720", label: "Image Plus", maxResolution: "1K" },
@@ -174,6 +178,7 @@ const IMAGE_OFFERS: Record<string, { action: string; label: string; maxResolutio
   ],
 };
 const VIDEO_OFFERS: Record<string, { action: string; label: string; seconds: number }[]> = {
+  discovery_pack: [{ action: "video_4s", label: "Clip Découverte 4 s", seconds: 4 }],
   light_pack: [
     { action: "video_4s", label: "Vidéo 4 s", seconds: 4 },
     { action: "video_8s", label: "Vidéo 8 s", seconds: 8 },
@@ -256,7 +261,7 @@ function cheapestCompatibleOffer(offers: typeof IMAGE_OFFERS[string], resolution
 // authentifiées du backend ouvrent les modèles et leurs paramètres.
 function videoModelsFromCapabilities(caps: Capabilities | null): VideoModel[] {
   if (!caps) return [];
-  if (MEDIA_PROVIDER === "openrouter") {
+  if (caps.provider === "openrouter") {
     return (caps.video.models || []).filter(model =>
       !!model && typeof model.model === "string" && !!model.model.trim() &&
       Array.isArray(model.duration_choices_seconds) &&
@@ -279,7 +284,8 @@ function offersForVideoModel(
   offers: typeof VIDEO_OFFERS[string],
   capabilities: Capabilities | null,
 ) {
-  if (!model || !model.billable_resolutions.includes("720p")) return [];
+  const expectedResolution = capabilities?.pack_id === "discovery_pack" ? "480p" : "720p";
+  if (!model || !model.billable_resolutions.includes(expectedResolution)) return [];
   return offers.filter(offer =>
     model.duration_choices_seconds.includes(offer.seconds) &&
     capabilities?.video.duration_choices_seconds.includes(offer.seconds),
@@ -341,11 +347,15 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const allowCloseRef = useRef(true);
   const isFrench = language === "fr";
   const tr = (fr: string, en: string) => isFrench ? fr : en;
+  // Le Pack Découverte utilise OpenRouter, indépendamment du fournisseur global.
+  const mediaProvider: "google" | "openrouter" =
+    wallet?.pack_id === "discovery_pack" ? "openrouter" : MEDIA_PROVIDER;
+  const mediaApi = `/ai/${mediaProvider}-media`;
   const imageOffers = useMemo(() => IMAGE_OFFERS[wallet?.pack_id || ""] || [], [wallet?.pack_id]);
   const videoOffers = useMemo(() => VIDEO_OFFERS[wallet?.pack_id || ""] || [], [wallet?.pack_id]);
   const selectedImageOffer = imageOffers.find(o => o.action === imageAction) || imageOffers[0];
   const packImageResolutions = availableImageResolutions(caps?.images, imageOffers);
-  const availableImageRatios: string[] = MEDIA_PROVIDER === "openrouter"
+  const availableImageRatios: string[] = mediaProvider === "openrouter"
     ? IMAGE_RATIOS.filter(ratio => caps?.images.models.find(model => model.model === imageModel)?.aspect_ratios?.includes(ratio))
     : [...IMAGE_RATIOS];
   const videoModels = useMemo(() => videoModelsFromCapabilities(caps), [caps]);
@@ -366,7 +376,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     : caps?.video.allowed_modes.includes(modeVideo) === true);
   const quoteReady = Boolean(
     quote && quote.success && quote.media_type === activeKind && quote.pack_id === wallet?.pack_id &&
-    (MEDIA_PROVIDER !== "openrouter" ||
+    (mediaProvider !== "openrouter" ||
       (quote.model === (activeKind === "image" ? imageModel : videoModel) && quote.mode === mode)),
   );
   const generationReady = Boolean(caps?.generation_available && wallet?.is_pack_active && modeAvailableNow);
@@ -383,14 +393,18 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
       const current = walletResponse.wallet;
       setWallet(current);
       if (!current?.is_pack_active) { setError(tr("Un pack actif est nécessaire pour créer.", "An active plan is required to create.")); return; }
-      const remote = await api<Capabilities>(`${MEDIA_API}/capabilities`);
-      if (!remote.success || remote.provider !== MEDIA_PROVIDER || remote.pack_id !== current.pack_id || !remote.pack_active) {
+      // La lecture du portefeuille vient de réussir : ne pas utiliser le provider
+      // calculé avant le setWallet(), qui serait encore celui du pack précédent.
+      const providerForWallet: "google" | "openrouter" =
+        current.pack_id === "discovery_pack" ? "openrouter" : MEDIA_PROVIDER;
+      const remote = await api<Capabilities>(`/ai/${providerForWallet}-media/capabilities`);
+      if (!remote.success || remote.provider !== providerForWallet || remote.pack_id !== current.pack_id || !remote.pack_active) {
         throw new Error("Les droits de création ne correspondent pas au pack actif.");
       }
       setCaps(remote);
-      if (MEDIA_PROVIDER === "openrouter") {
+      if (providerForWallet === "openrouter") {
         try {
-          const previous = await api<{ jobs: Generation[] }>(`${MEDIA_API}/jobs`);
+          const previous = await api<{ jobs: Generation[] }>(`${mediaApi}/jobs`);
           const active = previous.jobs?.find(item =>
             !["completed", "failed", "refunded"].includes(item.status || ""));
           if (active?.request_id) setPendingRequestId(active.request_id);
@@ -399,7 +413,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
       const firstModel = remote.images.models[0];
       if (firstModel) {
         setImageModel(firstModel.model);
-        if (MEDIA_PROVIDER === "openrouter") setRatioImage(firstModel.aspect_ratios?.[0] || "1:1");
+        if (providerForWallet === "openrouter") setRatioImage(firstModel.aspect_ratios?.[0] || "1:1");
       }
       if (remote.images.resolutions.length) setResolution(remote.images.resolutions[0]);
       setImageAction(IMAGE_OFFERS[remote.pack_id]?.[0]?.action || "");
@@ -433,6 +447,14 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   // la version actuelle de ai.py peut exposer des clips sans ces routes.
   useEffect(() => {
     if (screen !== "projects") return;
+    // Découverte : clips de 4 s autorisés, films multi-scènes non autorisés.
+    if (wallet?.pack_id === "discovery_pack") {
+      setProjectCaps(null);
+      setProjectChecking(false);
+      setProjectError(tr("Les Projets vidéo sont réservés aux packs supérieurs.",
+        "Video projects require a higher-tier plan."));
+      return;
+    }
     let cancelled = false;
     setProjectChecking(true);
     setProjectError(null);
@@ -511,7 +533,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     if (model && !model.resolutions.includes(resolution)) {
       setResolution(model.resolutions[0] || "1K"); invalidateQuote();
     }
-    if (MEDIA_PROVIDER === "openrouter" && model && !model.aspect_ratios?.includes(ratioImage)) {
+    if (mediaProvider === "openrouter" && model && !model.aspect_ratios?.includes(ratioImage)) {
       setRatioImage(model.aspect_ratios?.[0] || "1:1"); invalidateQuote();
     }
   }, [imageModel, caps, resolution, ratioImage]);
@@ -550,7 +572,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     }
     invalidateQuote(); setError(null);
     setImageAction(offer.action); setImageModel(model.model); setResolution(target);
-    if (MEDIA_PROVIDER === "openrouter" && !model.aspect_ratios?.includes(ratioImage)) {
+    if (mediaProvider === "openrouter" && !model.aspect_ratios?.includes(ratioImage)) {
       setRatioImage(model.aspect_ratios?.[0] || "1:1");
     }
   }
@@ -564,7 +586,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     if (!offer || !model) return;
     invalidateQuote(); setError(null);
     setResolution(target); setImageModel(model.model); setImageAction(offer.action);
-    if (MEDIA_PROVIDER === "openrouter" && !model.aspect_ratios?.includes(ratioImage)) {
+    if (mediaProvider === "openrouter" && !model.aspect_ratios?.includes(ratioImage)) {
       setRatioImage(model.aspect_ratios?.[0] || "1:1");
     }
   }
@@ -591,7 +613,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
     if (!offer) return;
     invalidateQuote(); setError(null);
     setImageModel(next); setResolution(target); setImageAction(offer.action);
-    if (MEDIA_PROVIDER === "openrouter" && !model.aspect_ratios?.includes(ratioImage)) {
+    if (mediaProvider === "openrouter" && !model.aspect_ratios?.includes(ratioImage)) {
       setRatioImage(model.aspect_ratios?.[0] || "1:1");
     }
   }
@@ -617,14 +639,15 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         reference_count: needsReference ? 1 : 0, count: 1,
       } : {
         media_type: "video", mode: modeVideo,
-        ...(MEDIA_PROVIDER === "openrouter" ? { model: videoModel } : {}),
+        ...(mediaProvider === "openrouter" ? { model: videoModel } : {}),
         reference_count: needsReference ? 1 : 0,
-        resolution: "720p", count: 1, final_duration_seconds: selectedVideoOffer!.seconds,
+        resolution: wallet?.pack_id === "discovery_pack" ? "480p" : "720p",
+        count: 1, final_duration_seconds: selectedVideoOffer!.seconds,
         scene_durations_seconds: [selectedVideoOffer!.seconds],
       };
-      const calculated = await api<Quote>(`${MEDIA_API}/quote`, { method: "POST", body: JSON.stringify(payload) });
+      const calculated = await api<Quote>(`${mediaApi}/quote`, { method: "POST", body: JSON.stringify(payload) });
       if (calculated.pack_id !== wallet?.pack_id || calculated.media_type !== activeKind ||
-          (MEDIA_PROVIDER === "openrouter" &&
+          (mediaProvider === "openrouter" &&
             (calculated.model !== (activeKind === "image" ? imageModel : videoModel) || calculated.mode !== mode))) {
         throw new Error("Le devis ne correspond pas au modèle ou au mode sélectionné.");
       }
@@ -647,23 +670,23 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
       const ref = needsReference && reference ? await fileToB64(reference) : undefined;
       const request_id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
       const shared = { action, prompt: prompt.trim(), accepted_max_credits: quote.reservation_credits,
-        ...(MEDIA_PROVIDER === "openrouter" ? { request_id } : {}) };
+        ...(mediaProvider === "openrouter" ? { request_id } : {}) };
       const payload = activeKind === "image" ? {
         ...shared, mode: modeImage, model: imageModel, resolution, aspect_ratio: ratioImage,
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
       } : {
         ...shared, mode: modeVideo, requested_seconds: selectedVideoOffer!.seconds, aspect_ratio: ratioVideo,
-        ...(MEDIA_PROVIDER === "openrouter" ? { model: videoModel } : {}),
+        ...(mediaProvider === "openrouter" ? { model: videoModel } : {}),
         ...(ref ? { reference_image_b64: ref, reference_mime_type: reference?.type } : {}),
       };
       // Retenir l'identifiant AVANT le POST : si le réseau coupe, rechercher
       // cette requête plutôt que payer une deuxième création.
-      if (MEDIA_PROVIDER === "openrouter") setPendingRequestId(request_id);
-      const result = await api<Generation>(`${MEDIA_API}/${activeKind}`, {
+      if (mediaProvider === "openrouter") setPendingRequestId(request_id);
+      const result = await api<Generation>(`${mediaApi}/${activeKind}`, {
         method: "POST", body: JSON.stringify(payload),
       });
       if (!result.success) throw new Error("La génération n'a pas été confirmée.");
-      if (MEDIA_PROVIDER === "openrouter" && ["refunded", "failed"].includes(result.status || "")) {
+      if (mediaProvider === "openrouter" && ["refunded", "failed"].includes(result.status || "")) {
         setPendingRequestId(null);
         setQuote(null); setAccepted(false);
         setNotice(result.status === "refunded"
@@ -673,7 +696,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         onWalletRefresh?.();
         return;
       }
-      if (MEDIA_PROVIDER === "openrouter" && result.status && result.status !== "completed") {
+      if (mediaProvider === "openrouter" && result.status && result.status !== "completed") {
         if (activeKind === "image" && (result.media_url || result.url)) {
           setLastResult({ id: result.media_id || request_id, media_type: "image",
             url: String(result.media_url || result.url), model: result.model,
@@ -692,7 +715,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
         setQuote(null); setAccepted(false);
         return;
       }
-      if (MEDIA_PROVIDER === "openrouter") setPendingRequestId(null);
+      if (mediaProvider === "openrouter") setPendingRequestId(null);
       let url = String(result.media_url || result.url || result.public_url || "");
       let blobUrl: string | null = null;
       // Secours : si Supabase est indisponible, le backend peut renvoyer le fichier
@@ -755,7 +778,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
             <span className="grid h-11 w-11 shrink-0 place-items-center rounded-[17px] border border-border/60 bg-surface-secondary"><Sparkles size={22}/></span>
             <div className="min-w-0">
               <h2 id="oria-studio-heading" className="truncate text-lg font-bold tracking-tight sm:text-2xl">Mini-Studio ORIA</h2>
-              <p className="text-xs text-muted">{tr(`Images, retouches et vidéos — ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video — ${MEDIA_PROVIDER === "openrouter" ? "OpenRouter" : "Google"}`)}</p>
+              <p className="text-xs text-muted">{tr(`Images, retouches et vidéos — ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video — ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"}`)}</p>
             </div>
           </div>
           <button type="button" disabled={busy} onClick={onClose} aria-label={tr("Fermer", "Close")}
@@ -769,9 +792,10 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
               { id: "projects", label: tr("Projets vidéo", "Video projects"), icon: Clapperboard },
               { id: "gallery", label: tr("Mes créations", "My creations"), icon: Images }] as const).map(item => (
               <button key={item.id} type="button" role="tab" aria-selected={screen === item.id}
-                onClick={() => changeScreen(item.id)} disabled={busy || quoting}
+                onClick={() => changeScreen(item.id)} disabled={busy || quoting || (wallet?.pack_id === "discovery_pack" && item.id === "projects")}
                 className={`inline-flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs font-semibold transition-colors duration-200 sm:text-sm ${screen === item.id ? "bg-accent text-accent-foreground" : "bg-surface-secondary/75 text-muted-strong hover:bg-surface-tertiary"}`}>
-                <item.icon size={16}/>{item.label}
+                <item.icon size={16}/>{item.id === "projects" && wallet?.pack_id === "discovery_pack"
+                  ? tr("Projets vidéo · pack supérieur", "Video projects · higher tier") : item.label}
               </button>
             ))}
           </div>
@@ -789,10 +813,10 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
           </div>}
           {error && <div role="alert" className="mb-4 rounded-2xl border border-red-500/25 bg-red-500/[0.055] p-3.5 text-xs text-red-600 dark:text-red-300">{error}</div>}
           {notice && <div role="status" className="mb-4 rounded-2xl border border-border/70 bg-surface-secondary/70 p-3.5 text-xs">{notice}</div>}
-           {MEDIA_PROVIDER === "openrouter" && pendingRequestId && <button type="button"
+           {mediaProvider === "openrouter" && pendingRequestId && <button type="button"
              disabled={busy} onClick={async () => {
                try {
-                 const job = await api<Generation>(`${MEDIA_API}/jobs/${encodeURIComponent(pendingRequestId)}`);
+                 const job = await api<Generation>(`${mediaApi}/jobs/${encodeURIComponent(pendingRequestId)}`);
                  if (job.media_url || job.url) {
                    if (job.status === "completed") setPendingRequestId(null);
                    setLastResult({ id: job.media_id || pendingRequestId, media_type: job.type,
@@ -957,7 +981,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                         </div>
                         <div>
                           <label className="mb-1 block text-xs font-medium">{tr("Durée de l'offre", "Offer duration")}</label>
-                          <div className="rounded-2xl border border-border/75 bg-background/80 p-2.5 text-xs">{selectedVideoOffer?.seconds ?? "—"} s · 720p</div>
+                          <div className="rounded-2xl border border-border/75 bg-background/80 p-2.5 text-xs">{selectedVideoOffer?.seconds ?? "—"} s · {wallet?.pack_id === "discovery_pack" ? "480p" : "720p"}</div>
                         </div>
                         <div>
                           <label className="mb-1 block text-xs font-medium">{tr("Format", "Aspect ratio")}</label>
@@ -971,8 +995,8 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
                       </div>
                       {videoModels.length > 0 && !compatibleVideoOffers.length &&
                         <p className="rounded-2xl border border-border/70 bg-surface-secondary/65 p-3 text-xs text-muted-strong">
-                          {tr("Ce modèle ne propose actuellement aucune durée compatible avec ton pack en 720p. Aucun appel payant ne sera lancé.",
-                            "This model currently offers no duration compatible with your plan at 720p. No paid request will be sent.")}
+                          {tr("Ce modèle ne propose actuellement aucune durée compatible avec ton pack. Aucun appel payant ne sera lancé.",
+                            "This model currently offers no duration compatible with your plan. No paid request will be sent.")}
                         </p>}
                       <p className="text-[11px] leading-5 text-muted">
                         {tr("Seuls les modèles et paramètres confirmés par le backend sont sélectionnables. Changer de modèle annule le devis précédent.",
