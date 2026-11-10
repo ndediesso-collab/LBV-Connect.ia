@@ -17,10 +17,13 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
+import UniversalArtifactPreview, { type UniversalPreviewPayload } from "@/components/oria-artifacts/UniversalArtifactPreview";
 
 type OriaLanguage = "fr" | "en";
 type CreationKind = "image" | "video" | "artifact";
 type FilterType = "all" | CreationKind;
+type FileGroup = "all" | "documents" | "spreadsheets" | "presentations" | "code" | "data" | "archives" | "other";
+type SpecificFileGroup = Exclude<FileGroup, "all">;
 
 type CreationItem = {
   id: string;
@@ -76,12 +79,13 @@ type SpreadsheetPreview = ApiError & {
 };
 type ArtifactPreview = {
   item: CreationItem;
-  kind: "pdf" | "docx" | "xlsx" | "text" | "unsupported";
+  kind: "pdf" | "docx" | "xlsx" | "text" | "universal" | "unsupported";
   loading: boolean;
   pdfUrl?: string;
   text?: string;
   document?: DocumentPreview;
   spreadsheet?: SpreadsheetPreview;
+  universal?: UniversalPreviewPayload;
   error?: string;
 };
 
@@ -113,7 +117,11 @@ function previewKind(item: CreationItem): ArtifactPreview["kind"] {
   if (ext === "pdf") return "pdf";
   if (ext === "docx") return "docx";
   if (ext === "xlsx") return "xlsx";
-  return TEXT_PREVIEW_EXTENSIONS.has(ext) ? "text" : "unsupported";
+  // CSV/TSV ont un aperçu tabulaire côté serveur ; les autres types binaires
+  // passent par le lecteur universel existant (PPTX, ODP, ODT, etc.).
+  if (ext === "csv" || ext === "tsv") return "universal";
+  if (TEXT_PREVIEW_EXTENSIONS.has(ext)) return "text";
+  return ext ? "universal" : "unsupported";
 }
 
 function safeRemoteUrl(value: unknown): string | null {
@@ -246,7 +254,7 @@ const UI = {
     backToChat: "Retour au chat",
     myCreations: "Mes créations",
     description:
-      "Retrouvez ici vos images, vidéos et fichiers générés avec Oria.",
+      "Retrouvez vos images, vidéos, présentations, documents, tableurs, livres numériques, archives et fichiers créés avec Oria.",
     refresh: "Actualiser",
     creation: "création",
     creations: "créations",
@@ -293,7 +301,7 @@ const UI = {
     backToChat: "Back to chat",
     myCreations: "My creations",
     description:
-      "Find your images, videos and files generated with Oria.",
+      "Find images, videos, presentations, documents, spreadsheets, ebooks, archives and other files generated with Oria.",
     refresh: "Refresh",
     creation: "creation",
     creations: "creations",
@@ -351,10 +359,12 @@ function getInitialOriaLanguage(): OriaLanguage {
 function getCreationKind(item: CreationItem): CreationKind {
   const explicit = String(item.creation_type || "").toLowerCase();
   const mediaType = String(item.media_type || item.type || "").toLowerCase();
-
+  // Priorité aux artefacts : un SVG généré comme fichier ne doit pas devenir
+  // une image de la galerie des médias.
+  if (explicit === "artifact") return "artifact";
   if (explicit === "video" || mediaType === "video") return "video";
   if (explicit === "image" || mediaType === "image") return "image";
-  if (explicit === "artifact" || mediaType === "file" || Boolean(item.extension)) return "artifact";
+  if (mediaType === "file" || Boolean(item.extension) || Boolean(item.filename)) return "artifact";
   return "image";
 }
 
@@ -433,6 +443,24 @@ function getActionLabel(action?: string | null) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+const FILE_GROUP_LABELS: Record<OriaLanguage, Record<FileGroup, string>> = {
+  fr: { all: "Tous les fichiers", documents: "Documents", spreadsheets: "Tableurs", presentations: "Présentations", code: "Code et Web", data: "Données", archives: "Archives", other: "Autres" },
+  en: { all: "All files", documents: "Documents", spreadsheets: "Spreadsheets", presentations: "Presentations", code: "Code and Web", data: "Data", archives: "Archives", other: "Other" },
+};
+
+const FILE_GROUP_ORDER: FileGroup[] = ["all", "documents", "spreadsheets", "presentations", "code", "data", "archives", "other"];
+
+function getFileGroup(item: CreationItem): SpecificFileGroup {
+  const ext = artifactExtension(item);
+  if (["pdf", "docx", "odt", "rtf", "epub", "txt", "md", "tex"].includes(ext)) return "documents";
+  if (["xlsx", "ods", "csv", "tsv"].includes(ext)) return "spreadsheets";
+  if (["pptx", "odp"].includes(ext)) return "presentations";
+  if (["zip"].includes(ext)) return "archives";
+  if (["sqlite", "json", "jsonl", "ndjson", "xml", "yaml", "yml", "ics", "vcf"].includes(ext)) return "data";
+  if (["py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "html", "htm", "css", "java", "c", "h", "cpp", "hpp", "cs", "go", "rs", "php", "rb", "sh", "ps1", "bat", "sql", "svg", "ini", "env", "toml", "log"].includes(ext)) return "code";
+  return "other";
+}
+
 function getFileLabel(item: CreationItem, language: OriaLanguage) {
   const extension = item.extension?.replace(/^\./, "").toUpperCase();
   if (extension) return extension;
@@ -469,6 +497,7 @@ export default function CreationsPage() {
     useState<CreationItem[]>([]);
   const [filter, setFilter] =
     useState<FilterType>("all");
+  const [fileGroup, setFileGroup] = useState<FileGroup>("all");
   const [loading, setLoading] =
     useState(true);
   const [refreshing, setRefreshing] =
@@ -645,16 +674,26 @@ export default function CreationsPage() {
     return result;
   }, [creations]);
 
-  const filteredCreations = useMemo(() => {
-    if (filter === "all") {
-      return creations;
+  const fileGroupCounts = useMemo(() => {
+    const groups: Record<FileGroup, number> = {
+      all: 0, documents: 0, spreadsheets: 0, presentations: 0, code: 0, data: 0, archives: 0, other: 0,
+    };
+    for (const item of creations) {
+      if (getCreationKind(item) !== "artifact") continue;
+      groups.all += 1;
+      groups[getFileGroup(item)] += 1;
     }
+    return groups;
+  }, [creations]);
 
-    return creations.filter(
-      (item) =>
-        getCreationKind(item) === filter,
-    );
-  }, [creations, filter]);
+  const filteredCreations = useMemo(() => {
+    if (filter === "all") return creations;
+    if (filter === "artifact") {
+      return creations.filter((item) => getCreationKind(item) === "artifact" &&
+        (fileGroup === "all" || getFileGroup(item) === fileGroup));
+    }
+    return creations.filter((item) => getCreationKind(item) === filter);
+  }, [creations, filter, fileGroup]);
 
   const resolveArtifact = useCallback(async (item: CreationItem): Promise<CreationItem> => {
     // Les URLs signées sont éphémères. On renouvelle toujours via une API
@@ -763,6 +802,19 @@ export default function CreationsPage() {
     setSelectedArtifact({ item, kind, loading: kind !== "unsupported" });
     if (kind === "unsupported") return;
     try {
+      if (kind === "universal") {
+        const response = await fetchArtifactGet(
+          `/${encodeURIComponent(item.id)}/universal-preview`,
+        );
+        const data: UniversalPreviewPayload & ApiError = await response.json().catch(() => ({}));
+        if (!response.ok || data.success !== true ||
+          !["text", "tables", "slides", "archive"].includes(data.kind || "")) {
+          throw new Error(data.detail || data.message || UI[language].previewFailed);
+        }
+        if (requestId !== previewRequestRef.current) return;
+        setSelectedArtifact({ item, kind, loading: false, universal: data });
+        return;
+      }
       if (kind === "docx" || kind === "xlsx") {
         const endpoint = kind === "docx" ? "document-preview" : "spreadsheet-preview";
         const response = await fetchArtifactGet(
@@ -1048,6 +1100,21 @@ export default function CreationsPage() {
               })}
             </div>
           )}
+
+        {filter === "artifact" && !loading && fileGroupCounts.all > 0 && (
+          <div role="group" aria-label={language === "fr" ? "Types de fichiers" : "File types"}
+            className="mb-6 flex flex-wrap gap-2 oria-reveal">
+            {FILE_GROUP_ORDER.filter((group) => group === "all" || fileGroupCounts[group] > 0).map((group) => (
+              <button key={group} type="button" onClick={() => setFileGroup(group)}
+                aria-pressed={fileGroup === group}
+                className={`rounded-xl border px-3 py-1.5 text-xs font-semibold transition-colors ${fileGroup === group
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border bg-surface text-muted-strong hover:border-border-strong"}`}>
+                {FILE_GROUP_LABELS[language][group]} <span className="opacity-60">{fileGroupCounts[group]}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {error && (
           <div className="mb-6 flex items-start justify-between gap-4 rounded-[21px] border border-red-200/70 bg-red-50/80 px-4 py-4 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
@@ -1460,6 +1527,8 @@ export default function CreationsPage() {
                    <FileText className="h-9 w-9 text-black/30" />
                    <p className="text-sm text-muted-strong">{selectedArtifact.error}</p>
                  </div>
+               ) : selectedArtifact.kind === "universal" && selectedArtifact.universal ? (
+                 <UniversalArtifactPreview preview={selectedArtifact.universal} language={language} />
                ) : selectedArtifact.kind === "pdf" && selectedArtifact.pdfUrl ? (
                  <iframe title={`${UI[language].preview} PDF`} src={selectedArtifact.pdfUrl}
                    className="h-[76vh] min-h-[360px] w-full border-0 bg-white" referrerPolicy="no-referrer" />
