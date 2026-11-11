@@ -1026,7 +1026,7 @@ class OpenAIService:
         # ORIA KNOWLEDGE V1 : seules les demandes portant sur ORIA reçoivent
         # un référentiel produit, à autorité supérieure aux textes externes.
         from app.services.oria_product_knowledge import oria_product_context_for_message
-        product_context = oria_product_context_for_message(message, web_enabled=web)
+        product_context = oria_product_context_for_message(message, web_enabled=web, history=history)
         if product_context:
             input_data.append({"role": "developer", "content": product_context})
         document_types = self._document_types(artifact_types)

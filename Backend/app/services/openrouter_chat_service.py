@@ -281,7 +281,7 @@ class OpenRouterChatService:
         msgs: list[dict[str, Any]] = []
         # ORIA KNOWLEDGE V1 : même référentiel produit que le fournisseur OpenAI.
         from app.services.oria_product_knowledge import oria_product_context_for_message
-        product_context = oria_product_context_for_message(message, web_enabled=web)
+        product_context = oria_product_context_for_message(message, web_enabled=web, history=history)
         if product_context:
             msgs.append({"role": "developer", "content": product_context})
         if artifact_types:
