@@ -1,0 +1,49 @@
+.shell {
+  --sim-shadow: 0 22px 54px rgb(0 0 0 / .07);
+  margin: 20px 0;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 22px;
+  background: var(--surface, #fff);
+  color: var(--foreground, #111);
+  box-shadow: var(--sim-shadow);
+  font-variant-numeric: tabular-nums;
+}
+.header { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 22px 24px 20px; border-bottom: 1px solid var(--border, #ddd); background: linear-gradient(140deg, var(--surface-secondary, #f6f6f6), var(--surface, #fff) 65%); }
+.eyebrow { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 99px; color: var(--muted-strong); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.title { margin: 12px 0 0; font-weight: 800; letter-spacing: -.03em; font-size: clamp(18px, 2vw, 23px); line-height: 1.2; }
+.description { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; max-width: 62ch; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 10px; border: 1px solid var(--border); background: var(--surface); color: var(--foreground); border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer; transition: transform .15s, background .15s; }
+.action:hover { background: var(--surface-tertiary); transform: translateY(-1px); }
+.body { display: grid; grid-template-columns: minmax(215px, .85fr) minmax(0, 1.45fr); gap: 0; }
+.controlsPanel { padding: 22px; border-right: 1px solid var(--border); background: var(--surface-secondary); }
+.resultsPanel { min-width: 0; padding: 22px; }
+.panelTitle { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 800; letter-spacing: .03em; margin: 0 0 18px; }
+.dot { flex: none; height: 7px; width: 7px; border-radius: 50%; background: var(--foreground); }
+.controlsGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 19px; }
+.control { display: block; min-width: 0; }
+.controlHead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 9px; }
+.controlLabel { color: var(--muted-strong); font-size: 12px; line-height: 1.4; }
+.controlValue { font-size: 12px; white-space: nowrap; font-weight: 800; }
+.range { display: block; width: 100%; height: 20px; accent-color: var(--foreground); cursor: pointer; }
+.scale { display: flex; align-items: center; justify-content: space-between; margin-top: 0; color: var(--muted); font-size: 10px; }
+.entry { width: 100%; box-sizing: border-box; padding: 11px 12px; color: var(--foreground); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; font-size: 13px; }
+.numberRow { display: flex; align-items: center; gap: 8px; }
+.numberUnit { color: var(--muted); font-size: 12px; flex: none; }
+.scenarios { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+.scenario { cursor: pointer; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; font-size: 12px; background: var(--surface); color: var(--foreground); }
+.scenarioActive { color: var(--accent-foreground); background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.hint { font-size: 11px; line-height: 1.5; color: var(--muted); margin: 6px 0 0; }
+.resultsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.metric { min-width: 0; padding: 14px 12px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-secondary); }
+.metricLabel { display: block; color: var(--muted); font-size: 11px; font-weight: 650; line-height: 1.3; }
+.metricValue { display: block; margin-top: 9px; color: var(--foreground); font-size: clamp(17px, 2vw, 25px); font-weight: 800; letter-spacing: -.04em; overflow-wrap: anywhere; }
+.chartPanel { min-width: 0; padding: 16px 2px 4px; }
+.smallHeading { font-size: 12px; color: var(--muted-strong); font-weight: 750; margin: 0 0 5px; }
+.footer { border-top: 1px solid var(--border); padding: 13px 22px 15px; font-size: 11px; line-height: 1.55; color: var(--muted); background: var(--surface-secondary); }
+.footer strong { color: var(--muted-strong); }
+@media (max-width: 850px) { .body { grid-template-columns: 1fr; } .controlsPanel { border-right: none; border-bottom: 1px solid var(--border); } .controlsGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 540px) { .shell { border-radius: 14px; } .header, .controlsPanel, .resultsPanel { padding: 16px; } .controlsGrid { grid-template-columns: 1fr; } .resultsGrid { grid-template-columns: 1fr 1fr; gap: 7px; } .metric { padding: 12px 9px; } .metricValue { font-size: 16px; } .actions { width: 100%; } .action { flex: 1; } }
+@media (prefers-reduced-motion: reduce) { .action { transition: none; } }

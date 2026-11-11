@@ -1,0 +1,20 @@
+{
+  "title":"Comparer trois scénarios de ventes",
+  "kind":"comparison",
+  "description":"Comparez les niveaux de demande en conservant la marge et le coût fixe modifiables.",
+  "inputs":[
+    {"id":"orders","label":"Commandes par mois (référence)","control":"slider","min":0,"max":1000,"step":10,"value":200,"unit":""},
+    {"id":"margin","label":"Marge par commande","control":"slider","min":100,"max":10000,"step":100,"value":2000,"unit":"FCFA"},
+    {"id":"fixed","label":"Charges fixes mensuelles","control":"number","min":0,"max":1000000,"step":1000,"value":180000,"unit":"FCFA"}
+  ],
+  "outputs":[
+    {"id":"gross","label":"Marge brute","expr":{"op":"mul","args":["orders","margin"]},"unit":"FCFA"},
+    {"id":"profit","label":"Résultat estimé","expr":{"op":"sub","args":["gross","fixed"]},"unit":"FCFA"}
+  ],
+  "scenarios":[
+    {"name":"Prudent","values":{"orders":100}},
+    {"name":"Central","values":{"orders":200}},
+    {"name":"Ambitieux","values":{"orders":400}}
+  ],
+  "assumptions":"Simulation illustrative hors impôts et coûts variables supplémentaires."
+}

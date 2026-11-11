@@ -1,0 +1,15 @@
+{
+  "title":"Projection des dépenses d'exploitation sur 12 mois",
+  "kind":"projection",
+  "description":"Observez la dépense cumulée lorsque le coût mensuel change.",
+  "inputs":[
+    {"id":"monthly","label":"Dépense mensuelle","control":"slider","min":10000,"max":250000,"step":5000,"value":75000,"unit":"FCFA"},
+    {"id":"setup","label":"Frais de départ","control":"number","min":0,"max":1000000,"step":10000,"value":100000,"unit":"FCFA"}
+  ],
+  "outputs":[
+    {"id":"cumulative","label":"Dépense totale cumulée","expr":{"op":"add","args":["setup",{"op":"mul","args":["monthly","period"]}]},"unit":"FCFA"}
+  ],
+  "periods":12,
+  "periodUnit":"mois",
+  "assumptions":"Budget mensuel constant, sans inflation. Données illustratives."
+}

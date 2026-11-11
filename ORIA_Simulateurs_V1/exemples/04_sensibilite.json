@@ -1,0 +1,16 @@
+{
+  "title":"Comment le nombre d'utilisateurs change les coûts",
+  "kind":"sensitivity",
+  "description":"La courbe balaie la plage complète des utilisateurs ; modifiez le coût unitaire pour observer son effet.",
+  "inputs":[
+    {"id":"users","label":"Utilisateurs actifs par jour","control":"slider","min":0,"max":2000,"step":50,"value":600,"unit":""},
+    {"id":"requests","label":"Requêtes par personne","control":"slider","min":1,"max":40,"step":1,"value":8,"unit":""},
+    {"id":"unit","label":"Coût par requête","control":"number","min":0,"max":100,"step":0.5,"value":4,"unit":"FCFA"}
+  ],
+  "outputs":[
+    {"id":"monthly","label":"Coût sur 30 jours","expr":{"op":"mul","args":["users","requests","unit",30]},"unit":"FCFA"}
+  ],
+  "sweepVariable":"users",
+  "points":41,
+  "assumptions":"Modèle linéaire simplifié ; le prix moyen réel peut varier selon les modèles et les volumes."
+}

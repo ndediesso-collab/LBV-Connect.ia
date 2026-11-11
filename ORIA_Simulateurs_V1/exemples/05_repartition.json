@@ -1,0 +1,17 @@
+{
+  "title":"Répartir un budget marketing",
+  "kind":"allocation",
+  "description":"Modifiez les montants pour ajuster le diagramme de répartition.",
+  "inputs":[
+    {"id":"social","label":"Réseaux sociaux","control":"slider","min":0,"max":100000,"step":5000,"value":45000,"unit":"FCFA"},
+    {"id":"events","label":"Événements","control":"slider","min":0,"max":100000,"step":5000,"value":25000,"unit":"FCFA"},
+    {"id":"content","label":"Création de contenus","control":"slider","min":0,"max":100000,"step":5000,"value":30000,"unit":"FCFA"}
+  ],
+  "outputs":[
+    {"id":"socialpart","label":"Réseaux sociaux","expr":"social","unit":"FCFA"},
+    {"id":"eventspart","label":"Événements","expr":"events","unit":"FCFA"},
+    {"id":"contentpart","label":"Contenus","expr":"content","unit":"FCFA"},
+    {"id":"total","label":"Total engagé","expr":{"op":"add","args":["social","events","content"]},"unit":"FCFA","chart":false}
+  ],
+  "assumptions":"Données fictives. Le total est une somme ; aucune limite de budget n'est imposée."
+}
