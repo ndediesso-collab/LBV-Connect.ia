@@ -1023,6 +1023,12 @@ class OpenAIService:
 
 
         input_data: list[dict[str, Any]] = []
+        # ORIA KNOWLEDGE V1 : seules les demandes portant sur ORIA reçoivent
+        # un référentiel produit, à autorité supérieure aux textes externes.
+        from app.services.oria_product_knowledge import oria_product_context_for_message
+        product_context = oria_product_context_for_message(message, web_enabled=web)
+        if product_context:
+            input_data.append({"role": "developer", "content": product_context})
         document_types = self._document_types(artifact_types)
         if document_types:
             # Contrat de sortie à autorité supérieure au texte utilisateur.

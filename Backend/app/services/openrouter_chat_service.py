@@ -279,6 +279,11 @@ class OpenRouterChatService:
         if len(message) > MAX_TEXT_CHARS:
             raise ValueError("Message texte trop volumineux.")
         msgs: list[dict[str, Any]] = []
+        # ORIA KNOWLEDGE V1 : même référentiel produit que le fournisseur OpenAI.
+        from app.services.oria_product_knowledge import oria_product_context_for_message
+        product_context = oria_product_context_for_message(message, web_enabled=web)
+        if product_context:
+            msgs.append({"role": "developer", "content": product_context})
         if artifact_types:
             msgs.append({"role": "developer", "content": (
                 "MODE ORIA DOCUMENTAIRE. Rends exclusivement le JSON "
