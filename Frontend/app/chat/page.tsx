@@ -5906,6 +5906,11 @@ export default function ChatPage() {
       return;
     }
 
+    if (isFreeAccount && selected.some((file) => !isImageFile(file) && file.size > 2_000_000)) {
+      setError("En gratuit, un document ne peut pas dépasser 2 Mo.");
+      return;
+    }
+
     const newAttachments = selected.map(
       (file) => ({
         id: crypto.randomUUID(),
@@ -6368,8 +6373,14 @@ export default function ChatPage() {
         activeConversationRef.current = conversation.id;
       }
       if (!conversationId) throw new Error("Conversation non créée.");
+      // Afficher les fichiers associés au message, même en mode gratuit.
+      // Le backend vérifie l'égalité du texte persisté et du texte envoyé.
+      const freeAttachmentSummary = attachments.length
+        ? `\n\n[Pièces jointes : ${attachments.map((item) => item.file.name.replace(/[\r\n\[\]]/g, " ").slice(0, 90)).join(", ")}]`
+        : "";
       const userMessage: ChatMessage = {
-        id: crypto.randomUUID(), conversationId, role: "user", content, createdAt: now,
+        id: crypto.randomUUID(), conversationId, role: "user",
+        content: `${content}${freeAttachmentSummary}`, createdAt: now,
       };
       userEntry = userMessage;
       setMessages((current) => activeConversationRef.current === conversationId ? [...current, userMessage] : current);
@@ -6403,7 +6414,7 @@ export default function ChatPage() {
         }>("/ai/free/chat/persistent", {
           method: "POST",
           body: JSON.stringify({
-            message: content, model: "luna", reasoning_mode: reasoningMode, web: webEnabled,
+            message: userMessage.content, model: "luna", reasoning_mode: reasoningMode, web: webEnabled,
             attachments: await encodeFreeAttachments(attachments),
             conversation_id: conversationId, current_message_id: userMessage.id,
           }),
@@ -8914,6 +8925,11 @@ export default function ChatPage() {
             {activeCapability !== "Cours" ? (
             <div className="mx-auto mt-4 w-full max-w-3xl">
               <div className="overflow-hidden rounded-[28px] border border-border/80 bg-surface/95 shadow-[0_12px_40px_var(--shadow-color)] transition-[border-color,box-shadow] duration-200 focus-within:border-border-strong oria-composer-card">
+                {isFreeAccount && error ? (
+                  <p role="alert" className="mx-3 mt-3 rounded-xl border border-border bg-surface-secondary px-3 py-2 text-xs text-foreground">
+                    {localizeFrontendError(error, language)}
+                  </p>
+                ) : null}
                 {recording ? (
                   <div className="mx-3 mt-3 flex items-center gap-3 rounded-2xl border border-red-500/20 bg-red-500/5 px-3 py-2.5">
                     <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500"/>
@@ -9147,7 +9163,7 @@ export default function ChatPage() {
                               label !== "Création" &&
                               attachments.length > 0 && (
                                 <span className="text-[10px] opacity-70">
-                                  {attachments.length}/{MAX_ATTACHMENTS}
+                                  {attachments.length}/{isFreeAccount ? 2 : MAX_ATTACHMENTS}
                                 </span>
                               )}
                           </button>
@@ -9189,11 +9205,11 @@ export default function ChatPage() {
               <p className="mt-2 hidden text-center text-[11px] text-muted sm:block">
                 {language === "fr" ? (
                   <>
-                    Jusqu&apos;à {MAX_ATTACHMENTS} {UI.fr.attachmentsHelp} Les collages très longs sont convertis automatiquement en fichier texte.
+                    Jusqu&apos;à {isFreeAccount ? 2 : MAX_ATTACHMENTS} {UI.fr.attachmentsHelp} {isFreeAccount ? "Les documents gratuits sont limités à 2 Mo ; les très longs PDF sont analysés par extraits." : "Les collages très longs sont convertis automatiquement en fichier texte."}
                   </>
                 ) : (
                   <>
-                    Up to {MAX_ATTACHMENTS} {UI.en.attachmentsHelp} Very long pasted text is automatically converted into a text file.
+                    Up to {isFreeAccount ? 2 : MAX_ATTACHMENTS} {UI.en.attachmentsHelp} {isFreeAccount ? "Free documents are limited to 2 MB; long PDFs are analyzed in excerpts." : "Very long pasted text is automatically converted into a text file."}
                   </>
                 )}
               </p>

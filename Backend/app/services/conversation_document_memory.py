@@ -253,10 +253,39 @@ def _safe_message_id(source_id: str | None) -> str | None:
 
 def _search_query(message: str, history: list[dict[str, Any]]) -> tuple[str, str]:
     query = message.strip()[:500]
+    # ORIA_DOC_MEMORY_ORDINALS_V2
     match = list(EXERCISE.finditer(query))
     if match:
         label = 'exercice ' + match[-1].group(1)
         return query, label
+    # "le deuxieme exercice", "exercice deux", "le second exo" et
+    # "le 2e" doivent retrouver exactement l'enonce indexe.
+    ordinal = re.search(
+        r'\b(?:premier|première|premiere|deuxième|deuxieme|second|seconde|'
+        r'troisième|troisieme|quatrième|quatrieme|cinquième|cinquieme|'
+        r'sixième|sixieme|1er|1re|2e|3e|4e|5e|6e)\b',
+        query, re.I,
+    )
+    written = re.search(r'\b(?:exercice|exo)\s+(un|deux|trois|quatre|cinq|six)\b', query, re.I)
+    near = bool(re.search(r'\b(?:exercice|exo|numéro|numero|n°)\b', query, re.I))
+    # Un message bref comme "fais le deuxième" reprend le TD déjà évoqué.
+    near = near or any(EXERCISE.search(str(row.get('content') or ''))
+                       for row in history[-6:] if row.get('role') in {'user', 'assistant'})
+    word = (ordinal.group(0) if ordinal and near else
+            written.group(1) if written else None)
+    if word:
+        normalized = word.lower().replace('è', 'e').replace('é', 'e')
+        for number, names in {
+            1: {'premier', 'premiere', '1er', '1re', 'un'},
+            2: {'deuxieme', 'second', 'seconde', '2e', 'deux'},
+            3: {'troisieme', '3e', 'trois'},
+            4: {'quatrieme', '4e', 'quatre'},
+            5: {'cinquieme', '5e', 'cinq'},
+            6: {'sixieme', '6e', 'six'},
+        }.items():
+            if normalized in names:
+                label = f'exercice {number}'
+                return query + ' ' + label, label
     if re.search(r'\b(?:continue|poursuis|suivant|suivante|suite)\b', query, re.I):
         # Continuité avec le dernier exercice réellement mentionné dans l'historique.
         for item in reversed(history[-6:]):
