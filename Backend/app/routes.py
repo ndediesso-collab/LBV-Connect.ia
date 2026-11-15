@@ -566,8 +566,8 @@ def _discovery_has_transaction(user_id: str, *, column: str, product_id: str,
 def _discovery_resume_checkout(user_id: str, *, column: str, product_id: str) -> dict:
     """Reprend une commande en attente, SANS en créer une autre.
 
-    60 secondes = délai UX, PAS une expiration de paiement.
-    Une commande ancienne sans URL enregistrée exige une vérification Chariow.
+    Une commande encore en cours peut être reprise par son URL privée.
+    Sans Pulse Chariow terminal, ne jamais inventer un abandon ni un paiement.
     """
     if column not in {"pack_id", "addon_id"}:
         raise RuntimeError("Colonne de produit invalide")
@@ -588,7 +588,7 @@ def _discovery_resume_checkout(user_id: str, *, column: str, product_id: str) ->
         age = max(0.0, (datetime.now(timezone.utc) - when).total_seconds())
     except (TypeError, ValueError, OverflowError):
         pass  # Horodatage inconnu : jamais de reprise automatique.
-    wait = max(0, int(60 - age + 0.999))
+    wait = 0  # Le délai local de 60 s n'est pas un état Chariow.
     data = row.get("metadata")
     url = data.get("checkout_url") if isinstance(data, dict) else None
     # Cette URL provient uniquement de l'API Chariow et a été enregistrée côté serveur.
@@ -3518,15 +3518,22 @@ def _update_payment_transaction_from_chariow(
     # ========================================================
 
     if success:
-
         status = "paid"
-
     else:
-
-        status = (
-            event.get("status")
-            or "pending"
-        )
+        # ORIA V5: les Pulses Chariow terminaux doivent libérer une commande
+        # abandonnée/échouée même si `status` est absent du payload.
+        event_name = str(event.get("event") or "").strip().lower()
+        if event_name in ("abandoned.sale", "failed.sale"):
+            status = "failed"  # statut terminal local déjà utilisé par les autres packs
+        else:
+            status = str(event.get("status") or "pending").strip().lower()
+            if status in ("abandoned", "cancelled", "canceled", "failed", "failure"):
+                status = "failed"
+            elif status not in ("pending", "processing"):
+                status = "pending"
+        if str(payment_transaction.get("status") or "").lower() in ("paid", "success"):
+            # Un Pulse tardif ne doit JAMAIS dégrader une commande payée.
+            return payment_transaction
 
     # ========================================================
     # 5. PAYLOAD DE MISE À JOUR

@@ -2891,7 +2891,10 @@ export default function CreditsPage() {
     return <main className="min-h-dvh bg-background px-4 py-10 text-foreground">
       <div className="mx-auto max-w-4xl">
         <div className="mb-8 flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-bold">Mes crédits · Gratuit</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link href="/chat" className="rounded-xl border border-border px-4 py-2 text-sm font-medium">← Retour au chat</Link>
+            <h1 className="text-2xl font-bold">Mes crédits · Gratuit</h1>
+          </div>
           <a href="/packs" className="rounded-xl border border-border px-4 py-2 text-sm">Voir les packs et recharges</a>
         </div>
         <div className="rounded-3xl border border-border bg-surface p-6">
@@ -2907,7 +2910,9 @@ export default function CreditsPage() {
               {freeHistory.map((item, index) => <div key={`${item.id}-${index}`} className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4 last:border-0">
                 <div><p className="font-medium">{item.action.replaceAll("_", " ")}</p>
                   <p className="text-xs text-muted">{item.created_at ? new Date(item.created_at).toLocaleString("fr-FR") : "Date non transmise"} · {item.status}</p></div>
-                <p className="font-semibold">{item.charged_credits !== null ? `${item.charged_credits} crédits réellement débités` : item.reserved_credits !== null ? `${item.reserved_credits} crédits réservés · coût réel à vérifier` : "Coût réel à vérifier"}</p>
+                <p className="font-semibold">{item.charged_credits !== null ? `${item.charged_credits} crédits réellement débités` :
+                  ["reserved", "processing", "pending"].includes(item.status) ? "Opération en cours · débit non confirmé" :
+                  "Coût historique non enregistré · aucune estimation affichée"}</p>
               </div>)}
             </div>}
           <p className="mt-4 text-xs text-muted">Les crédits réservés ne sont pas automatiquement des crédits dépensés. Les transactions des packs payants ne figurent pas dans ce relevé.</p>

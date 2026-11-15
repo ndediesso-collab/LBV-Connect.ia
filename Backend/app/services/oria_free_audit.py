@@ -41,3 +41,24 @@ def record_free_usage(client, *, user_id: str, reservation_id: str,
         log.warning("ORIA free audit deferred reservation=%s type=%s",
                     reservation_id, type(exc).__name__)
         return False
+
+def record_only_if_settled(client, *, user_id: str, reservation_id: str,
+                           action: str, credits: int, api_xaf) -> bool:
+    """Audit UNIQUEMENT après relecture de l'état RÉEL de la RPC en base.
+
+    Certains contrats RPC renvoient success=true/state=settled sans status :
+    l'ancienne condition sur response.status perdait l'audit du coût confirmé.
+    """
+    try:
+        uid=str(UUID(str(user_id))); rid=str(UUID(str(reservation_id)))
+        rows=(client.table("oria_free_credit_reservations").select("status")
+              .eq("id",rid).eq("user_id",uid).limit(1).execute().data or [])
+        if len(rows)!=1 or rows[0].get("status") not in ("settled", "completed"):
+            log.warning("ORIA free audit deferred; reservation status not settled: %s",rid)
+            return False
+        return record_free_usage(client,user_id=uid,reservation_id=rid,
+                                 action=action,credits=credits,api_xaf=api_xaf)
+    except Exception as exc:
+        log.warning("ORA FREE confirmation DB unavailable: %s",type(exc).__name__)
+        return False
+

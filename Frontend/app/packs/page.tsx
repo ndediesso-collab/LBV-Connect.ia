@@ -2550,12 +2550,12 @@ export default function PacksPage() {
                           ? "Cette ancienne tentative doit être vérifiée avant de réessayer. Consultez l'assistance ORIA."
                           : discoveryStatus.resume_checkout_url
                             ? "Votre première commande est prête : reprenez le même paiement sans nouvel achat."
-                            : `Commande en attente : reprise possible après ${discoveryStatus.resume_after_seconds ?? 60} s si Chariow a fourni un lien.`
+                            : "Commande en attente de confirmation Chariow. Actualise le statut ; ne paie pas deux fois."
                         : discoveryStatus.purchase_needs_review
                           ? "The previous checkout needs verification before another attempt. Contact ORIA support."
                           : discoveryStatus.resume_checkout_url
                             ? "Resume your previous checkout without creating another order."
-                            : `Payment pending: retry in ${discoveryStatus.resume_after_seconds ?? 60}s if the checkout link is available.`
+                            : "Awaiting Chariow confirmation. Refresh the status before trying another purchase."
                       : walletPackId
                         ? language === "fr"
                           ? "Le paiement Découverte doit être vérifié avant une nouvelle commande."

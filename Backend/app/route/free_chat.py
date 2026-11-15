@@ -296,9 +296,8 @@ async def free_chat(payload: FreeChatRequest,
         )) from exc
     try:
         settlement = gateway.settle(uid, reservation_id, bill.credits, bill.total_cost_xaf)
-        if settlement.get("status") in ("settled", "completed"):
-            from app.services.oria_free_audit import record_free_usage
-            record_free_usage(supabase,user_id=uid,reservation_id=reservation_id,
+        from app.services.oria_free_audit import record_only_if_settled
+        record_only_if_settled(supabase,user_id=uid,reservation_id=reservation_id,
                               action="chat_luna",credits=bill.credits,api_xaf=bill.total_cost_xaf)
         balance = gateway.balance(uid)
     except Exception as exc:
@@ -472,6 +471,14 @@ def free_transactions(user_id: str | None = Header(default=None, alias="user-id"
         reserve=(reserved_free+reserved_purchased if type(reserved_free) is int
                  and type(reserved_purchased) is int else None)
         charged=rec.get("charged_credits") if rec else None
+        # Une ancienne ligne réglée peut contenir le coût RÉEL enregistré par la RPC.
+        # Ne JAMAIS utiliser amount/reserved_free comme coût définitif.
+        if charged is None and item.get("status") in ("settled", "completed"):
+            for actual_key in ("actual_credits", "settled_credits", "credits_charged", "charged_credits"):
+                raw_cost=item.get(actual_key)
+                if type(raw_cost) is int and raw_cost >= 0:
+                    charged=raw_cost
+                    break
         rows.append({"id":rid,"action":str(item.get("action") or "action_gratuite")[:60],
           "status":str(item.get("status") or "inconnu")[:60],
           "reserved_credits":reserve,

@@ -1535,6 +1535,83 @@ function renderParagraphWithDisplayMath(text: string, key: string): ReactNode {
   return <Fragment key={key}>{result}</Fragment>;
 }
 
+
+// ORIA_V5_PRIVATE_PDF_PREVIEW: une URL Supabase signée ancienne n'est jamais réutilisée.
+// Résoudre l'identifiant d'artifact avec la session ORIA et demander un nouveau jeton.
+function OriaPrivatePdfLink({label, oldUrl}: {label: string; oldUrl: string}) {
+  const [preview, setPreview] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [fault, setFault] = useState<string | null>(null);
+
+  const resolveFresh = async (): Promise<{previewUrl: string | null; downloadUrl: string | null; name: string}> => {
+    const path = new URL(oldUrl).pathname;
+    const match = path.match(/\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.|\/|$)/i);
+    let id: string | undefined = match?.[1];
+    if (!id) {
+      // Anciens liens sans UUID: correspondance seulement si UNIQUE pour ce compte.
+      const catalog = await apiFetch<{artifacts?: Array<{id: string; filename: string; extension: string}>}>(
+        "/ai/artifacts?extension=pdf&limit=100"
+      );
+      const matches = (catalog.artifacts || []).filter(item => item.filename === label &&
+        item.extension?.toLowerCase().replace(/^\./, "") === "pdf");
+      if (matches.length !== 1) throw new Error("Document ambigu ou introuvable. Ouvre « Mes créations » pour le retrouver.");
+      id = matches[0].id;
+    }
+    const response = await apiFetch<{artifact?: {filename?: string; preview_url?: string | null;
+      download_url?: string | null; preview_available?: boolean}}>(`/ai/artifacts/${encodeURIComponent(id)}`);
+    const artifact = response.artifact;
+    if (!artifact) throw new Error("Document privé introuvable. Il n'a pas été supprimé par cette opération.");
+    return {name: artifact.filename || label,
+      previewUrl: artifact.preview_url ? oriaSafeUrl(artifact.preview_url) : null,
+      downloadUrl: artifact.download_url ? oriaSafeUrl(artifact.download_url) : null};
+  };
+  const open = async () => {
+    if (busy) return;
+    setBusy(true); setFault(null);
+    try {
+      const urls = await resolveFresh();
+      if (!urls.previewUrl) throw new Error("Prévisualisation PDF indisponible. Le téléchargement reste accessible.");
+      setPreview(urls.previewUrl);
+    } catch (e) { setFault(e instanceof Error ? e.message : "Aperçu indisponible."); }
+    finally {setBusy(false);}
+  };
+  const download = async () => {
+    if (busy) return;
+    setBusy(true); setFault(null);
+    try {
+      const urls = await resolveFresh();
+      if (!urls.downloadUrl) throw new Error("Lien de téléchargement temporairement indisponible.");
+      // Le jeton est généré à l'instant du clic: jamais de lien historique expiré.
+      const anchor = document.createElement("a");
+      anchor.href = urls.downloadUrl;
+      anchor.download = urls.name;
+      document.body.appendChild(anchor); anchor.click(); anchor.remove();
+    } catch (e) {setFault(e instanceof Error ? e.message : "Téléchargement indisponible.");}
+    finally {setBusy(false);}
+  };
+  return <>
+    <span className="inline-flex flex-wrap items-center gap-1">
+    <button type="button" disabled={busy} onClick={() => void download()}
+      className="font-medium underline underline-offset-2 hover:opacity-70 disabled:opacity-50">{label}</button>
+    <button type="button" disabled={busy} onClick={() => void open()}
+      title="Prévisualiser le PDF" aria-label={`Prévisualiser ${label}`}
+      className="inline-flex rounded-md p-1 text-muted hover:bg-surface-secondary hover:text-foreground disabled:opacity-50"><Eye size={15}/></button>
+    {fault && <span role="alert" className="text-xs text-red-600">{fault}</span>}
+    </span>
+    {preview && <div role="dialog" aria-modal="true" aria-label={`Aperçu de ${label}`}
+      className="fixed inset-0 z-[200] flex flex-col bg-background text-foreground">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <span className="truncate font-semibold">{label}</span>
+        <button type="button" onClick={() => setPreview(null)}
+          className="rounded-lg border border-border px-4 py-2 text-sm">Fermer l'aperçu</button>
+      </div>
+      <iframe title={`Document ${label}`} src={preview} referrerPolicy="no-referrer"
+        sandbox="allow-same-origin allow-downloads" className="min-h-0 flex-1 w-full bg-white"/>
+      <p className="px-3 py-1 text-center text-xs text-muted">Lien privé renouvelé pour cette session.</p>
+    </div>}
+  </>;
+}
+
 function renderInlineMarkdown(
   text: string,
 ) {
@@ -1643,14 +1720,11 @@ function renderInlineMarkdown(
         const [, label, url] = linkMatch;
         const safeUrl = oriaSafeUrl(url);
         parts.push(safeUrl ? (
-          <span key={index} className="inline-flex flex-wrap items-center gap-1">
-            <a href={safeUrl} target="_blank" rel="noopener noreferrer"
-              className="font-medium underline underline-offset-2 hover:opacity-70">{label}</a>
-            {/\.pdf(?:$|[?#])/i.test(label) || /\.pdf(?:$|[?#])/i.test(safeUrl) ? (
-              <a href={safeUrl} target="_blank" rel="noopener noreferrer" title="Prévisualiser le PDF"
-                aria-label={`Prévisualiser ${label}`} className="inline-flex rounded-md p-1 text-muted hover:bg-surface-secondary hover:text-foreground"><Eye size={15}/></a>
-            ) : null}
-          </span>
+          (/\.pdf(?:$|[?#])/i.test(label) &&
+            /^https:\/\/[^/]+\.supabase\.co\/storage\/v1\/object\/sign\/generated-artifacts\//i.test(safeUrl)
+              ? <OriaPrivatePdfLink key={index} label={label} oldUrl={safeUrl}/>
+              : <a key={index} href={safeUrl} target="_blank" rel="noopener noreferrer"
+                  className="font-medium underline underline-offset-2 hover:opacity-70">{label}</a>)
         ) : <span key={index}>{label}</span>);
       }
     }
@@ -5691,10 +5765,8 @@ export default function ChatPage() {
       if (label === "Recherche Web" && freeCapabilities?.catalog?.web?.wired !== true) {
         setError("La recherche Web gratuite n'est pas activée par le serveur.");return;
       }
-      if ((label === "Fichier" || label === "Image") && freeCapabilities?.catalog?.attachments?.wired !== true) {
-        setError("L'analyse des fichiers gratuits doit d'abord être activée sur le serveur.");
-        return;
-      }
+      // V5: le sélecteur reste accessible. Les droits et limites sont validés dans /ai/free/chat.
+
     }
     if (label === "Cours") {
       if (discoveryWallet) {
@@ -5742,9 +5814,7 @@ export default function ChatPage() {
     fileList: FileList | File[],
     expectedKind?: "image" | "file",
   ) {
-    if (isFreeAccount && freeCapabilities?.catalog?.attachments?.wired !== true) {
-      setError("L'analyse des fichiers gratuits n'est pas activée sur le serveur.");return;
-    }
+    // Le backend refusera l'action si les permissions serveur n'ont pas été accordées.
     const incoming = Array.from(fileList);
 
     if (incoming.length === 0) {
@@ -6170,8 +6240,8 @@ export default function ChatPage() {
       setError("Les fichiers audio restent réservés aux routes vocales autorisées. Utilise la dictée gratuite du microphone.");
       return;
     }
-    if (attachments.length > 2 || (attachments.length>0 && freeCapabilities?.catalog?.attachments?.wired !== true)) {
-      setError("Maximum deux fichiers gratuits, si l'analyse est activée par le serveur.");return;
+    if (attachments.length > 2) {
+      setError("Maximum deux images ou fichiers au total par demande gratuite.");return;
     }
     if (reasoningMode === "deep") {
       setError("Le compte gratuit propose les modes Rapide et Équilibré uniquement.");

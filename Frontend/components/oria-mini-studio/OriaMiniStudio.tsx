@@ -417,7 +417,11 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh, fre
           const imageCaps = await api<{success: boolean; ready: boolean; model: string; reserve_credits: number}>("/ai/free/images/capabilities");
           setFreeCanCreateImages(access.catalog.images?.wired === true && imageCaps.ready === true &&
             imageCaps.model === "recraft/recraft-v4.1-flash" && imageCaps.reserve_credits === 60);
-        } catch { setFreeCanCreateImages(false); }
+        } catch (cause) {
+          setFreeCanCreateImages(false);
+          setFreeImageHint(cause instanceof Error ? `Images indisponibles côté serveur : ${cause.message}` :
+            "Images indisponibles : vérifier ORIA_FREE_IMAGES_ENABLED, OpenRouter et la migration Supabase.");
+        }
         return; // Jamais de capacités payantes sur un compte gratuit.
       }
       const walletResponse = await api<{ success: boolean; wallet: Wallet }>("/credits/me");

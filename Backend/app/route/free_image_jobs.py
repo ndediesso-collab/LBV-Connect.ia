@@ -132,12 +132,12 @@ def _work_image(uid: str, job_id: str, prompt: str, ratio: str):
                 return
             credits, xaf = charge
             settlement = FreeTierGateway(supabase).settle(uid, job_id, credits, xaf)
-            if settlement.get("status") not in ("settled", "completed"):
-                _update(uid, job_id, status="needs_review", error_code="settlement_unconfirmed")
+            from app.services.oria_free_audit import record_only_if_settled
+            if not record_only_if_settled(supabase,user_id=uid,reservation_id=job_id,
+                                        action="free_image_recraft",credits=credits,api_xaf=xaf):
+                # Image déjà sauvée : ne jamais regénérer à cause d'un souci de rapprochement.
+                _update(uid, job_id, status="needs_review", error_code="audit_settlement_unconfirmed")
                 return
-            from app.services.oria_free_audit import record_free_usage
-            record_free_usage(supabase,user_id=uid,reservation_id=job_id,
-                              action="free_image_recraft",credits=credits,api_xaf=xaf)
             _update(uid, job_id, status="completed", charged_credits=credits,
                     api_cost_xaf=float(xaf), error_code=None)
             if media_id:
