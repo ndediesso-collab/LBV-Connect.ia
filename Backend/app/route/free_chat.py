@@ -9,7 +9,7 @@ import asyncio
 import logging
 import os
 from decimal import Decimal
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -37,6 +37,51 @@ class FreeChatRequest(BaseModel):
     model: str = Field(default="luna", pattern="^luna$")
     web: bool = False
     reasoning_mode: str = Field(default="balanced", pattern="^(fast|balanced)$")
+    conversation_id: UUID | None = None
+    current_message_id: UUID | None = None
+
+
+# ORIA_UNIQUE_FREE_MEMORY_V2 : history comes only from messages owned by the
+# authenticated user in the authenticated conversation. Always count tokens
+# before reserving any API budget. Never trust history submitted by a browser.
+def _oria_bounded_free_history(uid: str, payload: FreeChatRequest) -> tuple[list[dict], int]:
+    if payload.conversation_id is None:
+        return [], 0
+    conversation_id = str(payload.conversation_id)
+    parent = (supabase.table("conversations").select("id")
+              .eq("id", conversation_id).eq("user_id", uid).limit(1).execute())
+    if not parent.data:
+        raise HTTPException(status_code=404, detail="Conversation introuvable.")
+    try:
+        rows = (supabase.table("messages")
+                .select("id,role,content,created_at")
+                .eq("conversation_id", conversation_id).eq("user_id", uid)
+                .order("created_at", desc=True).limit(16).execute().data or [])
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Historique temporairement indisponible.") from error
+    budget = 1100  # ceiling independent of full provider context window
+    used = 0
+    selected = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if payload.current_message_id is not None and str(row.get("id")) == str(payload.current_message_id):
+            continue
+        role, content = row.get("role"), row.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            continue
+        if not content.strip():
+            continue
+        # Skip URLs, giant generated documents and very long turns when over budget;
+        # do not truncate messages into invalid or misleading context.
+        count = estimate_text_tokens(content)
+        if count <= 0 or count > (budget - used):
+            continue
+        used += count
+        selected.append({"role": role, "content": content})
+        if used >= budget:
+            break
+    return list(reversed(selected)), used
 
 
 def _enabled() -> None:
@@ -102,7 +147,8 @@ async def free_chat(payload: FreeChatRequest,
         raise HTTPException(status_code=400, detail="Message vide.")
     # Conservative overhead for system prompts and formatting. No attachment
     # or stored history is accepted in this endpoint yet.
-    estimated_input = estimate_text_tokens(message) + 800
+    history, history_tokens = _oria_bounded_free_history(uid, payload)
+    estimated_input = estimate_text_tokens(message) + 800 + history_tokens
     if estimated_input > FREE_CHAT_INPUT_TOKENS_MAX:
         raise HTTPException(status_code=413, detail="Message trop long pour le quota gratuit.")
     gateway = FreeTierGateway(supabase)
@@ -140,7 +186,7 @@ async def free_chat(payload: FreeChatRequest,
             model_id = MODEL_OPENAI_IDS["luna"]
             result = await asyncio.to_thread(
                 OpenAIService().chat, model=model_id, message=message,
-                web=payload.web, attachments=[], history=[],
+                web=payload.web, attachments=[], history=history,
                 free_web_limits=payload.web,
                 reasoning_mode=payload.reasoning_mode,
                 max_output_tokens=FREE_CHAT_OUTPUT_TOKENS_MAX,
@@ -155,7 +201,7 @@ async def free_chat(payload: FreeChatRequest,
             service = _oria_openrouter_service()
             result = await asyncio.to_thread(
                 service.chat, model="openai/gpt-6-luna", message=message,
-                web=payload.web, attachments=[], history=[],
+                web=payload.web, attachments=[], history=history,
                 reasoning_mode=payload.reasoning_mode,
                 max_completion_tokens=FREE_CHAT_OUTPUT_TOKENS_MAX,
                 free_web_limits=payload.web,

@@ -31,11 +31,10 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
-import OriaFreeChatPanel from "@/components/oria-free/OriaFreeChatPanel";
-import OriaGiftCampaign from "@/components/oria-campaign/OriaGiftCampaign";
+import OriaFreeOfferNotifications from "@/components/oria-free/OriaFreeOfferNotifications";
 import { createClient } from "@/lib/supabase/client";
 import type { ChatMessage, Conversation } from "@/types/lbv";
 import { OriaMathBlock, OriaMathInline } from "@/components/oria-math/OriaMathRenderer";
@@ -95,6 +94,28 @@ type WalletData = {
   pack_activated_at: string | null;
   pack_expires_at: string | null;
   is_pack_active: boolean;
+};
+
+// ORIA_UNIQUE_PERMISSIONS_V2: product rights are reported by the authenticated backend.
+type OriaFreeCapabilities = {
+  success: boolean;
+  catalog: {
+    role: "free";
+    chat?: {wired?: boolean; model?: string; reasoning_modes?: string[]};
+    web?: {wired?: boolean};
+    documents?: {wired?: boolean; target_formats?: string[]};
+    images?: {wired?: boolean; max_edge_pixels?: number};
+    video?: {wired?: boolean};
+    oria_courses?: {wired?: boolean};
+  };
+};
+
+// ORIA_BETA_CHAT_UNIQUE_V1 : le serveur reste la source de vérité des crédits gratuits.
+type OriaFreeStatus = {
+  success: boolean;
+  daily_credits: number;
+  paid_pack_active: boolean;
+  wallet: {free_credits: number; purchased_credits: number; balance: number};
 };
 
 type ChatResponse = {
@@ -4010,6 +4031,46 @@ export default function ChatPage() {
 
   const [wallet, setWallet] =
     useState<WalletData | null>(null);
+  const [isLoadingWallet, setIsLoadingWallet] = useState(true);
+  const isFreeAccount = !isLoadingWallet && wallet?.is_pack_active !== true;
+  const [freeStatus, setFreeStatus] = useState<OriaFreeStatus | null>(null);
+  const [freeCapabilities, setFreeCapabilities] = useState<OriaFreeCapabilities | null>(null);
+  const freeChatAuthorized = Boolean(freeStatus?.success &&
+    freeCapabilities?.success && freeCapabilities.catalog?.role === "free" &&
+    freeCapabilities.catalog?.chat?.wired === true && freeCapabilities.catalog.chat.model === "luna");
+  const refreshFreeStatus = useCallback(async () => {
+    try {
+      const data = await apiFetch<OriaFreeStatus>("/ai/free/status");
+      if (!data.success || data.paid_pack_active) throw new Error("Statut de crédits gratuits indisponible.");
+      setFreeStatus(data);
+    } catch (cause) {
+      console.warn("Vérification du quota gratuit indisponible :", cause);
+      setFreeStatus(null);
+    }
+  }, []);
+  useEffect(() => {
+    if (!isFreeAccount) {setFreeStatus(null);return;}
+    void refreshFreeStatus();
+    const t = window.setInterval(() => {if(document.visibilityState === "visible") void refreshFreeStatus();}, 30000);
+    const focus = () => {void refreshFreeStatus();};
+    window.addEventListener("focus", focus);
+    return () => {window.clearInterval(t);window.removeEventListener("focus", focus);};
+  }, [isFreeAccount, refreshFreeStatus]);
+  useEffect(() => {
+    if (!isFreeAccount) {setFreeCapabilities(null);return;}
+    let live = true;
+    void apiFetch<OriaFreeCapabilities>("/ai/free/capabilities")
+      .then((value) => {if(live && value?.success && value.catalog?.role === "free") setFreeCapabilities(value);})
+      .catch(() => {if(live) setFreeCapabilities(null);});
+    return () => {live = false;};
+  }, [isFreeAccount]);
+  useEffect(() => {
+    if (!isFreeAccount) return;
+    setSelectedModel("luna");
+    setReasoningMode((mode) => mode === "deep" ? "balanced" : mode);
+    setActiveCapability((value) => value === "Recherche Web" ? value : null);
+    setModelMenuOpen(false);
+  }, [isFreeAccount]);
 
   const [trials, setTrials] =
     useState<Record<string, TrialInfo>>({});
@@ -4019,14 +4080,13 @@ export default function ChatPage() {
   // Chaque nouvelle lecture invalide les plus anciennes réponses réseau.
   const chatCapabilitiesRequestRef = useRef(0);
   const selectableModels = useMemo(
-    () => getSelectableModels(chatCapabilities, trials),
-    [chatCapabilities, trials],
+    () => isFreeAccount
+      ? [{id: "luna", name: "GPT-6 Luna", description: "Accès gratuit", packs: []}]
+      : getSelectableModels(chatCapabilities, trials),
+    [isFreeAccount, chatCapabilities, trials],
   );
 
   const [isLoadingTrials, setIsLoadingTrials] =
-    useState(true);
-
-  const [isLoadingWallet, setIsLoadingWallet] =
     useState(true);
 
   const [
@@ -4301,7 +4361,7 @@ export default function ChatPage() {
         ++chatCapabilitiesRequestRef.current;
         setChatCapabilities(null);
         setIsLoadingChatCapabilities(false);
-        setSelectedModel("");
+        setSelectedModel("luna");
       }
     } catch (requestError) {
       console.error("Erreur chargement wallet :", requestError);
@@ -5596,6 +5656,17 @@ export default function ChatPage() {
   function handleCapabilityClick(
     label: string,
   ) {
+    if (isFreeAccount) {
+      if (label === "Cours") return;
+      if (label === "Création") {setIsMiniStudioOpen(true);setError(null);return;}
+      if (label === "Recherche Web" && freeCapabilities?.catalog?.web?.wired !== true) {
+        setError("La recherche Web gratuite n'est pas activée par le serveur.");return;
+      }
+      if (label === "Fichier" || label === "Image") {
+        setError("Les pièces jointes ne sont pas encore disponibles dans le chat gratuit. Continuez en texte.");
+        return;
+      }
+    }
     if (label === "Cours") {
       if (discoveryWallet) {
         setDiscoveryNotice(language === "fr"
@@ -5642,6 +5713,7 @@ export default function ChatPage() {
     fileList: FileList | File[],
     expectedKind?: "image" | "file",
   ) {
+    if (isFreeAccount) {setError("Les pièces jointes ne sont pas disponibles dans le gratuit.");return;}
     const incoming = Array.from(fileList);
 
     if (incoming.length === 0) {
@@ -5704,6 +5776,7 @@ export default function ChatPage() {
   function createPastedTextAttachment(
     pastedText: string,
   ): boolean {
+    if (isFreeAccount) {setError("Colle un message plus court pour utiliser ORIA Gratuit.");return false;}
     if (
       attachments.length >=
       MAX_ATTACHMENTS
@@ -5829,6 +5902,7 @@ export default function ChatPage() {
   async function selectReasoningMode(
     mode: ReasoningMode,
   ) {
+    if (isFreeAccount && mode === "deep") return;
     setReasoningMode(mode);
     setReasoningMenuOpen(false);
     setModelMenuOpen(false);
@@ -5957,7 +6031,205 @@ export default function ChatPage() {
     }
   }
 
+  // ORIA_UNIQUE_PERMISSIONS_V2 : a document quote is checked SERVER-SIDE.
+  // No extra quotation screen in the chat. Only explicit creation requests count as consent.
+  function requestedFreeDocument(text: string): "pdf" | "docx" | null {
+    const request = text.trim().toLowerCase();
+    const explicit = /\b(cr[eé]e|cr[eé]er|g[eé]n[eè]re|g[eé]n[eé]rer|fabrique|r[eé]dige|pr[eé]pare|fais|faites|produis|produire|mets|mettre)\b/.test(request);
+    if (!explicit) return null;
+    if (/\b(pdf)\b/.test(request)) return "pdf";
+    if (/\b(word|docx)\b/.test(request)) return "docx";
+    return null;
+  }
+
+  async function executeFreeDocument(content: string, format: "pdf" | "docx", reasoning: "fast" | "balanced") {
+    const catalog = freeCapabilities?.catalog?.documents;
+    if (catalog?.wired !== true || !catalog.target_formats?.includes(format)) {
+      throw new Error("La création de ce format n'est pas encore disponible dans votre accès gratuit.");
+    }
+    const request = {message: content, format, reasoning_mode: reasoning};
+    const preflight = await apiFetch<{success: boolean; quote: {can_reserve_by_balance: boolean; reserved_credits: number}}>(
+      "/ai/free/document/quote", {method: "POST", body: JSON.stringify(request)},
+    );
+    if (!preflight.success || !preflight.quote?.can_reserve_by_balance) {
+      throw new Error("Crédits gratuits insuffisants pour ce document. Découvrez les offres sur /packs.");
+    }
+    // The user explicitly requested a file; backend requires confirmed=true.
+    const created = await apiFetch<{
+      success: boolean; artifacts?: Array<{filename?: string; download_url?: string; url?: string}>;
+    }>("/ai/free/document", {method: "POST", body: JSON.stringify({...request, confirmed: true})});
+    if (!created.success || !created.artifacts?.length) {
+      throw new Error("Le document n'a pas été confirmé. Vérifiez Mes créations avant de réessayer.");
+    }
+    const items = created.artifacts.map((item) => {
+      const rawUrl = item.download_url || item.url || "";
+      const safeUrl = /^https:\/\//i.test(rawUrl) || /^\/(?!\/)/.test(rawUrl) ? rawUrl : "";
+      const label = (item.filename || (format === "pdf" ? "Document PDF" : "Document Word"))
+        .replace(/[\[\]\n\r]/g, " ");
+      return safeUrl ? `- [${label}](${safeUrl})` : `- ${label} (retrouvable dans Mes créations)`;
+    });
+    return `Votre document a été créé.\n\n${items.join("\n")}`;
+  }
+
+  async function planFreeCv(content: string): Promise<null | {ready: boolean; answer: string; docMessage?: string; docFormat?: "pdf" | "docx"}> {
+    if (!/\b(cv|curriculum vitae|candidature)\b/i.test(content) && !messages.slice(-8).some((m) =>
+      m.role === "assistant" && /\b(cv|curriculum vitae)\b/i.test(m.content))) return null;
+    // Preflight analyzes the existing conversation; zero provider calls and zero credits.
+    try {
+      const recent = messages.slice(-22)
+        .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+        .map((m) => ({role: m.role as "user" | "assistant", content: m.content}));
+      const plan = await apiFetch<{
+        success: boolean; is_cv: boolean; ready?: boolean; question?: string;
+        profile_text?: string | null; style?: string; format?: "pdf" | "docx";
+      }>("/ai/free/cv/plan", {
+        method: "POST", body: JSON.stringify({message: content, history: recent}),
+      });
+      if (!plan.success || !plan.is_cv) return null;
+      if (!plan.ready) return {ready: false, answer: plan.question || "Quelles informations souhaites-tu ajouter à ton CV ?"};
+      const fmt = plan.format === "docx" ? "docx" : "pdf";
+      const profile = plan.profile_text?.trim();
+      if (!profile) return {ready: false, answer: "Il manque des informations pour préparer ton CV."};
+      return {
+        ready: true, answer: "",
+        docFormat: fmt,
+        docMessage: `Prépare un CV professionnel de style ${plan.style || "classique"} à partir de ces informations :\n${profile}`,
+      };
+    } catch (error) {
+      // Optional server CV planner unavailable; don't make a billable guess.
+      console.warn("Questionnaire CV gratuit indisponible", error);
+      return null;
+    }
+  }
+
+  /** ORIA_BETA_CHAT_UNIQUE_V1 : le même historique et la même UI pour gratuit/payant.
+   * Ce transport gratuit est une requête indépendante : le backend n'accepte pas
+   * encore le contexte des échanges antérieurs. L'historique, lui, est bien conservé.
+   * Aucun double-envoi automatique sur timeout : une réservation peut être en attente.
+   */
+  async function sendFreeMessage(options?: {content?: string; voice?: VoiceNote}) {
+    const content = (options?.content ?? message).trim();
+    if (!content || isThinking || editBusy || editingMessageId !== null) return;
+    if (!freeChatAuthorized || freeStatus?.paid_pack_active) {
+      setError("Accès gratuit temporairement indisponible. Réessaie après avoir actualisé ton solde.");
+      return;
+    }
+    if (attachments.length > 0 || options?.voice) {
+      setError("Les pièces jointes et les messages vocaux ne sont pas encore disponibles dans le parcours gratuit. Tu peux continuer en texte.");
+      return;
+    }
+    if (reasoningMode === "deep") {
+      setError("Le compte gratuit propose les modes Rapide et Équilibré uniquement.");
+      return;
+    }
+    if (content.length > 12000) {
+      setError("Le message est trop long pour le quota gratuit (12 000 caractères maximum).");
+      return;
+    }
+    if (activeCapability === "Cours" || activeCapability === "Création") {
+      setError("Choisis une conversation ou ouvre le Mini-Studio pour cette action.");
+      return;
+    }
+    const webEnabled = activeCapability === "Recherche Web";
+    if (webEnabled && freeCapabilities?.catalog?.web?.wired !== true) {
+      setError("La recherche Web gratuite est désactivée par le serveur.");return;
+    }
+    const now = new Date().toISOString();
+    setError(null);
+    setIsThinking(true);
+    setChatStatusStep("sending");
+    followBottomRef.current = true;
+    let conversationId = activeConversationId;
+    const title = content.length > 45 ? `${content.slice(0, 45)}...` : content;
+    let userEntry: ChatMessage | null = null;
+    try {
+      // Créer d'abord le fil cloud pour que la navigation recharge les messages.
+      if (!conversationId) {
+        const conversation = await createConversationRemote(title || "Nouvelle conversation");
+        conversationId = conversation.id;
+        setConversations((current) => [conversation, ...current.filter((c) => c.id !== conversation.id)]);
+        setActiveConversationId(conversation.id);
+        activeConversationRef.current = conversation.id;
+      }
+      if (!conversationId) throw new Error("Conversation non créée.");
+      const userMessage: ChatMessage = {
+        id: crypto.randomUUID(), conversationId, role: "user", content, createdAt: now,
+      };
+      userEntry = userMessage;
+      setMessages((current) => activeConversationRef.current === conversationId ? [...current, userMessage] : current);
+      setMessage("");
+      if (currentUserId) {
+        const cache = readLocalCache(currentUserId);
+        const cached = cache?.messages[conversationId] || [];
+        const persistedList = cache?.conversations || conversations;
+        writeLocalCache(currentUserId, {
+          conversations: persistedList, messages: {...(cache?.messages || {}), [conversationId]: [...cached, userMessage]},
+          activeConversationId: conversationId, selectedModel: "luna", activeCapability,
+        });
+      }
+      // Si la persistance a échoué, on ne lance pas une génération facturable.
+      await saveMessageRemote(userMessage);
+      const cvPlan = await planFreeCv(content);
+      const documentFormat = cvPlan?.ready ? cvPlan.docFormat : requestedFreeDocument(content);
+      let answerText: string;
+      let reconciliationRequired = false;
+      if (cvPlan && !cvPlan.ready) {
+        answerText = cvPlan.answer;
+      } else if (documentFormat) {
+        answerText = await executeFreeDocument(cvPlan?.docMessage || content, documentFormat,
+          reasoningMode === "fast" ? "fast" : "balanced");
+      } else {
+        const response = await apiFetch<{
+          success: boolean; message: string; requires_reconciliation?: boolean;
+          wallet?: OriaFreeStatus["wallet"];
+        }>("/ai/free/chat", {
+          method: "POST",
+          body: JSON.stringify({
+            message: content, model: "luna", reasoning_mode: reasoningMode, web: webEnabled,
+            conversation_id: conversationId, current_message_id: userMessage.id,
+          }),
+        });
+        if (!response.success || !response.message?.trim()) throw new Error("La réponse gratuite n'a pas été confirmée.");
+        answerText = response.message;
+        reconciliationRequired = response.requires_reconciliation === true;
+      }
+      const answer: ChatMessage = {
+        id: crypto.randomUUID(), conversationId, role: "assistant",
+        content: answerText, createdAt: new Date().toISOString(),
+      };
+      setMessages((current) => activeConversationRef.current === conversationId ? [...current, answer] : current);
+      if (currentUserId) {
+        const cache = readLocalCache(currentUserId);
+        const cached = cache?.messages[conversationId] || [];
+        writeLocalCache(currentUserId, {
+          conversations: cache?.conversations || conversations,
+          messages: {...(cache?.messages || {}), [conversationId]: [...cached, answer]},
+          activeConversationId: conversationId, selectedModel: "luna", activeCapability,
+        });
+      }
+      try {
+        await saveMessageRemote(answer);
+      } catch (persistError) {
+        console.warn("Réponse gratuite conservée localement ; cloud à resynchroniser.", persistError);
+        setError("Réponse conservée localement. Sauvegarde cloud en attente ; ne relance pas la requête IA.");
+      }
+      if (reconciliationRequired) {
+        setError("Vérification des crédits en cours. Ne relance pas automatiquement la demande.");
+      }
+      setConversations((current) => current.map((c) => c.id === conversationId ? {...c, updatedAt: new Date().toISOString()} : c));
+    } catch (error) {
+      console.error("ORIA gratuit : erreur d'envoi", error);
+      setError((error instanceof Error ? error.message : "Échec de la demande") +
+        (userEntry ? " Vérifie ton historique et ton solde avant de réessayer pour éviter un double coût." : ""));
+    } finally {
+      setChatStatusStep(null);
+      setIsThinking(false);
+      void refreshFreeStatus();
+    }
+  }
+
   async function handleSendMessage(options?: {content?: string; voice?: VoiceNote}) {
+    if (isFreeAccount) {await sendFreeMessage(options);return;}
     if (editBusy || editingMessageId !== null) return;
     followBottomRef.current = true;
     const content =
@@ -7090,9 +7362,8 @@ export default function ChatPage() {
   // La navigation reste libre et la sécurité des actions IA
   // reste gérée par le backend et Supabase.
   const availableBalance =
-    wallet?.is_pack_active
-      ? wallet.balance
-      : 0;
+    isFreeAccount ? (freeStatus?.wallet?.balance ?? 0)
+      : wallet?.is_pack_active ? wallet.balance : 0;
 
   // CTA d'achat visible depuis le Chat, sans modifier la facturation.
   // Un pack actif reste utilisable normalement : on ne le presente pas comme expire.
@@ -7101,7 +7372,9 @@ export default function ChatPage() {
     (wallet.is_pack_active === true && availableBalance <= 0)
   );
   const packCtaHref = "/packs";
-  const packCtaLabel = discoveryWallet && availableBalance <= 0
+  const packCtaLabel = isFreeAccount
+    ? (language === "fr" ? "Voir les packs et recharges" : "View plans and top-ups")
+    : discoveryWallet && availableBalance <= 0
     ? (language === "fr" ? "Recharger ou changer de pack" : "Top up or change plan")
     : isLoadingWallet
     ? (language === "fr" ? "Chargement…" : "Loading…")
@@ -7117,18 +7390,10 @@ export default function ChatPage() {
    * ==========================================================
    */
 
-  // STAGING uniquement : l'UI ne donne aucun droit ; GET /ai/free/status
-  // et les RPC Supabase décident de l'accès réel. Le parcours payant reste intact.
-  if (
-    process.env.NEXT_PUBLIC_ORIA_FREE_UI_STAGING_ENABLED === "1" &&
-    !isLoadingWallet && (!wallet || wallet.is_pack_active === false)
-  ) {
-    return <OriaFreeChatPanel apiFetch={apiFetch} />;
-  }
-
   return (
     <main className="min-h-dvh w-full min-w-0 overflow-x-clip bg-background text-foreground oria-chat-page">
-      <div className="mx-auto max-w-3xl px-4"><OriaGiftCampaign variant="chat" /></div>
+      {isFreeAccount && <OriaFreeOfferNotifications status={freeStatus} enabled={freeChatAuthorized} onRefresh={refreshFreeStatus} />}
+      {isFreeAccount && <Link href="/packs?recharge=standard" aria-label="Voir les recharges et les packs ORIA" className="fixed bottom-36 right-4 z-30 flex max-w-[185px] items-center gap-2 rounded-full border border-border bg-foreground px-4 py-3 text-xs font-semibold text-background shadow-xl transition-transform hover:-translate-y-1 sm:bottom-8 sm:right-8"><Wallet size={16}/> Besoin de crédits ?</Link>}
       {discoveryNotice && (
         <div role="alert" className="fixed bottom-5 left-1/2 z-[100] flex w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 items-start justify-between gap-3 rounded-2xl border border-border bg-surface p-4 text-sm shadow-xl">
           <div><p>{discoveryNotice}</p><Link className="mt-2 inline-block font-semibold underline" href="/packs">{language === "fr" ? "Voir les packs" : "See plans"}</Link></div>
@@ -7303,6 +7568,7 @@ export default function ChatPage() {
       )}
       {isMiniStudioOpen && (
         <OriaMiniStudio
+          freeMode={isFreeAccount}
           language={language}
           onClose={() => setIsMiniStudioOpen(false)}
           onWalletRefresh={() => { void loadWallet(); }}
@@ -7446,6 +7712,8 @@ export default function ChatPage() {
             <p className="mt-1 text-[11px] text-muted">
               {wallet?.pack_id === "discovery_pack" && !wallet?.pack_expires_at
                 ? language === "fr" ? "Ancien pack sans expiration" : "Legacy non-expiring pass"
+                : isFreeAccount
+                ? (language === "fr" ? "Solde du jour · Bêta ORIA" : "Daily quota · ORIA beta")
                 : wallet && !wallet.is_pack_active
                 ? UI[language].packExpired
                 : remainingDays !== null
@@ -7782,7 +8050,7 @@ export default function ChatPage() {
                                 </button>
                               ) : (
                                 <button type="button"
-                                  disabled={editBusy || editOpening || isThinking ||
+                                  disabled={isFreeAccount || editBusy || editOpening || isThinking ||
                                     (editingMessageId !== null && editingMessageId !== item.id)}
                                   onClick={() => void openCompletedEdit(item)}
                                   aria-label={language === "fr" ? "Modifier ce message" : "Edit this message"}
@@ -8181,7 +8449,7 @@ export default function ChatPage() {
                         ? "border-border-strong bg-surface-tertiary"
                         : "border-border bg-surface hover:bg-surface-secondary"
                     }`}
-                    disabled={isLoadingChatCapabilities || selectableModels.length === 0}
+                    disabled={(!isFreeAccount && isLoadingChatCapabilities) || selectableModels.length === 0}
                     aria-haspopup="listbox"
                     aria-expanded={modelMenuOpen}
                     onClick={() => {
@@ -8248,7 +8516,8 @@ export default function ChatPage() {
                             trials[model.id].remaining <= 0
                           }
                           onClick={() => {
-                            if (isLoadingChatCapabilities || !chatCapabilities ||
+                            if ((!isFreeAccount && (isLoadingChatCapabilities || !chatCapabilities)) ||
+                              (isFreeAccount && (model.id !== "luna" || !freeChatAuthorized)) ||
                               !selectableModels.some((item) => item.id === model.id) ||
                               (trials[model.id] && trials[model.id].remaining <= 0)) {
                               return;
@@ -8319,7 +8588,7 @@ export default function ChatPage() {
 
                   {reasoningMenuOpen && (
                     <div className="absolute bottom-12 left-0 z-30 w-80 rounded-2xl border border-border bg-surface p-2 shadow-xl oria-menu-enter">
-                      {REASONING_OPTIONS.map(
+                      {REASONING_OPTIONS.filter((option) => !isFreeAccount || option.id !== "deep").map(
                         (option) => {
                           const active =
                             reasoningMode ===
@@ -8659,9 +8928,9 @@ export default function ChatPage() {
                                 label,
                               )
                             }
-                            disabled={
-                              disabled
-                            }
+                            disabled={disabled || (isFreeAccount &&
+                              (label === "Cours" || label === "Fichier" || label === "Image" ||
+                              (label === "Recherche Web" && freeCapabilities?.catalog?.web?.wired !== true)))}
                             className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-2 transition ${
                               disabled
                                 ? "cursor-not-allowed text-muted opacity-50"
@@ -8694,7 +8963,7 @@ export default function ChatPage() {
                   {!recording ? (
                     <button type="button" aria-label={language === "fr" ? "Enregistrer une note vocale" : "Record voice note"}
                       title={language === "fr" ? "Note vocale" : "Voice note"} onClick={() => void startVoiceRecording()}
-                      disabled={isThinking || Boolean(voiceDraft) || audioUploadBusyRef.current}
+                      disabled={isFreeAccount || isThinking || Boolean(voiceDraft) || audioUploadBusyRef.current}
                       className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary transition hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-30"><Mic size={18}/></button>
                   ) : (
                     <button type="button" onClick={stopRecorder} aria-label="Stop recording"
@@ -8708,7 +8977,8 @@ export default function ChatPage() {
                       (!message.trim() &&
                         attachments.length === 0) ||
                       isThinking || editBusy || editingMessageId !== null ||
-                      isLoadingChatCapabilities || !chatCapabilities ||
+                      (!isFreeAccount && (isLoadingChatCapabilities || !chatCapabilities)) ||
+                      (isFreeAccount && !freeChatAuthorized) ||
                       !selectableModels.some((model) => model.id === selectedModel)
                     }
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30 oria-press"

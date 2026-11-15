@@ -15,8 +15,7 @@ import {
   Video,
 } from "lucide-react";
 import styles from "./OriaLanding.module.css";
-import OriaPwaSpotlight from "./OriaPwaSpotlight";
-import OriaGiftCampaign from "@/components/oria-campaign/OriaGiftCampaign";
+import OriaScrollExperience from "./OriaScrollExperience";
 
 // La landing est publique : le backend vérifie l'éligibilité au paiement.
 // Le drapeau public ne débloque aucun droit ni aucun crédit.
@@ -199,7 +198,7 @@ export default function OriaLanding() {
         </div>
       </header>
 
-      <OriaPwaSpotlight />
+      <OriaScrollExperience />
 
       <section className={styles.hero} aria-labelledby="hero-title">
         <div className={styles.heroContent}>

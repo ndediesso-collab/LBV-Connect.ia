@@ -120,6 +120,7 @@ type Props = {
   language: Language;
   onClose: () => void;
   onWalletRefresh?: () => void;
+  freeMode?: boolean;
 };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "https://lbv-connect-api.onrender.com";
@@ -312,7 +313,9 @@ function asMedia(raw: unknown): Media | null {
   };
 }
 
-export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: Props) {
+export default function OriaMiniStudio({ language, onClose, onWalletRefresh, freeMode = false }: Props) {
+  // ORIA_UNIQUE_STUDIO_V2 : le même composant pour tous. Les permissions sont serveur.
+  const [freeCanCreateImages, setFreeCanCreateImages] = useState(false);
   const [screen, setScreen] = useState<Screen>("image");
   const [projectCaps, setProjectCaps] = useState<ProjectVideoCaps | null>(null);
   const [projectChecking, setProjectChecking] = useState(false);
@@ -382,13 +385,25 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const generationReady = Boolean(caps?.generation_available && wallet?.is_pack_active && modeAvailableNow);
 
   function invalidateQuote() { setQuote(null); setAccepted(false); setNotice(null); }
-  function changeScreen(next: Screen) { if (busy || quoting) return; setScreen(next); invalidateQuote(); setError(null); }
+  function changeScreen(next: Screen) { if (busy || quoting || (freeMode && (next === "video" || next === "projects"))) return; setScreen(next); invalidateQuote(); setError(null); }
 
   async function loadCapabilities() {
     setLoading(true);
     setError(null);
     setCaps(null);
     try {
+      if (freeMode) {
+        const [status, access] = await Promise.all([
+          api<{success: boolean; paid_pack_active: boolean; wallet: {balance: number}}>("/ai/free/status"),
+          api<{success: boolean; catalog?: {role?: string; images?: {wired?: boolean}}}>("/ai/free/capabilities"),
+        ]);
+        if (!status.success || status.paid_pack_active || !access.success || access.catalog?.role !== "free") {
+          throw new Error("Les droits du Mini-Studio gratuit ne sont pas confirmés.");
+        }
+        setWallet({balance: status.wallet.balance, pack_id: null, is_pack_active: false});
+        setFreeCanCreateImages(access.catalog.images?.wired === true);
+        return; // Jamais de capacités payantes sur un compte gratuit.
+      }
       const walletResponse = await api<{ success: boolean; wallet: Wallet }>("/credits/me");
       const current = walletResponse.wallet;
       setWallet(current);
@@ -621,7 +636,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   const optionsForModel = caps?.images.models.find(model => model.model === imageModel)?.resolutions || [];
 
   const canQuote = Boolean(
-    wallet?.is_pack_active && caps?.quote_available && !loading && !busy && !quoting &&
+    !freeMode && wallet?.is_pack_active && caps?.quote_available && !loading && !busy && !quoting &&
     prompt.trim() && prompt.length <= 8000 && modeAvailableNow &&
     (!needsReference || reference) &&
     (activeKind === "image"
@@ -660,7 +675,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
   }
 
   async function generate() {
-    if (!canQuote || quoting || !quoteReady || !quote || !accepted || !generationReady || !quote.generation_available || !quote.credits_sufficient) return;
+    if (freeMode || !canQuote || quoting || !quoteReady || !quote || !accepted || !generationReady || !quote.generation_available || !quote.credits_sufficient) return;
     if (activeKind === "video" &&
         (!selectedVideoOffer || !caps?.video.short_clip_actions_available_now.includes(selectedVideoOffer.action))) return;
     const action = activeKind === "image" ? selectedImageOffer?.action : selectedVideoOffer?.action;
@@ -778,7 +793,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
             <span className="grid h-11 w-11 shrink-0 place-items-center rounded-[17px] border border-border/60 bg-surface-secondary"><Sparkles size={22}/></span>
             <div className="min-w-0">
               <h2 id="oria-studio-heading" className="truncate text-lg font-bold tracking-tight sm:text-2xl">Mini-Studio ORIA</h2>
-              <p className="text-xs text-muted">{tr(`Images, retouches et vidéos — ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video — ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"}`)}</p>
+              <p className="text-xs text-muted">{freeMode ? tr("Création d'images · Compte gratuit", "Image creation · Free account") : tr(`Images, retouches et vidéos — ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"}`, `Images, editing and video — ${mediaProvider === "openrouter" ? "OpenRouter" : "Google"}`)}</p>
             </div>
           </div>
           <button type="button" disabled={busy} onClick={onClose} aria-label={tr("Fermer", "Close")}
@@ -792,7 +807,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
               { id: "projects", label: tr("Projets vidéo", "Video projects"), icon: Clapperboard },
               { id: "gallery", label: tr("Mes créations", "My creations"), icon: Images }] as const).map(item => (
               <button key={item.id} type="button" role="tab" aria-selected={screen === item.id}
-                onClick={() => changeScreen(item.id)} disabled={busy || quoting || (wallet?.pack_id === "discovery_pack" && item.id === "projects")}
+                onClick={() => changeScreen(item.id)} disabled={busy || quoting || (freeMode && (item.id === "video" || item.id === "projects")) || (wallet?.pack_id === "discovery_pack" && item.id === "projects")}
                 className={`inline-flex items-center gap-2 rounded-[16px] px-3 py-2 text-xs font-semibold transition-colors duration-200 sm:text-sm ${screen === item.id ? "bg-accent text-accent-foreground" : "bg-surface-secondary/75 text-muted-strong hover:bg-surface-tertiary"}`}>
                 <item.icon size={16}/>{item.id === "projects" && wallet?.pack_id === "discovery_pack"
                   ? tr("Projets vidéo · pack supérieur", "Video projects · higher tier") : item.label}
@@ -801,7 +816,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
           </div>
           <div className="flex items-center gap-2 text-xs text-muted">
             <Wallet size={15}/>
-            {wallet?.pack_id ? LABEL_PACK[wallet.pack_id] || wallet.pack_id : tr("Aucun pack", "No plan")}
+            {freeMode ? tr("Gratuit", "Free") : wallet?.pack_id ? LABEL_PACK[wallet.pack_id] || wallet.pack_id : tr("Aucun pack", "No plan")}
             {wallet && <strong className="text-foreground">· {formatted(wallet.balance, language)} {tr("crédits", "credits")}</strong>}
           </div>
         </div>
@@ -849,7 +864,20 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh }: P
             </div>
           )}
 
-          {screen === "projects" ? (
+          {freeMode && screen !== "gallery" ? (
+            <div className="mx-auto max-w-2xl rounded-2xl border border-border bg-surface p-6 sm:p-8">
+              <h3 className="text-lg font-semibold">{tr("Images · Bêta ORIA", "Images · ORIA Beta")}</h3>
+              <p className="mt-3 text-sm leading-6 text-muted-strong">
+                {freeCanCreateImages
+                  ? tr("Le backend annonce les images, mais leur génération gratuite reste désactivée tant que la route sécurisée n'est pas déployée.",
+                       "The backend reports images, but free generation is disabled until the secure endpoint is deployed.")
+                  : tr("La génération d'images gratuites n'est pas encore activée. Tu peux consulter tes créations précédentes.",
+                       "Free image generation is not yet enabled. You can browse your existing creations.")}
+              </p>
+              <p className="mt-3 text-xs text-muted">{tr("Aucun appel de génération payante depuis un compte gratuit.", "No paid generation calls from a free account.")}</p>
+              <Link href="/packs" className="mt-5 inline-flex rounded-xl border border-border px-4 py-2 text-sm font-semibold">{tr("Voir les packs et recharges", "See plans and top-ups")}</Link>
+            </div>
+          ) : screen === "projects" ? (
             <section aria-label={tr("Projets vidéo", "Video projects")}
               className="oria-tab-content-enter rounded-[26px] border border-border/80 bg-surface p-4 shadow-[0_14px_36px_-30px_var(--shadow-color)] sm:p-5">
               <div className="mb-3 flex items-center gap-2">

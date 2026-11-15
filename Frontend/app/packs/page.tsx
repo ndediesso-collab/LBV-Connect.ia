@@ -48,7 +48,6 @@ import {
 
 
 import Link from "next/link";
-import OriaGiftCampaign from "@/components/oria-campaign/OriaGiftCampaign";
 
 
 
@@ -2474,7 +2473,6 @@ export default function PacksPage() {
 
 
 
-        <OriaGiftCampaign variant="packs" />
         {DISCOVERY_PUBLIC && discoveryNotice && (
           <div role="status" className="mt-6 flex items-center justify-between gap-4 rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm">
             <span>{discoveryNotice}</span>
