@@ -35,6 +35,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Clipb
 
 import LogoutButton from "@/components/layout/LogoutButton";
 import OriaFreeOfferNotifications from "@/components/oria-free/OriaFreeOfferNotifications";
+import UniversalArtifactPreview, { type UniversalPreviewPayload } from "@/components/oria-artifacts/UniversalArtifactPreview";
 import { createClient } from "@/lib/supabase/client";
 import type { ChatMessage, Conversation } from "@/types/lbv";
 import { OriaMathBlock, OriaMathInline } from "@/components/oria-math/OriaMathRenderer";
@@ -1538,10 +1539,27 @@ function renderParagraphWithDisplayMath(text: string, key: string): ReactNode {
 
 // ORIA_V5_PRIVATE_PDF_PREVIEW: une URL Supabase signée ancienne n'est jamais réutilisée.
 // Résoudre l'identifiant d'artifact avec la session ORIA et demander un nouveau jeton.
+async function oriaPdfBlobPreviewFromSignedUrl(url: string): Promise<string> {
+  const response = await fetch(url, {cache: "no-store", referrerPolicy: "no-referrer"});
+  if (!response.ok) throw new Error("PDF privé indisponible.");
+  const maxBytes = 50 * 1024 * 1024;
+  const declared = Number(response.headers.get("content-length") || "0");
+  if (declared > maxBytes) throw new Error("PDF trop volumineux pour l’aperçu.");
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength < 5 || bytes.byteLength > maxBytes ||
+      new TextDecoder("ascii").decode(bytes.slice(0, 5)) !== "%PDF-") {
+    throw new Error("Fichier PDF invalide ou trop volumineux.");
+  }
+  return URL.createObjectURL(new Blob([bytes], {type: "application/pdf"}));
+}
+
 function OriaPrivatePdfLink({label, oldUrl}: {label: string; oldUrl: string}) {
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [fault, setFault] = useState<string | null>(null);
+  useEffect(() => () => {
+    if (preview?.startsWith("blob:")) URL.revokeObjectURL(preview);
+  }, [preview]);
 
   const resolveFresh = async (): Promise<{previewUrl: string | null; downloadUrl: string | null; name: string}> => {
     const path = new URL(oldUrl).pathname;
@@ -1570,8 +1588,16 @@ function OriaPrivatePdfLink({label, oldUrl}: {label: string; oldUrl: string}) {
     setBusy(true); setFault(null);
     try {
       const urls = await resolveFresh();
-      if (!urls.previewUrl) throw new Error("Prévisualisation PDF indisponible. Le téléchargement reste accessible.");
-      setPreview(urls.previewUrl);
+      let inlineUrl: string | null = null;
+      for (const candidate of [urls.previewUrl, urls.downloadUrl]) {
+        if (!candidate) continue;
+        try {
+          inlineUrl = await oriaPdfBlobPreviewFromSignedUrl(candidate);
+          break;
+        } catch { /* Essayer le lien de téléchargement signé. */ }
+      }
+      if (!inlineUrl) throw new Error("Impossible de charger le PDF dans ORIA. Ouvrez Mes créations pour consulter ou télécharger le fichier.");
+      setPreview(inlineUrl);
     } catch (e) { setFault(e instanceof Error ? e.message : "Aperçu indisponible."); }
     finally {setBusy(false);}
   };
@@ -1606,8 +1632,8 @@ function OriaPrivatePdfLink({label, oldUrl}: {label: string; oldUrl: string}) {
           className="rounded-lg border border-border px-4 py-2 text-sm">Fermer l'aperçu</button>
       </div>
       <iframe title={`Document ${label}`} src={preview} referrerPolicy="no-referrer"
-        sandbox="allow-same-origin allow-downloads" className="min-h-0 flex-1 w-full bg-white"/>
-      <p className="px-3 py-1 text-center text-xs text-muted">Lien privé renouvelé pour cette session.</p>
+        className="min-h-0 flex-1 w-full bg-white"/>
+      <p className="px-3 py-1 text-center text-xs text-muted">Aperçu PDF privé (même lecteur que Mes créations).</p>
     </div>}
   </>;
 }
@@ -1991,6 +2017,25 @@ function DocumentPreviewModal({ preview, onClose, onDownload, language }: {
   onDownload: () => void;
   language: OriaLanguage;
 }) {
+  const [pdfLocalUrl, setPdfLocalUrl] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    let blobUrl: string | null = null;
+    setPdfError(false);
+    setPdfLocalUrl(null);
+    void oriaPdfBlobPreviewFromSignedUrl(preview.url).then((url) => {
+      blobUrl = url;
+      if (disposed) URL.revokeObjectURL(url);
+      else setPdfLocalUrl(url);
+    }).catch(() => {
+      if (!disposed) setPdfError(true);
+    });
+    return () => {
+      disposed = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [preview.url]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -2031,14 +2076,20 @@ function DocumentPreviewModal({ preview, onClose, onDownload, language }: {
         </div>
       </div>
       <div className="min-h-0 flex-1 bg-surface-secondary/35 p-2 sm:p-4">
-        <iframe
-          key={preview.id}
-          src={preview.url}
-          title={preview.filename}
-          className="h-full w-full rounded-lg border border-border bg-white"
-          sandbox="allow-same-origin allow-downloads"
-          referrerPolicy="no-referrer"
-        />
+        {pdfError ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-4 text-center text-sm">
+            <p>L’aperçu PDF n’a pas pu être chargé. Le fichier n’a pas été supprimé.</p>
+            <Link href="/mes_creations" className="font-semibold underline">Ouvrir Mes créations</Link>
+          </div>
+        ) : pdfLocalUrl ? (
+          <iframe
+            key={preview.id}
+            src={pdfLocalUrl}
+            title={preview.filename}
+            className="h-full w-full rounded-lg border border-border bg-white"
+            referrerPolicy="no-referrer"
+          />
+        ) : <div role="status" className="flex h-full items-center justify-center text-sm text-muted">Chargement du PDF…</div>}
       </div>
       <p className="shrink-0 px-4 py-2 text-center text-[11px] text-muted">
         {language === "fr"
@@ -4209,7 +4260,7 @@ export default function ChatPage() {
 
   // Les droits Découverte sont toujours vérifiés côté backend.
   const [discoveryStatus, setDiscoveryStatus] = useState<{
-    enabled: boolean; purchased: boolean; topup_available: boolean; topup_used: boolean;
+    enabled: boolean; purchased: boolean; topup_available: boolean; standard_addons_available?: boolean; topup_used: boolean;
   } | null>(null);
   const [discoveryNotice, setDiscoveryNotice] = useState<string | null>(null);
   const discoveryWallet = wallet?.pack_id === "discovery_pack";
@@ -4218,7 +4269,7 @@ export default function ChatPage() {
     let cancelled = false;
     const refresh = async () => {
       try {
-        const data = await apiFetch<{ enabled: boolean; purchased: boolean; topup_available: boolean; topup_used: boolean }>("/payments/discovery/status");
+        const data = await apiFetch<{ enabled: boolean; purchased: boolean; topup_available: boolean; standard_addons_available?: boolean; topup_used: boolean }>("/payments/discovery/status");
         if (!cancelled) setDiscoveryStatus(data);
       } catch { if (!cancelled) setDiscoveryStatus(null); }
     };
@@ -6210,10 +6261,50 @@ export default function ChatPage() {
    * Aucun double-envoi automatique sur timeout : une réservation peut être en attente.
    */
   // ORIA_FREE_FILES_V3 : Base64 uniquement pour un envoi gratuit plafonné côté serveur.
+  // L'API gratuite n'accepte que les images PNG/JPEG/WebP <= 1K et 2 Mo.
+  // Adapter automatiquement les photos de téléphone, sans facturation supplémentaire.
+  async function prepareFreeImageForUpload(file: File): Promise<File> {
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      throw new Error("En gratuit : images PNG, JPEG ou WebP uniquement.");
+    }
+    if (file.size > 16 * 1024 * 1024) {
+      throw new Error("Photo trop volumineuse (16 Mo maximum avant réduction).");
+    }
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error("Image illisible."));
+        image.src = objectUrl;
+      });
+      if (image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+        throw new Error("Dimensions de la photo invalides.");
+      }
+      if (Math.max(image.naturalWidth, image.naturalHeight) <= 1024 && file.size <= 2_000_000) {
+        return file;
+      }
+      const scale = Math.min(1, 1024 / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Réduction de l'image non disponible sur ce navigateur.");
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.80));
+      if (!blob || blob.size > 2_000_000) throw new Error("Réduction impossible à moins de 2 Mo.");
+      return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", {type: "image/jpeg"});
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
   async function encodeFreeAttachments(files: ChatAttachment[]) {
     if (files.length > 2) throw new Error("Maximum 2 fichiers en gratuit.");
     return await Promise.all(files.map(async (attachment) => {
-      const file = attachment.file;
+      const file = attachment.kind === "image" ? await prepareFreeImageForUpload(attachment.file) : attachment.file;
       if (file.size > 2_000_000) throw new Error("Maximum 2 Mo par fichier gratuit.");
       const data = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -7547,11 +7638,11 @@ export default function ChatPage() {
               <div>
                 <p className="text-sm font-semibold">{language === "fr" ? (creditAlert === 0 ? "Crédits épuisés" : "Votre solde de crédits diminue") : (creditAlert === 0 ? "Credits exhausted" : "Your credit balance is running low")}</p>
                 <p className="mt-1 text-xs leading-5 text-muted">{discoveryWallet
-                  ? (discoveryStatus?.topup_available
+                  ? ((discoveryStatus?.standard_addons_available ?? discoveryStatus?.topup_available)
                       ? language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Les recharges standard sont disponibles pendant votre pack.` : `You have ${wallet.balance.toLocaleString("en-US")} credits. Standard top-ups remain available during your plan.`
                       : language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Vous pouvez changer de pack à tout moment.` : `You have ${wallet.balance.toLocaleString("en-US")} credits. You can change plans at any time.`)
                   : language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Rechargez votre portefeuille pour continuer à utiliser ORIA.` : `You have ${wallet.balance.toLocaleString("en-US")} credits left. Top up to keep using ORIA.`}</p>
-                <Link href={packCtaHref} onClick={() => setCreditAlert(null)} className="mt-3 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground hover:opacity-85">{discoveryWallet && !discoveryStatus?.topup_available
+                <Link href={packCtaHref} onClick={() => setCreditAlert(null)} className="mt-3 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground hover:opacity-85">{discoveryWallet && !(discoveryStatus?.standard_addons_available ?? discoveryStatus?.topup_available)
                   ? language === "fr" ? "Voir les packs classiques" : "See classic plans"
                   : language === "fr" ? "Recharger mes crédits" : "Top up credits"}</Link>
               </div>
@@ -7572,39 +7663,7 @@ export default function ChatPage() {
                 onClick={() => setUniversalPreview(null)}><X size={18}/></button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto bg-surface-secondary p-4 sm:p-6">
-              {universalPreview.kind === "slides" && (universalPreview.slides || []).map((slide, index) => (
-                <div key={index} className="mb-4 rounded-xl border border-border bg-surface p-5">
-                  <p className="mb-3 text-xs text-muted">{language === "fr" ? "Diapositive" : "Slide"} {index + 1}</p>
-                  <h3 className="mb-3 text-lg font-semibold">{slide.title}</h3>
-                  {typeof slide.image_data === "string" && slide.image_data.startsWith("data:image/jpeg;base64,") ? (
-                    <img src={slide.image_data} alt={`${slide.title} — aperçu visuel`}
-                      className="mb-3 aspect-video w-full rounded-lg bg-white object-contain" />
-                  ) : null}
-                  {(slide.texts || []).map((line, i) => <p key={i} className="mb-2 whitespace-pre-wrap text-sm leading-6">{line}</p>)}
-                </div>
-              ))}
-              {universalPreview.kind === "tables" && (universalPreview.tables || []).map((table, index) => (
-                <section key={index} className="mb-6 overflow-hidden rounded-xl border border-border bg-surface">
-                  <h3 className="border-b border-border p-3 text-sm font-semibold">{table.name}</h3>
-                  <div className="overflow-x-auto"><table className="w-full border-collapse text-left text-xs">
-                    <tbody>{(table.rows || []).map((row, r) => <tr key={r} className="border-b border-border">
-                      {row.map((cell, c) => <td key={c} className="max-w-72 whitespace-pre-wrap break-words border-r border-border p-2 align-top">{String(cell)}</td>)}
-                    </tr>)}</tbody>
-                  </table></div>
-                </section>
-              ))}
-              {universalPreview.kind === "archive" && (
-                <div className="rounded-xl border border-border bg-surface p-4">
-                  {(universalPreview.entries || []).map((entry, i) => (
-                    <div key={i} className="flex flex-wrap justify-between gap-3 border-b border-border py-2 text-xs last:border-0">
-                      <span className="break-all">{entry.name}</span><span className="text-muted">{formatArtifactSize(entry.size, language)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {universalPreview.kind === "text" && (
-                <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-surface p-4 font-mono text-xs leading-6">{universalPreview.text || ""}</pre>
-              )}
+              <UniversalArtifactPreview preview={universalPreview as UniversalPreviewPayload} language={language} />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3 text-xs">
               <p className="max-w-xl text-muted">{universalPreview.note || "Aperçu simplifié."}{universalPreview.truncated ? " · Aperçu partiel." : ""}</p>
@@ -8975,7 +9034,7 @@ export default function ChatPage() {
                   type="file"
                   className="hidden"
                   multiple
-                  accept={ACCEPTED_FILE_TYPES.join(",")}
+                  accept={(isFreeAccount ? ["application/pdf", "text/plain", "text/csv", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"] : ACCEPTED_FILE_TYPES).join(",")}
                   onChange={(event) => {
                     if (event.target.files) {
                       addAttachments(
@@ -8992,7 +9051,7 @@ export default function ChatPage() {
                   type="file"
                   className="hidden"
                   multiple
-                  accept={ACCEPTED_IMAGE_TYPES.join(",")}
+                  accept={(isFreeAccount ? ["image/jpeg", "image/png", "image/webp"] : ACCEPTED_IMAGE_TYPES).join(",")}
                   onChange={(event) => {
                     if (event.target.files) {
                       addAttachments(
@@ -9065,7 +9124,8 @@ export default function ChatPage() {
                               )
                             }
                             disabled={disabled || (isFreeAccount &&
-                              (label === "Cours" || label === "Fichier" || label === "Image" ||
+                              (label === "Cours" ||
+                              ((label === "Fichier" || label === "Image") && freeCapabilities?.catalog?.attachments?.wired !== true) ||
                               (label === "Recherche Web" && freeCapabilities?.catalog?.web?.wired !== true)))}
                             className={`flex shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-2 transition ${
                               disabled

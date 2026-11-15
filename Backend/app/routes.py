@@ -641,11 +641,10 @@ def _discovery_validate_checkout(user_id: str, payment_type: str,
         # Le changement de pack et les reservations en cours sont controles
         # dans checkout_payment via _oria_assert_pack_change_ready().
         # Le frontend demande confirmation avant de remplacer le pack actif.
-        if _discovery_has_transaction(
-            user_id, column="pack_id", product_id=product_id,
-            statuses=("pending", "processing"),
-        ):
-            raise HTTPException(409, "Paiement Découverte déjà en attente.")
+        # Le Pack Découverte est renouvelable : même checkout que les quatre autres.
+        # Une ancienne commande non confirmée ne bloque pas le nouveau checkout.
+        # Elle reste en base : seul un Pulse signé peut la terminer et seul un
+        # paiement réellement confirmé peut activer des crédits.
         return
     if product_id == _DISCOVERY_TOPUP_ID:
         raise HTTPException(410, "Ancienne recharge Découverte retirée. Utiliser une recharge standard.")
@@ -786,7 +785,7 @@ def get_discovery_payment_status(
     active = bool(wallet and wallet.pack_id == _DISCOVERY_PRIMARY_ID and wallet.is_pack_active)
     return {
         "enabled": True,
-        "can_buy": not pending_purchase,
+        "can_buy": True,  # Pack renouvelable : un ancien pending ne bloque plus
         "purchased": purchased, "purchase_pending": pending_purchase,
         "active_discovery": active, "topup_used": old_topup_used,
         # The old frontend topup_available refers to a one-shot product; keep
@@ -3854,12 +3853,20 @@ async def chariow_webhook(request: Request):
         # Authenticate Pulse first (existing Phase 4A), then check amount and
         # product using the existing Discovery validation logic.
         validate_free_target_payment(payment_transaction)
-        _discovery_validate_webhook_transaction(event, payment_transaction)
+        if success:
+            # Validation commerciale complète seulement pour un paiement confirmé.
+            # Les Pulses signés abandoned.sale / failed.sale peuvent ne pas
+            # contenir le montant ou le produit : ne pas les rejeter en HTTP 409.
+            _discovery_validate_webhook_transaction(event, payment_transaction)
         if not success and str(payment_transaction.get("status") or "").lower() == "paid":
             return {"success": True, "processed": False, "status": "paid",
                     "message": "Recharge gratuite déjà confirmée."}
     if _webhook_product in _DISCOVERY_IDS:
-        _discovery_validate_webhook_transaction(event, payment_transaction)
+        if success:
+            # Validation commerciale complète seulement pour un paiement confirmé.
+            # Les Pulses signés abandoned.sale / failed.sale peuvent ne pas
+            # contenir le montant ou le produit : ne pas les rejeter en HTTP 409.
+            _discovery_validate_webhook_transaction(event, payment_transaction)
         if (not success and str(payment_transaction.get("status") or "").lower() == "paid"):
             # Une notification tardive ne dégrade pas un paiement confirmé.
             return {"success": True, "processed": False, "status": "paid",

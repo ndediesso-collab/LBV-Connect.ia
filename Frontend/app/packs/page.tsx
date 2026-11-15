@@ -755,6 +755,7 @@ type DiscoveryStatus = {
   active_discovery: boolean;
   balance?: number;
   topup_available: boolean;
+  standard_addons_available?: boolean;
   topup_pending?: boolean;
   topup_used: boolean;
 };
@@ -1652,7 +1653,7 @@ export default function PacksPage() {
   useEffect(() => {
     if (!DISCOVERY_PUBLIC || discoveryLoginCheckout.current || discoverySession !== "authenticated" || !discoveryStatus?.enabled) return;
     const requested = new URLSearchParams(window.location.search).get("checkout");
-    if (requested !== DISCOVERY_PACK_ID || !discoveryStatus.can_buy) return;
+    if (requested !== DISCOVERY_PACK_ID || !discoveryStatus.enabled) return;
     discoveryLoginCheckout.current = true;
     // Le clic initial, avant connexion, a déjà exprimé l'intention d'acheter.
     window.history.replaceState(null, "", "/packs");
@@ -1793,7 +1794,7 @@ export default function PacksPage() {
         });
         if (!statusResponse.ok) throw new Error(discoveryCheckErrorText(`status:${statusResponse.status}`, language));
         const verified = await statusResponse.json() as DiscoveryStatus;
-        const allowed = verified.enabled && verified.can_buy;
+        const allowed = verified.enabled; // Aucun verrou d'achat historique en plus du checkout commun
         if (!allowed) {
           void refreshDiscoveryStatus();
           setDiscoveryNotice("Cette offre n'est plus disponible pour ce compte.");
@@ -2504,13 +2505,9 @@ export default function PacksPage() {
                 <p className="mt-1 text-xs text-muted">{language === "fr" ? "Renouvelable" : "Renewable"}</p>
                 <button type="button"
                   disabled={isPaying !== null || discoverySession === "error" ||
-                    (discoverySession === "authenticated" && discoveryStatus?.can_buy !== true &&
-                      !(discoveryStatus?.purchase_pending && discoveryStatus?.resume_checkout_url))}
+                    (discoverySession === "authenticated" && discoveryStatus?.enabled !== true)}
                   onClick={() => {
-                    if (discoveryStatus?.purchase_pending && discoveryStatus.resume_checkout_url) {
-                      window.location.assign(discoveryStatus.resume_checkout_url);
-                    } else {
-                      void (async () => {
+                    void (async () => {
                           const sb = createClient();
                           const {data:{session}} = await sb.auth.getSession();
                           if (session) {
@@ -2527,77 +2524,21 @@ export default function PacksPage() {
                           }
                           await startPayment({type:"primary_pack",id:DISCOVERY_PACK_ID});
                         })();
-                    }
                   }}
                   className="mt-4 w-full rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
                   {discoverySession === "error"
                     ? language === "fr" ? "Vérification nécessaire" : "Verification required"
-                    : discoverySession === "authenticated" && discoveryStatus?.can_buy !== true
-                      ? discoveryStatus?.purchase_pending
-                        ? discoveryStatus.resume_checkout_url
-                          ? language === "fr" ? "Reprendre le paiement" : "Resume payment"
-                          : language === "fr" ? "Paiement en attente" : "Payment pending"
-                        : language === "fr" ? "Vérification nécessaire" : "Verification required"
                     : isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting
                     : language === "fr" ? "Découvrir ORIA" : "Try ORIA"}
                 </button>
-                {discoverySession === "authenticated" && discoveryStatus?.enabled &&
-                  !discoveryStatus.can_buy && !discoveryStatus.purchased && (
-                  <p role="status" className="mt-2 max-w-xs text-xs leading-5 text-muted">
-                    {discoveryStatus.purchase_pending
-                      ? language === "fr"
-                        ? discoveryStatus.purchase_needs_review
-                          ? "Cette ancienne tentative doit être vérifiée avant de réessayer. Consultez l'assistance ORIA."
-                          : discoveryStatus.resume_checkout_url
-                            ? "Votre première commande est prête : reprenez le même paiement sans nouvel achat."
-                            : "Commande en attente de confirmation Chariow. Actualise le statut ; ne paie pas deux fois."
-                        : discoveryStatus.purchase_needs_review
-                          ? "The previous checkout needs verification before another attempt. Contact ORIA support."
-                          : discoveryStatus.resume_checkout_url
-                            ? "Resume your previous checkout without creating another order."
-                            : "Awaiting Chariow confirmation. Refresh the status before trying another purchase."
-                      : walletPackId
-                        ? language === "fr"
-                          ? "Le paiement Découverte doit être vérifié avant une nouvelle commande."
-                          : "Another pack is already associated with this account. The welcome offer cannot be purchased."
-                        : language === "fr"
-                          ? "Ce compte ne remplit pas actuellement les conditions de l'offre de bienvenue."
-                          : "This account is not currently eligible for the welcome offer."}
-                  </p>
-                )}
               </div>
             </div>
           </section>
         )}
-        {DISCOVERY_PUBLIC && discoveryStatus?.enabled && discoveryStatus.purchase_pending && (
-          <p role="status" className="mt-6 rounded-2xl border border-border bg-surface-secondary p-4 text-sm">
-            {discoveryStatus.resume_checkout_url
-              ? (language === "fr" ? "Vous pouvez reprendre la même commande Chariow, sans nouvel achat." : "You can resume the same Chariow checkout without a new order.")
-              : discoveryStatus.purchase_needs_review
-                ? (language === "fr" ? "Cette commande ancienne exige une vérification avant toute nouvelle tentative." : "This older order requires verification before another attempt.")
-                : (language === "fr" ? "Paiement en attente : reprise disponible après une minute si le lien Chariow est enregistré." : "Pending payment: resume after one minute if the Chariow link is saved.")}
-            <button type="button" onClick={() => { void (async () => {
-              try {
-                const client=createClient();
-                const {data:{session}}=await client.auth.getSession();
-                if (!session?.access_token) return;
-                const r=await fetch(`${API_URL}/payments/primary/reconcile-me`, {
-                  method:"POST",headers:{Authorization:`Bearer ${session.access_token}`,
-                    "user-id":session.user.id},cache:"no-store"});
-                if (!r.ok) throw new Error("Rapprochement indisponible");
-                const result=await r.json();
-                setDiscoveryNotice(result?.activated_now>0
-                  ? "Paiement confirmé : votre pack a été activé."
-                  : "Vérification réalisée. Une commande non confirmée reste en attente ; aucun nouvel achat n'a été lancé.");
-                await refreshDiscoveryStatus();
-              } catch {setDiscoveryNotice("État Chariow indisponible. Ne payez pas deux fois : contactez l'assistance ORIA si le paiement a été prélevé.");}
-            })(); }} className="ml-3 underline">{language === "fr" ? "Vérifier le paiement" : "Check payment"}</button>
-          </p>
-        )}
         {DISCOVERY_PUBLIC && discoveryWallet && discoveryStatus?.enabled && (
           <p role="status" className="mt-6 rounded-2xl border border-border bg-surface-secondary p-4 text-sm">
             {language === "fr" ? `Pack Découverte : ${discoveryStatus.balance ?? 0} crédits disponibles jusqu’à la fin de la validité.` : `Discovery Pass: ${discoveryStatus.balance ?? 0} credits available until expiry.`}
-            {discoveryStatus.topup_available ? <button type="button" className="ml-3 font-semibold underline" onClick={() => setActivePackTab("addon")}>{language === "fr" ? "Voir les recharges" : "See top-ups"}</button> : null}
+            {discoveryStatus.standard_addons_available ? <button type="button" className="ml-3 font-semibold underline" onClick={() => setActivePackTab("addon")}>{language === "fr" ? "Voir les recharges" : "See top-ups"}</button> : null}
           </p>
         )}
         {/* Deux offres commerciales visibles au même niveau */}

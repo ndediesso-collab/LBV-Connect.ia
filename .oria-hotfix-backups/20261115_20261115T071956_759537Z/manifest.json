@@ -1,0 +1,13 @@
+{
+  "repo": "C:\\Users\\LENOVO\\Desktop\\LBV-Connect.ia",
+  "files": [
+    "Backend/app/routes.py",
+    "Frontend/app/chat/page.tsx",
+    "Frontend/app/packs/page.tsx"
+  ],
+  "original_sha256": {
+    "Backend/app/routes.py": "3ca3dd24d4cfe0050d9af8fbcf10438069aa1c489d8b70e8dd2e9a9e52ccbfee",
+    "Frontend/app/chat/page.tsx": "d10f91a7b1e0b96cce108d253af076f35ecd6dbcc6080d6c084215b2773dc86a",
+    "Frontend/app/packs/page.tsx": "45e46453ce6d26364db793e54f1ee8ec7174f3ab34f87d0db8958fea0c41d606"
+  }
+}
