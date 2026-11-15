@@ -15,10 +15,13 @@ import {
   Video,
 } from "lucide-react";
 import styles from "./OriaLanding.module.css";
+import OriaPwaSpotlight from "./OriaPwaSpotlight";
+import OriaGiftCampaign from "@/components/oria-campaign/OriaGiftCampaign";
 
 // La landing est publique : le backend vérifie l'éligibilité au paiement.
 // Le drapeau public ne débloque aucun droit ni aucun crédit.
-const DISCOVERY_PUBLIC = process.env.NEXT_PUBLIC_ORIA_DISCOVERY_ENABLED === "1";
+// Jamais d'annonce "150 crédits disponibles" avant activation côté serveur.
+const FREE_PUBLIC = process.env.NEXT_PUBLIC_ORIA_FREE_PUBLIC_ENABLED === "1";
 
 const features = [
   { number: "01", icon: MessageSquareText, title: "Réfléchir et comprendre", description: "Discutez avec différents modèles, explorez une idée et approfondissez vos questions.", tags: ["Chat", "Raisonnement"] },
@@ -35,14 +38,13 @@ const offers = [
 ] as const;
 
 const questions = [
-  { question: "Comment fonctionnent les crédits ORIA ?", answer: "Chaque action utilise des crédits selon le modèle et la fonctionnalité. Le solde et la consommation sont suivis dans votre espace ORIA." },
-  { question: "Combien de temps un pack reste-t-il actif ?", answer: DISCOVERY_PUBLIC
-    ? "Le Pack Découverte propose des crédits sans date d'expiration, jusqu'à épuisement du solde. Les packs Léger, Intermédiaire, Pro et Business restent valables 35 jours après activation."
-    : "Les packs ORIA ont une validité de 35 jours à partir de leur activation. Le détail des conditions est présenté avant l'achat." },
-  { question: "Puis-je utiliser plusieurs modèles d'IA ?", answer: "Oui. Le catalogue dépend du pack choisi et des fournisseurs disponibles dans ORIA à ce moment-là." },
-  { question: "La génération d'images et de vidéos est-elle incluse ?", answer: "Ces fonctionnalités sont accessibles selon le pack et consomment des crédits. La génération vidéo peut représenter une consommation importante : vérifiez le coût affiché avant de confirmer." },
-  { question: "ORIA est-elle gratuite ?", answer: "L'accès à l'interface peut être libre, mais l'utilisation des services IA nécessite un pack payant actif. ORIA ne propose pas de pack gratuit permanent." },
-  ...(DISCOVERY_PUBLIC ? [{ question: "Qui peut acheter le Pack Découverte ?", answer: "Cette offre de bienvenue à 1 000 FCFA est réservée aux comptes éligibles et ne peut être achetée qu'une fois. Une seule recharge de 1 000 crédits à 600 FCFA est prévue pour les bénéficiaires." }] : []),
+  { question: "Comment fonctionnent les crédits ORIA ?", answer: "Chaque action consomme des crédits en fonction du modèle choisi. Le coût est contrôlé par le serveur ; les crédits des packs payants et les crédits gratuits sont suivis séparément." },
+  { question: "ORIA propose-t-elle un accès gratuit ?", answer: FREE_PUBLIC
+    ? "Oui. Les comptes éligibles peuvent recevoir jusqu’à 150 crédits ORIA gratuits par jour, selon les conditions du service. Le quota est recalculé côté serveur ; certaines fonctionnalités restent réservées aux packs."
+    : "Un quota quotidien gratuit de 150 crédits ORIA est en préparation. Tant qu'il n'est pas activé, les services IA restent soumis aux conditions des packs payants actifs." },
+  { question: "Combien de temps un pack reste-t-il actif ?", answer: "Les packs payants ont une validité de 35 jours à compter de leur activation, sous réserve des conditions propres à chaque offre. Les conditions exactes sont présentées avant achat." },
+  { question: "Puis-je utiliser plusieurs modèles d'IA ?", answer: "Le catalogue dépend du pack actif et des fournisseurs disponibles. Le quota gratuit utilise Luna dans ses modes autorisés." },
+  { question: "La génération d'images et de vidéos est-elle incluse ?", answer: "Les possibilités dépendent du pack, des crédits et des fonctionnalités effectivement activées. Le coût doit être vérifié avant toute création." },
 ] as const;
 
 function Brand({ footer = false }: { footer?: boolean }) {
@@ -173,6 +175,7 @@ export default function OriaLanding() {
         <div className={styles.navInner}>
           <Brand />
           <nav className={styles.desktopNav} aria-label="Navigation principale">
+            <a href="#installation">Installer ORIA</a>
             <a href="#fonctionnalites">Fonctionnalités</a>
             <a href="#fonctionnement">Comment ça marche</a>
             <a href="#offres">Les packs</a>
@@ -185,6 +188,7 @@ export default function OriaLanding() {
           <details className={styles.mobileNav}>
             <summary aria-label="Ouvrir le menu"><span /><span /><span /></summary>
             <nav aria-label="Navigation mobile" className={styles.mobileNavPanel}>
+              <a href="#installation">Installer ORIA</a>
               <a href="#fonctionnalites">Fonctionnalités</a>
               <a href="#fonctionnement">Comment ça marche</a>
               <a href="#offres">Les packs</a>
@@ -195,30 +199,7 @@ export default function OriaLanding() {
         </div>
       </header>
 
-      {DISCOVERY_PUBLIC && (
-        <section className="oria-discovery-announcement" aria-labelledby="oria-discovery-announcement-title">
-          <div className="oria-discovery-announcement-inner">
-            <div className="oria-discovery-announcement-main">
-              <span className="oria-discovery-announcement-kicker">
-                <Sparkles size={15} aria-hidden="true" /> NOUVEAU · OFFRE DE BIENVENUE
-              </span>
-              <h2 id="oria-discovery-announcement-title">
-                Le Pack Découverte. <span>Votre premier pas avec ORIA.</span>
-              </h2>
-              <p>8 000 crédits sans expiration pour utiliser les fonctionnalités incluses, à votre rythme.</p>
-            </div>
-            <div className="oria-discovery-announcement-action">
-              <div className="oria-discovery-announcement-price">
-                <strong>1 000 <small>FCFA</small></strong>
-                <span>Un seul achat par compte · Sous réserve d’éligibilité</span>
-              </div>
-              <Link className="oria-discovery-announcement-link" href="/packs">
-                Découvrir l’offre <ArrowUpRight size={18} strokeWidth={1.8} aria-hidden="true" />
-              </Link>
-            </div>
-          </div>
-        </section>
-      )}
+      <OriaPwaSpotlight />
 
       <section className={styles.hero} aria-labelledby="hero-title">
         <div className={styles.heroContent}>
@@ -274,39 +255,18 @@ export default function OriaLanding() {
       <section className={styles.howSection} id="fonctionnement" aria-labelledby="how-title">
         <div className={styles.howIntro}><p className={styles.sectionKicker}>02 — LE FONCTIONNEMENT</p><h2 id="how-title">L'essentiel,<br/><em>sans complication.</em></h2><p>Tout se passe dans un seul espace. Vous choisissez le bon outil, ORIA s’occupe de vous accompagner.</p><Link href="/chat" className={styles.textLink}>Accéder à mon espace <ArrowUpRight size={18}/></Link></div>
         <div className={styles.howSteps}>
-          <div className={styles.howStep}><span>01</span><div><h3>Choisissez votre pack</h3><p>Sélectionnez l’offre qui correspond à vos besoins et à votre manière d’utiliser l’IA.</p></div><ArrowUpRight size={22}/></div>
+          <div className={styles.howStep}><span>01</span><div><h3>Commencez à votre rythme</h3><p>{FREE_PUBLIC ? "Utilisez votre quota quotidien de 150 crédits ORIA selon vos droits, ou choisissez un pack pour aller plus loin." : "Créez votre compte et consultez les packs actuellement disponibles pour accéder aux services IA."}</p></div><ArrowUpRight size={22}/></div>
           <div className={styles.howStep}><span>02</span><div><h3>Choisissez votre modèle</h3><p>Accédez aux modèles disponibles dans votre pack et ajustez la réflexion selon votre tâche.</p></div><ArrowUpRight size={22}/></div>
           <div className={styles.howStep}><span>03</span><div><h3>Passez à l'action</h3><p>Discutez, joignez un document, faites une recherche ou lancez une création.</p></div><ArrowUpRight size={22}/></div>
         </div>
       </section>
 
       <section className={styles.creditsSection} aria-labelledby="credit-title">
-        <div className={styles.creditsMain}><p className={styles.sectionKicker}>03 — DES CRÉDITS, PAS DES SURPRISES</p><h2 id="credit-title">Vous créez.<br/><span>Vous gardez le contrôle.</span></h2><p>Avec ORIA, vos actions utilisent des crédits. Suivez votre solde, choisissez le modèle adapté et consultez les coûts avant les opérations les plus exigeantes.</p><div className={styles.creditPills}><span><Check size={15}/> {DISCOVERY_PUBLIC ? "35 jours pour les packs classiques" : "Validité de 35 jours"}</span>{DISCOVERY_PUBLIC && <span><Check size={15}/> Découverte : crédits sans expiration</span>}<span><Check size={15}/> Suivi du solde</span><span><Check size={15}/> Crédits complémentaires</span></div></div>
+        <div className={styles.creditsMain}><p className={styles.sectionKicker}>03 — DES CRÉDITS, PAS DES SURPRISES</p><h2 id="credit-title">Vous créez.<br/><span>Vous gardez le contrôle.</span></h2><p>Avec ORIA, vos actions utilisent des crédits. Suivez votre solde, choisissez le modèle adapté et consultez les coûts avant les opérations les plus exigeantes.</p><div className={styles.creditPills}><span><Check size={15}/> "Validité de 35 jours pour les packs payants"</span>{FREE_PUBLIC && <span><Check size={15}/> Jusqu’à 150 crédits gratuits par jour</span>}<span><Check size={15}/> Suivi du solde</span><span><Check size={15}/> Crédits complémentaires</span></div></div>
         <div className={styles.creditVisual} aria-label="Illustration du suivi des crédits"><div className={styles.creditVisualTop}><span>MON ESPACE</span><span className={styles.creditVisualDot}/></div><div className={styles.creditMetricLabel}>Utilisation des crédits</div><div className={styles.creditMetric}>À votre rythme<span>.</span></div><div className={styles.creditBar}><span/></div><div className={styles.creditVisualLine}><span>Un solde clair</span><ShieldCheck size={18}/></div><div className={styles.creditVisualLine}><span>Un coût adapté à l’action</span><Check size={18}/></div><div className={styles.creditVisualFooter}>Illustration de l'interface — valeurs non contractuelles</div></div>
       </section>
 
-      <section className={styles.offersSection} id="offres" aria-labelledby="offers-title"><div className={styles.offersHeading}><div><p className={styles.sectionKicker}>04 — CHOISISSEZ VOTRE RYTHME</p><h2 id="offers-title">Un pack pour<br/>chaque ambition.</h2></div><p>{DISCOVERY_PUBLIC ? "Une offre de bienvenue à paiement unique, puis quatre niveaux d’accès. Les conditions et disponibilités sont vérifiées lors de la souscription." : "Quatre niveaux d’accès. Les modèles, crédits et tarifs exacts sont présentés dans votre espace ORIA au moment de la souscription."}</p></div>
-        {DISCOVERY_PUBLIC && (
-          <article className="oria-discovery-offer" aria-labelledby="discovery-offer-title">
-            <div className="oria-discovery-copy">
-              <span className="oria-discovery-kicker">OFFRE DE BIENVENUE · UNE SEULE FOIS PAR COMPTE</span>
-              <h3 id="discovery-offer-title">Découvrez ORIA.<br/><span>Gardez votre temps.</span></h3>
-              <p>Le Pack Découverte vous permet de commencer avec 8 000 crédits qui ne périment pas. Les modèles et créations autorisés restent utilisables tant que le solde suffit, sans quota fixe par fonctionnalité.</p>
-              <div className="oria-discovery-chips" aria-label="Fonctions prévues dans le Pack Découverte">
-                <span>GPT-6 Luna</span>
-                <span>GPT-5.6 Terra</span>
-                <span>Images Recraft · 1K</span>
-                <span>Vidéos Grok · 4 s / 480p</span>
-              </div>
-            </div>
-            <div className="oria-discovery-side">
-              <span className="oria-discovery-volume">8 000<small>crédits sans expiration</small></span>
-              <span className="oria-discovery-price">1 000 FCFA<small>Un paiement, pas d’abonnement</small></span>
-              <Link href="/packs">Voir le Pack Découverte <ArrowUpRight size={18} aria-hidden="true" /></Link>
-              <span className="oria-discovery-fineprint">Offre soumise à éligibilité · Un achat par compte · Une recharge unique possible : 1 000 crédits pour 600 FCFA.</span>
-            </div>
-          </article>
-        )}
+      <section className={styles.offersSection} id="offres" aria-labelledby="offers-title"><div className={styles.offersHeading}><div><p className={styles.sectionKicker}>04 — CHOISISSEZ VOTRE RYTHME</p><h2 id="offers-title">Un pack pour<br/>chaque ambition.</h2></div><p>"Les conditions, modèles, crédits et tarifs des packs payants sont présentés dans ORIA avant la souscription."</p></div>
         <div className={styles.offersGrid}>{offers.map((offer, index) => <div className={`${styles.offer} ${offer.accent ? styles.offerAccent : ""}`} key={offer.name}><div className={styles.offerTop}><span>{String(index+1).padStart(2,"0")}</span>{offer.accent && <span className={styles.offerPopular}>Plus de possibilités</span>}</div><h3>{offer.name}</h3><p className={styles.offerPosition}>{offer.position}</p><p className={styles.offerDescription}>{offer.description}</p><div className={styles.offerFooter}><span>{offer.models} au catalogue*</span><ArrowUpRight size={20}/></div></div>)}</div><div className={styles.offersBottom}><p>*Répartition prévue des modèles par pack, susceptible d’évoluer selon les disponibilités fournisseurs.</p><Link href="/chat" className={styles.blackButton}>Découvrir les packs dans ORIA <ArrowUpRight size={18}/></Link></div>
       </section>
 

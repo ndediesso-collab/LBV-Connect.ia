@@ -6,6 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routes import router
 
 from app.route.ai import router as ai_router
+from app.route.free_addon_recovery import router as free_addon_recovery_router
+from app.route.free_cv_plan import router as free_cv_plan_router
+from app.route.free_chat import router as free_router
+from app.route.free_documents import router as free_documents_router
 
 from app.services.oria_memory_middleware import OriaMemoryCleanupMiddleware
 
@@ -94,3 +98,12 @@ app.include_router(
     ai_router,
     prefix="/ai",
 )
+
+# ORIA Gratuit : staging flag and SQL enabled both required.
+app.include_router(free_router, prefix="/ai")
+app.include_router(free_documents_router, prefix="/ai")
+
+
+# ORIA gratuit: rapprochement de recharges serveur + collecte CV sans frais.
+app.include_router(free_addon_recovery_router)
+app.include_router(free_cv_plan_router, prefix="/ai")

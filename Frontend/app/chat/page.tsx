@@ -34,6 +34,8 @@ import dynamic from "next/dynamic";
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 
 import LogoutButton from "@/components/layout/LogoutButton";
+import OriaFreeChatPanel from "@/components/oria-free/OriaFreeChatPanel";
+import OriaGiftCampaign from "@/components/oria-campaign/OriaGiftCampaign";
 import { createClient } from "@/lib/supabase/client";
 import type { ChatMessage, Conversation } from "@/types/lbv";
 import { OriaMathBlock, OriaMathInline } from "@/components/oria-math/OriaMathRenderer";
@@ -7064,7 +7066,7 @@ export default function ChatPage() {
    */
 
   const remainingDays =
-    wallet?.pack_id === "discovery_pack" ? null : wallet?.pack_expires_at
+    wallet?.pack_expires_at
       ? Math.max(
           0,
           Math.ceil(
@@ -7098,11 +7100,9 @@ export default function ChatPage() {
     !wallet || wallet.is_pack_active === false ||
     (wallet.is_pack_active === true && availableBalance <= 0)
   );
-  const packCtaHref = discoveryWallet && discoveryStatus?.topup_available ? "/packs?recharge=decouverte" : "/packs";
+  const packCtaHref = "/packs";
   const packCtaLabel = discoveryWallet && availableBalance <= 0
-    ? (discoveryStatus?.topup_available
-      ? language === "fr" ? "Recharge unique Découverte" : "Discovery one-time top-up"
-      : language === "fr" ? "Découvrir les autres packs" : "See other plans")
+    ? (language === "fr" ? "Recharger ou changer de pack" : "Top up or change plan")
     : isLoadingWallet
     ? (language === "fr" ? "Chargement…" : "Loading…")
     : !wallet || !wallet.is_pack_active
@@ -7117,8 +7117,18 @@ export default function ChatPage() {
    * ==========================================================
    */
 
+  // STAGING uniquement : l'UI ne donne aucun droit ; GET /ai/free/status
+  // et les RPC Supabase décident de l'accès réel. Le parcours payant reste intact.
+  if (
+    process.env.NEXT_PUBLIC_ORIA_FREE_UI_STAGING_ENABLED === "1" &&
+    !isLoadingWallet && (!wallet || wallet.is_pack_active === false)
+  ) {
+    return <OriaFreeChatPanel apiFetch={apiFetch} />;
+  }
+
   return (
     <main className="min-h-dvh w-full min-w-0 overflow-x-clip bg-background text-foreground oria-chat-page">
+      <div className="mx-auto max-w-3xl px-4"><OriaGiftCampaign variant="chat" /></div>
       {discoveryNotice && (
         <div role="alert" className="fixed bottom-5 left-1/2 z-[100] flex w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 items-start justify-between gap-3 rounded-2xl border border-border bg-surface p-4 text-sm shadow-xl">
           <div><p>{discoveryNotice}</p><Link className="mt-2 inline-block font-semibold underline" href="/packs">{language === "fr" ? "Voir les packs" : "See plans"}</Link></div>
@@ -7140,8 +7150,8 @@ export default function ChatPage() {
                 <p className="text-sm font-semibold">{language === "fr" ? (creditAlert === 0 ? "Crédits épuisés" : "Votre solde de crédits diminue") : (creditAlert === 0 ? "Credits exhausted" : "Your credit balance is running low")}</p>
                 <p className="mt-1 text-xs leading-5 text-muted">{discoveryWallet
                   ? (discoveryStatus?.topup_available
-                      ? language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Votre recharge unique de 1 000 crédits est disponible pour 600 FCFA.` : `You have ${wallet.balance.toLocaleString("en-US")} credits. Your one-time 1,000-credit top-up is available for 600 XAF.`
-                      : language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Votre recharge Découverte n'est plus disponible ; choisissez un pack classique si nécessaire.` : `You have ${wallet.balance.toLocaleString("en-US")} credits. Your Discovery top-up is unavailable; choose a classic plan if needed.`)
+                      ? language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Les recharges standard sont disponibles pendant votre pack.` : `You have ${wallet.balance.toLocaleString("en-US")} credits. Standard top-ups remain available during your plan.`
+                      : language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Vous pouvez changer de pack à tout moment.` : `You have ${wallet.balance.toLocaleString("en-US")} credits. You can change plans at any time.`)
                   : language === "fr" ? `Il vous reste ${wallet.balance.toLocaleString("fr-FR")} crédits. Rechargez votre portefeuille pour continuer à utiliser ORIA.` : `You have ${wallet.balance.toLocaleString("en-US")} credits left. Top up to keep using ORIA.`}</p>
                 <Link href={packCtaHref} onClick={() => setCreditAlert(null)} className="mt-3 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-accent-foreground hover:opacity-85">{discoveryWallet && !discoveryStatus?.topup_available
                   ? language === "fr" ? "Voir les packs classiques" : "See classic plans"
@@ -7434,8 +7444,8 @@ export default function ChatPage() {
             </p>
 
             <p className="mt-1 text-[11px] text-muted">
-              {wallet?.pack_id === "discovery_pack"
-                ? language === "fr" ? "Crédits sans expiration" : "Credits never expire"
+              {wallet?.pack_id === "discovery_pack" && !wallet?.pack_expires_at
+                ? language === "fr" ? "Ancien pack sans expiration" : "Legacy non-expiring pass"
                 : wallet && !wallet.is_pack_active
                 ? UI[language].packExpired
                 : remainingDays !== null

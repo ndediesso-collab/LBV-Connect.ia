@@ -19,10 +19,10 @@ PRIMARY_PACKS = {
         "credits": 120000,
     },
 
-    # Offre unique : validation d'eligibilite dans le backend et Supabase.
+    # Pack Découverte permanent (35 jours). Prix 1500; attention à la RPC et Chariow.
     "discovery_pack": {
-        "price": 1000,
-        "credits": 8000,
+        "price": 1500,
+        "credits": 7000,
     },
 }
 

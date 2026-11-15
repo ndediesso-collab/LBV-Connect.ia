@@ -869,6 +869,7 @@ class TokenBillingService:
         web_enabled: bool = False,
 
         include_api_cost: bool = False,
+        max_web_calls: int | None = None,
 
     ) -> int | tuple[int, Decimal]:
 
@@ -996,14 +997,12 @@ class TokenBillingService:
 
         )
 
+        if max_web_calls is not None and (type(max_web_calls) is not int
+                                       or not 1 <= max_web_calls <= MAX_WEB_SEARCH_CALLS_PER_ACTION):
+            raise TokenBillingError("Plafond de recherche Web invalide")
         reserved_web_calls = (
-
-            MAX_WEB_SEARCH_CALLS_PER_ACTION
-
-            if web_enabled
-
-            else 0
-
+            (MAX_WEB_SEARCH_CALLS_PER_ACTION if max_web_calls is None else max_web_calls)
+            if web_enabled else 0
         )
 
         estimated_web_cost_usd = (
@@ -1303,6 +1302,7 @@ class OpenRouterTokenBillingService:
         max_output_tokens: int = MAX_CHAT_OUTPUT_TOKENS, web_enabled: bool = False,
         rates: Mapping[str, Mapping[str, Any]] | None = None,
         web_search_usd_per_call: Any = None,
+        max_web_calls: int | None = None,
     ) -> OpenRouterReservationQuote:
         """Réserve le coût maximum estimé (tokens + Web) et 20 % de marge.
 
@@ -1332,7 +1332,10 @@ class OpenRouterTokenBillingService:
             if web_search_usd_per_call is None:
                 web_search_usd_per_call = OPENROUTER_WEB_SEARCH_RESERVATION_USD_PER_CALL
             web_rate = cls._money(web_search_usd_per_call, "plafond_web_usd_per_call")
-            web_budget = MAX_WEB_SEARCH_CALLS_PER_ACTION
+            if max_web_calls is not None and (type(max_web_calls) is not int
+                                               or not 1 <= max_web_calls <= MAX_WEB_SEARCH_CALLS_PER_ACTION):
+                raise TokenBillingError("Nombre de recherches Web réservé invalide.")
+            web_budget = MAX_WEB_SEARCH_CALLS_PER_ACTION if max_web_calls is None else max_web_calls
             estimated += Decimal(web_budget) * web_rate
         safety = cls._money(PACK_API_SAFETY_RESERVE_RATIO, "PACK_API_SAFETY_RESERVE_RATIO", allow_zero=True)
         if safety > 1:

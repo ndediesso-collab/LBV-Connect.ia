@@ -1004,6 +1004,16 @@ def _resolve_artifact_requests(
     """
     message_text = str(message or "").strip()
     lower_message = message_text.lower()
+    # High-confidence natural-language file commands override fragile substring
+    # rules. Explicit frontend artifact_type remains the top priority.
+    if not (explicit_type and explicit_type.strip()):
+        from app.services.oria_document_intent_v2 import detect_document_creation
+        requested_format = detect_document_creation(message_text)
+        if requested_format:
+            return [{"file_type": requested_format, "filename":
+                _artifact_filename_from_message(message_text,
+                                                extension=requested_format,
+                                                explicit_filename=explicit_filename)}]
 
     detected_types: list[str] = []
 
@@ -1510,6 +1520,10 @@ def _render_document_results(
     """
     if not isinstance(artifact_payload, dict):
         raise ArtifactError("Réponse documentaire structurée absente.")
+    from app.services.oria_cv_renderer import adapt_cv_payload
+    cv_style = next((item.get("cv_style") for item in artifact_requests
+                    if isinstance(item, dict) and item.get("cv_style")), None)
+    artifact_payload = adapt_cv_payload(artifact_payload, expected_style=cv_style)
     expected_types = [str(r.get("file_type") or "").lower().lstrip(".")
                       for r in artifact_requests]
     specs = artifact_payload.get("artifacts")
@@ -4937,6 +4951,21 @@ async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: s
 # ============================================================
 
 
+
+def _oria_cv_question_response(*, model, action, wallet, question: str) -> ChatResponse:
+    """A CV questionnaire is not a provider request and costs zero credits."""
+    current=max(0, int(wallet.balance or 0))
+    initial=max(current, int(getattr(wallet, "initial_credits", 0) or 0))
+    remaining=round(100.0 * current / initial, 2) if initial else 0.0
+    return ChatResponse(
+        success=True, model=model, action=action.value, message=question,
+        cost=0, previous_balance=current, credits_remaining=current,
+        consumed_percentage=round(100.0 - remaining, 2),
+        remaining_percentage=remaining, requires_warning=False,
+        requires_critical_warning=False, artifacts=None, artifact_errors=None,
+        provider=active_chat_provider().value, visual_mode=False,
+    )
+
 @router.post(
     "/chat",
     response_model=ChatResponse,
@@ -4983,11 +5012,28 @@ async def chat(
         source_message_id=attachment_message_id or source_message_id,
     )
 
-    artifact_requests = _resolve_artifact_requests(
-        message=message,
-        explicit_type=artifact_type,
-        explicit_filename=artifact_filename,
-    )
+    # ORIA_CV_V1_CHAT_PREFLIGHT: same six-category questionnaire for both paths.
+    from app.services.oria_cv_flow import analyze_cv_turn
+    from app.services.oria_cv_templates import cv_generation_message
+    try:
+        cv_state = analyze_cv_turn(message, history, artifact_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if cv_state is not None and not cv_state.ready:
+        return _oria_cv_question_response(
+            model=model, action=action, wallet=wallet, question=cv_state.question,
+        )
+    if cv_state is not None:
+        # Force the default PDF or explicitly requested Word; no extra UI.
+        artifact_requests = [{"file_type": cv_state.fmt, "filename": None, "cv_style": cv_state.style}]
+        # The long CV style prompt is included BEFORE provider quote/reserve.
+        message = cv_generation_message(message, style=cv_state.style, fmt=cv_state.fmt)
+    else:
+        artifact_requests = _resolve_artifact_requests(
+            message=message,
+            explicit_type=artifact_type,
+            explicit_filename=artifact_filename,
+        )
 
     document_types, _legacy_artifact_requests = _document_artifact_selection(
         artifact_requests
@@ -7423,11 +7469,47 @@ async def chat_stream(
         source_message_id=attachment_message_id or source_message_id,
     )
 
-    artifact_requests = _resolve_artifact_requests(
-        message=message,
-        explicit_type=artifact_type,
-        explicit_filename=artifact_filename,
-    )
+    # ORIA_CV_V1_CHAT_PREFLIGHT: no provider call before collecting CV fields.
+    from app.services.oria_cv_flow import analyze_cv_turn
+    from app.services.oria_cv_templates import cv_generation_message
+    try:
+        cv_state = analyze_cv_turn(message, history, artifact_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if cv_state is not None and not cv_state.ready:
+        cv_reply = _oria_cv_question_response(
+            model=model, action=action, wallet=wallet, question=cv_state.question,
+        )
+        cv_attempt_id = str(uuid4())
+        async def cv_info_stream():
+            yield _sse("start", {
+                "success": True, "model": model, "generation_id": generation_id,
+                "attempt_id": cv_attempt_id, "transport": "local",
+                "reasoning_mode": reasoning_mode, "artifact_requests": [],
+            })
+            yield _sse("delta", {
+                "content": cv_reply.message, "generation_id": generation_id,
+                "attempt_id": cv_attempt_id,
+            })
+            yield _sse("done", {
+                **cv_reply.model_dump(), "generation_id": generation_id,
+                "attempt_id": cv_attempt_id, "transport": "local",
+                "reasoning_mode": reasoning_mode,
+            })
+        return StreamingResponse(
+            cv_info_stream(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache, no-transform",
+                     "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        )
+    if cv_state is not None:
+        artifact_requests = [{"file_type": cv_state.fmt, "filename": None, "cv_style": cv_state.style}]
+        message = cv_generation_message(message, style=cv_state.style, fmt=cv_state.fmt)
+    else:
+        artifact_requests = _resolve_artifact_requests(
+            message=message,
+            explicit_type=artifact_type,
+            explicit_filename=artifact_filename,
+        )
 
     document_types, _legacy_artifact_requests = _document_artifact_selection(
         artifact_requests

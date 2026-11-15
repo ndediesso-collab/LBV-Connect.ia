@@ -609,10 +609,10 @@ BUSINESS_PACK_API_BUDGET_XAF = 20_000
 # Droits commerciaux ; autorisation, crédits et idempotence sont vérifiés
 # par les routes authentifiées, le portefeuille et les jobs Supabase.
 # Les montants et identifiants Chariow sont geres dans config/payments.py.
-DISCOVERY_PACK_CREDITS = 8_000
-DISCOVERY_PACK_PRICE_XAF = 1_000
-DISCOVERY_PACK_DURATION_DAYS: int | None = None  # aucune expiration
-DISCOVERY_PACK_MAX_PURCHASES = 1  # limite a faire appliquer par SQL
+DISCOVERY_PACK_CREDITS = 7_000
+DISCOVERY_PACK_PRICE_XAF = 1_500
+DISCOVERY_PACK_DURATION_DAYS: int | None = 35  # nouveau pack payant; cadeau = 14 jours en SQL
+DISCOVERY_PACK_MAX_PURCHASES = None  # renouvelable, une seule commande en attente a la fois
 
 DISCOVERY_TOPUP_CREDITS = 1_000
 DISCOVERY_TOPUP_PRICE_XAF = 600

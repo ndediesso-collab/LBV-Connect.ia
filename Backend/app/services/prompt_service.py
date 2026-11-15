@@ -655,9 +655,10 @@ def build_artifact_generation_instructions(artifact_types) -> str:
     formats = _artifact_formats_for_prompt(artifact_types)
     if not formats:
         return ""
-    return ORIA_ARTIFACT_CREATION_INSTRUCTIONS.replace(
+    from app.services.oria_document_intent_v2 import exact_artifact_manifest
+    return (ORIA_ARTIFACT_CREATION_INSTRUCTIONS.replace(
         "{target_formats}", ", ".join(formats)
-    )
+    ) + exact_artifact_manifest(formats))
 
 
 def build_output_prompt(

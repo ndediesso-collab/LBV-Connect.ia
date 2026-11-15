@@ -65,6 +65,7 @@ ORIA_V2_PACK_MODEL_COUNT = {
     "intermediate": 2,
     "pro": 3,
     "business": 4,
+
 }
 _ORIA_V2_PACK_ALIASES = {
     "light": "light", "léger": "light", "leger": "light",

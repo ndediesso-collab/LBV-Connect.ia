@@ -3628,6 +3628,8 @@ class OpenAIService:
 
         visual_mode: bool = False,
         artifact_types: str | list[str] | tuple[str, ...] | None = None,
+        max_output_tokens: int = MAX_CHAT_OUTPUT_TOKENS,
+        free_web_limits: bool = False,
     ) -> dict[str, Any]:
 
 
@@ -3676,6 +3678,11 @@ class OpenAIService:
 
 
 
+        if type(max_output_tokens) is not int or not 1 <= max_output_tokens <= MAX_CHAT_OUTPUT_TOKENS:
+            raise ValueError("max_output_tokens hors limites")
+        if free_web_limits and (web is not True or attachments or history or artifact_types
+                                or type(max_output_tokens) is not int or max_output_tokens > 4096):
+            raise ValueError("Paramètres de recherche Web gratuite non autorisés.")
         document_types = self._document_types(artifact_types)
         input_data = self._build_input(
 
@@ -3753,7 +3760,7 @@ class OpenAIService:
 
 
 
-                MAX_CHAT_OUTPUT_TOKENS
+                max_output_tokens
 
 
 
@@ -3808,6 +3815,15 @@ class OpenAIService:
 
 
 
+        if free_web_limits:
+            # OpenAI documents that one tool call may consult >2 sites.
+            # This limits provider calls/cost, NOT distinct sources visited.
+            request["tools"] = [{"type": "web_search", "search_context_size": "low"}]
+            request["max_tool_calls"] = 1
+            input_data.insert(0, {"role": "developer", "content": (
+                "Recherche Web gratuite : cite au maximum deux sources principales, "
+                "sans inventer de sources. Réponds même si un seul site pertinent est trouvé."
+            )})
         self._apply_reasoning_to_request(
             request,
             model=model,

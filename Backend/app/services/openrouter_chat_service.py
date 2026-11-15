@@ -357,6 +357,8 @@ class OpenRouterChatService:
         reasoning_mode: str = "balanced", visual_mode: bool = False,
         artifact_types: Sequence[str] | str | None = None,
         stream: bool = False,
+        max_completion_tokens: int = 32_000,
+        free_web_limits: bool = False,
     ) -> dict[str, Any]:
         """Pure construction ; ne contacte pas OpenRouter et ne débite rien."""
         # Reproduire strictement les formats documentaires d'ORIA.
@@ -390,13 +392,15 @@ class OpenRouterChatService:
         if attachments and any(a.get("type") == "image" for a in attachments) and cap.get("images") is not True:
             raise OpenRouterUnsupportedFeatureError("Lecture d'images non validée pour ce modèle.")
 
+        if type(max_completion_tokens) is not int or not 1 <= max_completion_tokens <= 32_000:
+            raise ValueError("max_completion_tokens hors limites")
         payload: dict[str, Any] = {
             "model": model,
             "messages": self._build_messages(
                 message=message, history=history, attachments=attachments,
                 web=web, visual_mode=visual_mode, artifact_types=formats,
             ),
-            "max_completion_tokens": 32_000,
+            "max_completion_tokens": max_completion_tokens,
             "usage": {"include": True},
             "stream": stream,
         }
@@ -426,6 +430,14 @@ class OpenRouterChatService:
             }]
             # max_uses limite les recherches : max_tool_calls borne en plus les tours.
             payload["max_tool_calls"] = 3
+        if free_web_limits:
+            from app.services.free_web_policy import validate_free_web_request, free_exa_tool
+            validate_free_web_request(
+                model=model, web=web, max_completion_tokens=max_completion_tokens,
+                attachments=attachments, history=history, artifact_types=artifact_types,
+            )
+            payload["tools"] = [free_exa_tool()]
+            payload["max_tool_calls"] = 1
         if stream:
             payload["stream_options"] = {"include_usage": True}
         return payload
@@ -474,11 +486,15 @@ class OpenRouterChatService:
         history: Sequence[Mapping[str, Any]] | None = None,
         reasoning_mode: str = "balanced", visual_mode: bool = False,
         artifact_types: Sequence[str] | str | None = None,
+        max_completion_tokens: int = 32_000,
+        free_web_limits: bool = False,
     ) -> dict[str, Any]:
         payload = self.build_request(
             model=model, message=message, web=web, attachments=attachments,
             history=history, reasoning_mode=reasoning_mode,
             visual_mode=visual_mode, artifact_types=artifact_types,
+            max_completion_tokens=max_completion_tokens,
+            free_web_limits=free_web_limits,
         )
         with self._request(payload) as response:
             try:

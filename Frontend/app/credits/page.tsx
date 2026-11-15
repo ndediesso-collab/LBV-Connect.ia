@@ -61,6 +61,7 @@ import { useEffect, useMemo, useState } from "react";
 
 
 import { createClient } from "@/lib/supabase/client";
+import OriaFreeWalletSummary from "@/components/oria-free/OriaFreeWalletSummary";
 
 
 
@@ -69,21 +70,10 @@ import { createClient } from "@/lib/supabase/client";
 
 
 type PackId =
-
-
-
+  | "discovery_pack"
   | "light_pack"
-
-
-
   | "intermediate_pack"
-
-
-
   | "pro_pack"
-
-
-
   | "business_pack";
 
 
@@ -909,6 +899,8 @@ const PACK_CONFIG: Record<
 
 > = {
 
+  discovery_pack: { name: "Découverte", credits: 7_000, durationDays: 35 },
+
   light_pack: {
 
     name: "Léger",
@@ -1124,6 +1116,9 @@ async function apiFetch<T>(
 
 
   if (!response.ok) {
+    if (path === "/credits/me" && response.status === 404) {
+      return {success: false, wallet: null} as T;
+    }
 
 
 
@@ -1574,6 +1569,8 @@ function getPackName(
   const packNames: Record<PackId, { fr: string; en: string }> = {
 
 
+
+    discovery_pack: { fr: "Découverte", en: "Discovery" },
 
     light_pack: { fr: "Léger", en: "Light" },
 
@@ -2860,6 +2857,7 @@ export default function CreditsPage() {
 
 
     <main className="min-h-dvh bg-background text-foreground oria-page-enter">
+      {!isPackActive && <OriaFreeWalletSummary />}
 
 
 
