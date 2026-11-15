@@ -50,10 +50,11 @@ def free_web_quote(estimated_message_input_tokens: int) -> tuple[int, object]:
     # Reserve web snippets before dispatch; never trust a client quote.
     from app.services.token_billing_service import OpenRouterTokenBillingService
     from app.config.free_tier_policy import FREE_CHAT_OUTPUT_TOKENS_MAX
+    free_web_output_tokens = min(FREE_CHAT_OUTPUT_TOKENS_MAX, 1536)
     q = OpenRouterTokenBillingService.estimate_reservation(
         provider_model=FREE_WEB_MODEL,
         estimated_input_tokens=estimated_message_input_tokens + FREE_WEB_ADDITIONAL_INPUT_TOKENS,
-        max_output_tokens=FREE_CHAT_OUTPUT_TOKENS_MAX,
+        max_output_tokens=free_web_output_tokens,
         web_enabled=True,
         max_web_calls=FREE_WEB_MAX_CALLS,
     )

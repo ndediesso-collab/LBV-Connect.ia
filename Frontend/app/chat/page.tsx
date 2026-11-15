@@ -107,6 +107,7 @@ type OriaFreeCapabilities = {
     images?: {wired?: boolean; max_edge_pixels?: number};
     video?: {wired?: boolean};
     oria_courses?: {wired?: boolean};
+    attachments?: {wired?: boolean; max_files?: number};
   };
 };
 
@@ -1642,8 +1643,14 @@ function renderInlineMarkdown(
         const [, label, url] = linkMatch;
         const safeUrl = oriaSafeUrl(url);
         parts.push(safeUrl ? (
-          <a key={index} href={safeUrl} target="_blank" rel="noopener noreferrer"
-            className="font-medium underline underline-offset-2 hover:opacity-70">{label}</a>
+          <span key={index} className="inline-flex flex-wrap items-center gap-1">
+            <a href={safeUrl} target="_blank" rel="noopener noreferrer"
+              className="font-medium underline underline-offset-2 hover:opacity-70">{label}</a>
+            {/\.pdf(?:$|[?#])/i.test(label) || /\.pdf(?:$|[?#])/i.test(safeUrl) ? (
+              <a href={safeUrl} target="_blank" rel="noopener noreferrer" title="Prévisualiser le PDF"
+                aria-label={`Prévisualiser ${label}`} className="inline-flex rounded-md p-1 text-muted hover:bg-surface-secondary hover:text-foreground"><Eye size={15}/></a>
+            ) : null}
+          </span>
         ) : <span key={index}>{label}</span>);
       }
     }
@@ -4112,6 +4119,7 @@ export default function ChatPage() {
 
   // Le Chat ne conserve que le déclencheur : tout le Mini-Studio est isolé.
   const [isMiniStudioOpen, setIsMiniStudioOpen] = useState(false);
+  const [miniStudioBusy, setMiniStudioBusy] = useState(false);
   // Confirmation des coûts et paramètres Découverte avant ouverture du Mini-Studio.
   const [discoveryStudioConfirm, setDiscoveryStudioConfirm] = useState(false);
 
@@ -5448,7 +5456,28 @@ export default function ChatPage() {
     setRecording(false);
   }
 
+  // ORIA_FREE_DICTATION_V3 : dictée fournie par le navigateur (potentiellement en cloud); aucun appel vocal ORIA facturé.
+  function startFreeDictation(): void {
+    type RecognitionResult = {results: ArrayLike<{0: {transcript: string}}>; resultIndex: number};
+    type Recognition = {lang: string; interimResults: boolean; onresult: ((event: RecognitionResult) => void) | null;
+      onerror: ((event: {error?: string}) => void) | null; start: () => void};
+    type RecognitionConstructor = new () => Recognition;
+    const browser = window as unknown as {SpeechRecognition?: RecognitionConstructor; webkitSpeechRecognition?: RecognitionConstructor};
+    const Speech = browser.SpeechRecognition || browser.webkitSpeechRecognition;
+    if (!Speech) {setError("La dictée vocale gratuite n'est pas compatible avec ce navigateur. Utilise le clavier ou un navigateur prenant en charge la reconnaissance vocale.");return;}
+    const recognition = new Speech();
+    recognition.lang = language === "fr" ? "fr-FR" : "en-US";
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      const words = Array.from(event.results).map((value) => value[0]?.transcript || "").join(" ").trim();
+      if (words) setMessage((current) => `${current.trim()} ${words}`.trim());
+    };
+    recognition.onerror = () => setError("Dictée vocale interrompue. Aucun crédit n'a été dépensé.");
+    try {recognition.start();} catch {setError("Impossible de démarrer la dictée vocale.");}
+  }
+
   async function startVoiceRecording() {
+    if (isFreeAccount) {startFreeDictation();return;}
     if (discoveryWallet) {
       setDiscoveryNotice(language === "fr"
         ? "Les notes vocales ne sont pas incluses dans le Pack Découverte. Consultez les packs classiques."
@@ -5662,8 +5691,8 @@ export default function ChatPage() {
       if (label === "Recherche Web" && freeCapabilities?.catalog?.web?.wired !== true) {
         setError("La recherche Web gratuite n'est pas activée par le serveur.");return;
       }
-      if (label === "Fichier" || label === "Image") {
-        setError("Les pièces jointes ne sont pas encore disponibles dans le chat gratuit. Continuez en texte.");
+      if ((label === "Fichier" || label === "Image") && freeCapabilities?.catalog?.attachments?.wired !== true) {
+        setError("L'analyse des fichiers gratuits doit d'abord être activée sur le serveur.");
         return;
       }
     }
@@ -5713,19 +5742,22 @@ export default function ChatPage() {
     fileList: FileList | File[],
     expectedKind?: "image" | "file",
   ) {
-    if (isFreeAccount) {setError("Les pièces jointes ne sont pas disponibles dans le gratuit.");return;}
+    if (isFreeAccount && freeCapabilities?.catalog?.attachments?.wired !== true) {
+      setError("L'analyse des fichiers gratuits n'est pas activée sur le serveur.");return;
+    }
     const incoming = Array.from(fileList);
 
     if (incoming.length === 0) {
       return;
     }
 
+    const attachmentLimit = isFreeAccount ? 2 : MAX_ATTACHMENTS;
     const remainingSlots =
-      MAX_ATTACHMENTS - attachments.length;
+      attachmentLimit - attachments.length;
 
     if (remainingSlots <= 0) {
       setError(
-        `Vous pouvez joindre au maximum ${MAX_ATTACHMENTS} éléments par message.`,
+        `Vous pouvez joindre au maximum ${attachmentLimit} éléments par message.`,
       );
       return;
     }
@@ -6107,16 +6139,39 @@ export default function ChatPage() {
    * encore le contexte des échanges antérieurs. L'historique, lui, est bien conservé.
    * Aucun double-envoi automatique sur timeout : une réservation peut être en attente.
    */
+  // ORIA_FREE_FILES_V3 : Base64 uniquement pour un envoi gratuit plafonné côté serveur.
+  async function encodeFreeAttachments(files: ChatAttachment[]) {
+    if (files.length > 2) throw new Error("Maximum 2 fichiers en gratuit.");
+    return await Promise.all(files.map(async (attachment) => {
+      const file = attachment.file;
+      if (file.size > 2_000_000) throw new Error("Maximum 2 Mo par fichier gratuit.");
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Fichier illisible."));
+        reader.onload = () => {
+          const encoded = reader.result;
+          if (typeof encoded !== "string" || !encoded.includes(",")) reject(new Error("Fichier non lisible."));
+          else resolve(encoded.split(",",2)[1]);
+        };
+        reader.readAsDataURL(file);
+      });
+      return {type: attachment.kind, name: file.name, mime_type: file.type, data};
+    }));
+  }
+
   async function sendFreeMessage(options?: {content?: string; voice?: VoiceNote}) {
-    const content = (options?.content ?? message).trim();
+    const content = (options?.content ?? message).trim() || (attachments.length ? "Analyse les fichiers joints." : "");
     if (!content || isThinking || editBusy || editingMessageId !== null) return;
     if (!freeChatAuthorized || freeStatus?.paid_pack_active) {
       setError("Accès gratuit temporairement indisponible. Réessaie après avoir actualisé ton solde.");
       return;
     }
-    if (attachments.length > 0 || options?.voice) {
-      setError("Les pièces jointes et les messages vocaux ne sont pas encore disponibles dans le parcours gratuit. Tu peux continuer en texte.");
+    if (options?.voice) {
+      setError("Les fichiers audio restent réservés aux routes vocales autorisées. Utilise la dictée gratuite du microphone.");
       return;
+    }
+    if (attachments.length > 2 || (attachments.length>0 && freeCapabilities?.catalog?.attachments?.wired !== true)) {
+      setError("Maximum deux fichiers gratuits, si l'analyse est activée par le serveur.");return;
     }
     if (reasoningMode === "deep") {
       setError("Le compte gratuit propose les modes Rapide et Équilibré uniquement.");
@@ -6173,6 +6228,7 @@ export default function ChatPage() {
       const documentFormat = cvPlan?.ready ? cvPlan.docFormat : requestedFreeDocument(content);
       let answerText: string;
       let reconciliationRequired = false;
+      let serverPersistedMessageId: string | null = null;
       if (cvPlan && !cvPlan.ready) {
         answerText = cvPlan.answer;
       } else if (documentFormat) {
@@ -6181,20 +6237,25 @@ export default function ChatPage() {
       } else {
         const response = await apiFetch<{
           success: boolean; message: string; requires_reconciliation?: boolean;
+          server_persisted?: boolean; assistant_message_id?: string;
           wallet?: OriaFreeStatus["wallet"];
-        }>("/ai/free/chat", {
+        }>("/ai/free/chat/persistent", {
           method: "POST",
           body: JSON.stringify({
             message: content, model: "luna", reasoning_mode: reasoningMode, web: webEnabled,
+            attachments: await encodeFreeAttachments(attachments),
             conversation_id: conversationId, current_message_id: userMessage.id,
           }),
         });
         if (!response.success || !response.message?.trim()) throw new Error("La réponse gratuite n'a pas été confirmée.");
         answerText = response.message;
+        serverPersistedMessageId = response.server_persisted === true && response.assistant_message_id
+          ? response.assistant_message_id : null;
         reconciliationRequired = response.requires_reconciliation === true;
       }
+      setAttachments([]);
       const answer: ChatMessage = {
-        id: crypto.randomUUID(), conversationId, role: "assistant",
+        id: serverPersistedMessageId || crypto.randomUUID(), conversationId, role: "assistant",
         content: answerText, createdAt: new Date().toISOString(),
       };
       setMessages((current) => activeConversationRef.current === conversationId ? [...current, answer] : current);
@@ -6207,11 +6268,13 @@ export default function ChatPage() {
           activeConversationId: conversationId, selectedModel: "luna", activeCapability,
         });
       }
-      try {
-        await saveMessageRemote(answer);
-      } catch (persistError) {
-        console.warn("Réponse gratuite conservée localement ; cloud à resynchroniser.", persistError);
-        setError("Réponse conservée localement. Sauvegarde cloud en attente ; ne relance pas la requête IA.");
+      if (!serverPersistedMessageId) {
+        try {
+          await saveMessageRemote(answer);
+        } catch (persistError) {
+          console.warn("Réponse gratuite conservée localement ; cloud à resynchroniser.", persistError);
+          setError("Réponse conservée localement. Sauvegarde cloud en attente ; ne relance pas la requête IA.");
+        }
       }
       if (reconciliationRequired) {
         setError("Vérification des crédits en cours. Ne relance pas automatiquement la demande.");
@@ -7392,7 +7455,7 @@ export default function ChatPage() {
 
   return (
     <main className="min-h-dvh w-full min-w-0 overflow-x-clip bg-background text-foreground oria-chat-page">
-      {isFreeAccount && <OriaFreeOfferNotifications status={freeStatus} enabled={freeChatAuthorized} onRefresh={refreshFreeStatus} />}
+      {isFreeAccount && <OriaFreeOfferNotifications status={freeStatus} enabled={freeChatAuthorized} busy={isThinking || miniStudioBusy} onRefresh={refreshFreeStatus} />}
       {isFreeAccount && <Link href="/packs?recharge=standard" aria-label="Voir les recharges et les packs ORIA" className="fixed bottom-36 right-4 z-30 flex max-w-[185px] items-center gap-2 rounded-full border border-border bg-foreground px-4 py-3 text-xs font-semibold text-background shadow-xl transition-transform hover:-translate-y-1 sm:bottom-8 sm:right-8"><Wallet size={16}/> Besoin de crédits ?</Link>}
       {discoveryNotice && (
         <div role="alert" className="fixed bottom-5 left-1/2 z-[100] flex w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 items-start justify-between gap-3 rounded-2xl border border-border bg-surface p-4 text-sm shadow-xl">
@@ -7566,13 +7629,16 @@ export default function ChatPage() {
           </div>
         </div>
       )}
-      {isMiniStudioOpen && (
-        <OriaMiniStudio
-          freeMode={isFreeAccount}
-          language={language}
-          onClose={() => setIsMiniStudioOpen(false)}
-          onWalletRefresh={() => { void loadWallet(); }}
-        />
+      {(isMiniStudioOpen || miniStudioBusy) && (
+        <div className={isMiniStudioOpen ? "" : "invisible pointer-events-none"}>
+          <OriaMiniStudio
+            freeMode={isFreeAccount}
+            language={language}
+            onClose={() => setIsMiniStudioOpen(false)}
+            onBusyChange={setMiniStudioBusy}
+            onWalletRefresh={() => { void loadWallet(); }}
+          />
+        </div>
       )}
       {sidebarOpen && (
         <button
@@ -8963,7 +9029,7 @@ export default function ChatPage() {
                   {!recording ? (
                     <button type="button" aria-label={language === "fr" ? "Enregistrer une note vocale" : "Record voice note"}
                       title={language === "fr" ? "Note vocale" : "Voice note"} onClick={() => void startVoiceRecording()}
-                      disabled={isFreeAccount || isThinking || Boolean(voiceDraft) || audioUploadBusyRef.current}
+                      disabled={isThinking || Boolean(voiceDraft) || audioUploadBusyRef.current}
                       className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-secondary transition hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-30"><Mic size={18}/></button>
                   ) : (
                     <button type="button" onClick={stopRecorder} aria-label="Stop recording"

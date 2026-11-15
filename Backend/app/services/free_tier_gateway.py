@@ -59,7 +59,7 @@ class FreeTierGateway:
 
     def reserve(self, user_id: str, reservation_id: str, credits: int,
                 estimated_api_xaf: object, *, action: str = "chat_luna") -> dict:
-        if action not in {"chat_luna", "free_pdf_luna", "free_docx_luna"}:
+        if action not in {"chat_luna", "free_pdf_luna", "free_docx_luna", "free_image_recraft"}:
             raise FreeTierRpcError("Unsupported free-tier action.")
         return self._rpc("oria_free_reserve", {
             "p_user_id": _uuid(user_id),

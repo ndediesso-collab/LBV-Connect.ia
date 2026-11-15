@@ -10,6 +10,7 @@ from app.route.free_addon_recovery import router as free_addon_recovery_router
 from app.route.free_cv_plan import router as free_cv_plan_router
 from app.route.free_chat import router as free_router
 from app.route.free_documents import router as free_documents_router
+from app.route.free_image_jobs import router as free_image_jobs_router
 
 from app.services.oria_memory_middleware import OriaMemoryCleanupMiddleware
 
@@ -102,6 +103,7 @@ app.include_router(
 # ORIA Gratuit : staging flag and SQL enabled both required.
 app.include_router(free_router, prefix="/ai")
 app.include_router(free_documents_router, prefix="/ai")
+app.include_router(free_image_jobs_router, prefix="/ai")
 
 
 # ORIA gratuit: rapprochement de recharges serveur + collecte CV sans frais.

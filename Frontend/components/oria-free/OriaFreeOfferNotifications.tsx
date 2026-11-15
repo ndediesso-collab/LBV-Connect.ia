@@ -16,11 +16,11 @@ type FreeStatus = {
   wallet?: {free_credits: number; purchased_credits: number; balance: number};
 };
 
-type Props = {status: FreeStatus | null; enabled: boolean; onRefresh?: () => Promise<void>};
+type Props = {status: FreeStatus | null; enabled: boolean; busy?: boolean; onRefresh?: () => Promise<void>};
 const VERSION = "oria_free_offres_v1";
 
 /** Affichage dans l'application. Ce ne sont pas des notifications push système. */
-export default function OriaFreeOfferNotifications({status, enabled, onRefresh}: Props) {
+export default function OriaFreeOfferNotifications({status, enabled, busy = false, onRefresh}: Props) {
   const [uid, setUid] = useState<string | null>(null);
   const offersEnabled = enabled && process.env.NEXT_PUBLIC_ORIA_FREE_OFFERS_ENABLED !== "0";
   const [notice, setNotice] = useState<OfferNotice | null>(null);
@@ -86,7 +86,7 @@ export default function OriaFreeOfferNotifications({status, enabled, onRefresh}:
     if (outcome.notice) setNotice(outcome.notice);
   }, [uid, status, offersEnabled, clockTick]);
 
-  if (!notice || !uid || !offersEnabled || !status || status.paid_pack_active || (status.wallet?.purchased_credits ?? 0) > 0) return null;
+  if (busy || !notice || !uid || !offersEnabled || !status || status.paid_pack_active || (status.wallet?.purchased_credits ?? 0) > 0) return null;
 
   const headline = notice.kind === "reminder"
     ? "Découvre tout le potentiel d'ORIA"
@@ -100,7 +100,7 @@ export default function OriaFreeOfferNotifications({status, enabled, onRefresh}:
       : "Tu approches de la fin de ton quota gratuit. Voici comment continuer sans interrompre ton expérience.";
 
   return (
-    <aside role="status" aria-live="polite" aria-label="Offres ORIA" className="fixed bottom-5 left-1/2 z-[90] w-[calc(100%-1.5rem)] max-w-lg -translate-x-1/2 rounded-2xl border border-border bg-background p-4 text-foreground shadow-2xl sm:bottom-6 sm:p-5">
+    <aside role="status" aria-live="polite" aria-label="Offres ORIA" className="fixed right-3 top-20 z-[90] max-h-[calc(100dvh-6rem)] w-[calc(100%-1.5rem)] max-w-sm overflow-y-auto rounded-2xl border border-border bg-background p-4 text-foreground shadow-2xl sm:bottom-6 sm:p-5">
       <div className="flex items-start gap-3">
         <BellRing size={20} className="mt-0.5 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1">

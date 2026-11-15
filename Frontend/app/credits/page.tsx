@@ -2430,6 +2430,40 @@ export default function CreditsPage() {
 
 
 
+  // ORIA_FREE_CREDIT_VIEW_V3 : lecture du solde gratuit et de ses seules reservations.
+  const [freeUsage, setFreeUsage] = useState<{
+    daily_credits: number; paid_pack_active: boolean;
+    wallet: {free_credits: number; purchased_credits: number; balance: number};
+  } | null>(null);
+  const [freeHistory, setFreeHistory] = useState<Array<{
+    id: string; action: string; status: string; charged_credits: number | null;
+    reserved_credits: number | null; created_at?: string | null;
+  }>>([]);
+  const [freeHistoryError, setFreeHistoryError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = async () => {
+      try {
+        const status = await apiFetch<{success: boolean; daily_credits: number; paid_pack_active: boolean;
+          wallet: {free_credits: number; purchased_credits: number; balance: number}}>("/ai/free/status");
+        if (!live) return;
+        if (status.success && status.paid_pack_active === false) {
+          setFreeUsage(status);
+          try {
+            const history = await apiFetch<{success: boolean; transactions: Array<{
+              id: string; action: string; status: string; charged_credits: number | null;
+              reserved_credits: number | null; created_at?: string | null}>}>("/ai/free/transactions");
+            if (live && history.success) {setFreeHistory(history.transactions || []);setFreeHistoryError(null);}
+          } catch {if (live) setFreeHistoryError("Historique gratuit indisponible. Aucune dépense n'est estimée.");}
+        } else setFreeUsage(null);
+      } catch {if (live) setFreeUsage(null);}
+    };
+    void load();
+    const focus = () => void load();
+    window.addEventListener("focus", focus);
+    return () => {live=false;window.removeEventListener("focus",focus);};
+  }, []);
+
   async function loadCredits() {
 
 
@@ -2851,6 +2885,36 @@ export default function CreditsPage() {
 
 
 
+
+  // Le compte gratuit a son propre portefeuille; un ancien pack expiré ne le remplace pas.
+  if (freeUsage?.paid_pack_active === false) {
+    return <main className="min-h-dvh bg-background px-4 py-10 text-foreground">
+      <div className="mx-auto max-w-4xl">
+        <div className="mb-8 flex items-center justify-between gap-3">
+          <h1 className="text-2xl font-bold">Mes crédits · Gratuit</h1>
+          <a href="/packs" className="rounded-xl border border-border px-4 py-2 text-sm">Voir les packs et recharges</a>
+        </div>
+        <div className="rounded-3xl border border-border bg-surface p-6">
+          <p className="text-sm text-muted">Crédits disponibles</p>
+          <p className="mt-2 text-4xl font-bold">{freeUsage.wallet.balance}</p>
+          <p className="mt-3 text-sm text-muted">{freeUsage.wallet.free_credits} gratuits aujourd'hui sur {freeUsage.daily_credits} · {freeUsage.wallet.purchased_credits} achetés</p>
+        </div>
+        <section className="mt-8">
+          <h2 className="mb-4 text-lg font-semibold">Historique du portefeuille gratuit</h2>
+          {freeHistoryError && <p role="status" className="mb-4 text-sm text-muted">{freeHistoryError}</p>}
+          {freeHistory.length === 0 ? <p className="text-sm text-muted">Aucune opération disponible pour le moment.</p> :
+            <div className="overflow-hidden rounded-2xl border border-border">
+              {freeHistory.map((item, index) => <div key={`${item.id}-${index}`} className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4 last:border-0">
+                <div><p className="font-medium">{item.action.replaceAll("_", " ")}</p>
+                  <p className="text-xs text-muted">{item.created_at ? new Date(item.created_at).toLocaleString("fr-FR") : "Date non transmise"} · {item.status}</p></div>
+                <p className="font-semibold">{item.charged_credits !== null ? `${item.charged_credits} crédits réellement débités` : item.reserved_credits !== null ? `${item.reserved_credits} crédits réservés · coût réel à vérifier` : "Coût réel à vérifier"}</p>
+              </div>)}
+            </div>}
+          <p className="mt-4 text-xs text-muted">Les crédits réservés ne sont pas automatiquement des crédits dépensés. Les transactions des packs payants ne figurent pas dans ce relevé.</p>
+        </section>
+      </div>
+    </main>;
+  }
 
   return (
 

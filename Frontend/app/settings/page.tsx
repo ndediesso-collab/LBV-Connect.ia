@@ -1469,7 +1469,7 @@ async function reverseGeocode(
                       value={phone}
                       onChange={setPhone}
                       type="tel"
-                      placeholder="+241 77 37 98 48"
+                      placeholder=""
                     />
                   </div>
 

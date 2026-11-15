@@ -6,6 +6,8 @@ Do NOT advertise a 'two sites searched' guarantee for this provider.
 from __future__ import annotations
 
 from app.config.free_tier_policy import FREE_CHAT_OUTPUT_TOKENS_MAX
+# Reduction des longues reponses web gratuites, pas du moteur payant.
+FREE_WEB_OUTPUT_TOKENS = min(FREE_CHAT_OUTPUT_TOKENS_MAX, 1536)
 from app.services.chat_provider_router import ChatProvider
 
 FREE_OPENAI_WEB_TOOL_CALLS = 1
@@ -30,7 +32,7 @@ def free_provider_web_quote(provider: object, estimated_input: int):
     # reservation is per upstream TOOL call, not displayed citations.
     return TokenBillingService.estimate_reservation(
         model='luna', estimated_input_tokens=estimated_input + 3000,
-        max_output_tokens=FREE_CHAT_OUTPUT_TOKENS_MAX,
+        max_output_tokens=FREE_WEB_OUTPUT_TOKENS,
         web_enabled=True, include_api_cost=True,
         max_web_calls=FREE_OPENAI_WEB_TOOL_CALLS,
     )

@@ -121,6 +121,7 @@ type Props = {
   onClose: () => void;
   onWalletRefresh?: () => void;
   freeMode?: boolean;
+  onBusyChange?: (busy: boolean) => void;
 };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "https://lbv-connect-api.onrender.com";
@@ -313,8 +314,17 @@ function asMedia(raw: unknown): Media | null {
   };
 }
 
-export default function OriaMiniStudio({ language, onClose, onWalletRefresh, freeMode = false }: Props) {
+export default function OriaMiniStudio({ language, onClose, onWalletRefresh, freeMode = false, onBusyChange }: Props) {
   // ORIA_UNIQUE_STUDIO_V2 : le même composant pour tous. Les permissions sont serveur.
+  // ORIA_FREE_IMAGE_JOBS_V1: jobs belong to the server, not to the modal's lifecycle.
+  type FreeImageJob = { id:string; status:string; prompt:string; media_url?:string | null;
+    created_at?:string; reserved_credits?:number; charged_credits?:number | null; error_code?:string | null };
+  const [freeImagePrompt, setFreeImagePrompt] = useState("");
+  const [freeRatio, setFreeRatio] = useState("1:1");
+  const [freeImageBusy, setFreeImageBusy] = useState(false);
+  const [freeImageJobs, setFreeImageJobs] = useState<FreeImageJob[]>([]);
+  const [freeImageHint, setFreeImageHint] = useState<string | null>(null);
+
   const [freeCanCreateImages, setFreeCanCreateImages] = useState(false);
   const [screen, setScreen] = useState<Screen>("image");
   const [projectCaps, setProjectCaps] = useState<ProjectVideoCaps | null>(null);
@@ -325,6 +335,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh, fre
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [quoting, setQuoting] = useState(false);
+  useEffect(() => {onBusyChange?.(busy);}, [busy, onBusyChange]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -385,7 +396,7 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh, fre
   const generationReady = Boolean(caps?.generation_available && wallet?.is_pack_active && modeAvailableNow);
 
   function invalidateQuote() { setQuote(null); setAccepted(false); setNotice(null); }
-  function changeScreen(next: Screen) { if (busy || quoting || (freeMode && (next === "video" || next === "projects"))) return; setScreen(next); invalidateQuote(); setError(null); }
+  function changeScreen(next: Screen) { if (busy || quoting || (freeMode && (next === "video" || next === "projects"))) return; setScreen(next); if (next === "gallery") void loadGallery(); invalidateQuote(); setError(null); }
 
   async function loadCapabilities() {
     setLoading(true);
@@ -401,7 +412,12 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh, fre
           throw new Error("Les droits du Mini-Studio gratuit ne sont pas confirmés.");
         }
         setWallet({balance: status.wallet.balance, pack_id: null, is_pack_active: false});
-        setFreeCanCreateImages(access.catalog.images?.wired === true);
+        // Le catalogue affiche une intention; la vraie route valide SQL/clé/modèle.
+        try {
+          const imageCaps = await api<{success: boolean; ready: boolean; model: string; reserve_credits: number}>("/ai/free/images/capabilities");
+          setFreeCanCreateImages(access.catalog.images?.wired === true && imageCaps.ready === true &&
+            imageCaps.model === "recraft/recraft-v4.1-flash" && imageCaps.reserve_credits === 60);
+        } catch { setFreeCanCreateImages(false); }
         return; // Jamais de capacités payantes sur un compte gratuit.
       }
       const walletResponse = await api<{ success: boolean; wallet: Wallet }>("/credits/me");
@@ -456,6 +472,44 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh, fre
   }
 
   useEffect(() => { void loadCapabilities(); void loadGallery(); }, []); // ouverture du Studio uniquement
+
+  async function refreshFreeImageJobs() {
+    if (!freeMode) return;
+    try {
+      const response = await api<{success: boolean; jobs: FreeImageJob[]}>("/ai/free/images/jobs");
+      if (response.success && Array.isArray(response.jobs)) {
+        setFreeImageJobs(response.jobs);
+        if (response.jobs.some(job => job.status === "completed")) await loadGallery();
+      }
+    } catch { /* Serveur indisponible : ne pas relancer une création payante. */ }
+  }
+
+  async function startFreeImageGeneration() {
+    if (!freeMode || !freeCanCreateImages || freeImageBusy || freeImagePrompt.trim().length < 3) return;
+    const request_id = crypto.randomUUID();
+    setFreeImageBusy(true); setFreeImageHint(null);
+    try {
+      const response = await api<{success: boolean; job: FreeImageJob}>("/ai/free/images/jobs", {
+        method: "POST", body: JSON.stringify({request_id, prompt: freeImagePrompt.trim(), aspect_ratio: freeRatio}),
+      });
+      if (!response.success) throw new Error("La demande n'a pas été acceptée.");
+      setFreeImageHint("Création enregistrée côté serveur. Tu peux fermer le Studio ou changer de page : retrouve le résultat dans Mes créations.");
+      setFreeImagePrompt("");
+      await refreshFreeImageJobs();
+      onWalletRefresh?.();
+    } catch (error) {
+      setFreeImageHint(error instanceof Error ? error.message : "Démarrage non confirmé. Vérifie Mes créations avant de réessayer.");
+    } finally {setFreeImageBusy(false);}
+  }
+
+  useEffect(() => {
+    if (!freeMode) return;
+    void refreshFreeImageJobs();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshFreeImageJobs();
+    }, 6000);
+    return () => window.clearInterval(interval);
+  }, [freeMode]);
 
   // La création de films utilise les routes OpenRouter *projects*.
   // Un GET non facturable vérifie leur présence AVANT le montage du composant :
@@ -866,16 +920,37 @@ export default function OriaMiniStudio({ language, onClose, onWalletRefresh, fre
 
           {freeMode && screen !== "gallery" ? (
             <div className="mx-auto max-w-2xl rounded-2xl border border-border bg-surface p-6 sm:p-8">
-              <h3 className="text-lg font-semibold">{tr("Images · Bêta ORIA", "Images · ORIA Beta")}</h3>
-              <p className="mt-3 text-sm leading-6 text-muted-strong">
-                {freeCanCreateImages
-                  ? tr("Le backend annonce les images, mais leur génération gratuite reste désactivée tant que la route sécurisée n'est pas déployée.",
-                       "The backend reports images, but free generation is disabled until the secure endpoint is deployed.")
-                  : tr("La génération d'images gratuites n'est pas encore activée. Tu peux consulter tes créations précédentes.",
-                       "Free image generation is not yet enabled. You can browse your existing creations.")}
-              </p>
-              <p className="mt-3 text-xs text-muted">{tr("Aucun appel de génération payante depuis un compte gratuit.", "No paid generation calls from a free account.")}</p>
-              <Link href="/packs" className="mt-5 inline-flex rounded-xl border border-border px-4 py-2 text-sm font-semibold">{tr("Voir les packs et recharges", "See plans and top-ups")}</Link>
+              <h3 className="text-lg font-semibold">Images · ORIA Gratuit · Recraft Flash 1K</h3>
+              <p className="mt-2 text-sm text-muted">Une image à la fois, à partir d'une description. Réservation de 60 crédits au lancement, puis débit du coût confirmé.</p>
+              <label htmlFor="oria-free-image-prompt" className="mt-5 block text-sm font-medium">Décris ton image</label>
+              <textarea id="oria-free-image-prompt" value={freeImagePrompt}
+                onChange={(event) => setFreeImagePrompt(event.target.value)} maxLength={1800} rows={4}
+                placeholder="Ex. Portrait en studio, fond noir et blanc, lumière douce…"
+                className="mt-2 w-full rounded-xl border border-border bg-background p-3 text-sm" disabled={!freeCanCreateImages || freeImageBusy}/>
+              <label htmlFor="oria-free-image-ratio" className="mt-3 block text-sm font-medium">Format</label>
+              <select id="oria-free-image-ratio" value={freeRatio} onChange={e => setFreeRatio(e.target.value)}
+                disabled={!freeCanCreateImages || freeImageBusy} className="mt-2 rounded-xl border border-border bg-background p-3 text-sm">
+                {["1:1", "4:3", "3:4", "16:9", "9:16"].map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <button type="button" disabled={!freeCanCreateImages || freeImageBusy || freeImagePrompt.trim().length < 3}
+                  onClick={() => void startFreeImageGeneration()}
+                  className="rounded-xl bg-foreground px-5 py-3 text-sm font-semibold text-background disabled:opacity-35">
+                  {freeImageBusy ? "Enregistrement…" : "Générer l'image"}
+                </button>
+                <button type="button" onClick={() => changeScreen("gallery")}
+                  className="rounded-xl border border-border px-4 py-3 text-sm">Mes créations</button>
+              </div>
+              {!freeCanCreateImages && <p role="status" className="mt-3 text-sm text-muted">La génération gratuite sera disponible lorsque Render et la base auront confirmé leurs permissions.</p>}
+              {freeImageHint && <p role="status" className="mt-3 text-sm">{freeImageHint}</p>}
+              <div className="mt-6 space-y-2">
+                {freeImageJobs.slice(0, 6).map(job => <div key={job.id} className="flex items-center justify-between gap-3 rounded-xl border border-border px-3 py-2 text-xs">
+                  <span className="min-w-0 flex-1 truncate">{job.prompt}</span>
+                  <span className="shrink-0 font-medium">{job.status === "completed" ? `${job.charged_credits ?? "?"} crédits` :
+                    job.status === "needs_review" ? "Vérification nécessaire" : job.status === "declined" ? "Refusé" : "En cours…"}</span>
+                </div>)}
+              </div>
+              <p className="mt-4 text-xs text-muted">Une création en cours continue côté serveur si tu fermes cette fenêtre. Elle sera enregistrée dans « Mes créations » lorsqu'elle est terminée. Ne redemande pas la même création en cas de doute.</p>
             </div>
           ) : screen === "projects" ? (
             <section aria-label={tr("Projets vidéo", "Video projects")}

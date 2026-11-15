@@ -1580,7 +1580,7 @@ export default function PacksPage() {
       let packId: string | null = null;
       if (walletResponse.ok) {
         const walletData = await walletResponse.json();
-        packId = typeof walletData?.wallet?.pack_id === "string" ? walletData.wallet.pack_id : null;
+        packId = walletData?.wallet?.is_pack_active === true && typeof walletData?.wallet?.pack_id === "string" ? walletData.wallet.pack_id : null;
       } else if (walletResponse.status !== 404) {
         // 404 est normal sur un nouveau compte, avant son tout premier achat.
         throw new Error(`wallet:${walletResponse.status}`);
@@ -2576,7 +2576,22 @@ export default function PacksPage() {
               : discoveryStatus.purchase_needs_review
                 ? (language === "fr" ? "Cette commande ancienne exige une vérification avant toute nouvelle tentative." : "This older order requires verification before another attempt.")
                 : (language === "fr" ? "Paiement en attente : reprise disponible après une minute si le lien Chariow est enregistré." : "Pending payment: resume after one minute if the Chariow link is saved.")}
-            <button type="button" onClick={() => void refreshDiscoveryStatus()} className="ml-3 underline">{language === "fr" ? "Actualiser" : "Refresh"}</button>
+            <button type="button" onClick={() => { void (async () => {
+              try {
+                const client=createClient();
+                const {data:{session}}=await client.auth.getSession();
+                if (!session?.access_token) return;
+                const r=await fetch(`${API_URL}/payments/primary/reconcile-me`, {
+                  method:"POST",headers:{Authorization:`Bearer ${session.access_token}`,
+                    "user-id":session.user.id},cache:"no-store"});
+                if (!r.ok) throw new Error("Rapprochement indisponible");
+                const result=await r.json();
+                setDiscoveryNotice(result?.activated_now>0
+                  ? "Paiement confirmé : votre pack a été activé."
+                  : "Vérification réalisée. Une commande non confirmée reste en attente ; aucun nouvel achat n'a été lancé.");
+                await refreshDiscoveryStatus();
+              } catch {setDiscoveryNotice("État Chariow indisponible. Ne payez pas deux fois : contactez l'assistance ORIA si le paiement a été prélevé.");}
+            })(); }} className="ml-3 underline">{language === "fr" ? "Vérifier le paiement" : "Check payment"}</button>
           </p>
         )}
         {DISCOVERY_PUBLIC && discoveryWallet && discoveryStatus?.enabled && (

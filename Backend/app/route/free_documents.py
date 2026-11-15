@@ -184,6 +184,11 @@ async def create_free_document(
         if settlement.get('status') == 'review':
             raise RuntimeError('Settlement requires reconciliation')
         balance = gateway.balance(uid)
+        from app.services.oria_free_audit import record_free_usage
+        if settlement.get("status") in ("settled", "completed"):
+            record_free_usage(supabase,user_id=uid,reservation_id=rid,
+                              action=_ALLOWED[payload.format],credits=bill.credits,
+                              api_xaf=bill.total_cost_xaf)
     except Exception as exc:
         logger.exception('ORIA free document settlement failed; reservation=%s', rid)
         raise HTTPException(503, 'Usage IA à rapprocher ; aucun fichier confirmé.') from exc
