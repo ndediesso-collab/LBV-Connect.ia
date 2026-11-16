@@ -4238,8 +4238,14 @@ export default function ChatPage() {
   // Les documents transmis par l'utilisateur sont différents des fichiers générés.
   const [storedAttachmentsByConversation, setStoredAttachmentsByConversation] =
     useState<Record<string, StoredConversationAttachment[]>>({});
+  // ORIA_FREE_EDIT_PREVIEW_20261116 : liberer les apercus PDF temporaires.
   const [userAttachmentPreview, setUserAttachmentPreview] =
     useState<UserAttachmentPreview | null>(null);
+  useEffect(() => () => {
+    if (userAttachmentPreview?.url.startsWith("blob:")) {
+      URL.revokeObjectURL(userAttachmentPreview.url);
+    }
+  }, [userAttachmentPreview]);
   const [busyUserAttachmentId, setBusyUserAttachmentId] = useState<string | null>(null);
 
   // Le Chat ne conserve que le déclencheur : tout le Mini-Studio est isolé.
@@ -4843,18 +4849,19 @@ export default function ChatPage() {
     const serverId = persistedMessageIds[item.id] || item.id;
     const content = editDraft.trim();
     if (!conversationId || !content || editSubmittingRef.current || isThinking || editBusy) return;
-    if (content.length > 24000) {
-      setEditError(language === "fr" ? "Le message dépasse 24 000 caractères." : "Message exceeds 24,000 characters.");
+    if (content.length > (isFreeAccount ? 12000 : 24000)) {
+      setEditError(language === "fr" ? "La demande dépasse la limite de caractères de ce compte." : "Message exceeds this account's character limit.");
       return;
     }
     if (content === editableUserText(item.content)) return;
-    if (requiresOriginalFiles(editOriginalContent) && editFiles.length === 0) {
+    if (!isFreeAccount && requiresOriginalFiles(editOriginalContent) && editFiles.length === 0) {
       setEditError(language === "fr"
         ? "Ce message utilisait des pièces jointes. Ajoute de nouveau les fichiers d’origine avant de régénérer."
         : "This message used attachments. Reattach the original files before regenerating.");
       return;
     }
-    if (editFiles.length > MAX_ATTACHMENTS || editFiles.some((file) => !isAcceptedAttachment(file))) {
+    if ((isFreeAccount && editFiles.length > 0) || editFiles.length > MAX_ATTACHMENTS ||
+        editFiles.some((file) => !isAcceptedAttachment(file))) {
       setEditError(language === "fr" ? "Maximum 3 fichiers aux formats acceptés." : "Maximum 3 supported files.");
       return;
     }
@@ -4872,19 +4879,31 @@ export default function ChatPage() {
           base_revision: editBaseRevision,
         }) },
       );
-      const form = new FormData();
-      form.append("conversation_id", conversationId);
-      form.append("message_id", serverId);
-      form.append("model", selectedModel);
-      form.append("web", String(activeCapability === "Recherche Web"));
-      form.append("visual_mode", "true");
-      form.append("reasoning_mode", reasoningMode);
-      editFiles.forEach((file) => form.append("files", file, file.name));
-
-      const generated = await apiFetch<OriaGenerateRevisionResponse>(
-        `/ai/chat/revisions/${encodeURIComponent(prepared.revision.id)}/generate`,
-        { method: "POST", body: form },
-      );
+      let generated: OriaGenerateRevisionResponse;
+      if (isFreeAccount) {
+        // ORIA_FREE_EDIT_PREVIEW_20261116 : meme revision SQL, facturation gratuite distincte.
+        generated = await apiFetch<OriaGenerateRevisionResponse>(
+          `/ai/free/chat/revisions/${encodeURIComponent(prepared.revision.id)}/generate`,
+          { method: "POST", body: JSON.stringify({
+            conversation_id: conversationId, message_id: serverId,
+            reasoning_mode: reasoningMode === "fast" ? "fast" : "balanced",
+            web: activeCapability === "Recherche Web",
+          }) },
+        );
+      } else {
+        const form = new FormData();
+        form.append("conversation_id", conversationId);
+        form.append("message_id", serverId);
+        form.append("model", selectedModel);
+        form.append("web", String(activeCapability === "Recherche Web"));
+        form.append("visual_mode", "true");
+        form.append("reasoning_mode", reasoningMode);
+        editFiles.forEach((file) => form.append("files", file, file.name));
+        generated = await apiFetch<OriaGenerateRevisionResponse>(
+          `/ai/chat/revisions/${encodeURIComponent(prepared.revision.id)}/generate`,
+          { method: "POST", body: form },
+        );
+      }
       if (!generated.active) throw new Error(language === "fr"
         ? "La version n’a pas été activée : vérifie son état côté serveur."
         : "The revision was not activated: check server state.");
@@ -4923,8 +4942,8 @@ export default function ChatPage() {
         setEditDraft("");
         setEditFiles([]);
         setEditError(null);
-        void loadWallet();
-        void loadTrials();
+        if (isFreeAccount) void refreshFreeStatus();
+        else { void loadWallet(); void loadTrials(); }
       }
     } catch (cause) {
       // Ancienne question/réponse inchangée à l'écran jusqu'à la confirmation
@@ -5329,8 +5348,20 @@ export default function ChatPage() {
     try {
       const isImage = file.mime_type.startsWith("image/");
       if (!isImage && file.mime_type !== "application/pdf") return;
-      const url = await getStoredAttachmentUrl(file);
-      setUserAttachmentPreview({ id: file.id, filename: file.filename, url, isImage });
+      const signedUrl = await getStoredAttachmentUrl(file);
+      let previewUrl = signedUrl;
+      if (!isImage) {
+        // PDF en Blob prive, exactement comme l'affichage local fiable.
+        const response = await fetch(signedUrl, { cache: "no-store" });
+        if (!response.ok) throw new Error("Le PDF prive n'a pas pu etre charge.");
+        const bytes = await response.arrayBuffer();
+        if (bytes.byteLength < 5 || bytes.byteLength > 12 * 1024 * 1024 ||
+            new TextDecoder().decode(new Uint8Array(bytes, 0, 5)) !== "%PDF-") {
+          throw new Error("Le PDF stocke est invalide ou trop volumineux.");
+        }
+        previewUrl = URL.createObjectURL(new Blob([bytes], {type: "application/pdf"}));
+      }
+      setUserAttachmentPreview({ id: file.id, filename: file.filename, url: previewUrl, isImage });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Aperçu indisponible.");
     } finally {
@@ -6457,6 +6488,8 @@ export default function ChatPage() {
       setError((error instanceof Error ? error.message : "Échec de la demande") +
         (userEntry ? " Vérifie ton historique et ton solde avant de réessayer pour éviter un double coût." : ""));
     } finally {
+      // Sans cette lecture, la carte reste "Acces indisponible" apres envoi gratuit.
+      if (conversationId) void refreshStoredAttachments(conversationId);
       setChatStatusStep(null);
       setIsThinking(false);
       void refreshFreeStatus();
@@ -8256,7 +8289,7 @@ export default function ChatPage() {
                                 </button>
                               ) : (
                                 <button type="button"
-                                  disabled={isFreeAccount || editBusy || editOpening || isThinking ||
+                                  disabled={editBusy || editOpening || isThinking ||
                                     (editingMessageId !== null && editingMessageId !== item.id)}
                                   onClick={() => void openCompletedEdit(item)}
                                   aria-label={language === "fr" ? "Modifier ce message" : "Edit this message"}
@@ -8275,7 +8308,7 @@ export default function ChatPage() {
                                   onChange={(event) => setEditDraft(event.target.value)}
                                   disabled={editBusy} maxLength={24000}
                                   className="w-full resize-y rounded-xl border border-border bg-surface-secondary px-3 py-2 text-[16px] outline-none focus:border-muted-strong disabled:opacity-50" />
-                                {requiresOriginalFiles(editOriginalContent) ? (
+                                {!isFreeAccount && requiresOriginalFiles(editOriginalContent) ? (
                                   <div className="mt-2 space-y-2 text-[11px] text-muted">
                                     <p>{language === "fr"
                                       ? "Pour utiliser le document ou l’image d’origine, joins-le de nouveau. ORIA ne l’a pas conservé pour une nouvelle génération."

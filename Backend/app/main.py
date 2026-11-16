@@ -1,5 +1,8 @@
 
 from fastapi import FastAPI
+import asyncio
+import logging
+import os
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -18,6 +21,39 @@ from app.services.oria_memory_middleware import OriaMemoryCleanupMiddleware
 app = FastAPI(
     title="LBV-Connect Backend",
 )
+
+# ORIA_FREE_WATCHDOG_PERMANENT_V1
+# Lance un contrôle toutes les cinq minutes, indépendant du navigateur.
+# Activer seulement APRES migration SQL avec ORIA_FREE_WATCHDOG_ENABLED=1.
+_oria_watchdog_task = None
+
+@app.on_event("startup")
+async def _start_free_watchdog():
+    global _oria_watchdog_task
+    if os.getenv("ORIA_FREE_WATCHDOG_ENABLED", "0") != "1":
+        return
+    from app.services.oria_free_generation_watchdog import reconcile_stale_global
+    async def _run():
+        while True:
+            try:
+                await asyncio.to_thread(reconcile_stale_global)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logging.getLogger("oria.free.watchdog").exception("Periodic reconciliation failed")
+            await asyncio.sleep(300)
+    _oria_watchdog_task = asyncio.create_task(_run())
+
+@app.on_event("shutdown")
+async def _stop_free_watchdog():
+    global _oria_watchdog_task
+    if _oria_watchdog_task is not None:
+        _oria_watchdog_task.cancel()
+        try:
+            await _oria_watchdog_task
+        except asyncio.CancelledError:
+            pass
+        _oria_watchdog_task = None
 
 
 # ============================================================
