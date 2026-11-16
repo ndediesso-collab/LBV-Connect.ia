@@ -4151,18 +4151,37 @@ def _reserve_chat_credits(
     history: list[dict[str, str]],
     attachments: list[ChatAttachment],
     web: bool,
-) -> tuple[str, int]:
-    """Réserve uniquement les crédits ORIA avant l'appel fournisseur."""
+    reasoning_mode: str = "balanced",
+    document_types: tuple[str, ...] = (),
+    streaming: bool = False,
+) -> tuple[str, int, int]:
+    """Quote paid chat using the output limit actually enforced upstream."""
     estimated_input_tokens = _estimate_chat_input_tokens(
         message=message,
         history=history,
         attachments=attachments,
     )
 
+    from app.services.oria_paid_chat_quote import paid_output_tokens, reserve_for_stream
+    provider_cap = paid_output_tokens(
+        message=message, estimated_input_tokens=estimated_input_tokens,
+        reasoning_mode=reasoning_mode, web=web, attachment_count=len(attachments),
+        document_types=tuple(document_types),
+    )
+    # WebSocket may restart/steer up to three times on one reservation.
+    # Reserve more than the single provider response when streaming.
+    if streaming:
+        # Même avant un redémarrage/steering, une seule provision peut couvrir
+        # plusieurs réponses. Ne PAS activer de plafond réduit sur ce parcours.
+        provider_cap = credit_costs_config.MAX_CHAT_OUTPUT_TOKENS
+        quoted_cap = provider_cap
+    else:
+        quoted_cap = provider_cap
     try:
         reserved_amount, estimated_api_xaf = TokenBillingService.estimate_reservation(
             model=model,
             estimated_input_tokens=estimated_input_tokens,
+            max_output_tokens=quoted_cap,
             web_enabled=web,
             include_api_cost=True,
         )
@@ -4187,7 +4206,7 @@ def _reserve_chat_credits(
     except Exception as error:
         raise _billing_reservation_failure(error) from error
 
-    return reservation_id, reserved_amount
+    return reservation_id, reserved_amount, provider_cap
 
 
 def _release_chat_reservation(
@@ -4384,18 +4403,27 @@ def _oria_openrouter_preflight(*, service: OpenRouterChatService,
                                document_types: tuple[str, ...], stream: bool):
     """Bloque les fonctions non validées AVANT toute réservation payante."""
     payload_attachments = _attachments_for_openai(attachments)
+    from app.services.oria_paid_chat_quote import paid_output_tokens
+    estimated_input_tokens = _estimate_chat_input_tokens(
+        message=message, history=history, attachments=attachments,
+    )
+    provider_cap = paid_output_tokens(
+        message=message, estimated_input_tokens=estimated_input_tokens,
+        reasoning_mode=reasoning_mode, web=web, attachment_count=len(attachments),
+        document_types=tuple(document_types),
+    )
     try:
         service.build_request(
             model=selection.api_model,
             message=message, history=history, attachments=payload_attachments,
             web=web, reasoning_mode=reasoning_mode, visual_mode=visual_mode,
             artifact_types=document_types, stream=stream,
+            max_completion_tokens=provider_cap,
         )
         quote = OpenRouterTokenBillingService.estimate_reservation(
             provider_model=selection.api_model,
-            estimated_input_tokens=_estimate_chat_input_tokens(
-                message=message, history=history, attachments=attachments,
-            ),
+            estimated_input_tokens=estimated_input_tokens,
+            max_output_tokens=provider_cap,
             web_enabled=web,
         )
     except (OpenRouterUnsupportedFeatureError, ValueError, TokenBillingError) as exc:
@@ -4481,6 +4509,7 @@ async def _oria_openrouter_execute_classic(*, service, selection, repository,
             web=web, attachments=attachments, history=history,
             reasoning_mode=reasoning_mode, visual_mode=visual_mode,
             artifact_types=document_types,
+            max_completion_tokens=quote.max_output_tokens,
         )
     except Exception as exc:
         raise _oria_openrouter_reconcile_error(
@@ -4620,6 +4649,7 @@ async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: s
                     web=web, attachments=provider_attachments, history=history,
                     reasoning_mode=current_mode, visual_mode=visual_mode,
                     artifact_types=document_types, generation_id=attempt_id,
+                    max_completion_tokens=current_quote.max_output_tokens,
                 )
                 while True:
                     started = True  # L'appel fournisseur peut avoir eu lieu.
@@ -5070,7 +5100,7 @@ async def chat(
         if citation_text:
             response_text += citation_text
     else:
-        reservation_id, _reserved_amount = _reserve_chat_credits(
+        reservation_id, _reserved_amount, paid_output_cap = _reserve_chat_credits(
             repository=repository,
             authenticated_user_id=authenticated_user_id,
             action=action,
@@ -5079,6 +5109,7 @@ async def chat(
             history=history,
             attachments=attachments,
             web=web,
+            reasoning_mode=reasoning_mode, document_types=document_types,
         )
 
         openai_service = OpenAIService()
@@ -5093,6 +5124,7 @@ async def chat(
                 reasoning_mode=reasoning_mode,
                 visual_mode=visual_mode,
                 artifact_types=document_types,
+                max_output_tokens=paid_output_cap,
             )
         except Exception as error:
             try:
@@ -5417,10 +5449,11 @@ async def generate_chat_revision(
                 repository=repository, uid=owner, action=action, quote=or_quote,
             )
         else:
-            reservation_id, _ = _reserve_chat_credits(
+            reservation_id, _, paid_output_cap = _reserve_chat_credits(
                 repository=repository, authenticated_user_id=owner,
                 action=action, model=model, message=message, history=history,
                 attachments=attachments, web=web,
+                reasoning_mode=reasoning_mode, document_types=document_types,
             )
     except Exception:
         _edit_revision_update(revision, owner, expected_status="generating", fields={
@@ -5468,6 +5501,7 @@ async def generate_chat_revision(
                 web=web, attachments=_attachments_for_openai(attachments),
                 history=history, reasoning_mode=reasoning_mode,
                 visual_mode=visual_mode, artifact_types=document_types,
+                max_output_tokens=paid_output_cap,
             )
         except Exception as error:
             try:
@@ -7532,7 +7566,7 @@ async def chat_stream(
 
     reserve_started_at = perf_counter()
 
-    reservation_id, reserved_amount = _reserve_chat_credits(
+    reservation_id, reserved_amount, paid_output_cap = _reserve_chat_credits(
         repository=repository,
         authenticated_user_id=authenticated_user_id,
         action=action,
@@ -7540,7 +7574,8 @@ async def chat_stream(
         message=message,
         history=history,
         attachments=attachments,
-        web=web,
+        web=web, reasoning_mode=reasoning_mode,
+        document_types=document_types, streaming=True,
     )
 
     reserve_ms = (perf_counter() - reserve_started_at) * 1000
@@ -7680,6 +7715,7 @@ async def chat_stream(
                         control_queue=generation_state.control_queue,
                         visual_mode=visual_mode,
                         artifact_types=document_types,
+                        max_output_tokens=paid_output_cap,
                     )
 
                     try:
@@ -7844,6 +7880,7 @@ async def chat_stream(
                         generation_id=attempt_id,
                         visual_mode=visual_mode,
                         artifact_types=document_types,
+                        max_output_tokens=paid_output_cap,
                     )
 
                     for item in stream_result:
@@ -8986,14 +9023,37 @@ def _or_image_choices(entry: dict[str, Any], key: str) -> list[str]:
     return [x for x in values if isinstance(x, str)] if isinstance(values, list) else []
 
 
-def _or_reservation(kind: str) -> tuple[int, int, Decimal]:
-    # Estimation commerciale prudente : un plafond administrateur, pas une
-    # promesse de tarif fournisseur. Résultat final = usage.cost OpenRouter.
-    raw = _or_limit(kind)
-    if raw <= 0:
+def _or_reservation(kind: str, *, model: str | None = None,
+                    resolution: str | None = None, mode: str | None = None,
+                    duration: int | None = None) -> tuple[int, int, Decimal]:
+    """Conserve le devis global historique des projets Mini-Film.
+
+    Les générations courtes image/vidéo passent explicitement modèle, qualité,
+    mode et durée pour employer des plafonds par variante configurés par admin.
+    Sans configuration de variante, le maximum global reste inchangé.
+    """
+    from app.services.oria_paid_media_quote import approved_max_usd, PaidMediaQuoteConfigError
+    global_ceiling = _or_limit(kind)
+    if global_ceiling <= 0:
         raise HTTPException(503, f"Plafond USD {kind} OpenRouter non configuré.")
-    # Le remboursement du surplus reste effectué via le settlement du repository.
-    return _or_credits(raw), _or_credits(raw * Decimal("1.20")), raw * Decimal("1.20")
+    # Raccordement Mini-Film V7 historique: appel sans variante.
+    # Ne jamais tenter de deviner la résolution ou le modèle d'un projet.
+    if model is None and resolution is None and mode is None and duration is None:
+        ceiling = global_ceiling
+    else:
+        if not all(isinstance(v, str) and bool(v) for v in (model, resolution, mode)):
+            raise HTTPException(503, "Devis média incomplet : modèle, résolution et mode requis.")
+        env_key = f"ORIA_OPENROUTER_{kind.upper()}_MAX_USD_BY_VARIANT"
+        try:
+            ceiling = approved_max_usd(
+                kind=kind, model=model, resolution=resolution, mode=mode,
+                duration=duration, global_ceiling=global_ceiling,
+                raw_json=_or_os.getenv(env_key),
+            )
+        except PaidMediaQuoteConfigError as exc:
+            raise HTTPException(503, f"Configuration des plafonds média invalide : {exc}") from exc
+    return (_or_credits(ceiling), _or_credits(ceiling * Decimal("1.20")),
+            ceiling * Decimal("1.20"))
 
 
 def _or_verify_config(kind: str, *, pack_id: str, action: CreditAction | None,
@@ -9360,7 +9420,10 @@ async def openrouter_media_quote(
             action=None, model=str(payload.model or "") or None, resolution=resolution, mode=mode,
             ref_count=payload.reference_count, duration=payload.final_duration_seconds)
         model = chosen["id"]
-    estimated, reserved, _ = _or_reservation(kind)
+    estimated, reserved, _ = _or_reservation(
+        kind, model=model, resolution=resolution, mode=mode,
+        duration=payload.final_duration_seconds if kind == "video" else None,
+    )
     return {"success": True, "provider": "openrouter", "media_type": kind,
             "mode": mode, "pack_id": wallet.pack_id, "model": model,
             "estimated_credits": estimated, "reservation_credits": reserved,
@@ -9523,7 +9586,9 @@ async def openrouter_media_image(
     if payload.aspect_ratio not in ratios:
         raise HTTPException(400, "Format image non accepté par OpenRouter.")
     ref_bytes = _or_decode_preflight_reference(payload.reference_image_b64, payload.reference_mime_type)
-    reserved_est, reserve, reserved_usd = _or_reservation("image")
+    reserved_est, reserve, reserved_usd = _or_reservation(
+        "image", model=model, resolution=payload.resolution, mode=mode,
+    )
     _google_require_consent(SimpleNamespace(reservation_credits=reserve),
                             payload.accepted_max_credits, wallet.balance)
     _or_db_ready()
@@ -9583,7 +9648,10 @@ async def openrouter_media_video(
         raise HTTPException(400, "Format vidéo indisponible pour ce modèle.")
     model = str(chosen["id"])
     ref_bytes = _or_decode_preflight_reference(payload.reference_image_b64, payload.reference_mime_type)
-    reserved_est, reserve, reserved_usd = _or_reservation("video")
+    reserved_est, reserve, reserved_usd = _or_reservation(
+        "video", model=model, resolution=media_resolution, mode=mode,
+        duration=payload.requested_seconds,
+    )
     _google_require_consent(SimpleNamespace(reservation_credits=reserve),
                             payload.accepted_max_credits, wallet.balance)
     _or_db_ready()

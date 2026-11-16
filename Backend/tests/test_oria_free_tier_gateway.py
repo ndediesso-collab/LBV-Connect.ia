@@ -149,7 +149,7 @@ class GatewayTests(unittest.TestCase):
                 continue
             for k in n.keywords:
                 if k.arg in {'max_output_tokens', 'max_completion_tokens'}:
-                    if isinstance(k.value, ast.Name) and k.value.id == 'FREE_CHAT_OUTPUT_TOKENS_MAX':
+                    if isinstance(k.value, ast.Name) and k.value.id == 'output_limit':
                         outgoing.add(k.arg)
         self.assertEqual(outgoing, {'max_output_tokens', 'max_completion_tokens'})
 

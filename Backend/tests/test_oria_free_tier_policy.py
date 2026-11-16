@@ -25,18 +25,18 @@ class DailyFreePolicyTests(unittest.TestCase):
     def test_initial_grant_only_once_per_day(self):
         s, ok = daily_refresh(FreeBalance(), now=d(13), paid_pack_active=False)
         self.assertTrue(ok)
-        self.assertEqual(s.balance, 150)
+        self.assertEqual(s.balance, 90)
         s2, ok2 = daily_refresh(s, now=d(13, 20), paid_pack_active=False)
         self.assertFalse(ok2)
-        self.assertEqual(s2.balance, 150)
+        self.assertEqual(s2.balance, 90)
 
     def test_minuit_libreville_resets_not_accumulates(self):
         s, _ = daily_refresh(FreeBalance(), now=d(13), paid_pack_active=False)
-        s, _ = charge_credits(s, 105)
+        s, _ = charge_credits(s, 45)
         self.assertEqual(s.balance, 45)
         s, ok = daily_refresh(s, now=d(14), paid_pack_active=False)
         self.assertTrue(ok)
-        self.assertEqual(s.balance, 150)
+        self.assertEqual(s.balance, 90)
 
     def test_timezone_rollover_at_libreville_midnight(self):
         # 22:59 UTC on Nov 13 -> 23:59 Gabon, 23:00 UTC -> 00:00 Gabon
@@ -50,19 +50,19 @@ class DailyFreePolicyTests(unittest.TestCase):
     def test_purchased_addon_and_free_credit_freeze(self):
         s, _ = daily_refresh(FreeBalance(), now=d(13), paid_pack_active=False)
         s = apply_purchased_addon(s, credits=1000, paid_pack_active=False)
-        self.assertEqual(s.balance, 1150)
+        self.assertEqual(s.balance, 1090)
         s, ok = daily_refresh(s, now=d(14), paid_pack_active=False)
         self.assertFalse(ok)
-        self.assertEqual(s.balance, 1150)
-        s, charged = charge_credits(s, 1100)
-        self.assertEqual((charged.charged_free, charged.charged_purchased), (150, 950))
+        self.assertEqual(s.balance, 1090)
+        s, charged = charge_credits(s, 1040)
+        self.assertEqual((charged.charged_free, charged.charged_purchased), (90, 950))
         self.assertEqual(s.balance, 50)
         s, ok = daily_refresh(s, now=d(15), paid_pack_active=False)
         self.assertFalse(ok)
         s, _ = charge_credits(s, 50)
         s, ok = daily_refresh(s, now=d(15), paid_pack_active=False)
         self.assertTrue(ok)
-        self.assertEqual(s.balance, 150)
+        self.assertEqual(s.balance, 90)
         s, ok = daily_refresh(s, now=d(15), paid_pack_active=False)
         self.assertFalse(ok)
 

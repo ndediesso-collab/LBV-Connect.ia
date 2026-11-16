@@ -79,7 +79,7 @@ export default function OriaFreeOfferNotifications({status, enabled, busy = fals
     const key = `${VERSION}:${uid}:${clock.day}`;
     let memory: OfferMemory = fallback.current[key] ?? initialOfferMemory();
     try {memory = parseOfferMemory(window.localStorage.getItem(key));} catch {/* navigateur privé : fallback mémoire */}
-    const outcome = decideFreeOffer({memory, freeCredits, dailyCredits: status.daily_credits || 150,
+    const outcome = decideFreeOffer({memory, freeCredits, dailyCredits: status.daily_credits || 90,
       nowMs: now.getTime(), clock, hasPurchasedCredits: purchasedCredits > 0, enabled: offersEnabled});
     fallback.current[key] = outcome.memory;
     try {window.localStorage.setItem(key, JSON.stringify(outcome.memory));} catch {/* repli en mémoire */}

@@ -4166,6 +4166,7 @@ export default function ChatPage() {
   const [isLoadingWallet, setIsLoadingWallet] = useState(true);
   const isFreeAccount = !isLoadingWallet && wallet?.is_pack_active !== true;
   const [freeStatus, setFreeStatus] = useState<OriaFreeStatus | null>(null);
+  const [freeWebUpgradeOpen, setFreeWebUpgradeOpen] = useState(false);
   const [freeCapabilities, setFreeCapabilities] = useState<OriaFreeCapabilities | null>(null);
   const freeChatAuthorized = Boolean(freeStatus?.success &&
     freeCapabilities?.success && freeCapabilities.catalog?.role === "free" &&
@@ -5844,8 +5845,9 @@ export default function ChatPage() {
     if (isFreeAccount) {
       if (label === "Cours") return;
       if (label === "Création") {setIsMiniStudioOpen(true);setError(null);return;}
-      if (label === "Recherche Web" && freeCapabilities?.catalog?.web?.wired !== true) {
-        setError("La recherche Web gratuite n'est pas activée par le serveur.");return;
+      if (label === "Recherche Web") {
+        // Le bouton reste activable : présenter le pack seulement à l'envoi.
+        setError(null);
       }
       // V5: le sélecteur reste accessible. Les droits et limites sont validés dans /ai/free/chat.
 
@@ -6383,8 +6385,11 @@ export default function ChatPage() {
       return;
     }
     const webEnabled = activeCapability === "Recherche Web";
-    if (webEnabled && freeCapabilities?.catalog?.web?.wired !== true) {
-      setError("La recherche Web gratuite est désactivée par le serveur.");return;
+    if (webEnabled) {
+      // Aucune sauvegarde de message, ni reservation, ni appel IA.
+      setFreeWebUpgradeOpen(true);
+      setError(null);
+      return;
     }
     const now = new Date().toISOString();
     setError(null);
@@ -7661,6 +7666,38 @@ export default function ChatPage() {
   return (
     <main className="min-h-dvh w-full min-w-0 overflow-x-clip bg-background text-foreground oria-chat-page">
       {isFreeAccount && <OriaFreeOfferNotifications status={freeStatus} enabled={freeChatAuthorized} busy={isThinking || miniStudioBusy} onRefresh={refreshFreeStatus} />}
+      {isFreeAccount && freeWebUpgradeOpen && (
+        <div role="dialog" aria-modal="true"
+          aria-label={language === "fr" ? "Recherche Web réservée aux packs" : "Web search requires a plan"}
+          className="fixed inset-0 z-[140] flex items-center justify-center bg-black/65 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-5 text-foreground shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2"><Globe size={21} />
+                <h2 className="text-lg font-semibold">{language === "fr" ? "Recherche Web avec un pack ORIA" : "Web search with an ORIA plan"}</h2>
+              </div>
+              <button type="button" aria-label={language === "fr" ? "Fermer" : "Close"}
+                onClick={() => setFreeWebUpgradeOpen(false)}
+                className="rounded-lg p-1.5 text-muted hover:bg-surface-tertiary"><X size={19}/></button>
+            </div>
+            <p className="mt-3 text-sm leading-6 text-muted">{language === "fr"
+              ? "La recherche Web en direct est réservée aux utilisateurs ayant un pack actif. Les crédits gratuits et les recharges seules ne débloquent pas cette fonction."
+              : "Live web search requires an active plan. Free credits and stand-alone top-ups do not unlock this feature."}</p>
+            <div className="mt-4 rounded-xl border border-border bg-surface-secondary p-4">
+              <p className="text-xs font-medium text-muted">{language === "fr" ? "Commencez avec le Pack Découverte" : "Start with the Discovery Plan"}</p>
+              <p className="mt-1 text-2xl font-semibold">1 500 FCFA</p>
+              <p className="mt-1 text-xs text-muted">{language === "fr" ? "35 jours • Voir les fonctionnalités et conditions du pack" : "35 days • See plan features and conditions"}</p>
+            </div>
+            <Link href="/packs" onClick={() => setFreeWebUpgradeOpen(false)}
+              className="mt-4 block rounded-xl bg-foreground px-4 py-3 text-center text-sm font-semibold text-background">
+              {language === "fr" ? "Découvrir les packs ORIA" : "Explore ORIA plans"}
+            </Link>
+            <button type="button" onClick={() => {setActiveCapability(null);setFreeWebUpgradeOpen(false);}}
+              className="mt-2 w-full rounded-xl border border-border px-4 py-2.5 text-sm font-medium">
+              {language === "fr" ? "Continuer avec Luna gratuit" : "Continue with free Luna"}
+            </button>
+          </div>
+        </div>
+      )}
       {isFreeAccount && <Link href="/packs?recharge=standard" aria-label="Voir les recharges et les packs ORIA" className="fixed bottom-36 right-4 z-30 flex max-w-[185px] items-center gap-2 rounded-full border border-border bg-foreground px-4 py-3 text-xs font-semibold text-background shadow-xl transition-transform hover:-translate-y-1 sm:bottom-8 sm:right-8"><Wallet size={16}/> Besoin de crédits ?</Link>}
       {discoveryNotice && (
         <div role="alert" className="fixed bottom-5 left-1/2 z-[100] flex w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 items-start justify-between gap-3 rounded-2xl border border-border bg-surface p-4 text-sm shadow-xl">

@@ -3979,6 +3979,7 @@ class OpenAIService:
         generation_id: str | None = None,
         visual_mode: bool = False,
         artifact_types: str | list[str] | tuple[str, ...] | None = None,
+        max_output_tokens: int = MAX_CHAT_OUTPUT_TOKENS,
     ) -> Iterator[dict[str, Any]]:
         """
         Streaming HTTP classique de la Responses API.
@@ -4004,7 +4005,7 @@ class OpenAIService:
             "model": model,
             "input": input_data,
             "stream": True,
-            "max_output_tokens": MAX_CHAT_OUTPUT_TOKENS,
+            "max_output_tokens": max_output_tokens,
         }
         # Limitation OpenAI Responses : web_search et JSON mode ne peuvent pas
         # être combinés dans une même requête. Conserver l'outil Web et exiger
@@ -4188,6 +4189,7 @@ class OpenAIService:
         control_queue: asyncio.Queue[dict[str, Any]] | None = None,
         visual_mode: bool = False,
         artifact_types: str | list[str] | tuple[str, ...] | None = None,
+        max_output_tokens: int = MAX_CHAT_OUTPUT_TOKENS,
     ) -> AsyncIterator[dict[str, Any]]:
         """
         Streaming Responses WebSocket pilotable pendant la génération.
@@ -4228,7 +4230,7 @@ class OpenAIService:
         request: dict[str, Any] = {
             "model": model,
             "input": input_data,
-            "max_output_tokens": MAX_CHAT_OUTPUT_TOKENS,
+            "max_output_tokens": max_output_tokens,
             "store": False,
         }
         # Limitation OpenAI Responses : web_search et JSON mode ne peuvent pas

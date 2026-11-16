@@ -20,6 +20,7 @@ from app.config.free_tier_policy import (
 )
 from app.services.conversation_memory_utils import estimate_text_tokens
 from app.services.free_tier_gateway import FreeTierGateway
+from app.services.oria_free_adaptive_quote import choose_luna_quote, AdaptiveQuoteUnavailable
 from app.services.openai_service import OpenAIService
 from app.services.token_billing_service import (
     TokenBillingService, OpenRouterTokenBillingService,
@@ -384,11 +385,9 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
     # avec le journal de la demande originale.
     watchdog_message_id = reservation_id_override or str(payload.current_message_id)
     if payload.web:
-        from app.services.free_web_openai_policy import require_web_provider, FreeOpenAIWebPolicyError
-        try:
-            require_web_provider(active_chat_provider())
-        except FreeOpenAIWebPolicyError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail=
+            "Recherche Web réservée aux comptes avec pack actif. "
+            "Pack Découverte dès 1 500 FCFA : consulte /packs.")
     message = payload.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message vide.")
@@ -423,19 +422,20 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
         if grant.get("paid_pack_active") is True:
             raise HTTPException(status_code=403, detail="Utilisez les crédits de votre pack actif.")
         provider = active_chat_provider()
-        if payload.web:
-            from app.services.free_web_openai_policy import free_provider_web_quote
-            reserve_credits, reserve_api_xaf = free_provider_web_quote(provider, estimated_input)
-        else:
-            reserve_credits, reserve_api_xaf = _quote(provider, estimated_input)
-        if image_payloads:
-            # Réserve conservatrice, quel que soit le fournisseur Luna réellement actif.
-            reserve_credits = max(reserve_credits, 100)
-            reserve_api_xaf = max(Decimal(str(reserve_api_xaf)),Decimal("6.00"))
-        if reserve_credits > 200:
-            # A small balance must remain useful; if provider pricing or
-            # config drifts, fail closed instead of silently overspending.
-            raise HTTPException(status_code=503, detail="Devis Luna indisponible pour le gratuit.")
+        current_balance = gateway.balance(uid)
+        # Le devis porte sur les tokens disponibles en sortie, pas un montant
+        # fixe de crédits. Le même cap est transmis au fournisseur ci-dessous.
+        adaptive = choose_luna_quote(
+            provider=provider, input_tokens=estimated_input,
+            user_message=payload.message, reasoning_mode=payload.reasoning_mode,
+            available_credits=current_balance["balance"],
+            image_count=len(image_payloads),
+            has_files=bool(doc_context or payload.attachments or replay_images),
+        )
+        reserve_credits, reserve_api_xaf = adaptive.reserved_credits, adaptive.reserve_api_xaf
+        output_limit = adaptive.output_tokens
+    except AdaptiveQuoteUnavailable as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
@@ -485,7 +485,7 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
                 web=payload.web, attachments=image_payloads, history=[] if payload.web else history,
                 free_web_limits=payload.web,
                 reasoning_mode=payload.reasoning_mode,
-                max_output_tokens=min(FREE_CHAT_OUTPUT_TOKENS_MAX,1536) if payload.web else FREE_CHAT_OUTPUT_TOKENS_MAX,
+                max_output_tokens=output_limit,
             )
             usage = result.get("usage")
             if not isinstance(usage, dict):
@@ -499,7 +499,7 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
                 service.chat, model="openai/gpt-6-luna", message=message,
                 web=payload.web, attachments=image_payloads, history=[] if payload.web else history,
                 reasoning_mode=payload.reasoning_mode,
-                max_completion_tokens=min(FREE_CHAT_OUTPUT_TOKENS_MAX,1536) if payload.web else FREE_CHAT_OUTPUT_TOKENS_MAX,
+                max_completion_tokens=output_limit,
                 free_web_limits=payload.web,
             )
             if payload.web:
@@ -566,15 +566,13 @@ def free_chat_quote(payload: FreeChatRequest,
     _enabled()
     uid = _identity(user_id, authorization)
     if payload.web:
-        from app.services.free_web_openai_policy import require_web_provider, FreeOpenAIWebPolicyError
-        try:
-            require_web_provider(active_chat_provider())
-        except FreeOpenAIWebPolicyError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail=
+            "Recherche Web réservée aux comptes avec pack actif. Consulte /packs.")
     message = payload.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message vide.")
-    input_tokens = estimate_text_tokens(message) + 800
+    history, history_tokens = _oria_bounded_free_history(uid, payload)
+    input_tokens = estimate_text_tokens(message) + 800 + history_tokens
     if input_tokens > FREE_CHAT_INPUT_TOKENS_MAX:
         raise HTTPException(status_code=413, detail="Message trop long pour le quota gratuit.")
     gateway = FreeTierGateway(supabase)
@@ -586,31 +584,37 @@ def free_chat_quote(payload: FreeChatRequest,
             raise HTTPException(status_code=403,
                                 detail="Utilisez les crédits de votre pack actif.")
         provider = active_chat_provider()
-        if payload.web:
-            from app.services.free_web_openai_policy import free_provider_web_quote
-            reserved_credits, reserved_xaf = free_provider_web_quote(provider, input_tokens)
-        else:
-            reserved_credits, reserved_xaf = _quote(provider, input_tokens)
         balance = gateway.balance(uid)
+        adaptive = choose_luna_quote(
+            provider=provider, input_tokens=input_tokens,
+            user_message=message, reasoning_mode=payload.reasoning_mode,
+            available_credits=balance["balance"], image_count=0, has_files=False,
+        )
+        reserved_credits, reserved_xaf = adaptive.reserved_credits, adaptive.reserve_api_xaf
         from app.services.free_tier_quote import make_free_chat_quote
         quote = make_free_chat_quote(
             provider=provider.value,
             reserved_credits=reserved_credits,
             reserve_api_xaf=reserved_xaf,
             balance=balance,
-            max_output_tokens=FREE_CHAT_OUTPUT_TOKENS_MAX,
+            max_output_tokens=adaptive.output_tokens,
             input_token_budget=input_tokens,
+            daily_free_credits=FREE_DAILY_CREDITS,
         )
+    except AdaptiveQuoteUnavailable as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("ORIA free preflight unavailable")
         raise HTTPException(status_code=503,
                             detail="Devis Luna temporairement indisponible.") from exc
-    quote["web"] = payload.web
-    quote["max_sites"] = (2 if provider is ChatProvider.OPENROUTER else None) if payload.web else 0
-    quote["openai_web_call_limit"] = 1 if payload.web and provider is ChatProvider.OPENAI else None
-    quote["two_sites_guaranteed"] = provider is ChatProvider.OPENROUTER if payload.web else False
+    quote["web"] = False
+    quote["max_sites"] = 0
+    quote["openai_web_call_limit"] = 0
+    quote["two_sites_guaranteed"] = False
+    quote["constrained_by_balance"] = adaptive.constrained_by_balance
+    quote["preferred_output_tokens"] = adaptive.preferred_output_tokens
     return {"success": True, "quote": quote}
 
 
@@ -625,6 +629,8 @@ async def persistent_free_chat(payload: FreeChatRequest,
                                authorization: str | None = Header(default=None)):
     from uuid import uuid5, NAMESPACE_URL
     uid = _identity(user_id, authorization)
+    if payload.web:
+        raise HTTPException(403, "Recherche Web réservée aux packs actifs. Consulte /packs.")
     if payload.conversation_id is None or payload.current_message_id is None:
         raise HTTPException(422, "La conversation et le message doivent être sauvegardés avant la génération.")
     conv_id = str(payload.conversation_id)
@@ -714,6 +720,8 @@ async def generate_free_chat_revision(
 ):
     _enabled()
     uid = _identity(user_id, authorization)
+    if payload.web:
+        raise HTTPException(403, "Recherche Web réservée aux packs actifs. Consulte /packs.")
     from app.route.ai import _edit_revision_rows, _edit_revision_update, _edit_activate
     cid, mid, rid = str(payload.conversation_id), str(payload.message_id), str(revision_id)
     thread, revision = await asyncio.to_thread(

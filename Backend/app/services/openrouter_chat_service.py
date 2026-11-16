@@ -552,6 +552,7 @@ class OpenRouterChatService:
         reasoning_mode: str = "balanced", visual_mode: bool = False,
         artifact_types: Sequence[str] | str | None = None,
         generation_id: str | None = None,
+        max_completion_tokens: int = 32_000,
     ) -> Iterator[dict[str, Any]]:
         """Traduit SSE OpenRouter en événements proches du flux ORIA existant.
 
@@ -562,6 +563,7 @@ class OpenRouterChatService:
             model=model, message=message, web=web, attachments=attachments,
             history=history, reasoning_mode=reasoning_mode,
             visual_mode=visual_mode, artifact_types=artifact_types, stream=True,
+            max_completion_tokens=max_completion_tokens,
         )
         response_id: str | None = None
         actual_model = model

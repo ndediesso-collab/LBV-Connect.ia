@@ -8,6 +8,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 from app.config.free_tier_access import FREE_UPGRADE_PATH
+from app.config.free_tier_policy import FREE_DAILY_CREDITS
 
 
 class FreeQuoteContractError(ValueError):
@@ -17,14 +18,14 @@ class FreeQuoteContractError(ValueError):
 def make_free_chat_quote(*, provider: str, reserved_credits: int,
                          reserve_api_xaf: object, balance: dict,
                          max_output_tokens: int, input_token_budget: int,
-                         daily_free_credits: int = 200) -> dict:
+                         daily_free_credits: int = FREE_DAILY_CREDITS) -> dict:
     if type(reserved_credits) is not int or reserved_credits <= 0:
         raise FreeQuoteContractError("Invalid server reserve.")
     if type(max_output_tokens) is not int or max_output_tokens <= 0:
         raise FreeQuoteContractError("Invalid enforced output cap.")
     if type(input_token_budget) is not int or input_token_budget <= 0:
         raise FreeQuoteContractError("Invalid input-token budget.")
-    if type(daily_free_credits) is not int or daily_free_credits != 200:
+    if type(daily_free_credits) is not int or daily_free_credits != FREE_DAILY_CREDITS:
         raise FreeQuoteContractError("Invalid free grant ceiling.")
     if provider not in {"openai", "openrouter"}:
         raise FreeQuoteContractError("Unrecognized active provider.")

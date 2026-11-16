@@ -20,7 +20,7 @@ from app.config.credit_costs import (
 )
 
 FREE_PACK_ID = "oria_free_daily"
-FREE_DAILY_CREDITS = 150
+FREE_DAILY_CREDITS = 90
 FREE_DAILY_TIMEZONE = "Africa/Libreville"
 FREE_ALLOWED_CHAT_MODEL = "luna"
 FREE_WEB_SEARCH_ENABLED = False
@@ -72,7 +72,7 @@ class FreeBalance:
         _check_count(self.free_credits, "free_credits")
         _check_count(self.purchased_credits, "purchased_credits")
         # Accepter les attributions anciennes de 200 jusqu’à leur expiration normale.
-        # Une nouvelle attribution est toujours limitée à FREE_DAILY_CREDITS (=150).
+        # Une nouvelle attribution est toujours limitée à FREE_DAILY_CREDITS (=90).
         if self.free_credits > max(FREE_DAILY_CREDITS, 200):
             raise FreeTierPolicyError("Free credits exceed the daily grant.")
         if self.purchased_credits and not self.recharge_frozen:
