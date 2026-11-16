@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || "https://lbv-connect-api.onrender.com").replace(/\/$/, "");
-type Balance = {balance: number; free_credits: number; purchased_credits: number};
+type Balance = {balance: number; free_credits: number; purchased_credits: number; purchased_expires_at?: string | null};
 type Status = {success: boolean; daily_credits: number; paid_pack_active: boolean; wallet: Balance};
 
 export default function OriaFreeWalletSummary() {
@@ -32,6 +32,12 @@ export default function OriaFreeWalletSummary() {
       <div><p className="text-xs font-semibold uppercase tracking-wider text-muted">ORIA · Accès sans pack</p>
         <h2 className="mt-1 text-xl font-bold">{status.wallet.balance.toLocaleString("fr-FR")} crédits disponibles</h2>
         <p className="mt-2 text-sm text-muted">Quota : {status.daily_credits} crédits gratuits par jour · {status.wallet.purchased_credits.toLocaleString("fr-FR")} crédits achetés distincts.</p>
+        {status.wallet.purchased_expires_at ? (
+          <p className="mt-2 text-sm font-medium">Recharges sans pack : valables jusqu’au {new Date(status.wallet.purchased_expires_at).toLocaleString("fr-FR", {dateStyle: "medium", timeStyle: "short"})}. Chaque nouvel achat ajoute 14 jours au temps restant.</p>
+        ) : null}
+        {status.wallet.purchased_credits > 0 && !status.wallet.purchased_expires_at ? (
+          <p className="mt-2 text-xs text-muted">Solde de recharge antérieur : durée historique conservée.</p>
+        ) : null}
       </div>
       <div className="flex gap-3 text-sm"><Link className="rounded-xl border border-border px-4 py-2 font-semibold" href="/chat">Utiliser ORIA</Link>
         <Link className="rounded-xl bg-foreground px-4 py-2 font-semibold text-background" href="/packs?recharge=standard">Recharger</Link></div>

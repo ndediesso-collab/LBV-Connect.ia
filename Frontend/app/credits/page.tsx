@@ -2433,7 +2433,7 @@ export default function CreditsPage() {
   // ORIA_FREE_CREDIT_VIEW_V3 : lecture du solde gratuit et de ses seules reservations.
   const [freeUsage, setFreeUsage] = useState<{
     daily_credits: number; paid_pack_active: boolean;
-    wallet: {free_credits: number; purchased_credits: number; balance: number};
+    wallet: {free_credits: number; purchased_credits: number; balance: number; purchased_expires_at?: string | null};
   } | null>(null);
   const [freeHistory, setFreeHistory] = useState<Array<{
     id: string; action: string; status: string; charged_credits: number | null;
@@ -2445,7 +2445,7 @@ export default function CreditsPage() {
     const load = async () => {
       try {
         const status = await apiFetch<{success: boolean; daily_credits: number; paid_pack_active: boolean;
-          wallet: {free_credits: number; purchased_credits: number; balance: number}}>("/ai/free/status");
+          wallet: {free_credits: number; purchased_credits: number; balance: number; purchased_expires_at?: string | null}}>("/ai/free/status");
         if (!live) return;
         if (status.success && status.paid_pack_active === false) {
           setFreeUsage(status);
@@ -2901,6 +2901,8 @@ export default function CreditsPage() {
           <p className="text-sm text-muted">Crédits disponibles</p>
           <p className="mt-2 text-4xl font-bold">{freeUsage.wallet.balance}</p>
           <p className="mt-3 text-sm text-muted">{freeUsage.wallet.free_credits} gratuits aujourd'hui sur {freeUsage.daily_credits} · {freeUsage.wallet.purchased_credits} achetés</p>
+          {freeUsage.wallet.purchased_expires_at ? <p className="mt-2 text-sm text-muted">Recharges valables jusqu’au {new Date(freeUsage.wallet.purchased_expires_at).toLocaleString("fr-FR", {dateStyle:"medium", timeStyle:"short"})}. Chaque recharge ajoute 14 jours au temps restant.</p> : null}
+          <p className="mt-2 text-xs text-muted">Si vous achetez un pack, les crédits de recharge sans pack resteront séparés et leur date d’expiration continuera de courir.</p>
         </div>
         <section className="mt-8">
           <h2 className="mb-4 text-lg font-semibold">Historique du portefeuille gratuit</h2>

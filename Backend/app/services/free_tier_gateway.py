@@ -88,10 +88,11 @@ class FreeTierGateway:
 
     def balance(self, user_id: str) -> dict:
         rows = (self.client.table("oria_free_credit_wallets")
-                .select("free_balance,purchased_balance,last_grant_day,recharge_frozen")
+                .select("free_balance,purchased_balance,purchased_expires_at,last_grant_day,recharge_frozen")
                 .eq("user_id", _uuid(user_id)).limit(1).execute().data or [])
         if not rows:
-            return {"free_credits": 0, "purchased_credits": 0, "balance": 0}
+            return {"free_credits": 0, "purchased_credits": 0, "balance": 0,
+                    "purchased_expires_at": None}
         row = rows[0]
         free = row.get("free_balance")
         paid = row.get("purchased_balance")
@@ -99,4 +100,5 @@ class FreeTierGateway:
             raise FreeTierRpcError("Invalid free-tier wallet state.")
         return {"free_credits": free, "purchased_credits": paid, "balance": free + paid,
                 "last_grant_day": row.get("last_grant_day"),
-                "recharge_frozen": row.get("recharge_frozen")}
+                "recharge_frozen": row.get("recharge_frozen"),
+                "purchased_expires_at": row.get("purchased_expires_at")}

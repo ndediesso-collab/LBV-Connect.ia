@@ -55,6 +55,7 @@ from app.config.payments import (
 from app.services.oria_free_addon_payment import (
     is_free_addon_checkout,
     require_free_checkout_ready,
+    require_free_recharge_wallet_ready,
     FREE_WALLET_TARGET_KEY,
     FREE_WALLET_TARGET,
     free_wallet_targeted,
@@ -1299,6 +1300,7 @@ def checkout_payment(
     )
     if free_addon_checkout:
         require_free_checkout_ready(supabase)
+        require_free_recharge_wallet_ready(supabase, authenticated_user_id)
     else:
         _discovery_validate_checkout(
             authenticated_user_id, request.payment_type,

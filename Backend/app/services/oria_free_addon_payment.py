@@ -46,6 +46,39 @@ def require_free_checkout_ready(supabase_client: Any) -> None:
         raise HTTPException(status_code=503, detail="Recharges gratuites non activées côté Supabase.")
 
 
+def require_free_recharge_wallet_ready(supabase_client: Any, user_id: str) -> None:
+    """Prevent payment when a historic purchased balance has no expiry contract.
+
+    The SQL migration does not retroactively expire previously purchased funds.
+    Old balance holders can spend their historic funds and then buy a new 14d
+    topup. This check MUST execute before initiating a Chariow checkout.
+    """
+    try:
+        response = (
+            supabase_client.table("oria_free_credit_wallets")
+            .select("purchased_balance,purchased_expires_at")
+            .eq("user_id", user_id).limit(1).execute()
+        )
+        rows = getattr(response, "data", None)
+        if not isinstance(rows, list):
+            raise ValueError("Solde gratuit indetermine")
+        if rows:
+            balance = rows[0].get("purchased_balance")
+            if type(balance) is not int or balance < 0:
+                raise ValueError("Solde achete invalide")
+            if balance > 0 and rows[0].get("purchased_expires_at") is None:
+                raise HTTPException(status_code=409, detail=(
+                    "Des credits de recharge anterieurs sans expiration sont encore "
+                    "disponibles. Utilisez-les avant d'acheter une recharge 14 jours."
+                ))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=(
+            "Verification de la validite des recharges temporairement indisponible."
+        )) from exc
+
+
 def free_wallet_targeted(payment: Mapping[str, Any]) -> bool:
     metadata = payment.get("metadata")
     return isinstance(metadata, dict) and metadata.get(FREE_WALLET_TARGET_KEY) == FREE_WALLET_TARGET

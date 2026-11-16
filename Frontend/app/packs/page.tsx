@@ -2136,6 +2136,10 @@ export default function PacksPage() {
 
 
   function handleCreditTopUp(topUp: CreditTopUp) {
+    if (freeRechargeEligible && !window.confirm(language === "fr"
+      ? "Recharge ORIA Gratuit : les crédits achetés sont valables 14 jours. Chaque nouvel achat ajoute 14 jours au temps restant, même si le solde est à zéro. Aucun crédit de recharge gratuite ne sera transféré dans un pack. Continuer vers le paiement ?"
+      : "ORIA Free top-up: purchased credits are valid for 14 days. Each additional purchase adds 14 days to remaining validity, even at zero balance. These credits are not transferred to paid packs. Continue to payment?")) return;
+
 
 
 
@@ -2555,6 +2559,7 @@ export default function PacksPage() {
 
         {activePackTab === "primary" ? (
           <section className="mt-6 oria-tab-content-enter" role="tabpanel">
+            <p className="mb-5 rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-6 text-muted">{language === "fr" ? "En achetant un pack, vous recevez uniquement les crédits de ce pack. Les recharges achetées sans pack restent séparées et leur expiration continue, même pendant les 35 jours du pack." : "Buying a plan grants only that plan’s credits. Top-ups purchased without a plan remain separate and continue to expire, even during the plan’s 35 days."}</p>
             <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4 oria-stagger-cards">
               {displayedPacks.map((pack) => (
                 <PackCard key={pack.id} pack={pack} language={language} onSelect={handlePackSelection} />
@@ -2571,6 +2576,9 @@ export default function PacksPage() {
           </section>
         ) : (
           <section className="mt-6 oria-tab-content-enter" role="tabpanel">
+            <p className="mb-5 rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-6 text-muted">{freeRechargeEligible
+              ? language === "fr" ? "Sans pack : les recharges expirent après 14 jours, prolongés de 14 jours supplémentaires à chaque nouvel achat (jours restants cumulés). Même avec 0 crédit, la validité restante est conservée. Après expiration ou épuisement, le quota gratuit de 90 crédits revient, au maximum une fois par jour." : "Without a plan: top-ups last 14 days and every new purchase adds 14 days to remaining validity, even with zero credits. After expiry or depletion, the daily 90 credits return (once per day)."
+              : language === "fr" ? "Avec pack actif : les recharges n’ajoutent aucun jour aux 35 jours du pack. Tous les crédits du pack et de ses recharges expirent ensemble à la date du pack." : "With an active plan, top-ups never extend its 35 days. Plan credits and add-ons expire together."}</p>
             <div className="mb-5">
               <h2 className="text-2xl font-semibold tracking-tight">{UI[language].topUpBalance}</h2>
               <p className="mt-2 text-sm leading-6 text-muted">{UI[language].topUpDescription}</p>
