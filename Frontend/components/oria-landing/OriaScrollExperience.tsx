@@ -64,7 +64,7 @@ export default function OriaScrollExperience() {
       </div>
       <div className={styles.steps}>
         <div className={styles.step}><p>01 / L'EXPÉRIENCE</p><h2>Une IA née ici.<br/><em>Pour aller plus loin.</em></h2><span>Une seule interface pour apprendre, créer et avancer.</span></div>
-        <div className={styles.step}><p>02 / BÊTA PUBLIQUE</p><h2>Découvre ORIA.<br/><em>150 crédits offerts chaque jour.</em></h2><span>Un accès gratuit pendant la bêta, sous réserve de disponibilité.</span></div>
+        <div className={styles.step}><p>02 / BÊTA PUBLIQUE</p><h2>Découvre ORIA.<br/><em>90 crédits offerts chaque jour.</em></h2><span>Un accès gratuit pendant la bêta, sous réserve de disponibilité.</span></div>
         <div className={styles.step}><p>03 / SUR TON TÉLÉPHONE</p><h2>Ton espace IA.<br/><em>À portée de main.</em></h2><span>Installe ORIA depuis Safari ou Chrome, sans boutique d'applications.</span></div>
       </div>
       <div className={styles.bottom} id="oria-video-pwa">

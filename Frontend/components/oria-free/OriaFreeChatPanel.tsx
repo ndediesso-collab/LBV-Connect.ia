@@ -194,7 +194,7 @@ export default function OriaFreeChatPanel({apiFetch}: {apiFetch: ApiFetch}) {
       <div className="mx-auto max-w-4xl space-y-5 px-4 py-7 sm:py-10">
         <div className="rounded-2xl border border-border bg-surface p-5 sm:p-7">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div><p className="text-xs font-bold uppercase tracking-widest text-muted">ORIA GRATUIT · QUOTA QUOTIDIEN</p><h1 className="mt-2 text-2xl font-bold sm:text-3xl">{status?.daily_credits ?? 150} crédits ORIA par jour</h1><p className="mt-2 text-sm text-muted">Le serveur décide du solde, des droits et du coût de chaque action. Les crédits gratuits ne se substituent pas à ceux d'un pack payant.</p></div>
+            <div><p className="text-xs font-bold uppercase tracking-widest text-muted">ORIA GRATUIT · QUOTA QUOTIDIEN</p><h1 className="mt-2 text-2xl font-bold sm:text-3xl">{status?.daily_credits ?? 90} crédits ORIA par jour</h1><p className="mt-2 text-sm text-muted">Le serveur décide du solde, des droits et du coût de chaque action. Les crédits gratuits ne se substituent pas à ceux d'un pack payant.</p></div>
             <div className="flex items-center gap-3 rounded-xl border border-border bg-surface-secondary px-4 py-3"><Wallet size={20} /><div><p className="text-xs text-muted">Crédits disponibles</p><p className="text-xl font-bold tabular-nums">{status?.wallet.balance ?? "—"}</p></div><button type="button" onClick={() => void loadStatus()} className="rounded-lg p-2 hover:bg-surface" aria-label="Actualiser le solde" title="Actualiser le solde"><RefreshCw size={16}/></button></div>
           </div>
         </div>

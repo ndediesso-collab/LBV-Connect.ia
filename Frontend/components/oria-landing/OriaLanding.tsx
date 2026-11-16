@@ -19,7 +19,7 @@ import OriaScrollExperience from "./OriaScrollExperience";
 
 // La landing est publique : le backend vérifie l'éligibilité au paiement.
 // Le drapeau public ne débloque aucun droit ni aucun crédit.
-// Jamais d'annonce "150 crédits disponibles" avant activation côté serveur.
+// Jamais d'annonce "90 crédits disponibles" avant activation côté serveur.
 const FREE_PUBLIC = process.env.NEXT_PUBLIC_ORIA_FREE_PUBLIC_ENABLED === "1";
 
 const features = [
@@ -39,8 +39,8 @@ const offers = [
 const questions = [
   { question: "Comment fonctionnent les crédits ORIA ?", answer: "Chaque action consomme des crédits en fonction du modèle choisi. Le coût est contrôlé par le serveur ; les crédits des packs payants et les crédits gratuits sont suivis séparément." },
   { question: "ORIA propose-t-elle un accès gratuit ?", answer: FREE_PUBLIC
-    ? "Oui. Les comptes éligibles peuvent recevoir jusqu’à 150 crédits ORIA gratuits par jour, selon les conditions du service. Le quota est recalculé côté serveur ; certaines fonctionnalités restent réservées aux packs."
-    : "Un quota quotidien gratuit de 150 crédits ORIA est en préparation. Tant qu'il n'est pas activé, les services IA restent soumis aux conditions des packs payants actifs." },
+    ? "Oui. Les comptes éligibles peuvent recevoir jusqu’à 90 crédits ORIA gratuits par jour, selon les conditions du service. Le quota est recalculé côté serveur ; certaines fonctionnalités restent réservées aux packs."
+    : "Un quota quotidien gratuit de 90 crédits ORIA est en préparation. Tant qu'il n'est pas activé, les services IA restent soumis aux conditions des packs payants actifs." },
   { question: "Combien de temps un pack reste-t-il actif ?", answer: "Les packs payants ont une validité de 35 jours à compter de leur activation, sous réserve des conditions propres à chaque offre. Les conditions exactes sont présentées avant achat." },
   { question: "Puis-je utiliser plusieurs modèles d'IA ?", answer: "Le catalogue dépend du pack actif et des fournisseurs disponibles. Le quota gratuit utilise Luna dans ses modes autorisés." },
   { question: "La génération d'images et de vidéos est-elle incluse ?", answer: "Les possibilités dépendent du pack, des crédits et des fonctionnalités effectivement activées. Le coût doit être vérifié avant toute création." },
@@ -254,14 +254,14 @@ export default function OriaLanding() {
       <section className={styles.howSection} id="fonctionnement" aria-labelledby="how-title">
         <div className={styles.howIntro}><p className={styles.sectionKicker}>02 — LE FONCTIONNEMENT</p><h2 id="how-title">L'essentiel,<br/><em>sans complication.</em></h2><p>Tout se passe dans un seul espace. Vous choisissez le bon outil, ORIA s’occupe de vous accompagner.</p><Link href="/chat" className={styles.textLink}>Accéder à mon espace <ArrowUpRight size={18}/></Link></div>
         <div className={styles.howSteps}>
-          <div className={styles.howStep}><span>01</span><div><h3>Commencez à votre rythme</h3><p>{FREE_PUBLIC ? "Utilisez votre quota quotidien de 150 crédits ORIA selon vos droits, ou choisissez un pack pour aller plus loin." : "Créez votre compte et consultez les packs actuellement disponibles pour accéder aux services IA."}</p></div><ArrowUpRight size={22}/></div>
+          <div className={styles.howStep}><span>01</span><div><h3>Commencez à votre rythme</h3><p>{FREE_PUBLIC ? "Utilisez votre quota quotidien de 90 crédits ORIA selon vos droits, ou choisissez un pack pour aller plus loin." : "Créez votre compte et consultez les packs actuellement disponibles pour accéder aux services IA."}</p></div><ArrowUpRight size={22}/></div>
           <div className={styles.howStep}><span>02</span><div><h3>Choisissez votre modèle</h3><p>Accédez aux modèles disponibles dans votre pack et ajustez la réflexion selon votre tâche.</p></div><ArrowUpRight size={22}/></div>
           <div className={styles.howStep}><span>03</span><div><h3>Passez à l'action</h3><p>Discutez, joignez un document, faites une recherche ou lancez une création.</p></div><ArrowUpRight size={22}/></div>
         </div>
       </section>
 
       <section className={styles.creditsSection} aria-labelledby="credit-title">
-        <div className={styles.creditsMain}><p className={styles.sectionKicker}>03 — DES CRÉDITS, PAS DES SURPRISES</p><h2 id="credit-title">Vous créez.<br/><span>Vous gardez le contrôle.</span></h2><p>Avec ORIA, vos actions utilisent des crédits. Suivez votre solde, choisissez le modèle adapté et consultez les coûts avant les opérations les plus exigeantes.</p><div className={styles.creditPills}><span><Check size={15}/> "Validité de 35 jours pour les packs payants"</span>{FREE_PUBLIC && <span><Check size={15}/> Jusqu’à 150 crédits gratuits par jour</span>}<span><Check size={15}/> Suivi du solde</span><span><Check size={15}/> Crédits complémentaires</span></div></div>
+        <div className={styles.creditsMain}><p className={styles.sectionKicker}>03 — DES CRÉDITS, PAS DES SURPRISES</p><h2 id="credit-title">Vous créez.<br/><span>Vous gardez le contrôle.</span></h2><p>Avec ORIA, vos actions utilisent des crédits. Suivez votre solde, choisissez le modèle adapté et consultez les coûts avant les opérations les plus exigeantes.</p><div className={styles.creditPills}><span><Check size={15}/> "Validité de 35 jours pour les packs payants"</span>{FREE_PUBLIC && <span><Check size={15}/> Jusqu’à 90 crédits gratuits par jour</span>}<span><Check size={15}/> Suivi du solde</span><span><Check size={15}/> Crédits complémentaires</span></div></div>
         <div className={styles.creditVisual} aria-label="Illustration du suivi des crédits"><div className={styles.creditVisualTop}><span>MON ESPACE</span><span className={styles.creditVisualDot}/></div><div className={styles.creditMetricLabel}>Utilisation des crédits</div><div className={styles.creditMetric}>À votre rythme<span>.</span></div><div className={styles.creditBar}><span/></div><div className={styles.creditVisualLine}><span>Un solde clair</span><ShieldCheck size={18}/></div><div className={styles.creditVisualLine}><span>Un coût adapté à l’action</span><Check size={18}/></div><div className={styles.creditVisualFooter}>Illustration de l'interface — valeurs non contractuelles</div></div>
       </section>
 
