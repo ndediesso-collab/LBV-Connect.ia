@@ -102,7 +102,7 @@ type OriaFreeCapabilities = {
   success: boolean;
   catalog: {
     role: "free";
-    chat?: {wired?: boolean; model?: string; reasoning_modes?: string[]};
+    chat?: {wired?: boolean; model?: string; models?: string[]; reasoning_modes?: string[]};
     web?: {wired?: boolean};
     documents?: {wired?: boolean; target_formats?: string[]};
     images?: {wired?: boolean; max_edge_pixels?: number};
@@ -1220,6 +1220,30 @@ const models: ModelDefinition[] = [
     packs: ["intermediate_pack"],
   },
   {
+    id: "claude-haiku-5.5",
+    name: "Claude Haiku 5.5",
+    description: "Modèle Anthropic récent et économique",
+    packs: ["light_pack", "intermediate_pack", "pro_pack", "business_pack", "discovery_pack"],
+  },
+  {
+    id: "gemini-3.5-flash-lite",
+    name: "Gemini 3.5 Flash-Lite",
+    description: "Rapidité et grands documents",
+    packs: ["intermediate_pack", "pro_pack", "business_pack"],
+  },
+  {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    description: "Raisonnement Google plus avancé",
+    packs: ["pro_pack", "business_pack"],
+  },
+  {
+    id: "gemini-4-argon",
+    name: "Gemini 4 Argon",
+    description: "Raisonnement premium Google",
+    packs: ["pro_pack", "business_pack"],
+  },
+  {
     id: "gpt-5.6-terra",
     name: "GPT-5.6 Terra",
     description: "Raisonnement avancé · Pour les problèmes complexes",
@@ -1368,9 +1392,31 @@ async function apiFetch<T>(
  * ============================================================
  */
 
+async function apiFreeStreamFetch(payload: unknown, signal?: AbortSignal): Promise<Response> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user || !session.access_token) throw new Error("Utilisateur non authentifié.");
+  const response = await fetch(`${API_URL}/ai/free/chat/persistent/stream`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "user-id": session.user.id,
+      authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.detail || "La generation gratuite est indisponible.");
+  }
+  if (!response.body) throw new Error("Le flux de reponse gratuite est vide.");
+  return response;
+}
+
 async function apiStreamFetch(
   path: string,
   formData: FormData,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const {
     data: { session },
@@ -1391,6 +1437,7 @@ async function apiStreamFetch(
         authorization: `Bearer ${session.access_token}`,
       },
       body: formData,
+      signal,
     },
   );
 
@@ -4121,6 +4168,23 @@ export default function ChatPage() {
 
   const [isThinking, setIsThinking] =
     useState(false);
+  const requestAbortRef = useRef<AbortController | null>(null);
+  const paidGenerationIdRef = useRef<string | null>(null);
+
+  async function stopActiveGeneration() {
+    const generationId = paidGenerationIdRef.current;
+    // Fermer immédiatement la lecture UI; le backend conserve une trace
+    // d'arrêt pour une génération payante dont le flux a déjà démarré.
+    const request = generationId
+      ? apiFetch<{success: boolean}>("/ai/chat/stop", {
+          method: "POST", body: JSON.stringify({generation_id: generationId}),
+        }).catch(() => null)
+      : Promise.resolve(null);
+    requestAbortRef.current?.abort();
+    setChatStatusStep(null);
+    setError("Arrêt demandé. Les tokens déjà engagés chez le fournisseur peuvent rester facturables ; le solde sera rapproché.");
+    void request;
+  }
 
   const [chatStatusStep, setChatStatusStep] =
     useState<OriaChatStatusStep | null>(null);
@@ -4214,9 +4278,12 @@ export default function ChatPage() {
   const chatCapabilitiesRequestRef = useRef(0);
   const selectableModels = useMemo(
     () => isFreeAccount
-      ? [{id: "luna", name: "GPT-6 Luna", description: "Accès gratuit", packs: []}]
+      ? (freeCapabilities?.catalog?.chat?.models || ["luna"]).map((id) => ({
+          id, name: id === "luna" ? "Luna" : "Claude Haiku 5.5",
+          description: "Accès gratuit · coût réel en crédits", packs: [],
+        }))
       : getSelectableModels(chatCapabilities, trials),
-    [isFreeAccount, chatCapabilities, trials],
+    [isFreeAccount, chatCapabilities, freeCapabilities, trials],
   );
 
   const [isLoadingTrials, setIsLoadingTrials] =
@@ -6224,23 +6291,25 @@ export default function ChatPage() {
 
   // ORIA_UNIQUE_PERMISSIONS_V2 : a document quote is checked SERVER-SIDE.
   // No extra quotation screen in the chat. Only explicit creation requests count as consent.
-  function requestedFreeDocument(text: string): "pdf" | "docx" | null {
+  function requestedFreeDocument(text: string): "pdf" | "docx" | "xlsx" | null {
     const request = text.trim().toLowerCase();
     const explicit = /\b(cr[eé]e|cr[eé]er|g[eé]n[eè]re|g[eé]n[eé]rer|fabrique|r[eé]dige|pr[eé]pare|fais|faites|produis|produire|mets|mettre)\b/.test(request);
     if (!explicit) return null;
     if (/\b(pdf)\b/.test(request)) return "pdf";
     if (/\b(word|docx)\b/.test(request)) return "docx";
+    if (/\b(excel|xlsx|classeur|tableur)\b/.test(request)) return "xlsx";
     return null;
   }
 
-  async function executeFreeDocument(content: string, format: "pdf" | "docx", reasoning: "fast" | "balanced") {
+  async function executeFreeDocument(content: string, format: "pdf" | "docx" | "xlsx", reasoning: "fast" | "balanced", signal?: AbortSignal) {
     const catalog = freeCapabilities?.catalog?.documents;
     if (catalog?.wired !== true || !catalog.target_formats?.includes(format)) {
       throw new Error("La création de ce format n'est pas encore disponible dans votre accès gratuit.");
     }
-    const request = {message: content, format, reasoning_mode: reasoning};
+    const request = {message: content, format, reasoning_mode: reasoning,
+      attachments: await encodeFreeAttachments(attachments)};
     const preflight = await apiFetch<{success: boolean; quote: {can_reserve_by_balance: boolean; reserved_credits: number}}>(
-      "/ai/free/document/quote", {method: "POST", body: JSON.stringify(request)},
+      "/ai/free/document/quote", {method: "POST", body: JSON.stringify(request), signal},
     );
     if (!preflight.success || !preflight.quote?.can_reserve_by_balance) {
       throw new Error("Crédits gratuits insuffisants pour ce document. Découvrez les offres sur /packs.");
@@ -6248,14 +6317,14 @@ export default function ChatPage() {
     // The user explicitly requested a file; backend requires confirmed=true.
     const created = await apiFetch<{
       success: boolean; artifacts?: Array<{filename?: string; download_url?: string; url?: string}>;
-    }>("/ai/free/document", {method: "POST", body: JSON.stringify({...request, confirmed: true})});
+    }>("/ai/free/document", {method: "POST", body: JSON.stringify({...request, confirmed: true}), signal});
     if (!created.success || !created.artifacts?.length) {
       throw new Error("Le document n'a pas été confirmé. Vérifiez Mes créations avant de réessayer.");
     }
     const items = created.artifacts.map((item) => {
       const rawUrl = item.download_url || item.url || "";
       const safeUrl = /^https:\/\//i.test(rawUrl) || /^\/(?!\/)/.test(rawUrl) ? rawUrl : "";
-      const label = (item.filename || (format === "pdf" ? "Document PDF" : "Document Word"))
+      const label = (item.filename || (format === "pdf" ? "Document PDF" : format === "xlsx" ? "Classeur Excel" : "Document Word"))
         .replace(/[\[\]\n\r]/g, " ");
       return safeUrl ? `- [${label}](${safeUrl})` : `- ${label} (retrouvable dans Mes créations)`;
     });
@@ -6394,11 +6463,14 @@ export default function ChatPage() {
     const now = new Date().toISOString();
     setError(null);
     setIsThinking(true);
+    const freeController = new AbortController();
+    requestAbortRef.current = freeController;
     setChatStatusStep("sending");
     followBottomRef.current = true;
     let conversationId = activeConversationId;
     const title = content.length > 45 ? `${content.slice(0, 45)}...` : content;
     let userEntry: ChatMessage | null = null;
+    let streamedAssistantId: string | null = null;
     try {
       // Créer d'abord le fil cloud pour que la navigation recharge les messages.
       if (!conversationId) {
@@ -6432,6 +6504,7 @@ export default function ChatPage() {
       }
       // Si la persistance a échoué, on ne lance pas une génération facturable.
       await saveMessageRemote(userMessage);
+      if (freeController.signal.aborted) return;
       const cvPlan = await planFreeCv(content);
       const documentFormat = cvPlan?.ready ? cvPlan.docFormat : requestedFreeDocument(content);
       let answerText: string;
@@ -6439,34 +6512,85 @@ export default function ChatPage() {
       let serverPersistedMessageId: string | null = null;
       if (cvPlan && !cvPlan.ready) {
         answerText = cvPlan.answer;
+      } else if (cvPlan?.ready) {
+        answerText = "La génération de CV est réservée aux packs payants. Je peux néanmoins t'aider à rédiger son contenu ici.";
       } else if (documentFormat) {
-        answerText = await executeFreeDocument(cvPlan?.docMessage || content, documentFormat,
-          reasoningMode === "fast" ? "fast" : "balanced");
+        answerText = await executeFreeDocument(content, documentFormat,
+          reasoningMode === "fast" ? "fast" : "balanced", freeController.signal);
       } else {
-        const response = await apiFetch<{
+        streamedAssistantId = crypto.randomUUID();
+        const pendingAssistantId = streamedAssistantId;
+        setMessages((current) => activeConversationRef.current === conversationId
+          ? [...current, {id: pendingAssistantId, conversationId: userMessage.conversationId, role: "assistant", content: "", createdAt: new Date().toISOString()}]
+          : current);
+        const stream = await apiFreeStreamFetch({
+          message: userMessage.content, model: selectedModel,
+          reasoning_mode: reasoningMode, web: webEnabled,
+          attachments: await encodeFreeAttachments(attachments),
+          conversation_id: conversationId, current_message_id: userMessage.id,
+        }, freeController.signal);
+        const reader = stream.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let liveText = "";
+        let finalResult: {
           success: boolean; message: string; requires_reconciliation?: boolean;
           server_persisted?: boolean; assistant_message_id?: string;
-          wallet?: OriaFreeStatus["wallet"];
-        }>("/ai/free/chat/persistent", {
-          method: "POST",
-          body: JSON.stringify({
-            message: userMessage.content, model: "luna", reasoning_mode: reasoningMode, web: webEnabled,
-            attachments: await encodeFreeAttachments(attachments),
-            conversation_id: conversationId, current_message_id: userMessage.id,
-          }),
-        });
-        if (!response.success || !response.message?.trim()) throw new Error("La réponse gratuite n'a pas été confirmée.");
-        answerText = response.message;
-        serverPersistedMessageId = response.server_persisted === true && response.assistant_message_id
-          ? response.assistant_message_id : null;
-        reconciliationRequired = response.requires_reconciliation === true;
+        } | null = null;
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, {stream: true}).replace(/\r\n/g, "\n");
+          const rawEvents = buffer.split("\n\n");
+          buffer = rawEvents.pop() || "";
+          for (const rawEvent of rawEvents) {
+            if (!rawEvent.trim() || rawEvent.startsWith(":")) continue;
+            let eventName = "message";
+            const dataLines: string[] = [];
+            for (const line of rawEvent.split("\n")) {
+              if (line.startsWith("event:")) eventName = line.slice(6).trim();
+              if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+            }
+            if (!dataLines.length) continue;
+            const data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+            if (eventName === "delta" && typeof data.content === "string") {
+              liveText += data.content;
+              const renderedText = liveText;
+              setChatStatusStep(null);
+              setMessages((current) => current.map((entry) => entry.id === pendingAssistantId
+                ? {...entry, content: renderedText} : entry));
+            } else if (eventName === "error") {
+              throw new Error(typeof data.detail === "string" ? data.detail : "Streaming gratuit interrompu.");
+            } else if (eventName === "done") {
+              finalResult = {
+                success: data.success === true,
+                message: typeof data.message === "string" ? data.message : "",
+                server_persisted: data.server_persisted === true,
+                assistant_message_id: typeof data.assistant_message_id === "string"
+                  ? data.assistant_message_id : undefined,
+                requires_reconciliation: data.requires_reconciliation === true,
+              };
+            }
+          }
+        }
+        if (!finalResult?.success || !finalResult.message?.trim()) {
+          throw new Error("Usage final gratuit non confirme. Consulte le solde avant de retenter.");
+        }
+        answerText = finalResult.message;
+        serverPersistedMessageId = finalResult.server_persisted === true && finalResult.assistant_message_id
+          ? finalResult.assistant_message_id : null;
+        reconciliationRequired = finalResult.requires_reconciliation === true;
       }
       setAttachments([]);
       const answer: ChatMessage = {
         id: serverPersistedMessageId || crypto.randomUUID(), conversationId, role: "assistant",
         content: answerText, createdAt: new Date().toISOString(),
       };
-      setMessages((current) => activeConversationRef.current === conversationId ? [...current, answer] : current);
+      setMessages((current) => activeConversationRef.current === conversationId
+        ? streamedAssistantId
+          ? current.map((entry) => entry.id === streamedAssistantId ? answer : entry)
+          : [...current, answer]
+        : current);
       if (currentUserId) {
         const cache = readLocalCache(currentUserId);
         const cached = cache?.messages[conversationId] || [];
@@ -6489,6 +6613,14 @@ export default function ChatPage() {
       }
       setConversations((current) => current.map((c) => c.id === conversationId ? {...c, updatedAt: new Date().toISOString()} : c));
     } catch (error) {
+      if (freeController.signal.aborted) {
+        setError("Affichage arrêté. Le serveur gratuit peut terminer l'appel déjà engagé pour calculer et enregistrer sa facture réelle.");
+        return;
+      }
+      if (streamedAssistantId) {
+        const failedId = streamedAssistantId;
+        setMessages((current) => current.filter((entry) => entry.id !== failedId));
+      }
       console.error("ORIA gratuit : erreur d'envoi", error);
       setError((error instanceof Error ? error.message : "Échec de la demande") +
         (userEntry ? " Vérifie ton historique et ton solde avant de réessayer pour éviter un double coût." : ""));
@@ -6496,6 +6628,7 @@ export default function ChatPage() {
       // Sans cette lecture, la carte reste "Acces indisponible" apres envoi gratuit.
       if (conversationId) void refreshStoredAttachments(conversationId);
       setChatStatusStep(null);
+      if (requestAbortRef.current === freeController) requestAbortRef.current = null;
       setIsThinking(false);
       void refreshFreeStatus();
     }
@@ -6707,6 +6840,9 @@ export default function ChatPage() {
      */
     const generationId =
       crypto.randomUUID();
+    paidGenerationIdRef.current = generationId;
+    const paidController = new AbortController();
+    requestAbortRef.current = paidController;
 
     const userMessageId =
       crypto.randomUUID();
@@ -6908,6 +7044,7 @@ export default function ChatPage() {
         await apiStreamFetch(
           "/ai/chat/stream",
           formData,
+          paidController.signal,
         );
 
       const reader =
@@ -7519,6 +7656,13 @@ export default function ChatPage() {
       );
     } catch (requestError) {
       setChatStatusStep(null);
+      if (paidController.signal.aborted) {
+        setMessages((current) => current.filter(
+          (item) => item.id !== activeStreamingAssistantIdRef.current || Boolean(item.content?.trim()),
+        ));
+        setError("Génération interrompue. Le solde réel sera vérifié après l'arrêt fournisseur.");
+        return;
+      }
       const errorMessage =
         requestError instanceof
         Error
@@ -7581,6 +7725,8 @@ export default function ChatPage() {
     } finally {
       setChatStatusStep(null);
       activeStreamingAssistantIdRef.current = null;
+      if (requestAbortRef.current === paidController) requestAbortRef.current = null;
+      if (paidGenerationIdRef.current === generationId) paidGenerationIdRef.current = null;
       setIsThinking(false);
       setCanModifyActiveGeneration(
         false,
@@ -9164,14 +9310,29 @@ export default function ChatPage() {
                     handleComposerPaste
                   }
                   onKeyDown={(event) => {
-                    if (
-                      event.key ===
-                        "Enter" &&
-                      !event.shiftKey
-                    ) {
+                    if (event.nativeEvent.isComposing) return;
+                    if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
-
-                      handleSendMessage();
+                      if (!event.repeat) void handleSendMessage();
+                      return;
+                    }
+                    // ↓ crée une ligne uniquement à la fin, sinon navigue normalement.
+                    if (event.key === "ArrowDown" && !event.shiftKey &&
+                        !event.ctrlKey && !event.metaKey && !event.altKey &&
+                        !event.repeat) {
+                      const input = event.currentTarget;
+                      if (input.value.length > 0 &&
+                          input.selectionStart === input.value.length &&
+                          input.selectionEnd === input.value.length) {
+                        event.preventDefault();
+                        const next = `${input.value}\n`;
+                        setMessage(next);
+                        requestAnimationFrame(() => {
+                          if (document.activeElement === input) {
+                            input.setSelectionRange(next.length, next.length);
+                          }
+                        });
+                      }
                     }
                   }}
                   placeholder={UI[language].writeToOria}
@@ -9253,21 +9414,19 @@ export default function ChatPage() {
                   )}
                   <button
                     type="button"
-                    aria-label={UI[language].send}
-                    onClick={() => void handleSendMessage()}
-                    disabled={
-                      (!message.trim() &&
+                    aria-label={isThinking ? (language === "fr" ? "Arrêter la génération" : "Stop generation") : UI[language].send}
+                    onClick={isThinking ? () => void stopActiveGeneration() : () => void handleSendMessage()}
+                    disabled={!isThinking && (
+                      ((!message.trim() &&
                         attachments.length === 0) ||
-                      isThinking || editBusy || editingMessageId !== null ||
+                      editBusy || editingMessageId !== null ||
                       (!isFreeAccount && (isLoadingChatCapabilities || !chatCapabilities)) ||
                       (isFreeAccount && !freeChatAuthorized) ||
-                      !selectableModels.some((model) => model.id === selectedModel)
+                      !selectableModels.some((model) => model.id === selectedModel)))
                     }
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-accent text-accent-foreground transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-30 oria-press"
                   >
-                    <ArrowUp
-                      size={18}
-                    />
+                    {isThinking ? <Square size={17} /> : <ArrowUp size={18} />}
                   </button>
                 </div>
               </div>

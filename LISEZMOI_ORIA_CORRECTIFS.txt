@@ -1,0 +1,97 @@
+ORIA — LOT DE CORRECTIFS 5 PRIORITÉS (20 NOVEMBRE 2026)
+======================================================
+
+Archive de modification LOCALE. Aucun commit GitHub, aucune migration
+Supabase, aucun déploiement Vercel/Render n'ont été effectués ici :
+l'accès GitHub disponible à ChatGPT est en lecture seule.
+
+INCLUS
+-------
+1. oria_apply_correctifs.py : patcher prudent du dépôt GitHub ORIA
+   (contrôle exact des ancres de code, validation de syntaxe Python,
+    sauvegarde/restauration en cas d'échec d'écriture).
+2. oria_document_images.py : nouveau module pour préparer et intégrer des
+   images authentifiées dans les documents PDF, DOCX, PPTX et XLSX.
+3. ORIA_SQL_FREE_XLSX.sql : migration transactionnelle des actions Supabase
+   free_xlsx_luna et chat_haiku (utilisation gratuite de Claude Haiku).
+
+SOURCE CIBLE
+------------
+https://github.com/ndediesso-collab/LBV-Connect.ia
+Branche vérifiée : main. Destiné au code du 16/11/2026.
+Ne PAS appliquer l'ancienne archive « phase 1 » avant celle-ci : la
+nouvelle archive contient déjà ses modifications et vérifie le code original.
+
+INSTALLATION — SUR VOTRE COPIE DU DÉPÔT
+---------------------------------------
+1. Télécharger ou cloner la branche main, créer une branche de travail et
+   conserver une sauvegarde/commit propre :
+     git checkout -b correction-oria-cinq-priorites
+2. Copier les trois fichiers de cette archive à la RACINE du dépôt,
+   au même niveau que Frontend/ et Backend/.
+3. Sous Windows PowerShell, à la racine :
+     py oria_apply_correctifs.py --dry-run
+   Sous macOS/Linux :
+     python3 oria_apply_correctifs.py --dry-run
+   N'exécuter la suite que si aucune erreur « ancre obsolète » n'apparaît.
+4. Appliquer :
+     py oria_apply_correctifs.py
+   ou : python3 oria_apply_correctifs.py
+5. Vérifier les changements :
+     git diff --check
+     git diff --stat
+   Inspecter le diff avant de committer.
+6. AVANT de rendre les nouveaux choix de modèles et Excel gratuits accessibles,
+   exécuter ORIA_SQL_FREE_XLSX.sql dans Supabase SQL Editor sur une base
+   sauvegardée, lire les deux SELECT de vérification, puis tester les RPC
+   de réservation et settlement. La migration refuse les contraintes ou
+   signatures inconnues afin de ne pas écraser une évolution SQL récente.
+7. Vérifications locales et environnement de staging :
+     cd Backend
+     python -m compileall app
+     python -m pytest tests -q
+     cd ../Frontend
+     npm ci
+     npm run build
+   Ensuite tests manuels avec abonnements Grat./Découv./Léger/Inter./Pro/
+   Business et les deux fournisseurs IA; tester les coûts et les pièces jointes.
+8. Publier seulement après tests et revue des devis OpenRouter, des réservations
+   Supabase et du rapprochement des consommations déjà engagées.
+
+CORRECTIFS CODE INCLUS
+----------------------
+- Entrée envoie ; Maj+Entrée et ↓ (curseur en fin de texte) créent une ligne.
+- Stop visible dans le chat payant et gratuit, contrôles de fermeture côté
+  backend payant, prudence accrue sur le remboursement des réservations.
+- OpenAI direct conserve son catalogue ; OpenRouter ajoute Haiku 5.5 dès
+  Gratuit, Découverte et Léger, Gemini Lite dès Intermédiaire, Gemini Flash
+  et Argon dès Pro. Terra retiré de Découverte, essais historiques préservés.
+- Gratuits : PDF/DOCX/XLSX, CV et PPTX toujours interdits en génération.
+- Insertion matérielle d'images jointes avec validation avant compilation des
+  quatre formats PDF/DOCX/PPTX/XLSX. Excel avec images exige un contrat XLSX
+  natif « sheets », non un simple tableau HTML.
+
+LIMITES IMPORTANTES — À NE PAS IGNORER
+--------------------------------------
+- STOP GRATUIT : /free/chat/persistent protège volontairement la génération
+  après démarrage de l'appel fournisseur. Le bouton coupe l'attente de
+  l'utilisateur mais ne garantit pas l'arrêt de calcul fournisseur : cet appel
+  peut terminer et rester facturable. Une annulation fournisseur fiable exigerait
+  une route asynchrone persistante remaniée et/ou une API d'annulation du modèle.
+- STOP PAYANT : interruption coopérative et fermeture du flux HTTP ; si l'usage
+  fournisseur final est absent, une réserve peut rester en attente de
+  rapprochement. Ne jamais rembourser aveuglément l'appel déjà engagé.
+  Le registre de contrôle est en mémoire : pour plusieurs workers/instances,
+  il faut un registre partagé (Redis/Postgres) et réconciliation automatisée.
+- Nouveaux modèles Google : les slugs, la compatibilité streaming, les budgets
+  de contexte et les plafonds de prix doivent être revalidés sur OpenRouter
+  par de vrais appels de tests avant l'activation en production.
+- Les tests unitaires/end-to-end et la compilation Next.js complète ne peuvent
+  PAS être exécutés ici sans copie locale complète du dépôt ni secrets API.
+  Le script refuse les versions de code imprévues plutôt que de forcer la mise
+  à jour : si une ancre ne correspond plus, ne PAS supprimer la vérification.
+- Images : insertion déterministe de 1 à 2 images pour une demande explicite,
+  redimensionnées et revalidées, mais les schémas de document non pris en charge
+  échouent volontairement plutôt que de créer un fichier sans l'image demandée.
+
+AUCUNE MODIFICATION N'EST APPLIQUÉE À GITHUB PAR CETTE ARCHIVE.

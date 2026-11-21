@@ -1,0 +1,55 @@
+ORIA — correctif d'installation V2 (20 novembre 2026)
+====================================================
+
+Cette archive REMPLACE l'archive ORIA_CORRECTIFS_5_PRIORITES_20261120.zip.
+Elle corrige l'erreur « Ancre obsolète » signalée dans le fichier
+Frontend/app/chat/page.tsx, au niveau de l'appel executeFreeDocument.
+
+Cause : l'ancienne ancre recherchait un argument freeController.signal
+qui n'existe pas encore dans la version originale du dépôt. La nouvelle
+version cherche l'appel original, puis ajoute le signal d'annulation.
+Le bloc a été placé après la création du contrôleur d'annulation et le
+signal a aussi été relié aux requêtes de devis/document gratuit.
+
+Aucun changement du dépôt GitHub ou de la base Supabase n'a été effectué
+par la création de cette archive. Elle est destinée à une copie locale.
+
+DANS POWERSHELL — UTILISER LA COPIE EXISTANTE, NE PAS RE-CLONER :
+
+  cd "C:\Users\LENOVO\LBV-Connect.ia"
+  git status --short
+  Expand-Archive -LiteralPath "$HOME\Downloads\ORIA_CORRECTIFS_5_PRIORITES_V2.zip" -DestinationPath . -Force
+  py .\oria_apply_correctifs.py --dry-run
+  if ($LASTEXITCODE -ne 0) { throw "Dry-run échoué ; ne pas appliquer." }
+  py .\oria_apply_correctifs.py
+  if ($LASTEXITCODE -ne 0) { throw "Application échouée ; ne pas déployer." }
+  git diff --check
+  git diff --stat
+  git status --short
+
+IMPORTANT : n'appliquez PAS l'ancienne archive avant la V2. La commande
+--dry-run vérifie les ancres sans modifier le projet. Si elle échoue encore,
+arrêtez-vous et communiquez la nouvelle erreur : ne désactivez pas les
+vérifications et ne remplacez pas le code manuellement.
+
+VERIFICATIONS EFFECTUEES POUR V2 :
+- Syntaxe Python du script et du module image validées.
+- 89 substitutions ordonnées validées sur un jeu d'ancres synthétiques.
+- Ancre exacte fautive et autres ancres à risque vérifiées dans les
+  fichiers GitHub main. Sans exécuter l'ensemble sur le dépôt Windows
+  de l'utilisateur, la compilation complète n'est pas garantie.
+- Insertion de référence d'image validée pour PDF/DOCX/PPTX/XLSX.
+
+LIMITES TOUJOURS IMPORTANTES :
+- Stop du chat gratuit coupe l'attente côté navigateur, sans garantir
+  l'annulation de l'appel fournisseur déjà lancé. Le coût peut être dû.
+- Sur le chat payant, les réservations sans usage final vérifié restent
+  à rapprocher : aucune restitution arbitraire.
+- Il faut tester la compilation Next.js, les routes et Supabase sur une
+  base de test, puis seulement publier.
+- Exécuter la migration ORIA_SQL_FREE_XLSX.sql dans Supabase sur une
+  base sauvegardée, APRÈS avoir vérifié les règles SQL en vigueur.
+- Les slugs et tarifs des nouveaux modèles doivent être testés sur
+  OpenRouter avant toute activation publique.
+
+AUCUN COMMIT ET AUCUN DEPLOIEMENT NE SONT FAITS PAR CETTE ARCHIVE.

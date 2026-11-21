@@ -1,0 +1,65 @@
+ORIA — correctifs V3 avec streaming réel pour le Chat Gratuit
+20 novembre 2026
+
+CONTENU
+- oria_apply_correctifs.py : V3 COMPLETE, pour une branche propre de main.
+- oria_add_streaming_gratuit.py : complément, si la V2 a DÉJÀ été appliquée.
+- oria_document_images.py : module images utilisé par les cinq correctifs.
+- ORIA_SQL_FREE_XLSX.sql : migration SQL des nouvelles actions, A REVOIR avant exécution.
+- ORIA_VERIFICATION_RESERVATIONS.sql : diagnostic lecture seule des réservations.
+
+NE PAS EXÉCUTER LES DEUX SCRIPTS :
+
+1) Sur une branche contenant encore le code ORIGINAL (git status --short propre) :
+   cd "C:\Users\LENOVO\LBV-Connect.ia"
+   Expand-Archive -LiteralPath "$HOME\Downloads\ORIA_CORRECTIFS_5_PRIORITES_V3_STREAMING_GRATUIT.zip" -DestinationPath . -Force
+   py .\oria_apply_correctifs.py --dry-run
+   if ($LASTEXITCODE -ne 0) { throw "Dry-run V3 échoué : arrêt." }
+   py .\oria_apply_correctifs.py
+   if ($LASTEXITCODE -ne 0) { throw "Application V3 échouée : arrêt." }
+   git diff --check
+   cd .\Frontend
+   npm ci
+   npm run build
+
+2) Si la V2 a déjà été appliquée sur cette même branche :
+   cd "C:\Users\LENOVO\LBV-Connect.ia"
+   Expand-Archive -LiteralPath "$HOME\Downloads\ORIA_CORRECTIFS_5_PRIORITES_V3_STREAMING_GRATUIT.zip" -DestinationPath . -Force
+   py .\oria_add_streaming_gratuit.py --dry-run
+   if ($LASTEXITCODE -ne 0) { throw "Dry-run V2->V3 échoué : arrêt." }
+   py .\oria_add_streaming_gratuit.py
+   if ($LASTEXITCODE -ne 0) { throw "Application V2->V3 échouée : arrêt." }
+   git diff --check
+   cd .\Frontend
+   npm ci
+   npm run build
+
+STREAMING DU CHAT GRATUIT
+- Le backend /ai/free/chat/persistent/stream produit des événements SSE start,
+  delta, done et error, à partir de véritables événements fournisseurs.
+- Les jetons apparaissent progressivement ; la réponse complète est enregistrée
+  seulement après calcul et règlement fournisseur confirmé.
+- La demande reste idempotente, indexée sur current_message_id comme auparavant.
+- L'arrêt visuel, la fermeture d'onglet ou la déconnexion ne sont PAS une
+  demande d'annulation réelle au fournisseur : le serveur doit laisser terminer
+  son appel engagé pour obtenir la facture et libérer le surplus réservé.
+  Autrement dit, STOP pendant le Gratuit n'économise PAS nécessairement de tokens.
+- Le mode Gratuit Document (PDF, DOCX, XLSX) reste une création asynchrone
+  NON streamée : les documents apparaissent après validation finale.
+- Si un appel fournisseur ne retourne jamais d'usage, la réservation demeure
+  en reconciliation. Ne pas débloquer automatiquement sans preuve.
+
+SÉCURITÉ ET TESTS
+- Les vérifications locales du patch ne sont pas des tests d'intégration.
+- Vérifier depuis un compte GRATUIT réel : streaming Luna, streaming Haiku
+  (OpenRouter seulement), absence de débit double, fermeture d'onglet,
+  clic sur Stop, reprise de l'historique, refus du Web gratuit, limites de crédits.
+- Effectuer la migration SQL seulement sur une base sauvegardée/de test et
+  après avoir comparé les contraintes actuelles ; elle est indépendante du SSE.
+- Vérifier que ORIA_FREE_WATCHDOG_ENABLED est correctement configuré après
+  déploiement de son schéma SQL, sans modifier arbitrairement les réservations.
+- Test complet Next.js/Render/Supabase nécessaire avant mise en production.
+- Aucun changement n'est effectué par la création de cette archive.
+
+ATTENTION AU DEPOT : la version du dépôt GitHub consultée est en lecture seule
+pour l'assistant. Les fichiers ne sont PAS automatiquement déployés.
