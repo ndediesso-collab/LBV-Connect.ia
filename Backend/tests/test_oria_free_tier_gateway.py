@@ -25,7 +25,7 @@ class FakeRpc:
 class FakeWalletQuery:
     def __init__(self, backend): self.backend=backend
     def select(self,columns):
-        assert columns == 'free_balance,purchased_balance,last_grant_day,recharge_frozen'
+        assert columns == 'free_balance,purchased_balance,purchased_expires_at,last_grant_day,recharge_frozen'
         return self
     def eq(self,field,value):
         assert field=='user_id' and value==UID

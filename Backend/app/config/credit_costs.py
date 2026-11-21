@@ -252,17 +252,20 @@ MODEL_TOKEN_PRICING_USD_PER_MILLION = {
 # La découverte (5 essais) est gérée séparément par model_trials.py.
 OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK: dict[str, frozenset[str]] = {
     "light_pack": frozenset({"luna", "claude-haiku-5.5"}),
-    "intermediate_pack": frozenset({"luna", "gpt-5", "claude-haiku-5.5"}),
+    "intermediate_pack": frozenset({"luna", "gpt-5", "claude-haiku-5.5",
+                                    "gemini-3.5-flash-lite"}),
     "pro_pack": frozenset({
         "luna", "gpt-5.6-terra", "gpt-6-sol",
         "claude-haiku-5.5", "claude-sonnet-5.5",
+        "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-4-argon",
     }),
     "business_pack": frozenset({
         "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra",
         "claude-haiku-5.5", "claude-sonnet-5.5", "claude-opus-5.5",
+        "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-4-argon",
     }),
-    # Modèles facturés en crédits, sans compteur d’essais Découverte.
-    "discovery_pack": frozenset({"luna", "gpt-5.6-terra"}),
+    # Découverte : Terra retiré, Haiku disponible via OpenRouter.
+    "discovery_pack": frozenset({"luna", "claude-haiku-5.5"}),
 }
 
 # A RENSEIGNER seulement après vérification via le catalogue OpenRouter.
@@ -280,6 +283,9 @@ OPENROUTER_CHAT_MODEL_IDS: dict[str, str] = {
     "claude-haiku-5.5": "anthropic/claude-haiku-5.5",
     "claude-sonnet-5.5": "anthropic/claude-sonnet-5.5",
     "claude-opus-5.5": "anthropic/claude-opus-5.5",
+    "gemini-3.5-flash-lite": "google/gemini-3.5-flash-lite",
+    "gemini-3.8-flash": "google/gemini-3.8-flash",
+    "gemini-4-argon": "google/gemini-4-argon",
 }
 
 # Plafonds de PRÉAUTORISATION administrateur, en USD/1M tokens.
@@ -302,6 +308,11 @@ OPENROUTER_CHAT_RESERVATION_RATES_USD_PER_MILLION: dict[str, dict[str, str]] = {
     "anthropic/claude-haiku-5.5": {"input": "1", "output": "2", "cache_write": "2"},
     "anthropic/claude-sonnet-5.5": {"input": "5", "output": "25", "cache_write": "10"},
     "anthropic/claude-opus-5.5": {"input": "10", "output": "50", "cache_write": "20"},
+    # Provision prudente ; règlement final sur l'usage OpenRouter mesuré.
+    # Ne jamais fonder les réservations Argon sur le prix promotionnel.
+    "google/gemini-3.5-flash-lite": {"input": "1.5", "output": "7", "cache_write": "2"},
+    "google/gemini-3.8-flash": {"input": "3.5", "output": "18", "cache_write": "5"},
+    "google/gemini-4-argon": {"input": "9", "output": "45", "cache_write": "12"},
 }
 
 # Montant plafond par appel Web OpenRouter. None signifie : recherches

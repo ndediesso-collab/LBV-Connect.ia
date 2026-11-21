@@ -55,8 +55,11 @@ def preferred_output_tokens(message: str, reasoning_mode: str, *, has_files: boo
     return min(MAX_ADAPTIVE_OUTPUT_TOKENS, cap)
 
 
-def _provider_quote(provider: ChatProvider, quoted_input: int, quoted_output: int) -> tuple[int, Decimal]:
+def _provider_quote(provider: ChatProvider, quoted_input: int, quoted_output: int,
+                    *, model: str = "luna") -> tuple[int, Decimal]:
     if provider is ChatProvider.OPENAI:
+        if model != "luna":
+            raise ValueError("Ce modèle n'est pas disponible chez OpenAI direct.")
         credits, xaf = TokenBillingService.estimate_reservation(
             model="luna", estimated_input_tokens=quoted_input,
             max_output_tokens=quoted_output, web_enabled=False,
@@ -64,7 +67,8 @@ def _provider_quote(provider: ChatProvider, quoted_input: int, quoted_output: in
         )
     elif provider is ChatProvider.OPENROUTER:
         quote = OpenRouterTokenBillingService.estimate_reservation(
-            provider_model="openai/gpt-6-luna", estimated_input_tokens=quoted_input,
+            provider_model=("anthropic/claude-haiku-5.5" if model == "claude-haiku-5.5"
+                            else "openai/gpt-6-luna"), estimated_input_tokens=quoted_input,
             max_output_tokens=quoted_output, web_enabled=False,
         )
         credits, xaf = quote.reserved_credits, quote.reserved_api_cost_xaf
@@ -79,7 +83,8 @@ def _provider_quote(provider: ChatProvider, quoted_input: int, quoted_output: in
 def choose_luna_quote(*, provider: ChatProvider, input_tokens: int,
                       user_message: str, reasoning_mode: str,
                       available_credits: int, image_count: int = 0,
-                      has_files: bool = False) -> AdaptiveLunaQuote:
+                      has_files: bool = False,
+                      model: str = "luna") -> AdaptiveLunaQuote:
     if type(input_tokens) is not int or input_tokens <= 0:
         raise ValueError("Budget d'entrée invalide")
     if type(available_credits) is not int or available_credits < 0:
@@ -97,7 +102,7 @@ def choose_luna_quote(*, provider: ChatProvider, input_tokens: int,
         # Deliberately quote MORE output tokens than actually permitted to provider.
         quoted_output = min(FREE_CHAT_OUTPUT_TOKENS_MAX,
                             output_cap + max(128, (output_cap + 4)//5))
-        return _provider_quote(provider, quoted_input, quoted_output)
+        return _provider_quote(provider, quoted_input, quoted_output, model=model)
 
     minimum, _ = price(MIN_OUTPUT_TOKENS)
     if minimum > available_credits:

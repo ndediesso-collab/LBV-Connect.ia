@@ -12,7 +12,7 @@ TRIAL_MODELS_BY_PACK = {
     "intermediate_pack": "gpt-5.6-terra",
     "pro_pack": "gpt-5.6-sol",
     "business_pack": None,
-    "discovery_pack": None,  # Terra est désormais un modèle standard payé en crédits.
+    "discovery_pack": None,  # Pas d'essais supérieurs sur Découverte.
 }
 
 

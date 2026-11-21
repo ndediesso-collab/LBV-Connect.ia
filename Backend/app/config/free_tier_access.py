@@ -8,7 +8,7 @@ from __future__ import annotations
 
 FREE_WEB_MAX_SITES = 2
 FREE_IMAGE_MAX_EDGE_PIXELS = 1024
-FREE_ALLOWED_DOCUMENT_FORMATS_TARGET = ("pdf", "docx")
+FREE_ALLOWED_DOCUMENT_FORMATS_TARGET = ("pdf", "docx", "xlsx")
 FREE_REASONING_MODES = ("fast", "balanced")
 FREE_UPGRADE_PATH = "/packs"
 FREE_RECHARGE_PRODUCT_ID = "credits_1000_563"
@@ -21,6 +21,9 @@ def get_free_feature_catalog() -> dict:
     return {
         "role": "free",
         "chat": {"model": "luna", "reasoning_modes": list(FREE_REASONING_MODES),
+                 "models": (["luna", "claude-haiku-5.5"] if
+                            __import__("app.services.chat_provider_router", fromlist=["active_chat_provider"]).active_chat_provider().value == "openrouter"
+                            else ["luna"]),
                  "staging_endpoint": "/ai/free/chat", "wired": True},
         "web": {"max_sites_per_request": 0, "wired": False,
                 "requires_pack": True, "upgrade_path": FREE_UPGRADE_PATH,

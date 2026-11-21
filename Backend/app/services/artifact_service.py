@@ -3396,6 +3396,24 @@ class ArtifactService:
                                     f'{get_column_letter(max_cols)}{len(rows)}')
             for merge in explicit_merges:
                 ws.merge_cells(merge)
+            images = s.get('images', [])
+            if not isinstance(images, list) or len(images) > 2:
+                raise ArtifactError('Images de classeur invalides.')
+            if images:
+                from openpyxl.drawing.image import Image as XlsxImage
+                for entry in images:
+                    if not isinstance(entry, dict) or set(entry) != {'src', 'anchor'}:
+                        raise ArtifactError('Définition d’image Excel invalide.')
+                    anchor = entry['anchor']
+                    if not isinstance(anchor, str) or re.fullmatch(r'[A-Z]{1,3}[1-9][0-9]{0,3}', anchor) is None:
+                        raise ArtifactError('Ancrage d’image Excel invalide.')
+                    _, image_bytes = self._image_data_uri(str(entry['src']))
+                    picture = XlsxImage(io.BytesIO(image_bytes))
+                    if picture.width > 280:
+                        ratio = 280 / picture.width
+                        picture.width = 280
+                        picture.height = max(1, round(picture.height * ratio))
+                    ws.add_image(picture, anchor)
             charts=s.get('charts',[])
             if not isinstance(charts,list) or len(charts)>10:raise ArtifactError('Graphiques invalides.')
             for chart in charts:

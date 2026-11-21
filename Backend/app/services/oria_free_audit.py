@@ -8,7 +8,7 @@ from decimal import Decimal
 from uuid import UUID
 
 log = logging.getLogger(__name__)
-ACTIONS = frozenset(("chat_luna", "free_pdf_luna", "free_docx_luna", "free_image_recraft"))
+ACTIONS = frozenset(("chat_luna", "free_pdf_luna", "chat_haiku", "free_docx_luna", "free_xlsx_luna", "free_image_recraft"))
 
 
 def record_free_usage(client, *, user_id: str, reservation_id: str,

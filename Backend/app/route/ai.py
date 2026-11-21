@@ -411,9 +411,12 @@ class ActiveChatGeneration:
         self.active_attempt_id: str | None = None
         self.created_at = perf_counter()
         self.closed = False
+        self.stop_requested = False
 
 
 _ACTIVE_CHAT_GENERATIONS: dict[str, ActiveChatGeneration] = {}
+# Intentions émises avant la création de l'état de génération.
+_PENDING_CHAT_STOPS: dict[tuple[str, str], float] = {}
 
 
 def _normalize_reasoning_mode(
@@ -463,6 +466,9 @@ def _normalize_generation_id(
 def _cleanup_active_generations() -> None:
     """Supprime les entrées terminées ou anormalement anciennes."""
     now = perf_counter()
+    for key, created_at in list(_PENDING_CHAT_STOPS.items()):
+        if now - created_at > 1200:
+            _PENDING_CHAT_STOPS.pop(key, None)
 
     for generation_id, state in list(_ACTIVE_CHAT_GENERATIONS.items()):
         if (
@@ -501,6 +507,7 @@ def _register_active_generation(
         transport=transport,
     )
 
+    state.stop_requested = (user_id, generation_id) in _PENDING_CHAT_STOPS
     _ACTIVE_CHAT_GENERATIONS[generation_id] = state
     return state
 
@@ -513,6 +520,7 @@ def _close_active_generation(
 
     if _ACTIVE_CHAT_GENERATIONS.get(generation_id) is state:
         _ACTIVE_CHAT_GENERATIONS.pop(generation_id, None)
+    _PENDING_CHAT_STOPS.pop((state.user_id, generation_id), None)
 
 
 def _sse(
@@ -1513,6 +1521,8 @@ def _render_document_results(
     reasoning_mode: str,
     model: str,
     openai_model: str,
+    source_images: list[Any] | None = None,
+    user_message: str | None = None,
 ) -> list[Any]:
     """Valide la correspondance exacte, puis compile tous les fichiers en mémoire.
 
@@ -1524,6 +1534,8 @@ def _render_document_results(
     cv_style = next((item.get("cv_style") for item in artifact_requests
                     if isinstance(item, dict) and item.get("cv_style")), None)
     artifact_payload = adapt_cv_payload(artifact_payload, expected_style=cv_style)
+    from app.services.oria_document_images import insert_requested_images
+    artifact_payload = insert_requested_images(artifact_payload, source_images, user_message)
     expected_types = [str(r.get("file_type") or "").lower().lstrip(".")
                       for r in artifact_requests]
     specs = artifact_payload.get("artifacts")
@@ -2245,8 +2257,8 @@ PACK_ALLOWED_MODELS = {
         "gpt-6-astra",
     },
 
-    # ORIA Découverte : Luna et Terra sont disponibles tant que les crédits suffisent.
-    "discovery_pack": {"luna", "gpt-5.6-terra"},
+    # ORIA Découverte : Luna uniquement sur OpenAI direct.
+    "discovery_pack": {"luna"},
 
 }
 
@@ -2346,10 +2358,8 @@ def _discovery_chat_rights(provider: ChatProvider):
     """Copie légère de la table de droits, sans mutation des packs classiques."""
     if provider is ChatProvider.OPENAI:
         return PACK_ALLOWED_MODELS
-    # Le fichier credit_costs.py sera raccordé ultérieurement. Pour l'instant,
-    # on ne fait pas apparaître le pack dans ses constantes historiques.
-    return {**OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK,
-            _DISCOVERY_PACK: frozenset({"luna", "gpt-5.6-terra"})}
+    # Référentiel unique du fournisseur OpenRouter, sans exception Découverte.
+    return OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK
 
 
 # Découverte : aucun quota fixe Terra, image ou vidéo.
@@ -4303,6 +4313,9 @@ _ORIA_CHAT_DISPLAY_NAMES = {
     "claude-haiku-5.5": "Claude Haiku 5.5",
     "claude-sonnet-5.5": "Claude Sonnet 5.5",
     "claude-opus-5.5": "Claude Opus 5.5",
+    "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite",
+    "gemini-3.8-flash": "Gemini 3.8 Flash",
+    "gemini-4-argon": "Gemini 4 Argon",
 }
 
 
@@ -4631,6 +4644,8 @@ async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: s
             received_step, processing_step = _oria_attachment_status_stages(attachments)
 
             while True:
+                if state.stop_requested:
+                    raise asyncio.CancelledError("Génération arrêtée")
                 state.active_attempt_id = attempt_id
                 state.reasoning_mode = current_mode
                 full_response = ""
@@ -4652,6 +4667,8 @@ async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: s
                     max_completion_tokens=current_quote.max_output_tokens,
                 )
                 while True:
+                    if state.stop_requested:
+                        raise asyncio.CancelledError("Génération arrêtée")
                     started = True  # L'appel fournisseur peut avoir eu lieu.
                     has_item, data = await asyncio.to_thread(_oria_next_stream_event, stream)
                     if not has_item:
@@ -4837,6 +4854,7 @@ async def _oria_openrouter_stream_route(*, selection, repository, wallet, uid: s
                                 generation_id=generation_id, attempt_id=attempt_id,
                                 reasoning_mode=current_mode, model=model,
                                 openai_model=selection.api_model,
+                                source_images=attachments, user_message=message,
                             )
                             for produced in prepared:
                                 persisted = _persist_document_result(
@@ -7292,6 +7310,33 @@ async def discard_voice_draft(
 # ============================================================
 
 
+class ChatStopRequest(BaseModel):
+    generation_id: str
+
+
+@router.post("/chat/stop")
+async def stop_chat_generation(
+    payload: ChatStopRequest,
+    user_id: str | None = Header(default=None, alias="user-id"),
+    authorization: str | None = Header(default=None, alias="authorization"),
+):
+    """Interruption authentifiée. Les usages déjà engagés restent à rapprocher."""
+    uid = _authenticate_chat_user(user_id=user_id, authorization=authorization)
+    generation_id = _normalize_generation_id(payload.generation_id)
+    _cleanup_active_generations()
+    state = _ACTIVE_CHAT_GENERATIONS.get(generation_id)
+    if state is not None and not state.closed and state.user_id != uid:
+        raise HTTPException(403, "Génération appartenant à un autre compte.")
+    # La commande peut devancer la réservation et le registre actif.
+    if sum(1 for key in _PENDING_CHAT_STOPS if key[0] == uid) > 40:
+        raise HTTPException(429, "Trop de demandes d'arrêt en attente.")
+    _PENDING_CHAT_STOPS[(uid, generation_id)] = perf_counter()
+    if state is not None and not state.closed:
+        state.stop_requested = True
+    return {"success": True, "stop_requested": True,
+            "billing": "usage_after_provider_start_requires_reconciliation"}
+
+
 @router.post("/chat/control")
 async def control_chat_generation(
     payload: ChatControlRequest,
@@ -7688,6 +7733,8 @@ async def chat_stream(
             status_active = True
 
             while True:
+                if generation_state.stop_requested:
+                    raise asyncio.CancelledError("Génération arrêtée")
                 generation_state.reasoning_mode = current_reasoning_mode
                 generation_state.active_attempt_id = attempt_id
 
@@ -7720,6 +7767,8 @@ async def chat_stream(
 
                     try:
                         async for item in stream_result:
+                            if generation_state.stop_requested:
+                                raise asyncio.CancelledError("Génération arrêtée")
                             if item is None:
                                 continue
 
@@ -7884,6 +7933,8 @@ async def chat_stream(
                     )
 
                     for item in stream_result:
+                        if generation_state.stop_requested:
+                            raise asyncio.CancelledError("Génération arrêtée")
                         if item is None:
                             continue
 
@@ -8089,7 +8140,7 @@ async def chat_stream(
             # --------------------------------------------------------
             if not (document_payload if document_types else full_response.strip()):
                 try:
-                    if not document_types or not provider_call_started:
+                    if not provider_call_started:
                         _release_chat_reservation(
                             repository=repository,
                             authenticated_user_id=authenticated_user_id,
@@ -8269,6 +8320,7 @@ async def chat_stream(
                         reasoning_mode=current_reasoning_mode,
                         model=model,
                         openai_model=openai_model,
+                        source_images=attachments, user_message=message,
                     )
                     for generated in prepared:
                         try:
@@ -8424,7 +8476,7 @@ async def chat_stream(
             # Le client a fermé le flux. Si aucun contenu n'a été produit,
             # rendre la réservation ; sinon ne pas rembourser aveuglément
             # une consommation fournisseur potentiellement engagée.
-            if not settled and not full_response.strip() and not (document_types and provider_call_started):
+            if not settled and not provider_call_started:
                 try:
                     _release_chat_reservation(
                         repository=repository,
@@ -8436,7 +8488,7 @@ async def chat_stream(
             raise
 
         except Exception as error:
-            if not settled and not full_response.strip() and not (document_types and provider_call_started):
+            if not settled and not provider_call_started:
                 try:
                     _release_chat_reservation(
                         repository=repository,

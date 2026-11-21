@@ -6,6 +6,7 @@ uncertain upstream error. Pack and gift routes are untouched.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from decimal import Decimal
@@ -13,6 +14,7 @@ from uuid import uuid4, UUID, uuid5, NAMESPACE_URL
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config.free_tier_policy import (
@@ -38,7 +40,7 @@ router = APIRouter(prefix="/free", tags=["ORIA Gratuit (staging)"])
 class FreeChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     message: str = Field(min_length=1, max_length=12000)
-    model: str = Field(default="luna", pattern="^luna$")
+    model: str = Field(default="luna", pattern="^(luna|claude-haiku-5.5)$")
     web: bool = False
     reasoning_mode: str = Field(default="balanced", pattern="^(fast|balanced)$")
     conversation_id: UUID | None = None
@@ -374,11 +376,68 @@ async def free_chat(payload: FreeChatRequest,
     return await _oria_free_chat_core(payload, uid)
 
 
+def _oria_free_stream_provider(provider, model: str, message: str,
+                               images: list[dict], history: list[dict],
+                               reasoning_mode: str, output_limit: int, emit_delta) -> dict:
+    """Execution synchrone dans asyncio.to_thread, afin de ne pas bloquer FastAPI.
+
+    Seul un événement fournisseur final avec usage verifie permet de regler
+    la reservation. Les deltas visibles ne sont JAMAIS utilises comme facture.
+    """
+    parts: list[str] = []
+    usage_event: dict | None = None
+    if provider is ChatProvider.OPENAI:
+        generator = OpenAIService().chat_stream(
+            model=MODEL_OPENAI_IDS["luna"], message=message, web=False,
+            attachments=images, history=history, reasoning_mode=reasoning_mode,
+            max_output_tokens=output_limit,
+        )
+    elif provider is ChatProvider.OPENROUTER:
+        actual_model = ("anthropic/claude-haiku-5.5" if model == "claude-haiku-5.5"
+                        else "openai/gpt-6-luna")
+        generator = _oria_openrouter_service().chat_stream(
+            model=actual_model, message=message, web=False, attachments=images,
+            history=history, reasoning_mode=reasoning_mode,
+            max_completion_tokens=output_limit,
+        )
+    else:
+        raise RuntimeError("Fournisseur IA indisponible.")
+    try:
+        for event in generator:
+            if not isinstance(event, dict):
+                continue
+            kind = event.get("type")
+            if kind == "delta":
+                delta = event.get("content")
+                if isinstance(delta, str) and delta:
+                    parts.append(delta)
+                    emit_delta(delta)
+            elif kind == "usage":
+                usage_event = event
+    finally:
+        closer = getattr(generator, "close", None)
+        if callable(closer):
+            closer()
+    if not parts or not isinstance(usage_event, dict):
+        raise RuntimeError("Flux incomplet ou usage final fournisseur absent.")
+    content = "".join(parts)
+    if provider is ChatProvider.OPENAI:
+        measured = usage_event.get("usage")
+        if not isinstance(measured, dict):
+            raise RuntimeError("Usage OpenAI final absent.")
+        return {"message": content, "usage": measured, "citations": []}
+    if (not isinstance(usage_event.get("provider_usage"), dict)
+            or usage_event.get("provider_cost_usd") is None):
+        raise RuntimeError("Facture finale OpenRouter non confirmee.")
+    return {**usage_event, "message": content, "citations": []}
+
+
 # Interne uniquement: before_message_id et reservation_id_override ne sont pas
 # exposés dans les parametres HTTP du chat gratuit.
 async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
                                before_message_id: str | None = None,
-                               reservation_id_override: str | None = None):
+                               reservation_id_override: str | None = None,
+                               stream_on_delta=None):
     if payload.conversation_id is None or payload.current_message_id is None:
         raise HTTPException(422, "Une conversation sauvegardée est requise pour sécuriser la facturation gratuite.")
     # Les révisions ont leur propre référence, afin de ne pas entrer en conflit
@@ -422,6 +481,8 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
         if grant.get("paid_pack_active") is True:
             raise HTTPException(status_code=403, detail="Utilisez les crédits de votre pack actif.")
         provider = active_chat_provider()
+        if payload.model != "luna" and provider is not ChatProvider.OPENROUTER:
+            raise HTTPException(403, "Claude Haiku nécessite OpenRouter.")
         current_balance = gateway.balance(uid)
         # Le devis porte sur les tokens disponibles en sortie, pas un montant
         # fixe de crédits. Le même cap est transmis au fournisseur ci-dessous.
@@ -431,6 +492,7 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
             available_credits=current_balance["balance"],
             image_count=len(image_payloads),
             has_files=bool(doc_context or payload.attachments or replay_images),
+            model=payload.model,
         )
         reserve_credits, reserve_api_xaf = adaptive.reserved_credits, adaptive.reserve_api_xaf
         output_limit = adaptive.output_tokens
@@ -453,7 +515,8 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
     except Exception as exc:
         raise HTTPException(409, "Une génération précédente existe ou le journal est indisponible. Aucun crédit réservé.") from exc
     try:
-        gateway.reserve(uid, reservation_id, reserve_credits, reserve_api_xaf)
+        gateway.reserve(uid, reservation_id, reserve_credits, reserve_api_xaf,
+                        action=("chat_haiku" if payload.model == "claude-haiku-5.5" else "chat_luna"))
     except Exception as exc:
         # La RPC a peut-etre validé malgré une réponse réseau perdue.
         # Le watchdog vérifiera le statut de cette référence sans IA.
@@ -478,7 +541,22 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
     # After reserve, any unknown provider result is considered potentially
     # billable. Keep the reservation for a verified reconciliation.
     try:
-        if provider is ChatProvider.OPENAI:
+        if stream_on_delta is not None:
+            result = await asyncio.to_thread(
+                _oria_free_stream_provider, provider, payload.model, message,
+                image_payloads, history, payload.reasoning_mode, output_limit,
+                stream_on_delta,
+            )
+            if provider is ChatProvider.OPENAI:
+                usage = result.get("usage")
+                if not isinstance(usage, dict):
+                    raise ValueError("Usage final OpenAI absent")
+                bill = TokenBillingService.calculate(
+                    model="luna", usage=usage, web_search_calls=0,
+                )
+            else:
+                bill = OpenRouterTokenBillingService.calculate(result)
+        elif provider is ChatProvider.OPENAI:
             model_id = MODEL_OPENAI_IDS["luna"]
             result = await asyncio.to_thread(
                 OpenAIService().chat, model=model_id, message=message,
@@ -496,7 +574,9 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
         else:
             service = _oria_openrouter_service()
             result = await asyncio.to_thread(
-                service.chat, model="openai/gpt-6-luna", message=message,
+                service.chat,
+                model=("anthropic/claude-haiku-5.5" if payload.model == "claude-haiku-5.5"
+                       else "openai/gpt-6-luna"), message=message,
                 web=payload.web, attachments=image_payloads, history=[] if payload.web else history,
                 reasoning_mode=payload.reasoning_mode,
                 max_completion_tokens=output_limit,
@@ -534,12 +614,13 @@ async def _oria_free_chat_core(payload: FreeChatRequest, uid: str, *,
             logger.exception("ORIA_FREE_WATCHDOG_POST_SETTLE_SYNC %s", reservation_id)
         from app.services.oria_free_audit import record_only_if_settled
         record_only_if_settled(supabase,user_id=uid,reservation_id=reservation_id,
-                              action="chat_luna",credits=bill.credits,api_xaf=bill.total_cost_xaf)
+                              action=("chat_haiku" if payload.model == "claude-haiku-5.5" else "chat_luna"),
+            credits=bill.credits,api_xaf=bill.total_cost_xaf)
         balance = gateway.balance(uid)
     except Exception as exc:
         logger.exception("ORIA free settlement failed; reservation=%s", reservation_id)
         raise HTTPException(status_code=503, detail="Réponse générée : vérification des crédits nécessaire.") from exc
-    return {"success": True, "model": "luna", "provider": provider.value,
+    return {"success": True, "model": payload.model, "provider": provider.value,
             "message": result["message"], "web": payload.web,
             "citations": result.get("citations", []) if payload.web else [], "cost": bill.credits,
             "credits_remaining": balance["balance"], "wallet": balance,
@@ -584,11 +665,14 @@ def free_chat_quote(payload: FreeChatRequest,
             raise HTTPException(status_code=403,
                                 detail="Utilisez les crédits de votre pack actif.")
         provider = active_chat_provider()
+        if payload.model != "luna" and provider is not ChatProvider.OPENROUTER:
+            raise HTTPException(403, "Claude Haiku nécessite OpenRouter.")
         balance = gateway.balance(uid)
         adaptive = choose_luna_quote(
             provider=provider, input_tokens=input_tokens,
             user_message=message, reasoning_mode=payload.reasoning_mode,
             available_credits=balance["balance"], image_count=0, has_files=False,
+            model=payload.model,
         )
         reserved_credits, reserved_xaf = adaptive.reserved_credits, adaptive.reserve_api_xaf
         from app.services.free_tier_quote import make_free_chat_quote
@@ -623,10 +707,11 @@ def free_chat_quote(payload: FreeChatRequest,
 # Un redemarrage du worker pendant le calcul reste un cas de reconciliation.
 _FREE_ACTIVE_TASKS = {}
 
-@router.post("/chat/persistent")
-async def persistent_free_chat(payload: FreeChatRequest,
-                               user_id: str | None = Header(default=None, alias="user-id"),
-                               authorization: str | None = Header(default=None)):
+async def _persistent_free_chat_core(payload: FreeChatRequest,
+                                     user_id: str | None = None,
+                                     authorization: str | None = None,
+                                     emit_delta=None):
+    _enabled()
     from uuid import uuid5, NAMESPACE_URL
     uid = _identity(user_id, authorization)
     if payload.web:
@@ -672,7 +757,7 @@ async def persistent_free_chat(payload: FreeChatRequest,
                     "replayed":True,"cost":None}
         async def work():
             # On réutilise EXACTEMENT la route gratuite: aucun paiement ni chemin payant.
-            result = await free_chat(payload,user_id=user_id,authorization=authorization)
+            result = await _oria_free_chat_core(payload, uid, stream_on_delta=emit_delta)
             message = str(result.get("message") or "").strip()
             if not result.get("success") or not message:
                 raise HTTPException(503,"Réponse gratuite non confirmée; vérification requise.")
@@ -698,6 +783,99 @@ async def persistent_free_chat(payload: FreeChatRequest,
         task.add_done_callback(on_done)
     # shield évite de canceller une génération lorsque le navigateur change de page.
     return await asyncio.shield(_FREE_ACTIVE_TASKS[key])
+
+
+@router.post("/chat/persistent")
+async def persistent_free_chat(payload: FreeChatRequest,
+                               user_id: str | None = Header(default=None, alias="user-id"),
+                               authorization: str | None = Header(default=None)):
+    return await _persistent_free_chat_core(payload, user_id, authorization)
+
+
+def _oria_free_sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+_FREE_STREAM_PRODUCERS: set[asyncio.Task] = set()
+
+
+@router.post("/chat/persistent/stream")
+async def persistent_free_chat_stream(payload: FreeChatRequest,
+                                      user_id: str | None = Header(default=None, alias="user-id"),
+                                      authorization: str | None = Header(default=None)):
+    """Flux visible et facturation durable : fermeture navigateur != annulation API.
+
+    Un seul calcul par identifiant message, meme si le client se reconnecte.
+    Le flux ne peut s'afficher qu'apres authentification du compte.
+    """
+    _enabled()
+    uid = _identity(user_id, authorization)
+    if payload.conversation_id is None or payload.current_message_id is None:
+        raise HTTPException(422, "Identifiants du message et de la conversation requis.")
+    loop = asyncio.get_running_loop()
+    stream_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+
+    def emit_delta(value: str) -> None:
+        # Le fournisseur s'execute dans un thread. Seul le loop touche la file.
+        loop.call_soon_threadsafe(stream_queue.put_nowait, ("delta", value))
+
+    # Cette tâche n'est jamais annulee par la fermeture de la connexion SSE.
+    # Le coeur protege aussi son appel fournisseur par asyncio.shield.
+    producer = asyncio.create_task(_persistent_free_chat_core(
+        payload, uid, authorization, emit_delta=emit_delta,
+    ))
+    # Conserver une reference forte si le navigateur se deconnecte.
+    _FREE_STREAM_PRODUCERS.add(producer)
+    def cleanup(done: asyncio.Task) -> None:
+        _FREE_STREAM_PRODUCERS.discard(done)
+        try:
+            done.exception()  # Consommer une eventuelle erreur sans la masquer.
+        except asyncio.CancelledError:
+            pass
+    producer.add_done_callback(cleanup)
+
+    async def events():
+        waiting = asyncio.create_task(stream_queue.get())
+        try:
+            yield _oria_free_sse("start", {"success": True, "model": payload.model})
+            while True:
+                completed, _ = await asyncio.wait(
+                    {producer, waiting}, timeout=15,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not completed:
+                    yield ": keepalive\n\n"
+                    continue
+                if waiting in completed:
+                    kind, value = waiting.result()
+                    if kind == "delta":
+                        yield _oria_free_sse("delta", {"content": value})
+                    waiting = asyncio.create_task(stream_queue.get())
+                if producer in completed:
+                    # Les derniers deltas du thread peuvent encore etre en file.
+                    while not stream_queue.empty():
+                        kind, value = stream_queue.get_nowait()
+                        if kind == "delta":
+                            yield _oria_free_sse("delta", {"content": value})
+                    try:
+                        result = producer.result()
+                    except Exception:
+                        logger.exception("ORIA FREE STREAM : generation ou reglement non confirme")
+                        yield _oria_free_sse("error", {
+                            "detail": "Generation non confirmee : verifiez le solde et l'historique avant de relancer."
+                        })
+                    else:
+                        yield _oria_free_sse("done", result)
+                    break
+        finally:
+            waiting.cancel()
+            # Ne PAS annuler producer : il doit finir et regler la reserve.
+
+    return StreamingResponse(
+        events(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform",
+                 "X-Accel-Buffering": "no"},
+    )
 
 
 # ORIA_FREE_EDIT_PREVIEW_20261116 : editions gratuites atomiques et idempotentes.

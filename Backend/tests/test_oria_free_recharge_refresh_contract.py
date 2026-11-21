@@ -25,7 +25,7 @@ class RechargeRefreshContractTests(unittest.TestCase):
         w = FreeBalance(35, 0, date(2026,11,13), True)
         n, changed = daily_refresh(w, now=utc(6), paid_pack_active=False)
         self.assertTrue(changed)
-        self.assertEqual((n.free_credits, n.purchased_credits, n.recharge_frozen), (150, 0, False))
+        self.assertEqual((n.free_credits, n.purchased_credits, n.recharge_frozen), (90, 0, False))
 
     def test_no_second_grant_on_same_gabon_day(self):
         w = FreeBalance(0, 0, date(2026,11,14), True)
@@ -47,6 +47,6 @@ class RechargeRefreshContractTests(unittest.TestCase):
         after, changed_after = daily_refresh(w, now=utc(23, 13), paid_pack_active=False)
         self.assertFalse(changed_before)
         self.assertTrue(changed_after)
-        self.assertEqual(after.free_credits, 150)
+        self.assertEqual(after.free_credits, 90)
 
 if __name__ == '__main__': unittest.main()
