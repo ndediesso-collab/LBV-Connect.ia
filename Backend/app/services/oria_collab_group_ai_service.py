@@ -73,11 +73,9 @@ class GroupAiService:
     def models(self, actor_id: str) -> dict:
         require_group_ai()
         ctx = self.groups._context(actor_id)
-        models = OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK.get(ctx["pack_id"], frozenset())
-        available = [name for name in sorted(models)
-                     if name in OPENROUTER_CHAT_MODEL_IDS
-                     and OPENROUTER_CHAT_MODEL_IDS[name].startswith(("openai/", "anthropic/"))]
-        return {"success": True, "models": available, "provider": "openrouter",
+        from app.services.oria_collab_provider_adapter import models_for_collab_pack
+        catalog = models_for_collab_pack(ctx["pack_id"])
+        return {"success": True, **catalog,
                 "funding": "quota_professionnel_collectif", "personal_recharges_charged": False}
 
     def policy(self, actor_id: str, group_id: str, allow_unequal: bool) -> dict:
@@ -113,62 +111,48 @@ class GroupAiService:
             raise HTTPException(422, "La demande doit contenir @ORIA et faire au maximum 4 000 caractères.")
         if reasoning_mode not in {"fast", "balanced", "deep"}:
             raise HTTPException(422, "Mode de raisonnement invalide.")
-        allow = OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK.get(ctx["pack_id"], frozenset())
-        api_model = OPENROUTER_CHAT_MODEL_IDS.get(model)
-        if model not in allow or not api_model or not api_model.startswith(("openai/", "anthropic/")):
-            raise HTTPException(403, "Modèle non autorisé par le pack professionnel.")
-        from app.services.chat_provider_router import ChatProvider, active_chat_provider
-        if active_chat_provider() is not ChatProvider.OPENROUTER:
-            raise HTTPException(503, "OpenRouter doit être actif pour @ORIA dans les groupes.")
-        from app.services.token_billing_service import OpenRouterTokenBillingService, TokenBillingError
+        from app.services.oria_collab_provider_adapter import (
+            selection_for_collab_pack, quote_collab_text, execute_collab_text,
+        )
+        selection = selection_for_collab_pack(model, ctx["pack_id"])
         from app.services.conversation_memory_utils import estimate_text_tokens
-        from app.services.openrouter_chat_service import OpenRouterChatError
-        from app.route.ai import _oria_openrouter_service, MODEL_ACTIONS
+        from app.route.ai import MODEL_ACTIONS
         from app.repositories.supabase_credit_repository import SupabaseCreditRepository
-
         action = MODEL_ACTIONS.get(model, {}).get("normal")
         if action is None:
             raise HTTPException(403, "Action du modèle absente du catalogue ORIA.")
-        # RPC already checks group membership, pack validity and workspace.
-        # No cross-group history is loaded. Historical messages belong ONLY to group_id.
+        # Historique de la salle courante uniquement. Aucun mélange d'espaces.
         recent = (_safe_rpc(self.db,"oria_collab_workspace_group_messages_v3", {
             "p_actor_user_id":actor_id,"p_workspace_id":workspace_id,
             "p_group_id":group_id,"p_before_message_id":None,"p_limit":28,
         }) if workspace_id is not None else self.groups.messages(actor_id, group_id, None, 28))
-        raw_messages = recent.get("messages", [])
         history = []
-        for row in raw_messages:
+        for row in recent.get("messages", []):
             content = str(row.get("content") or "")
             if not content:
                 continue
-            if row.get("sender_kind") == "oria":
-                history.append({"role": "assistant", "content": content})
-            else:
-                history.append({"role": "user", "content": "[Message du groupe] " + content})
-        # Revalidate on every DB write in reserve; read-history is informational.
+            role = "assistant" if row.get("sender_kind") == "oria" else "user"
+            history.append({"role":role, "content":content if role == "assistant" else "[Message du groupe] " + content})
         tokens = max(1, estimate_text_tokens(clean)
                      + sum(estimate_text_tokens(item["content"]) for item in history) + 512)
         if tokens > 30000:
             raise HTTPException(413, "Le contexte du groupe est trop volumineux.")
         max_output = 4096 if reasoning_mode == "deep" else 2048
         try:
-            service = _oria_openrouter_service()
-            service.build_request(model=api_model, message=clean, history=history,
-                                  reasoning_mode=reasoning_mode, web=False,
-                                  max_completion_tokens=max_output)
-            quote = OpenRouterTokenBillingService.estimate_reservation(
-                provider_model=api_model, estimated_input_tokens=tokens,
-                max_output_tokens=max_output, web_enabled=False)
+            quote = quote_collab_text(
+                selection, estimated_input_tokens=tokens, max_output_tokens=max_output,
+                reasoning_mode=reasoning_mode, message=clean, history=history,
+            )
             limit_xaf = SupabaseCreditRepository._pack_budget_limit(ctx["pack_id"])
             budget_on = SupabaseCreditRepository._api_budget_enabled()
-        except (OpenRouterChatError, TokenBillingError, ValueError) as exc:
-            raise HTTPException(503, "Modèle ou devis de réservation indisponible.") from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(503, "Modèle ou devis fournisseur indisponible.") from exc
 
         reserved = _safe_rpc(self.db,
             "oria_collab_group_ai_reserve_v3" if workspace_id is not None
             else "oria_collab_group_ai_reserve", {
             "p_actor_user_id": actor_id, "p_group_id": group_id,
-            "p_request_id": request_id, "p_model": api_model,
+            "p_request_id": request_id, "p_model": selection.api_model,
             "p_prompt": clean, "p_reserve_credits": quote.reserved_credits,
             "p_action": action.value,
             "p_api_reservation_xaf": str(quote.reserved_api_cost_xaf),
@@ -185,26 +169,24 @@ class GroupAiService:
         # BEGIN billable provider boundary: NEVER retry automatically, NEVER
         # release a reservation for uncertain delivery or missing cost.
         try:
-            output = await asyncio.to_thread(
-                service.chat, model=api_model, message=clean,
-                history=history, reasoning_mode=reasoning_mode,
-                web=False, max_completion_tokens=max_output,
+            metered = await execute_collab_text(
+                selection, message=clean, history=history,
+                reasoning_mode=reasoning_mode, max_output_tokens=max_output,
             )
-            billing = OpenRouterTokenBillingService.calculate(output)
-            answer = output.get("message")
-            if not isinstance(answer, str) or not answer.strip() or len(answer) > 4000:
-                # 5A group messages cap at 4000 chars; hold for reconciliation.
+            answer = metered.message
+            if len(answer) > 4000:
+                # Une reponse trop longue est a rapprocher, jamais tronquee apres debit.
                 raise RuntimeError("group_answer_invalid")
-            if len(billing.request_ids) != 1 or billing.credits > quote.reserved_credits:
+            if metered.credits > quote.reserved_credits:
                 raise RuntimeError("group_billing_needs_review")
             settled = _safe_rpc(self.db,
                 "oria_collab_group_ai_settle_v3" if workspace_id is not None
                 else "oria_collab_group_ai_settle", {
                 "p_actor_user_id": actor_id, "p_request_id": request_id,
-                "p_actual_credits": billing.credits,
-                "p_provider_response_id": billing.request_ids[0],
-                "p_provider_cost_usd": str(billing.total_cost_usd),
-                "p_actual_api_cost_xaf": str(billing.total_cost_xaf),
+                "p_actual_credits": metered.credits,
+                "p_provider_response_id": metered.response_id,
+                "p_provider_cost_usd": str(metered.total_cost_usd),
+                "p_actual_api_cost_xaf": str(metered.total_cost_xaf),
                 "p_response": answer,
                 **({"p_workspace_id": workspace_id} if workspace_id is not None else {}),
             })

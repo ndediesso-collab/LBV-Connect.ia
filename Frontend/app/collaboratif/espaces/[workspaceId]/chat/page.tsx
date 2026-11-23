@@ -17,6 +17,12 @@ type RoomKind = "group" | "direct" | "private";
 type Selection = { kind: RoomKind; id: string };
 type Message = { id: string; sender_user_id?: string | null; sender_kind?: string; role?: string; content: string; created_at: string };
 type FileLink = { id: string; message_id: string; original_name: string; mime_type: string; size_bytes: number };
+type CollabModelOption = { id: string; label: string; reasoning_modes?: string[] };
+type CollabModelResponse = { success: boolean; workspace_id: string;
+  provider: "openai" | "openrouter"; models: string[];
+  model_catalog?: CollabModelOption[]; reasoning_modes?: string[];
+  group_ai_enabled?: boolean; private_ai_enabled?: boolean };
+const reasoningLabels: Record<string,string> = { fast:"Rapide", balanced:"Équilibré", deep:"Approfondi" };
 type Notices = { success: boolean; workspace_id: string; unread: number; notifications: { id: number; actor_user_id: string; event_type: string; created_at: string; read_at?: string | null }[] };
 const input = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-foreground/15";
 const smallButton = "rounded-xl border border-border bg-surface px-3 py-2 text-sm transition hover:bg-surface-secondary disabled:opacity-40";
@@ -43,6 +49,10 @@ export default function OriaCollaboratifChat() {
   const [draft, setDraft] = useState("");
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [modelCatalog, setModelCatalog] = useState<CollabModelOption[]>([]);
+  const [provider, setProvider] = useState<"openai" | "openrouter" | null>(null);
+  const [groupAiEnabled, setGroupAiEnabled] = useState(false);
+  const [privateAiEnabled, setPrivateAiEnabled] = useState(false);
   const [mode, setMode] = useState("balanced");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -105,12 +115,25 @@ export default function OriaCollaboratifChat() {
 
   useEffect(() => {
     let alive = true;
-    void collabRequest<{success:boolean;workspace_id:string;models:string[]}>(`${root}/ai/models`).then(value=>{
+    void collabRequest<CollabModelResponse>(`${root}/ai/models`).then(value=>{
       if (!alive) return;
-      if (value.workspace_id!==space) throw new Error("Modèles provenant d'un autre espace.");
-      const list = Array.isArray(value.models)?value.models:[];
-      setModels(list);setModel(m=>list.includes(m)?m:(list[0]??""));
-    }).catch(()=>{if(alive)setModels([]);});
+      if (value.workspace_id!==space || value.success!==true ||
+          (value.provider!=="openai" && value.provider!=="openrouter"))
+        throw new Error("Catalogue fournisseur invalide pour cet espace.");
+      const catalog = Array.isArray(value.model_catalog) ? value.model_catalog.filter(item =>
+        item && typeof item.id==="string" && typeof item.label==="string" &&
+        Array.isArray(value.models) && value.models.includes(item.id) &&
+        (value.provider==="openrouter" || !item.id.startsWith("claude-"))) : [];
+      // Ne jamais deviner un modele ou un fournisseur depuis le navigateur.
+      const list = catalog.map(item=>item.id);
+      setProvider(value.provider);
+      setModelCatalog(catalog);setModels(list);
+      setGroupAiEnabled(value.group_ai_enabled===true);
+      setPrivateAiEnabled(value.private_ai_enabled===true);
+      setModel(m=>list.includes(m)?m:(list[0]??""));
+    }).catch(e=>{if(alive){setModels([]);setModelCatalog([]);setProvider(null);
+      setGroupAiEnabled(false);setPrivateAiEnabled(false);
+      setError(e instanceof Error?e.message:"Catalogue de modeles indisponible.");}});
     return ()=>{alive=false;};
   }, [root,space]);
 
@@ -169,7 +192,11 @@ export default function OriaCollaboratifChat() {
     if(!current||busy||pendingAi||!canWrite||!draft.trim())return;
     const content=draft.trim();
     const ai = current.kind==="private" || (current.kind==="group" && mentionOria.test(content));
-    if(ai && !model){setError("Aucun modèle IA n'est disponible pour cet espace.");return;}
+    if(ai && (!provider || !models.includes(model))){setError("Aucun modèle IA autorisé pour le fournisseur actif.");return;}
+    if(ai && current.kind==="group" && !groupAiEnabled){setError("@ORIA n'est pas encore activé dans les groupes de cet espace. Les messages entre collègues restent disponibles.");return;}
+    if(ai && current.kind==="private" && !privateAiEnabled){setError("Le chat IA privé professionnel n'est pas activé dans cet espace.");return;}
+    const selectedModes = modelCatalog.find(item=>item.id===model)?.reasoning_modes ?? [];
+    if(ai && !selectedModes.includes(mode)){setError("Ce niveau de raisonnement n'est pas proposé par le modèle sélectionné.");return;}
     setBusy(true);setError("");setNotice("");
     try{
       if(ai){
@@ -186,7 +213,12 @@ export default function OriaCollaboratifChat() {
       setDraft("");await load(current);await refreshBoot();
     }catch(e){
       setError(e instanceof Error?e.message:"Envoi impossible.");
-      if(ai){setPendingAi(true);setNotice("Réponse IA incertaine : consultez l'historique avant une nouvelle demande.");}
+      // Seul un refus apres appel fournisseur potentiellement facture bloque un retry.
+      // Les erreurs de catalogue, de flags et de pack ne doivent pas figer la saisie.
+      if(ai && /incertain|réservés|réservé pour|rapproch|vérification.*débit/i.test(e instanceof Error?e.message:"")){
+        setPendingAi(true);
+        setNotice("Demande IA possiblement facturée : vérifie l'historique avant de relancer.");
+      }
     }finally{setBusy(false);}
   }
 
@@ -344,7 +376,7 @@ export default function OriaCollaboratifChat() {
         })}
       </div>
       {selection&&<div className="border-t border-border bg-surface px-3 py-3 sm:px-6">
-        {(selection.kind==="group"||selection.kind==="private")&&<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{selection.kind==="group"?"Écrivez @ORIA pour demander une réponse IA":"Conversation avec ORIA"}</span><div className="flex gap-2"><select aria-label="Modèle IA" className="max-w-[170px] rounded-lg border border-border bg-background px-2 py-1" value={model} onChange={e=>setModel(e.target.value)}><option value="">Modèle indisponible</option>{models.map(m=><option key={m} value={m}>{m}</option>)}</select><select aria-label="Raisonnement" className="rounded-lg border border-border bg-background px-2 py-1" value={mode} onChange={e=>setMode(e.target.value)}><option value="fast">Rapide</option><option value="balanced">Équilibré</option><option value="deep">Approfondi</option></select></div></div>}
+        {(selection.kind==="group"||selection.kind==="private")&&<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{selection.kind==="group"?"Écrivez @ORIA pour demander une réponse IA":"Conversation avec ORIA"}</span><div className="flex flex-wrap items-center gap-2"><span className="hidden rounded-full border border-border px-2 py-1 text-[11px] sm:inline">{provider==="openai"?"OpenAI actif":provider==="openrouter"?"OpenRouter actif":"Fournisseur non vérifié"}</span><select aria-label="Modèle IA" className="max-w-[185px] rounded-xl border border-border bg-background px-3 py-2 font-medium text-foreground" value={model} onChange={e=>{setModel(e.target.value);setMode("balanced");}} disabled={!provider||busy}><option value="">Modèle indisponible</option>{modelCatalog.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Raisonnement" className="rounded-xl border border-border bg-background px-3 py-2 text-foreground" value={mode} onChange={e=>setMode(e.target.value)} disabled={!provider||busy}>{(modelCatalog.find(item=>item.id===model)?.reasoning_modes??[]).filter(m=>m in reasoningLabels).map(m=><option key={m} value={m}>{reasoningLabels[m]}</option>)}</select></div></div>}
         <form onSubmit={e=>void submit(e)} className="flex items-end gap-2">
           <input ref={fileRef} className="hidden" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.docx,.xlsx,.pptx" onChange={e=>void uploadFile(e)}/>
           {selection.kind!=="private"&&<button type="button" className="rounded-xl p-3 hover:bg-surface-secondary disabled:opacity-40" title="Joindre un fichier (8 Mo max)" aria-label="Joindre un fichier" disabled={busy||!canWrite} onClick={()=>fileRef.current?.click()}><Paperclip size={20}/></button>}
@@ -353,6 +385,7 @@ export default function OriaCollaboratifChat() {
             onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void submit();}}}/>
           <button aria-label="Envoyer" type="submit" disabled={!draft.trim()||busy||!canWrite||pendingAi} className="grid size-[45px] shrink-0 place-items-center rounded-xl bg-foreground text-background disabled:opacity-40"><Send size={19}/></button>
         </form>
+        {busy&&<p className="mt-2 text-xs text-muted" role="status">ORIA prépare sa réponse…</p>}
         {pendingAi&&<button className="mt-2 text-xs underline" onClick={()=>{setPendingAi(false);if(selection)void load(selection);}}>J'ai vérifié l'historique : autoriser une nouvelle question</button>}
       </div>}
     </section>

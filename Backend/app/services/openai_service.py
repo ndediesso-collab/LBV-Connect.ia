@@ -3481,6 +3481,8 @@ class OpenAIService:
 
 
             "message": message,
+            # Identifiant reel de la reponse OpenAI : controle comptable des jobs collaboratifs.
+            "provider_response_id": str(cls._value(response, "id", "") or ""),
             **({"artifact_payload": artifact_payload} if artifact_types else {}),
 
 

@@ -214,10 +214,9 @@ class PrivateChatService:
 
     def models(self, uid: str) -> dict:
         ctx = self.context(uid)
-        values = [name for name in sorted(OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK.get(ctx["pack_id"],()))
-                  if name in OPENROUTER_CHAT_MODEL_IDS and
-                  OPENROUTER_CHAT_MODEL_IDS[name].startswith(("openai/","anthropic/"))]
-        return {"success":True,"models":values,"provider":"openrouter",
+        from app.services.oria_collab_provider_adapter import models_for_collab_pack
+        catalog = models_for_collab_pack(ctx["pack_id"])
+        return {"success":True, **catalog,
                 "note":("Chat texte : quota de pack prioritaire, puis crédits personnels."
                         if mixed_billing_enabled() else
                         "Chat texte non-streaming, débité sur les recharges personnelles.")}
@@ -245,17 +244,11 @@ class PrivateChatService:
         clean = message.strip()
         if not 1<=len(clean)<=8000 or reasoning_mode not in {"fast","balanced","deep"}:
             raise HTTPException(422,"Message ou mode de raisonnement invalide.")
-        allowed=OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK.get(ctx["pack_id"],frozenset())
-        api_model=OPENROUTER_CHAT_MODEL_IDS.get(model)
-        if model not in allowed or not api_model or not api_model.startswith(("openai/","anthropic/")):
-            raise HTTPException(403,"Modèle indisponible avec votre pack.")
-        from app.services.chat_provider_router import ChatProvider, active_chat_provider
-        if active_chat_provider() is not ChatProvider.OPENROUTER:
-            raise HTTPException(503,"Chat professionnel textuel disponible lorsque OpenRouter est activé.")
-        from app.services.token_billing_service import OpenRouterTokenBillingService, TokenBillingError
+        from app.services.oria_collab_provider_adapter import (
+            selection_for_collab_pack, quote_collab_text, execute_collab_text,
+        )
+        selection = selection_for_collab_pack(model, ctx["pack_id"])
         from app.services.conversation_memory_utils import estimate_text_tokens
-        from app.services.openrouter_chat_service import OpenRouterChatError, OpenRouterBillingUncertainError
-        from app.route.ai import _oria_openrouter_service
 
         try:
             rows = self.db.table("oria_collab_private_messages")\
@@ -271,19 +264,17 @@ class PrivateChatService:
         if estimated_tokens>30000:
             raise HTTPException(413,"Contexte trop volumineux ; ouvrez une nouvelle conversation.")
         try:
-            service=_oria_openrouter_service()
-            service.build_request(model=api_model,message=clean,history=history,
-                                  reasoning_mode=reasoning_mode,web=False,
-                                  max_completion_tokens=max_output)
-            quote=OpenRouterTokenBillingService.estimate_reservation(
-                provider_model=api_model,estimated_input_tokens=estimated_tokens,
-                max_output_tokens=max_output,web_enabled=False)
-        except (OpenRouterChatError,TokenBillingError,ValueError) as exc:
+            quote = quote_collab_text(
+                selection, estimated_input_tokens=estimated_tokens,
+                max_output_tokens=max_output, reasoning_mode=reasoning_mode,
+                message=clean, history=history,
+            )
+        except (RuntimeError, ValueError) as exc:
             raise HTTPException(503,"Modèle ou devis fournisseur non disponible.") from exc
         mixed = mixed_billing_enabled()
         reservation_params={
             "p_member_user_id":uid,"p_conversation_id":conversation_id,
-            "p_request_id":request_id,"p_model":api_model,
+            "p_request_id":request_id,"p_model":selection.api_model,
             "p_message":clean,"p_reserve_credits":quote.reserved_credits,
         }
         if mixed:
@@ -316,25 +307,23 @@ class PrivateChatService:
         # Les erreurs APRES cette ligne peuvent avoir été facturées par le fournisseur.
         # Ne JAMAIS libérer la provision sans preuve vérifiable d'absence de débit.
         try:
-            output=await asyncio.to_thread(service.chat,model=api_model,message=clean,
-                history=history,reasoning_mode=reasoning_mode,web=False,
-                max_completion_tokens=max_output)
-            billed=OpenRouterTokenBillingService.calculate(output)
-            if (not isinstance(output.get("message"),str) or
-                    not output["message"].strip() or len(output["message"])>100000 or
-                    len(billed.request_ids)!=1):
+            metered = await execute_collab_text(
+                selection, message=clean, history=history,
+                reasoning_mode=reasoning_mode, max_output_tokens=max_output,
+            )
+            if len(metered.message)>100000:
                 raise RuntimeError("provider_result_not_deliverable")
-            if billed.credits>quote.reserved_credits:
+            if metered.credits>quote.reserved_credits:
                 raise RuntimeError("provider_over_quote_keep_reservation")
             settle_params={
                 "p_member_user_id":uid,"p_request_id":request_id,
-                "p_actual_credits":billed.credits,
-                "p_provider_response_id":billed.request_ids[0],
-                "p_provider_cost_usd":str(billed.total_cost_usd),
-                "p_response":output["message"],
+                "p_actual_credits":metered.credits,
+                "p_provider_response_id":metered.response_id,
+                "p_provider_cost_usd":str(metered.total_cost_usd),
+                "p_response":metered.message,
             }
             if mixed:
-                settle_params["p_actual_api_cost_xaf"]=str(billed.total_cost_xaf)
+                settle_params["p_actual_api_cost_xaf"]=str(metered.total_cost_xaf)
             if workspace_id is not None:
                 settle_params["p_workspace_id"] = workspace_id
             settled=_checked_rpc(self.db,

@@ -79,11 +79,13 @@ class ScopedAiWorkspaceService:
                 raise RuntimeError("collab016_model_scope_invalid")
         except Exception as exc:
             raise HTTPException(404,"Accès aux modèles de cet espace refusé.") from exc
-        from app.config.credit_costs import OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK, OPENROUTER_CHAT_MODEL_IDS
-        allowed=OPENROUTER_CHAT_ALLOWED_MODELS_BY_PACK.get(str(data.get("pack_id")),frozenset())
-        models=sorted(x for x in allowed if x in OPENROUTER_CHAT_MODEL_IDS
-            and OPENROUTER_CHAT_MODEL_IDS[x].startswith(("openai/","anthropic/")))
-        return {"success":True,"workspace_id":space_id,"models":models}
+        from app.services.oria_collab_provider_adapter import models_for_collab_pack
+        from app.services.oria_collab_group_ai_service import group_ai_enabled
+        from app.services.oria_collab_private_chat_service import private_chat_enabled, mixed_billing_enabled
+        catalog = models_for_collab_pack(str(data.get("pack_id")))
+        return {"success":True,"workspace_id":space_id,**catalog,
+                "group_ai_enabled":group_ai_enabled(),
+                "private_ai_enabled":private_chat_enabled() and mixed_billing_enabled()}
 
     async def private_ask(self, actor: str, space: str, conversation: str,
                           request_id: str, model: str, message: str, reasoning_mode: str) -> dict:
