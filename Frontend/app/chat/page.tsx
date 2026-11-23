@@ -6323,12 +6323,13 @@ export default function ChatPage() {
     return resolved.success ? resolved.format : null;
   }
 
-  async function executeFreeDocument(content: string, format: "pdf" | "docx" | "xlsx", reasoning: "fast" | "balanced", signal?: AbortSignal) {
+  async function executeFreeDocument(content: string, format: "pdf" | "docx" | "xlsx", reasoning: "fast" | "balanced", conversationId: string, sourceMessageId: string, signal?: AbortSignal) {
     const catalog = freeCapabilities?.catalog?.documents;
     if (catalog?.wired !== true || !catalog.target_formats?.includes(format)) {
       throw new Error("La création de ce format n'est pas encore disponible dans votre accès gratuit.");
     }
     const request = {message: content, format, reasoning_mode: reasoning,
+      conversation_id: conversationId, current_message_id: sourceMessageId,
       attachments: await encodeFreeAttachments(attachments)};
     const preflight = await apiFetch<{success: boolean; quote: {
       can_reserve_by_balance: boolean; reserved_credits: number;
@@ -6551,7 +6552,7 @@ export default function ChatPage() {
       } else if (documentFormat) {
         setChatStatusStep("creating_artifact");
         const documentResult = await executeFreeDocument(content, documentFormat,
-          reasoningMode === "fast" ? "fast" : "balanced", freeController.signal);
+          reasoningMode === "fast" ? "fast" : "balanced", conversationId, userMessage.id, freeController.signal);
         answerText = documentResult.message;
         freeDocumentArtifacts = documentResult.artifacts;
       } else {
