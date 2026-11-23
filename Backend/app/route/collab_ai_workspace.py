@@ -3,10 +3,13 @@
 The old mono-workspace SQL routines remain authoritative for reservation and
 settlement. The new identity RPC refuses this route after multi-admission cutover.
 """
+import asyncio
+import json
 from uuid import UUID
 from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.supabase import supabase
@@ -117,6 +120,61 @@ def group_delivery_status(workspace_id: UUID, group_id: UUID, request_id: UUID,
     return ScopedAiWorkspaceService(supabase).delivery_status(
         actor(user_id, authorization), str(workspace_id), "group",
         str(group_id), str(request_id))
+
+
+@router.get("/groups/{group_id}/jobs/{request_id}/stream")
+async def group_stream(workspace_id: UUID, group_id: UUID, request_id: UUID,
+                       user_id: str | None = Header(None, alias='user-id'),
+                       authorization: str | None = Header(None, alias='authorization')):
+    """Authenticated SSE snapshots. Disconnecting only stops this VIEWER."""
+    uid = actor(user_id, authorization)
+    service = ScopedAiWorkspaceService(supabase)
+    service.authorize(uid, str(workspace_id), 'group', str(group_id))
+
+    async def events():
+        marker = None
+        # Browser reconnects every <= 30 seconds, keeping Render requests short.
+        for _ in range(39):
+            try:
+                state = await asyncio.to_thread(
+                    service.delivery_status, uid, str(workspace_id), 'group',
+                    str(group_id), str(request_id),
+                )
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    yield ': en_attente_de_reservation\n\n'
+                    await asyncio.sleep(.7)
+                    continue
+                yield 'event: erreur\ndata: {"state":"unknown"}\n\n'
+                return
+            signature = (state.get('state'), state.get('seq'), state.get('phase'))
+            if signature != marker:
+                marker = signature
+                yield 'event: snapshot\ndata: '+json.dumps(state, ensure_ascii=False)+'\n\n'
+            if state.get('state') in {'settled','released','uncertain','needs_review','failed'}:
+                return
+            await asyncio.sleep(.7)
+        yield ': reconnecter\n\n'
+
+    return StreamingResponse(events(), media_type='text/event-stream', headers={
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'X-Accel-Buffering': 'no', 'Connection': 'keep-alive',
+    })
+
+
+@router.post("/groups/{group_id}/jobs/{request_id}/recover")
+def group_recover_receipt(workspace_id: UUID, group_id: UUID, request_id: UUID,
+                          user_id: str | None = Header(None, alias='user-id'),
+                          authorization: str | None = Header(None, alias='authorization')):
+    """Finish a saved provider receipt, NEVER regenerate or charge twice."""
+    uid = actor(user_id, authorization)
+    ScopedAiWorkspaceService(supabase).authorize(
+        uid, str(workspace_id), 'group', str(group_id))
+    from app.services.oria_collab_stream_store_v1 import settle_saved_receipt
+    return settle_saved_receipt(
+        supabase, actor=uid, workspace=str(workspace_id),
+        group=str(group_id), request=str(request_id),
+    )
 
 
 @router.get("/private/{conversation_id}/jobs/{request_id}")

@@ -196,6 +196,10 @@ class GroupAiService:
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(503, "Modèle ou devis fournisseur indisponible.") from exc
 
+        # P8 preflight: fail before reserving credits if persistent streaming is not installed.
+        if workspace_id is not None:
+            from app.services.oria_collab_stream_store_v1 import preflight
+            await asyncio.to_thread(preflight, self.db)
         reserved = _safe_rpc(self.db,
             "oria_collab_group_ai_reserve_v3" if workspace_id is not None
             else "oria_collab_group_ai_reserve", {
@@ -216,13 +220,36 @@ class GroupAiService:
 
         # BEGIN billable provider boundary: NEVER retry automatically, NEVER
         # release a reservation for uncertain delivery or missing cost.
+        progress_writer = None
         try:
-            metered = await execute_collab_text(
-                selection, message=provider_prompt, history=history,
-                reasoning_mode=reasoning_mode, max_output_tokens=max_output,
-                artifact_types=document_types, web_enabled=web,
-                attachments=visual_attachments,
-            )
+            if workspace_id is not None:
+                from app.services.oria_collab_stream_store_v1 import ProgressWriter
+                progress_writer = ProgressWriter(
+                    self.db, request=request_id, workspace=workspace_id,
+                    group=group_id, caller=actor_id,
+                )
+                await asyncio.to_thread(progress_writer.start)
+            if progress_writer is not None and not artifact_requests:
+                from app.services.oria_collab_streaming_v1 import execute_collab_text_streamed
+                metered = await execute_collab_text_streamed(
+                    selection, message=provider_prompt, history=history,
+                    reasoning_mode=reasoning_mode, max_output_tokens=max_output,
+                    web_enabled=web, attachments=visual_attachments,
+                    generation_id=request_id, on_delta=progress_writer.delta,
+                )
+                try:
+                    await asyncio.to_thread(progress_writer.flush)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "ORIA_P8_PROGRESS_FLUSH_FAILED request_id=%s", request_id)
+            else:
+                # Documents/code remain non-streamed to avoid exposing artifact JSON.
+                metered = await execute_collab_text(
+                    selection, message=provider_prompt, history=history,
+                    reasoning_mode=reasoning_mode, max_output_tokens=max_output,
+                    artifact_types=document_types, web_enabled=web,
+                    attachments=visual_attachments,
+                )
             answer = metered.message
             staged_files = []
             if artifact_requests:
@@ -255,6 +282,15 @@ class GroupAiService:
                 raise RuntimeError("group_answer_invalid")
             if metered.credits > quote.reserved_credits:
                 raise RuntimeError("group_billing_needs_review")
+            # Provider proof persisted BEFORE credit settlement: safe replay
+            # can finish SQL settlement WITHOUT a second external API request.
+            if progress_writer is not None:
+                await asyncio.to_thread(
+                    progress_writer.receipt, response=answer,
+                    credits=metered.credits, provider_id=metered.response_id,
+                    cost_usd=str(metered.total_cost_usd),
+                    cost_xaf=str(metered.total_cost_xaf), artifacts=staged_files,
+                )
             settled = _safe_rpc(self.db,
                 ("oria_collab_group_ai_settle_artifacts_v1" if artifact_requests else
                  "oria_collab_group_ai_settle_v3") if workspace_id is not None
@@ -271,11 +307,19 @@ class GroupAiService:
             if artifact_requests and (settled.get('artifact_count') != len(staged_files)
                                       or not settled.get('message_id')):
                 raise RuntimeError('Réponse et fichiers non rapprochés.')
+            if progress_writer is not None:
+                try:
+                    await asyncio.to_thread(progress_writer.settled)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "ORIA_P8_PROGRESS_AFTER_SETTLE_FAILED request_id=%s", request_id)
             return {"success": True, "replayed": False, "request_id": request_id,
                     "message": settled["response"], "cost": settled["cost"],
                     "shares": settled.get("shares", []),
                     "files": settled.get("files", []) if artifact_requests else []}
         except Exception as exc:
+            if progress_writer is not None:
+                await asyncio.to_thread(progress_writer.uncertain)
             # Diagnostic sûr : référencer l'exception côté serveur avant de bloquer
             # le solde. Ne jamais envoyer les détails fournisseur au navigateur.
             logging.getLogger(__name__).exception(

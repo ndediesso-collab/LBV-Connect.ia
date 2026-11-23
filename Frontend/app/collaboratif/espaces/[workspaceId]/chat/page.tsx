@@ -20,7 +20,8 @@ type FileLink = { id: string; message_id: string; original_name: string; mime_ty
 type OwnWallet = { success: boolean; workspace_id: string; member_user_id: string;
   personal_balance: number; pack_quota: { available?: number; reserved?: number; spent?: number } };
 type DeliveryState = {success: boolean;workspace_id:string;target_id:string;
-  request_id:string;state:string;actual_credits?:number|null};
+  request_id:string;state:string;actual_credits?:number|null;
+  phase?:string;seq?:number;preview?:string;receipt_ready?:boolean;updated_at?:string};
 type CollabModelOption = { id: string; label: string; reasoning_modes?: string[] };
 type CollabModelResponse = { success: boolean; workspace_id: string;
   provider: "openai" | "openrouter"; models: string[];
@@ -84,6 +85,9 @@ export default function OriaCollaboratifChat() {
   const [showGroupMember, setShowGroupMember] = useState(false);
   const [selectedPerson, setSelectedPerson] = useState("");
   const [pendingAi, setPendingAi] = useState(false);
+  const [livePreview, setLivePreview] = useState<{group:string;request:string;text:string;phase:string}|null>(null);
+  const monitorRef = useRef<{key:string;abort:AbortController}|null>(null);
+  const recoverRef = useRef<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -217,6 +221,65 @@ export default function OriaCollaboratifChat() {
   const pendingKey = useCallback((picked:Selection)=>
     `oria-collab-pending:${ownId}:${space}:${picked.kind}:${picked.id}`,[ownId,space]);
 
+  const watchDeliveryStream = useCallback(async (picked:Selection, requestId:string) => {
+    if(picked.kind!=='group')return;
+    const key=`${picked.id}:${requestId}`;
+    if(monitorRef.current?.key===key)return;
+    monitorRef.current?.abort.abort();
+    const controller = new AbortController();
+    monitorRef.current={key,abort:controller};
+    try {
+      const {data:{session}}=await collabSupabase.auth.getSession();
+      if(!session?.access_token||!session.user.id)return;
+      const path=`${root}/ai/groups/${picked.id}/jobs/${requestId}/stream`;
+      const resp=await fetch(`${COLLAB_API_URL}${path}`,{
+        headers:{authorization:`Bearer ${session.access_token}`,'user-id':session.user.id},
+        cache:'no-store',signal:controller.signal,
+      });
+      if(!resp.ok||!resp.body)return;
+      const reader=resp.body.getReader();
+      const decoder=new TextDecoder();
+      let buffer='';
+      let terminal=false;
+      while(!controller.signal.aborted){
+        const next=await reader.read();
+        if(next.done)break;
+        buffer+=decoder.decode(next.value,{stream:true}).replace(/\r\n/g,'\n');
+        let delimiter=buffer.indexOf('\n\n');
+        while(delimiter>=0){
+          const block=buffer.slice(0,delimiter);buffer=buffer.slice(delimiter+2);
+          const event=block.split('\n').find(line=>line.startsWith('data: '));
+          if(event){
+            let state:DeliveryState|null=null;
+            try{state=JSON.parse(event.slice(6)) as DeliveryState;}catch{}
+            if(state?.request_id===requestId&&state.workspace_id===space&&state.target_id===picked.id){
+              if(selectedRef.current?.id===picked.id&&selectedRef.current.kind==='group'){
+                if(state.state==='reserved'&&typeof state.preview==='string'&&state.preview){
+                  setLivePreview({group:picked.id,request:requestId,text:state.preview,phase:state.phase??'running'});
+                }
+                if(state.state==='settled'){
+                  terminal=true;setLivePreview(null);setPendingAi(false);
+                  try{localStorage.removeItem(`oria-collab-pending:${ownId}:${space}:group:${picked.id}`);}catch{}
+                  void load(picked).catch(()=>{});void refreshOwnWallet().catch(()=>{});
+                } else if(['uncertain','needs_review','released','failed'].includes(state.state)){
+                  terminal=true;setLivePreview(null);setPendingAi(state.state!=='released');
+                  if(state.state==='released'){
+                    try{localStorage.removeItem(`oria-collab-pending:${ownId}:${space}:group:${picked.id}`);}catch{}
+                  }
+                }
+              }
+            }
+          }
+          delimiter=buffer.indexOf('\n\n');
+        }
+        if(terminal)break;
+      }
+    }catch{/* Network stream may disconnect: history/status polling is authoritative. */}
+    finally {if(monitorRef.current?.key===key)monitorRef.current=null;}
+  },[root,space,ownId,load,refreshOwnWallet]);
+
+  useEffect(()=>()=>{monitorRef.current?.abort.abort();},[]);
+
   const checkPending = useCallback(async (picked:Selection) => {
     if(!ownId || (picked.kind!=="group" && picked.kind!=="private")) return;
     const key=pendingKey(picked);
@@ -235,6 +298,7 @@ export default function OriaCollaboratifChat() {
       } catch { /* Le statut local continue à fonctionner si le contrôle distant est indisponible. */ }
     }
     if(!requestId)return;
+    if(picked.kind==='group')void watchDeliveryStream(picked,requestId);
     if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind)
       setPendingAi(true);
     const endpoint=picked.kind==="group"?
@@ -244,12 +308,26 @@ export default function OriaCollaboratifChat() {
       const status=await collabRequest<DeliveryState>(endpoint);
       if(!status.success || status.workspace_id!==space || status.target_id!==picked.id ||
          status.request_id!==requestId)throw new Error('Statut incohérent.');
+      if(picked.kind==='group' && status.state==='reserved' && status.receipt_ready===true &&
+         status.phase==='provider_complete' && Boolean(status.updated_at) &&
+         Date.now()-new Date(status.updated_at as string).getTime()>12000 &&
+         !recoverRef.current.has(requestId)){
+        recoverRef.current.add(requestId);
+        // Non-billable recovery. Never re-call OpenAI/OpenRouter.
+        void collabRequest(`${root}/ai/groups/${picked.id}/jobs/${requestId}/recover`, 'POST', {})
+          .then(()=>{void load(picked);void refreshOwnWallet().catch(()=>{});})
+          .catch(()=>{recoverRef.current.delete(requestId);});
+      }
       if(status.state==='settled'){
         try{localStorage.removeItem(key);}catch{}
         if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind){
-          setPendingAi(false);setNotice('Réponse ORIA livrée dans cette conversation.');
+          setPendingAi(false);setLivePreview(null);setNotice('Réponse ORIA livrée dans cette conversation.');
           await load(picked);void refreshOwnWallet().catch(()=>{});
         }
+      } else if(status.state==='released'){
+        try{localStorage.removeItem(key);}catch{}
+        setLivePreview(null);setPendingAi(false);
+        setNotice('Réservation annulée : aucun débit confirmé.');
       } else if(['uncertain','needs_review','failed'].includes(status.state)){
         if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind){
           setPendingAi(true);
@@ -264,10 +342,12 @@ export default function OriaCollaboratifChat() {
         setPendingAi(true);setNotice('Statut IA non confirmé. Ne pas renvoyer cette demande avant vérification.');
       }
     }
-  },[ownId,pendingKey,root,space,load,refreshOwnWallet]);
+  },[ownId,pendingKey,root,space,load,refreshOwnWallet,watchDeliveryStream]);
 
   useEffect(()=>{
     if(!selection)return;
+    monitorRef.current?.abort.abort();
+    setLivePreview(null);
     setMessages([]);setFiles([]);setBefore(null);setError("");setPendingAi(false);setPreviewFile(null);
     selectedRef.current=selection;
     void load(selection).catch(e=>setError(e instanceof Error?e.message:"Historique indisponible."));
@@ -287,6 +367,12 @@ export default function OriaCollaboratifChat() {
   useEffect(()=>{
     if(viewRef.current)viewRef.current.scrollTop=viewRef.current.scrollHeight;
   },[messages.length,selection?.id]);
+
+  useEffect(()=>{
+    const view=viewRef.current;
+    if(view && view.scrollHeight-view.scrollTop-view.clientHeight < 250)
+      view.scrollTop=view.scrollHeight;
+  },[livePreview?.text]);
 
   function pick(kind:RoomKind,id:string){
     if(recordingRef.current?.state==="recording"){sendRecordingRef.current=false;recordingRef.current.stop();setRecording(false); }
@@ -336,6 +422,7 @@ export default function OriaCollaboratifChat() {
         const endpoint=current.kind==="group"?`${root}/ai/groups/${current.id}/ask`:`${root}/ai/private/${current.id}/ask`;
         const requestId=crypto.randomUUID();
         try{localStorage.setItem(pendingKey(current),requestId);}catch{}
+        if(current.kind==='group')void watchDeliveryStream(current,requestId);
         const body=current.kind==="group"?{request_id:requestId,model,reasoning_mode:mode,web:webEnabled,prompt:content}
           :{request_id:requestId,model,reasoning_mode:mode,web:webEnabled,message:content};
         const result=await collabRequest<{workspace_id:string;success:boolean}>(endpoint,"POST",body);
@@ -347,7 +434,7 @@ export default function OriaCollaboratifChat() {
           {client_message_id:crypto.randomUUID(),content});
         if(!result.success||result.workspace_id!==space)throw new Error("Message non confirmé.");
       }
-      setDraft("");await load(current);await refreshBoot();void refreshOwnWallet().catch(()=>{});
+      setDraft("");setLivePreview(null);await load(current);await refreshBoot();void refreshOwnWallet().catch(()=>{});
     }catch(e){
       setError(e instanceof Error?e.message:"Envoi impossible.");
       // Seul un refus apres appel fournisseur potentiellement facture bloque un retry.
@@ -585,7 +672,7 @@ export default function OriaCollaboratifChat() {
       {showGroupMember&&currentGroup&&<div className="flex flex-wrap items-end gap-2 border-b border-border p-3 text-xs"><label className="flex-1">Participant<select className={`${input} mt-1`} value={selectedPerson} onChange={e=>setSelectedPerson(e.target.value)}><option value="">Sélectionner</option>{peers.map(p=><option key={p.user_id} value={p.user_id}>{name(p)}</option>)}</select></label><button className={smallButton} disabled={!selectedPerson||busy} onClick={()=>void updateGroupMember(true)}>Ajouter</button><button className={smallButton} disabled={!selectedPerson||busy} onClick={()=>void updateGroupMember(false)}>Retirer</button></div>}
       <div ref={viewRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-6 sm:px-7" aria-live="polite">
         {!selection&&<div className="grid h-full place-items-center text-center text-muted"><div><Sparkles className="mx-auto mb-3" size={36}/><h2 className="font-semibold">ORIA Collaboratif</h2><p className="mt-2 text-sm">Choisissez un groupe ou une conversation.</p></div></div>}
-        {selection&&messages.length===0&&!loading&&<div className="grid h-full place-items-center text-sm text-muted">Aucun message pour le moment.</div>}
+        {selection&&messages.length===0&&!loading&&!livePreview&&<div className="grid h-full place-items-center text-sm text-muted">Aucun message pour le moment.</div>}
         {before&&selection?.kind!=="private"&&<div className="text-center"><button className={smallButton} onClick={()=>{if(selection)void load(selection,true,before);}}>Messages plus anciens</button></div>}
         {messages.map(m=>{
           const mine=(m.role==="user"&&selection?.kind==="private")||(m.sender_user_id!==null&&m.sender_user_id===ownId);
@@ -621,6 +708,14 @@ export default function OriaCollaboratifChat() {
             </article>
           </div>;
         })}
+        {selection?.kind==='group'&&livePreview?.group===selection.id&&
+          <div className="flex justify-start" role="status" aria-live="polite">
+            <article className="max-w-[88%] rounded-2xl rounded-bl-sm border border-border bg-surface px-4 py-3 text-sm sm:max-w-[76%]">
+              <div className="mb-1 font-semibold">ORIA <span className="ml-2 text-xs font-normal opacity-60">en cours…</span></div>
+              <p className="whitespace-pre-wrap leading-relaxed">{livePreview.text}</p>
+              {livePreview.phase==='provider_complete'&&<p className="mt-1 text-xs text-muted">Finalisation et vérification du débit…</p>}
+            </article>
+          </div>}
       </div>
       {previewFile&&<div role="dialog" aria-modal="true" aria-label={`Aperçu ${previewFile.file.original_name}`} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"><div className="flex h-[min(85vh,850px)] w-[min(96vw,1050px)] flex-col overflow-hidden rounded-2xl bg-background text-foreground"><div className="flex items-center justify-between gap-3 border-b border-border p-3"><span className="truncate font-medium">{previewFile.file.original_name}</span><div className="flex items-center gap-3"><button type="button" aria-label="Télécharger" onClick={()=>void openFile(previewFile.file)}><Download size={18}/></button><button type="button" aria-label="Fermer l’aperçu" onClick={()=>setPreviewFile(null)}><X size={18}/></button></div></div><div className="min-h-0 flex-1 bg-surface p-2">{previewFile.file.mime_type.startsWith('image/')?<img src={previewFile.url} alt={previewFile.file.original_name} className="h-full w-full object-contain"/>:(['application/pdf','text/plain'].includes(previewFile.file.mime_type))?<iframe title={previewFile.file.original_name} src={previewFile.url} className="h-full w-full rounded-md bg-white"/>:<div className="grid h-full place-items-center text-center text-sm text-muted"><div>Aperçu natif non pris en charge pour ce format.<br/>Utilise Télécharger pour consulter le fichier original.</div></div>}</div></div></div>}
       {selection&&<div className="border-t border-border bg-surface px-3 py-3 sm:px-6">

@@ -216,11 +216,21 @@ class ScopedAiWorkspaceService:
         if not rows:
             raise HTTPException(404, "Demande introuvable dans ce groupe ou chat.")
         state = str(rows[0].get("state") or "")
-        if state not in {"reserved", "settled", "uncertain", "needs_review", "pending", "failed"}:
+        if state not in {"reserved", "settled", "uncertain", "needs_review", "pending", "failed", "released"}:
             raise HTTPException(503, "État de demande inconnu ; aucun nouvel appel.")
+        progress = {}
+        if kind == 'group':
+            try:
+                from app.services.oria_collab_stream_store_v1 import snapshot
+                progress = snapshot(self.db, ws, room, request)
+            except Exception:
+                # Read-only existing status stays available before migration.
+                progress = {'phase': 'unavailable', 'preview': '', 'seq': 0,
+                            'receipt_ready': False}
         return {"success": True, "workspace_id": ws, "kind": kind,
                 "target_id": room, "request_id": request, "state": state,
-                "actual_credits": rows[0].get("actual_credits") if state == "settled" else None}
+                "actual_credits": rows[0].get("actual_credits") if state == "settled" else None,
+                **progress}
 
     def private_artifacts(self, actor: str, space: str, conversation: str) -> dict:
         self.authorize(actor,space,'private',conversation)
