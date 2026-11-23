@@ -190,7 +190,7 @@ export default function CollaboratifPage() {
                     <Link href="/collaboratif/profils" className="mt-5 inline-flex items-center gap-2 rounded-xl bg-foreground px-5 py-3 text-sm font-semibold text-background">
                       Gérer les profils professionnels <ArrowRight size={17} />
                     </Link>
-                    <p className="mt-4 text-xs text-muted">Les conversations individuelles et le partage de crédits seront disponibles dans les phases suivantes.</p>
+                    <p className="mt-4 text-xs text-muted">Le travail collaboratif se déroule dans les groupes. Les conversations personnelles restent dans ORIA classique.</p>
                   </section>
                 ) : status.can_create_workspace ? (
                   <section className="rounded-2xl border border-border bg-surface p-6">

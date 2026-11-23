@@ -44,15 +44,15 @@ def group_messages(workspace_id: UUID,group_id: UUID,before: UUID|None=Query(Non
 @router.post("/direct/open")
 def direct_open(workspace_id:UUID,body:OpenDirect,user_id:str|None=Header(None,alias="user-id"),
     authorization:str|None=Header(None,alias="authorization")):
-    srv,actor=service(user_id,authorization)
-    return srv.direct_open(actor,str(workspace_id),str(body.other_user_id))
+    service(user_id,authorization)
+    raise HTTPException(410, "Messagerie privée désactivée. Échangez dans les groupes de travail.")
 
 
 @router.get("/direct")
 def direct_list(workspace_id:UUID,user_id:str|None=Header(None,alias="user-id"),
     authorization:str|None=Header(None,alias="authorization")):
-    srv,actor=service(user_id,authorization)
-    return srv.direct_list(actor,str(workspace_id))
+    service(user_id,authorization)
+    return {"success": True, "workspace_id": str(workspace_id), "threads": []}
 
 
 @router.get("/direct/{thread_id}/messages")
@@ -68,7 +68,9 @@ def send(workspace_id:UUID,room_type:str,room_id:UUID,body:SendMessage,
     user_id:str|None=Header(None,alias="user-id"),
     authorization:str|None=Header(None,alias="authorization")):
     srv,actor=service(user_id,authorization)
-    max_len = 4000 if room_type=="group" else 8000
+    if room_type!="group":
+        raise HTTPException(410, "Messages privés retirés de cet espace de travail.")
+    max_len = 4000
     if len(body.content)>max_len:
         raise HTTPException(422,"Message trop long.")
     return srv.send(actor,str(workspace_id),room_type,str(room_id),body.content,str(body.client_message_id))
@@ -102,6 +104,8 @@ async def upload(workspace_id:UUID,room_type:str,room_id:UUID,
      user_id:str|None=Header(None,alias="user-id"),
      authorization:str|None=Header(None,alias="authorization")):
     srv,actor=service(user_id,authorization)
+    if room_type!="group":
+        raise HTTPException(410, "Fichiers privés retirés de cet espace de travail.")
     try:
         raw=await file.read(MAX_UPLOAD+1)
     finally:

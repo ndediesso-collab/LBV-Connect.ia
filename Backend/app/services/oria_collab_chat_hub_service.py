@@ -93,9 +93,8 @@ class ChatHubService:
             general = {"workspace_id": uuid(space), "group_id": None}
         groups = self._rpc("oria_collab_workspace_groups_v3", actor, space)
         profiles = self._rpc("oria_collab_workspace_profiles_v3", actor, space)
-        privates = self._rpc("oria_collab_workspace_private_list_v3", actor, space,
-                             p_member_user_id=None)
-        directs = self._rpc("oria_collab_chat_direct_list_v1", actor, space)
+        privates = {"conversations": []}
+        directs = {"threads": []}
         notices = self._rpc("oria_collab_chat_notifications_v1", actor, space, p_limit=30)
         return {"success": True, "workspace_id": uuid(space), "context": context,
                 "general_group_id": general.get("group_id"),

@@ -6,7 +6,7 @@ settlement. The new identity RPC refuses this route after multi-admission cutove
 from uuid import UUID
 from typing import Literal
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.supabase import supabase
@@ -84,15 +84,8 @@ def save_chat_preferences(workspace_id: UUID, body: ChatPreferences,
 async def private_ask(workspace_id: UUID, conversation_id: UUID, body: PrivateAsk,
                       user_id: str | None = Header(None, alias="user-id"),
                       authorization: str | None = Header(None, alias="authorization")):
-    # Le calcul serveur continue si l'onglet HTTP disparaît. Jamais de retry automatique.
-    uid = actor(user_id, authorization)
-    return await await_independent_delivery(
-        f'private:{workspace_id}:{body.request_id}',
-        lambda: ScopedAiWorkspaceService(supabase).private_ask(
-            uid, str(workspace_id), str(conversation_id),
-            str(body.request_id), body.model, body.message, body.reasoning_mode, body.web,
-        ),
-    )
+    actor(user_id, authorization)
+    raise HTTPException(410, "Chats personnels retirés d’ORIA Collaboratif. Utilisez ORIA classique hors de l’espace.")
 
 
 @router.post("/groups/{group_id}/ask")
@@ -107,6 +100,14 @@ async def group_ask(workspace_id: UUID, group_id: UUID, body: GroupAsk,
             str(body.request_id), body.model, body.prompt, body.reasoning_mode, body.web,
         ),
     )
+
+
+@router.get("/groups/{group_id}/jobs/latest")
+def latest_group_job(workspace_id: UUID, group_id: UUID,
+                     user_id: str | None = Header(None, alias="user-id"),
+                     authorization: str | None = Header(None, alias="authorization")):
+    return ScopedAiWorkspaceService(supabase).latest_group_delivery(
+        actor(user_id, authorization), str(workspace_id), str(group_id))
 
 
 @router.get("/groups/{group_id}/jobs/{request_id}")

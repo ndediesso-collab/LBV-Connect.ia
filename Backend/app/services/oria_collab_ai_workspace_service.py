@@ -165,6 +165,33 @@ class ScopedAiWorkspaceService:
         )
         return {**answer, "workspace_id": validated_uuid(space)}
 
+    def latest_group_delivery(self, actor: str, space: str, group: str) -> dict:
+        """Authoritative newest unfinished group request; no provider calls/credit changes.
+
+        Makes old uncertain jobs visible after browser navigation and on new devices.
+        All reads require the existing group/workspace membership RPC first.
+        """
+        self.authorize(actor, space, "group", group)
+        ws, room = validated_uuid(space), validated_uuid(group)
+        try:
+            response = (self.db.table("oria_collab_group_ai_jobs")
+                        .select("id,state,created_at")
+                        .eq("workspace_id", ws).eq("group_id", room)
+                        .in_("state", ["reserved", "uncertain", "needs_review"])
+                        .order("created_at", desc=True).limit(1).execute())
+            rows = getattr(response, "data", None) or []
+        except Exception as exc:
+            raise HTTPException(503, "État des requêtes de groupe indisponible.") from exc
+        if not rows:
+            return {"success": True, "workspace_id": ws,
+                    "group_id": room, "active": False}
+        job = rows[0]
+        state = str(job.get("state") or "")
+        if state not in {"reserved", "uncertain", "needs_review"}:
+            raise HTTPException(503, "État de génération incohérent.")
+        return {"success": True, "workspace_id": ws, "group_id": room,
+                "active": True, "request_id": str(job["id"]), "state": state}
+
     def delivery_status(self, actor: str, space: str, kind: str,
                         target: str, request_id: str) -> dict:
         """Read-only job status, scope authorized before service-role DB access.

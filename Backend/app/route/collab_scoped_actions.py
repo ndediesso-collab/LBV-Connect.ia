@@ -1,7 +1,7 @@
 """Space-explicit write APIs, never rely on a global selected workspace."""
 from uuid import UUID
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.supabase import supabase
@@ -60,8 +60,8 @@ class ExtensionCheckout(BaseModel):
 def create_private(workspace_id: UUID, body: CreateConversation,
                    user_id: str | None = Header(None, alias="user-id"),
                    authorization: str | None = Header(None, alias="authorization")):
-    service, actor = client(user_id, authorization)
-    return service.call("private_create", actor, str(workspace_id), p_title=body.title)
+    client(user_id, authorization)
+    raise HTTPException(410, "Conversations privées supprimées d’ORIA Collaboratif. Créez un groupe depuis le chat.")
 
 
 @router.post("/groups")

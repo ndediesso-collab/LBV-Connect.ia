@@ -70,9 +70,8 @@ export default function OriaCollaboratifChat() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<Notices | null>(null);
-  const [newKind, setNewKind] = useState<"group" | "direct" | "private" | null>(null);
+  const [newKind, setNewKind] = useState<"group" | null>(null);
   const [newTitle, setNewTitle] = useState("");
-  const [newPerson, setNewPerson] = useState("");
   const [showGroupMember, setShowGroupMember] = useState(false);
   const [selectedPerson, setSelectedPerson] = useState("");
   const [pendingAi, setPendingAi] = useState(false);
@@ -214,6 +213,18 @@ export default function OriaCollaboratifChat() {
     const key=pendingKey(picked);
     let requestId:string|null=null;
     try { requestId=localStorage.getItem(key); } catch { /* stockage désactivé */ }
+    if(!requestId && picked.kind==="group"){
+      // A job might predate localStorage (old sessions or other device).
+      // The server verifies workspace/group membership before returning an ID.
+      try {
+        const latest=await collabRequest<{success:boolean;workspace_id:string;group_id:string;
+          active:boolean;request_id?:string;state?:string}>(`${root}/ai/groups/${picked.id}/jobs/latest`);
+        if(latest.success && latest.workspace_id===space && latest.group_id===picked.id && latest.active && latest.request_id){
+          requestId=latest.request_id;
+          try{localStorage.setItem(key,requestId);}catch{}
+        }
+      } catch { /* Le statut local continue à fonctionner si le contrôle distant est indisponible. */ }
+    }
     if(!requestId)return;
     if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind)
       setPendingAi(true);
@@ -385,13 +396,11 @@ export default function OriaCollaboratifChat() {
     setBusy(true);setError("");
     try{
       let result:{workspace_id:string;group_id?:string;thread_id?:string;conversation_id?:string;success:boolean};
-      if(newKind==="group")result=await collabRequest(`${root}/actions/groups`,"POST",{title:newTitle.trim(),description:""});
-      else if(newKind==="direct")result=await collabRequest(`${hub}/direct/open`,"POST",{other_user_id:newPerson});
-      else result=await collabRequest(`${root}/actions/private/conversations`,"POST",{title:newTitle.trim()});
+      result=await collabRequest(`${root}/actions/groups`,"POST",{title:newTitle.trim(),description:""});
       if(!result.success||result.workspace_id!==space)throw new Error("Création non confirmée.");
       const id=result.group_id||result.thread_id||result.conversation_id;
       if(!id)throw new Error("Identifiant de conversation absent.");
-      setNewKind(null);setNewPerson("");setNewTitle("");await refreshBoot();pick(newKind,id);
+      setNewKind(null);setNewTitle("");await refreshBoot();pick("group",id);
     }catch(e){setError(e instanceof Error?e.message:"Création impossible.");}
     finally{setBusy(false);}
   }
@@ -441,7 +450,7 @@ export default function OriaCollaboratifChat() {
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted">
           <span className="inline-flex items-center gap-1"><ShieldCheck size={13}/> {boot?.context.is_owner?"Administrateur":"Membre"}</span>
-          <Link className="underline hover:text-foreground" href="/chat">Mon ORIA</Link>
+          <Link className="underline hover:text-foreground" href="/chat" title="Ouvrir ORIA classique hors de cet espace">Quitter vers ORIA personnel</Link>
           <Link className="underline hover:text-foreground" href={`${root.replace('/collaboratif/workspaces/','/collaboratif/espaces/')}/finances`}>Crédits</Link>
           {ownWallet&&<span role="status" title="Solde de votre profil uniquement" className="rounded-lg border border-border px-2 py-1 tabular-nums"><Wallet size={12} className="mr-1 inline"/> {((ownWallet.pack_quota?.available??0)+(ownWallet.personal_balance??0)).toLocaleString("fr-GA")} disponibles · {((ownWallet.pack_quota?.reserved??0)).toLocaleString("fr-GA")} réservés · {((ownWallet.pack_quota?.spent??0)).toLocaleString("fr-GA")} dépensés</span>}
           {boot?.context.is_owner&&<Link className="underline hover:text-foreground" href={`/collaboratif/invitations-email?workspace=${encodeURIComponent(space)}`}>Inviter</Link>}
@@ -458,14 +467,6 @@ export default function OriaCollaboratifChat() {
           <div className="flex items-center justify-between px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-muted"><span className="flex items-center gap-1.5"><MessagesSquare size={15}/> Groupes</span>{boot?.context.is_owner&&<button aria-label="Créer un groupe" onClick={()=>setNewKind("group")}><Plus size={17}/></button>}</div>
           {groups.map(g=><button key={g.id} onClick={()=>pick("group",g.id)} className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition ${selection?.kind==="group"&&selection.id===g.id?"bg-surface-secondary":"hover:bg-surface-secondary"}`}><span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-sm text-background">#</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{g.title}</span><span className="block truncate text-xs text-muted">{g.archived?"Archivé":`${g.message_count.toLocaleString("fr-GA")} messages`}</span></span></button>)}
           {!groups.length&&<p className="px-2 text-xs text-muted">Aucun groupe pour le moment.</p>}
-        </div>
-        <div>
-          <div className="flex items-center justify-between px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-muted"><span className="flex items-center gap-1.5"><MessageCircle size={15}/> Entre collègues</span><button aria-label="Nouvelle discussion entre collègues" onClick={()=>setNewKind("direct")}><Plus size={17}/></button></div>
-          {directs.map(t=><button key={t.id} onClick={()=>pick("direct",t.id)} className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition ${selection?.kind==="direct"&&selection.id===t.id?"bg-surface-secondary":"hover:bg-surface-secondary"}`}><span className="grid size-9 shrink-0 place-items-center rounded-full bg-surface-secondary font-medium">{name(t).slice(0,1)}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{t.display_name || name(t)}</span><span className="block truncate text-xs text-muted">{t.read_only?"Supervision · lecture seule":(t.last_message??"Discussion privée")}</span></span></button>)}
-        </div>
-        <div>
-          <div className="flex items-center justify-between px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-muted"><span className="flex items-center gap-1.5"><Sparkles size={15}/> Mes chats ORIA</span>{boot?.context.is_owner?<Link aria-label="Ouvrir mon ORIA personnel" href="/chat"><ChevronLeft size={17} className="rotate-180"/></Link>:<button aria-label="Nouveau chat ORIA" onClick={()=>setNewKind("private")}><Plus size={17}/></button>}</div>
-          {boot?.context.is_owner&&<p className="px-2 text-xs text-muted">Le propriétaire utilise son chat ORIA personnel avec son quota.</p>}{privates.map(p=><button key={p.id} onClick={()=>pick("private",p.id)} className={`mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition ${selection?.kind==="private"&&selection.id===p.id?"bg-surface-secondary":"hover:bg-surface-secondary"}`}><span className="grid size-9 shrink-0 place-items-center rounded-full border border-border"><Sparkles size={17}/></span><span className="truncate text-sm">{p.title}</span></button>)}
         </div>
       </div>
       <div className="flex flex-wrap gap-3 border-t border-border p-3 text-xs text-muted"><Link href={`/collaboratif/espaces/${encodeURIComponent(space)}/actions`} className="inline-flex items-center gap-1 underline"><Wallet size={14}/> Gestion et paiements</Link><Link href="/collaboratif/espaces" className="underline">Changer d'espace</Link></div>
@@ -520,9 +521,10 @@ export default function OriaCollaboratifChat() {
       </div>}
     </section>
 
-    {newKind&&<div className="fixed inset-0 z-50 grid place-items-center bg-black/55 px-4"><div className="w-full max-w-md space-y-4 rounded-2xl border border-border bg-surface p-6 shadow-xl"><div className="flex justify-between gap-2"><h2 className="text-lg font-semibold">{newKind==="group"?"Nouveau groupe":newKind==="direct"?"Nouvelle discussion privée":"Nouveau chat ORIA"}</h2><button aria-label="Fermer" onClick={()=>setNewKind(null)}><X size={18}/></button></div>
-      {newKind==="direct"?<select value={newPerson} onChange={e=>setNewPerson(e.target.value)} className={input}><option value="">Choisir un collègue</option>{peers.map(p=><option value={p.user_id} key={p.user_id}>{name(p)}</option>)}</select>:<input aria-label="Nom de conversation" className={input} value={newTitle} onChange={e=>setNewTitle(e.target.value)} maxLength={newKind==="group"?100:120} placeholder={newKind==="group"?"Nom du groupe":"Titre de conversation"}/>}
-      <div className="flex justify-end gap-2"><button className={smallButton} onClick={()=>setNewKind(null)}>Annuler</button><button className={darkButton} disabled={busy||(newKind==="direct"?!newPerson:!newTitle.trim())} onClick={()=>void create()}>Créer</button></div>
+    {newKind&&<div className="fixed inset-0 z-50 grid place-items-center bg-black/55 px-4"><div className="w-full max-w-md space-y-4 rounded-2xl border border-border bg-surface p-6 shadow-xl"><div className="flex justify-between gap-2"><h2 className="text-lg font-semibold">Nouveau groupe de travail</h2><button aria-label="Fermer" onClick={()=>setNewKind(null)}><X size={18}/></button></div>
+      <input aria-label="Nom du groupe" className={input} value={newTitle} onChange={e=>setNewTitle(e.target.value)} maxLength={100} placeholder="Nom du groupe"/>
+      <p className="text-xs text-muted">Les membres de l’espace se retrouvent dans les groupes. Pour vos conversations personnelles, quittez l’espace et ouvrez ORIA classique.</p>
+      <div className="flex justify-end gap-2"><button className={smallButton} onClick={()=>setNewKind(null)}>Annuler</button><button className={darkButton} disabled={busy||!newTitle.trim()} onClick={()=>void create()}>Créer ce groupe</button></div>
     </div></div>}
     {loading&&<div role="status" className="fixed inset-0 z-40 grid place-items-center bg-background/90 text-sm">Chargement de votre espace ORIA…</div>}
   </main>;

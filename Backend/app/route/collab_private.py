@@ -1,7 +1,7 @@
 """API ORIA Collaboratif 4A : historique indépendant et chat texte personnel."""
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Header, Query, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.supabase import supabase
@@ -44,7 +44,8 @@ def list_conversations(member_user_id: UUID | None = Query(None),
 def new_conversation(body:ConversationInput,
          user_id: str | None = Header(None,alias="user-id"),
          authorization: str | None = Header(None,alias="authorization")):
-    return PrivateChatService(supabase).new_conversation(_actor(user_id,authorization),body.title)
+    _actor(user_id,authorization)
+    raise HTTPException(410, "Chat ORIA personnel inaccessible dans cet espace. Utilisez le chat principal.")
 
 
 @router.get("/conversations/{conversation_id}/messages")
@@ -58,10 +59,8 @@ def messages(conversation_id:UUID,
 async def chat(conversation_id:UUID, body:ChatInput,
          user_id: str | None = Header(None,alias="user-id"),
          authorization: str | None = Header(None,alias="authorization")):
-    return await PrivateChatService(supabase).chat(
-        _actor(user_id,authorization),conversation_id=str(conversation_id),
-        request_id=str(body.request_id),model=body.model,
-        message=body.message,reasoning_mode=body.reasoning_mode)
+    _actor(user_id,authorization)
+    raise HTTPException(410, "Chat ORIA personnel inaccessible dans cet espace. Utilisez le chat principal.")
 
 
 @router.get("/jobs/{request_id}")

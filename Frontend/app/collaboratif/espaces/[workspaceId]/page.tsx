@@ -23,8 +23,8 @@ type Quota = { member_user_id: string; available: number; reserved: number; spen
 
 type Tab = "profiles" | "groups" | "private" | "quota";
 const tabs: { id: Tab; text: string }[] = [
-  { id: "profiles", text: "Profils" }, { id: "groups", text: "Salons" },
-  { id: "private", text: "Conversations" }, { id: "quota", text: "Crédits" },
+  { id: "profiles", text: "Profils" }, { id: "groups", text: "Groupes" },
+  { id: "quota", text: "Crédits" },
 ];
 const secondary = "rounded-xl border border-border px-3 py-2 text-sm hover:bg-surface";
 const primary = "rounded-xl bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50";
