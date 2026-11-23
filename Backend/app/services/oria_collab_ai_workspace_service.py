@@ -153,8 +153,8 @@ class ScopedAiWorkspaceService:
     async def group_ask(self, actor: str, space: str, group: str,
                         request_id: str, model: str, prompt: str, reasoning_mode: str) -> dict:
         self.authorize(actor, space, "group", group)
-        from app.services.oria_collab_shared_artifacts import reject_undeliverable_artifacts
-        reject_undeliverable_artifacts(prompt)  # Pas de facturation pour un fichier non livrable.
+        # P2: GroupAiService validates intent, feature flag and billing before
+        # calling the SAME principal-chat artifact compiler.
         from app.services.oria_collab_group_ai_service import GroupAiService
         answer = await GroupAiService(self.db).ask(
             validated_uuid(actor), group_id=validated_uuid(group),

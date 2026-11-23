@@ -27,7 +27,9 @@ def shared_artifact_capabilities() -> dict[str, Any]:
         "engine": "oria.artifact.v1",
         "formats": ARTIFACT_SERVICE.supported_types(),
         "max_artifacts_per_turn": MAX_ARTIFACTS_PER_TURN,
-        "collaborative_delivery_ready": False,
+        # Advertise ready only when ops explicitly enabled the migration.
+        "collaborative_delivery_ready": __import__('os').getenv(
+            'ORIA_COLLAB_GROUP_DOCUMENTS_ENABLED', '0').strip() == '1',
     }
 
 

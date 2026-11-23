@@ -115,6 +115,16 @@ class GroupAiService:
             selection_for_collab_pack, quote_collab_text, execute_collab_text,
         )
         selection = selection_for_collab_pack(model, ctx["pack_id"])
+        from app.services.oria_collab_shared_artifacts import plan_shared_artifacts
+        from app.services.oria_collab_artifact_delivery import supported_document_requests
+        artifact_requests = plan_shared_artifacts(clean)
+        if artifact_requests:
+            # Explicit launch flag: no call, charge or hold until the SQL
+            # migration and end-to-end deployment are verified by operators.
+            if workspace_id is None or os.getenv('ORIA_COLLAB_GROUP_DOCUMENTS_ENABLED', '0') != '1':
+                raise HTTPException(501, "La livraison de fichiers en groupe n’est pas encore activée ; aucun crédit réservé.")
+            if not supported_document_requests(artifact_requests):
+                raise HTTPException(422, 'Format non disponible par le contrat documentaire ORIA actuel.')
         from app.services.conversation_memory_utils import estimate_text_tokens
         from app.route.ai import MODEL_ACTIONS
         from app.repositories.supabase_credit_repository import SupabaseCreditRepository
@@ -157,11 +167,13 @@ class GroupAiService:
                      + sum(estimate_text_tokens(item["content"]) for item in history) + 512)
         if tokens > 30000:
             raise HTTPException(413, "Le contexte du groupe est trop volumineux.")
-        max_output = 4096 if reasoning_mode == "deep" else 2048
+        max_output = (16384 if artifact_requests else
+                      4096 if reasoning_mode == "deep" else 2048)
         try:
             quote = quote_collab_text(
                 selection, estimated_input_tokens=tokens, max_output_tokens=max_output,
                 reasoning_mode=reasoning_mode, message=clean, history=history,
+                artifact_types=tuple(r['file_type'] for r in artifact_requests),
             )
             limit_xaf = SupabaseCreditRepository._pack_budget_limit(ctx["pack_id"])
             budget_on = SupabaseCreditRepository._api_budget_enabled()
@@ -192,15 +204,34 @@ class GroupAiService:
             metered = await execute_collab_text(
                 selection, message=clean, history=history,
                 reasoning_mode=reasoning_mode, max_output_tokens=max_output,
+                artifact_types=tuple(r['file_type'] for r in artifact_requests),
             )
             answer = metered.message
+            staged_files = []
+            if artifact_requests:
+                from app.services.oria_collab_shared_artifacts import compile_shared_document_payload
+                from app.services.oria_collab_artifact_delivery import (
+                    stage_group_artifacts, group_document_confirmation,
+                )
+                generated = await compile_shared_document_payload(
+                    artifact_payload=metered.artifact_payload,
+                    artifact_requests=artifact_requests, generation_id=request_id,
+                    reasoning_mode=reasoning_mode, model=model,
+                    openai_model=selection.api_model,
+                )
+                staged_files = await asyncio.to_thread(
+                    stage_group_artifacts, self.db, workspace_id=workspace_id,
+                    request_id=request_id, results=generated,
+                )
+                answer = group_document_confirmation(generated)
             if len(answer) > 4000:
                 # Une reponse trop longue est a rapprocher, jamais tronquee apres debit.
                 raise RuntimeError("group_answer_invalid")
             if metered.credits > quote.reserved_credits:
                 raise RuntimeError("group_billing_needs_review")
             settled = _safe_rpc(self.db,
-                "oria_collab_group_ai_settle_v3" if workspace_id is not None
+                ("oria_collab_group_ai_settle_artifacts_v1" if artifact_requests else
+                 "oria_collab_group_ai_settle_v3") if workspace_id is not None
                 else "oria_collab_group_ai_settle", {
                 "p_actor_user_id": actor_id, "p_request_id": request_id,
                 "p_actual_credits": metered.credits,
@@ -209,10 +240,15 @@ class GroupAiService:
                 "p_actual_api_cost_xaf": str(metered.total_cost_xaf),
                 "p_response": answer,
                 **({"p_workspace_id": workspace_id} if workspace_id is not None else {}),
+                **({"p_artifacts": staged_files} if artifact_requests else {}),
             })
+            if artifact_requests and (settled.get('artifact_count') != len(staged_files)
+                                      or not settled.get('message_id')):
+                raise RuntimeError('Réponse et fichiers non rapprochés.')
             return {"success": True, "replayed": False, "request_id": request_id,
                     "message": settled["response"], "cost": settled["cost"],
-                    "shares": settled.get("shares", [])}
+                    "shares": settled.get("shares", []),
+                    "files": settled.get("files", []) if artifact_requests else []}
         except Exception as exc:
             try:
                 _safe_rpc(self.db,

@@ -34,6 +34,7 @@ class CollabChatResult:
     total_cost_usd: Decimal
     total_cost_xaf: Decimal
     response_id: str
+    artifact_payload: dict | None = None
 
 
 def _principal_catalog():
@@ -87,6 +88,7 @@ def selection_for_collab_pack(model: str, pack_id: str) -> ChatProviderSelection
 def quote_collab_text(
     selection: ChatProviderSelection, *, estimated_input_tokens: int,
     max_output_tokens: int, reasoning_mode: str, message: str, history: list[dict],
+    artifact_types: tuple[str, ...] = (),
 ) -> CollabChatQuote:
     """Tarification du fournisseur réellement appelé, sans devis OpenRouter fictif."""
     if reasoning_mode not in ('fast', 'balanced', 'deep'):
@@ -103,7 +105,7 @@ def quote_collab_text(
         service.build_request(
             model=selection.api_model, message=message, history=history,
             reasoning_mode=reasoning_mode, web=False,
-            max_completion_tokens=max_output_tokens,
+            artifact_types=artifact_types, max_completion_tokens=max_output_tokens,
         )
         quote = OpenRouterTokenBillingService.estimate_reservation(
             provider_model=selection.api_model,
@@ -121,6 +123,7 @@ def quote_collab_text(
 async def execute_collab_text(
     selection: ChatProviderSelection, *, message: str, history: list[dict],
     reasoning_mode: str, max_output_tokens: int,
+    artifact_types: tuple[str, ...] = (),
 ) -> CollabChatResult:
     """Un seul appel fournisseur, aucun retry automatique après la réservation."""
     if selection.provider is ChatProvider.OPENAI:
@@ -128,7 +131,7 @@ async def execute_collab_text(
         response = await asyncio.to_thread(
             OpenAIService().chat, model=selection.api_model, message=message,
             history=history, reasoning_mode=reasoning_mode, web=False,
-            max_output_tokens=max_output_tokens,
+            artifact_types=artifact_types, max_output_tokens=max_output_tokens,
         )
         usage = response.get('usage')
         if not isinstance(usage, dict):
@@ -143,7 +146,8 @@ async def execute_collab_text(
         response = await asyncio.to_thread(
             _oria_openrouter_service().chat, model=selection.api_model,
             message=message, history=history, reasoning_mode=reasoning_mode,
-            web=False, max_completion_tokens=max_output_tokens,
+            web=False, artifact_types=artifact_types,
+            max_completion_tokens=max_output_tokens,
         )
         bill = OpenRouterTokenBillingService.calculate(response)
         if len(bill.request_ids) != 1:
@@ -155,7 +159,12 @@ async def execute_collab_text(
         raise RuntimeError('Fournisseur non autorisé.')
     if not isinstance(provider_id, str) or not provider_id or len(provider_id) > 256:
         raise RuntimeError('Identifiant fournisseur absent : rapprochement requis.')
-    if not isinstance(response_text, str) or not response_text.strip():
+    if artifact_types:
+        if not isinstance(response.get('artifact_payload'), dict):
+            raise RuntimeError('Contrat documentaire non livré par le fournisseur.')
+        # JSON payload is NEVER displayed or persisted as a text chat answer.
+        response_text = ''
+    elif not isinstance(response_text, str) or not response_text.strip():
         raise RuntimeError('Réponse fournisseur vide : rapprochement requis.')
     if type(credits) is not int or credits < 1:
         raise RuntimeError('Coût fournisseur invalide.')
@@ -163,4 +172,5 @@ async def execute_collab_text(
         message=response_text, credits=credits,
         total_cost_usd=Decimal(str(usd)), total_cost_xaf=Decimal(str(xaf)),
         response_id=provider_id,
+        artifact_payload=response.get('artifact_payload') if artifact_types else None,
     )
