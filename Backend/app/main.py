@@ -14,6 +14,22 @@ from app.route.free_cv_plan import router as free_cv_plan_router
 from app.route.free_chat import router as free_router
 from app.route.free_documents import router as free_documents_router
 from app.route.free_image_jobs import router as free_image_jobs_router
+from app.route.collaboratif import router as collaboratif_router
+from app.route.collab_profiles import router as collab_profiles_router
+from app.route.collab_recharges import router as collab_recharges_router
+from app.route.collab_private import router as collab_private_router
+from app.route.collab_quotas import router as collab_quotas_router
+from app.route.collab_groups import router as collab_groups_router
+from app.route.collab_group_ai import router as collab_group_ai_router
+from app.route.collab_message_extensions import router as collab_message_extensions_router
+from app.route.collab_workspace_directory import router as collab_workspace_directory_router
+from app.route.collab_email_invites import router as collab_email_invites_router
+from app.route.collab_workspace_scope import router as collab_workspace_scope_router
+from app.route.collab_workspace_finance import router as collab_workspace_finance_router
+from app.route.collab_scoped_actions import router as collab_scoped_actions_router
+from app.route.collab_ai_workspace import router as collab_ai_workspace_router
+from app.route.collab_chat_hub import router as collab_chat_hub_router
+from app.route.collab_share_invites import router as collab_share_invites_router
 
 from app.services.oria_memory_middleware import OriaMemoryCleanupMiddleware
 
@@ -145,3 +161,42 @@ app.include_router(free_image_jobs_router, prefix="/ai")
 # ORIA gratuit: rapprochement de recharges serveur + collecte CV sans frais.
 app.include_router(free_addon_recovery_router)
 app.include_router(free_cv_plan_router, prefix="/ai")
+
+# ORIA Collaboratif — fondations additives (activation derriere flag).
+app.include_router(collaboratif_router)
+app.include_router(collab_profiles_router)
+app.include_router(collab_recharges_router)
+app.include_router(collab_private_router)
+app.include_router(collab_quotas_router)
+app.include_router(collab_groups_router)
+app.include_router(collab_group_ai_router)
+app.include_router(collab_message_extensions_router)
+app.include_router(collab_workspace_directory_router)
+app.include_router(collab_email_invites_router)
+app.include_router(collab_workspace_scope_router)
+app.include_router(collab_workspace_finance_router)
+app.include_router(collab_scoped_actions_router)
+app.include_router(collab_ai_workspace_router)
+app.include_router(collab_chat_hub_router)
+app.include_router(collab_share_invites_router)
+
+# ORIA 6B2D - Garde des anciennes routes mono-equipe en multi-adhesion.
+# OFF par defaut. Le gate DOIT etre actif avant le DROP INDEX de staging.
+from fastapi import Request as _CollabGateRequest
+from fastapi.responses import JSONResponse as _CollabGateJSON
+import os as _collab_gate_os
+
+@app.middleware("http")
+async def _oria_multi_workspace_legacy_gate(request: _CollabGateRequest, call_next):
+    if _collab_gate_os.getenv("ORIA_COLLAB_MULTI_ACTIVE", "0") == "1":
+        path = request.url.path.rstrip("/")
+        if path.startswith("/collaboratif/") and not (
+            path.startswith("/collaboratif/workspaces/")
+            or path == "/collaboratif/workspaces"
+            or path.startswith("/collaboratif/email-invitations/")
+            or path.startswith("/collaboratif/share-invitations/")
+        ):
+            return _CollabGateJSON(status_code=503, content={
+                "detail":"Ancienne route mono-equipe fermee : selectionnez un espace precis."
+            })
+    return await call_next(request)

@@ -196,6 +196,8 @@ def normalize_phone_number(
 CHARIOW_API_URL = "https://api.chariow.com/v1/checkout"
 
 CHARIOW_PRODUCTS = {
+    # ORIA Collaboratif 5C : capacité de salon, jamais crédits IA.
+    "oria_collab_messages_5000": os.getenv("CHARIOW_GROUP_MESSAGES_PRODUCT_ID", "prd_2m8g8pce").strip(),
     # PACKS PRINCIPAUX
     "light_pack": "prd_2tjuesk8",
     "intermediate_pack": "prd_vcyhokci",

@@ -31,6 +31,8 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
+  // Inscription/connexion par téléphone publiques, les données restent protégées par FastAPI.
+  const publicCollabEntry = pathname === "/collaboratif/rejoindre" || pathname === "/collaboratif/connexion";
 
   // Routes privées nécessitant une connexion
   const protectedRoutes = [
@@ -38,6 +40,7 @@ export async function middleware(request: NextRequest) {
     "/conversations",
     "/credits",
     "/settings",
+    "/collaboratif",
   ];
 
   const isProtectedRoute = protectedRoutes.some(
@@ -47,7 +50,7 @@ export async function middleware(request: NextRequest) {
   );
 
   // Utilisateur non connecté → page de connexion
-  if (!user && isProtectedRoute) {
+  if (!user && isProtectedRoute && !publicCollabEntry) {
     return NextResponse.redirect(
       new URL("/login", request.url),
     );
@@ -74,5 +77,6 @@ export const config = {
     "/conversations/:path*",
     "/credits/:path*",
     "/settings/:path*",
+    "/collaboratif/:path*",
   ],
 };

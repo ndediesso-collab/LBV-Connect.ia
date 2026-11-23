@@ -463,10 +463,18 @@ class CreditConsumptionRequest(BaseModel):
     action: CreditAction
     confirmed: bool = False
 
+from app.route.collaboratif import _enabled as _collab_enabled
+from app.services.oria_collab_payment_bridge import (
+    prepare_collab_checkout, refuse_collab_legacy_create,
+    collab_transaction_metadata, is_collab_personal_payment,
+    validate_collab_signed_sale, finalize_collab_personal_paid,
+)
+
 class CreatePaymentRequest(BaseModel):
     payment_type: str
     product_id: str
     provider: str | None = None
+    billing_email: str | None = None
 
 
 class UpdatePhoneRequest(BaseModel):
@@ -966,6 +974,10 @@ def create_payment(
     )
 
     # ========================================================
+    # Les profils professionnels ne peuvent utiliser cette route historique.
+    refuse_collab_legacy_create(supabase, user_id=authenticated_user_id,
+                                enabled=_collab_enabled())
+
     # 2. VALIDATION FOURNISSEUR
     # ========================================================
 
@@ -1259,6 +1271,12 @@ def checkout_payment(
         user_id=user_id,
         authorization=authorization,
     )
+    # Verification du profil et de la place active AVANT toute commande Chariow.
+    collab_topup = prepare_collab_checkout(
+        supabase, user_id=authenticated_user_id,
+        payment_type=request.payment_type, product_id=request.product_id,
+        billing_email=request.billing_email, enabled=_collab_enabled(),
+    )
 
     # ========================================================
     # 2. VALIDATION FOURNISSEUR
@@ -1293,11 +1311,11 @@ def checkout_payment(
 
     # Même commande Chariow pour tous les packs ; vérification additionnelle
     # uniquement quand le produit (ou wallet) concerne Découverte.
-    free_addon_checkout = is_free_addon_checkout(
+    free_addon_checkout = (False if collab_topup else is_free_addon_checkout(
         payment_type=request.payment_type,
         product_id=request.product_id,
         wallet=wallet,
-    )
+    ))
     if free_addon_checkout:
         require_free_checkout_ready(supabase)
         require_free_recharge_wallet_ready(supabase, authenticated_user_id)
@@ -1311,7 +1329,7 @@ def checkout_payment(
     # Nouveau pack : l'utilisateur garde le choix, mais pas au milieu d'un job IA.
     if request.payment_type == "primary_pack":
         _oria_assert_pack_change_ready(authenticated_user_id)
-    if request.payment_type == "addon" and not free_addon_checkout:
+    if request.payment_type == "addon" and not free_addon_checkout and not collab_topup:
 
         if wallet is None:
             raise HTTPException(
@@ -1400,6 +1418,10 @@ def checkout_payment(
     # ORIA 4C: destination figée dans la commande Supabase, jamais le client.
     if free_addon_checkout:
         transaction_payload["metadata"][FREE_WALLET_TARGET_KEY] = FREE_WALLET_TARGET
+
+    if collab_topup:
+        # Metadonnees produites exclusivement par le serveur.
+        transaction_payload["metadata"].update(collab_transaction_metadata(collab_topup))
 
     # ========================================================
     # 8. CRÉATION SUPABASE AVANT CHARIOW
@@ -1535,6 +1557,10 @@ def checkout_payment(
         "email",
         None,
     )
+    if collab_topup:
+        # Le compte telephone peut ne pas avoir de courriel Auth.
+        # L email fourni sert uniquement au recu Chariow.
+        customer_email = collab_topup["billing_email"]
 
     if not customer_email:
 
@@ -1604,6 +1630,11 @@ def checkout_payment(
     last_name = str(last_name).strip()
     phone = str(phone).strip()
     country_iso2 = str(country_iso2).strip().upper()
+    if collab_topup:
+        first_name = collab_topup["first_name"]
+        last_name = collab_topup["last_name"]
+        phone = collab_topup["phone"]
+        country_iso2 = collab_topup["country_iso2"]
 
     if not first_name:
 
@@ -3847,6 +3878,22 @@ async def chariow_webhook(request: Request):
             ),
         )
 
+    # Meme webhook Chariow : verification supplementaire des recharges pro.
+    if success and is_collab_personal_payment(payment_transaction):
+        validate_collab_signed_sale(event, payment_transaction)
+
+    # ORIA 5C : commande de CAPACITÉ, pas une recharge IA. Le Pulse a été
+    # vérifié par le HMAC historique. Cette branche doit précéder les
+    # validations génériques et toute activation de portefeuille.
+    from app.services.oria_collab_message_extensions_service import (
+        is_group_message_payment, confirm_signed_payment,
+    )
+    if is_group_message_payment(payment_transaction):
+        return confirm_signed_payment(
+            supabase, event=event, payment=payment_transaction,
+            delivery_id=delivery_id, success=success,
+        )
+
     # Même webhook pour les cinq packs. Aucun secret / URL Découverte.
     # Validation métier avant écriture pour ce produit uniquement.
     _webhook_product = (payment_transaction.get("pack_id")
@@ -4070,6 +4117,9 @@ async def chariow_webhook(request: Request):
         f"paid_at={updated_payment_transaction.get('paid_at')!r}",
         flush=True,
     )
+
+    if is_collab_personal_payment(updated_payment_transaction):
+        return finalize_collab_personal_paid(supabase, str(reference_id))
 
     # Découverte : le débit/ajout de crédits n'a jamais lieu en Python.
     # Une unique RPC transactionnelle garantit l'achat et la recharge uniques.

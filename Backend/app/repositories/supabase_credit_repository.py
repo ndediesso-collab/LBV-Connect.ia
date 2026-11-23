@@ -260,6 +260,7 @@ class SupabaseCreditRepository(CreditRepository):
         return self._checked_reservation_wallet(wallet_data, user_id)
 
     def _execute_budget_rpc(self, name: str, params: dict, user_id: str) -> CreditWallet:
+        name, params = self._oria_collab_guard_budget(name, params, user_id)
         try:
             response = self.supabase.rpc(name, params).execute()
         except Exception as error:
@@ -892,6 +893,55 @@ class SupabaseCreditRepository(CreditRepository):
 
 
 
+    @staticmethod
+    def _oria_collab_owner_guard_enabled() -> bool:
+        """Staging feature flag; ALL classic reservation paths use this repository."""
+        active = os.getenv("ORIA_COLLAB_OWNER_QUOTA_GUARD_ENABLED", "0") == "1"
+        if active and os.getenv("ORIA_COLLABORATIF_ENABLED", "0") != "1":
+            raise RuntimeError("collab015_owner_guard_requires_collaboratif")
+        return active
+
+    @classmethod
+    def _oria_collab_guard_budget(cls, name: str, params: dict, user_id: str) -> tuple[str, dict]:
+        if not cls._oria_collab_owner_guard_enabled():
+            return name, params
+        targets = {
+            "oria_reserve_credits_with_api_budget": "oria_collab_owner_guard_reserve_v1",
+            "oria_settle_credit_reservation_with_api_budget": "oria_collab_owner_guard_settle_v1",
+            "oria_release_credit_reservation_with_api_budget": "oria_collab_owner_guard_release_v1",
+        }
+        guarded = targets.get(name)
+        if not guarded:
+            return name, params
+        args = dict(params)
+        if name == "oria_reserve_credits_with_api_budget":
+            args.setdefault("p_ttl_seconds", 900)
+        args["p_budget_enabled"] = True
+        return guarded, args
+
+    @classmethod
+    def _oria_collab_guard_standard(cls, name: str, params: dict, user_id: str) -> tuple[str, dict]:
+        if not cls._oria_collab_owner_guard_enabled():
+            return name, params
+        targets = {
+            "reserve_credits": "oria_collab_owner_guard_reserve_v1",
+            "settle_credit_reservation": "oria_collab_owner_guard_settle_v1",
+            "release_credit_reservation": "oria_collab_owner_guard_release_v1",
+        }
+        guarded = targets.get(name)
+        if not guarded:
+            return name, params
+        args = dict(params)
+        args["p_user_id"] = user_id
+        args["p_budget_enabled"] = False
+        if name == "reserve_credits":
+            args.setdefault("p_ttl_seconds", 900)
+            args.update({"p_expected_pack_id": None, "p_api_limit_xaf": None,
+                         "p_api_reservation_xaf": None})
+        elif name == "settle_credit_reservation":
+            args["p_actual_api_cost_xaf"] = None
+        return guarded, args
+
     def reserve_credits(
 
         self,
@@ -1034,13 +1084,7 @@ class SupabaseCreditRepository(CreditRepository):
 
             self.supabase
 
-            .rpc(
-
-                "reserve_credits",
-
-                rpc_params,
-
-            )
+            .rpc(*self._oria_collab_guard_standard("reserve_credits", rpc_params, user_id))
 
             .execute()
 
@@ -1147,19 +1191,13 @@ class SupabaseCreditRepository(CreditRepository):
 
             self.supabase
 
-            .rpc(
-
-                "settle_credit_reservation",
-
-                {
+            .rpc(*self._oria_collab_guard_standard("settle_credit_reservation", {
 
                     "p_reservation_id": reference_id,
 
                     "p_actual_amount": actual_amount,
 
-                },
-
-            )
+                }, user_id))
 
             .execute()
 
@@ -1254,17 +1292,11 @@ class SupabaseCreditRepository(CreditRepository):
 
             self.supabase
 
-            .rpc(
-
-                "release_credit_reservation",
-
-                {
+            .rpc(*self._oria_collab_guard_standard("release_credit_reservation", {
 
                     "p_reservation_id": reference_id,
 
-                },
-
-            )
+                }, user_id))
 
             .execute()
 
