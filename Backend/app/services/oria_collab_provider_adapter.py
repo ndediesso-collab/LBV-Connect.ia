@@ -89,6 +89,7 @@ def quote_collab_text(
     selection: ChatProviderSelection, *, estimated_input_tokens: int,
     max_output_tokens: int, reasoning_mode: str, message: str, history: list[dict],
     artifact_types: tuple[str, ...] = (),
+    web_enabled: bool = False,
 ) -> CollabChatQuote:
     """Tarification du fournisseur réellement appelé, sans devis OpenRouter fictif."""
     if reasoning_mode not in ('fast', 'balanced', 'deep'):
@@ -96,7 +97,7 @@ def quote_collab_text(
     if selection.provider is ChatProvider.OPENAI:
         credits, xaf = TokenBillingService.estimate_reservation(
             model=selection.oria_model, estimated_input_tokens=estimated_input_tokens,
-            max_output_tokens=max_output_tokens, web_enabled=False,
+            max_output_tokens=max_output_tokens, web_enabled=web_enabled,
             include_api_cost=True,
         )
     elif selection.provider is ChatProvider.OPENROUTER:
@@ -104,13 +105,13 @@ def quote_collab_text(
         service = _oria_openrouter_service()
         service.build_request(
             model=selection.api_model, message=message, history=history,
-            reasoning_mode=reasoning_mode, web=False,
+            reasoning_mode=reasoning_mode, web=web_enabled,
             artifact_types=artifact_types, max_completion_tokens=max_output_tokens,
         )
         quote = OpenRouterTokenBillingService.estimate_reservation(
             provider_model=selection.api_model,
             estimated_input_tokens=estimated_input_tokens,
-            max_output_tokens=max_output_tokens, web_enabled=False,
+            max_output_tokens=max_output_tokens, web_enabled=web_enabled,
         )
         credits, xaf = quote.reserved_credits, quote.reserved_api_cost_xaf
     else:
@@ -124,20 +125,24 @@ async def execute_collab_text(
     selection: ChatProviderSelection, *, message: str, history: list[dict],
     reasoning_mode: str, max_output_tokens: int,
     artifact_types: tuple[str, ...] = (),
+    web_enabled: bool = False,
 ) -> CollabChatResult:
     """Un seul appel fournisseur, aucun retry automatique après la réservation."""
     if selection.provider is ChatProvider.OPENAI:
         from app.services.openai_service import OpenAIService
         response = await asyncio.to_thread(
             OpenAIService().chat, model=selection.api_model, message=message,
-            history=history, reasoning_mode=reasoning_mode, web=False,
+            history=history, reasoning_mode=reasoning_mode, web=web_enabled,
             artifact_types=artifact_types, max_output_tokens=max_output_tokens,
         )
         usage = response.get('usage')
         if not isinstance(usage, dict):
             raise RuntimeError('Usage OpenAI absent : rapprochement nécessaire.')
+        web_calls=response.get('web_search_calls') if web_enabled else 0
+        if type(web_calls) is not int or web_calls < 0:
+            raise RuntimeError('Compteur des recherches Web absent ou invalide : rapprochement requis.')
         bill = TokenBillingService.calculate(
-            model=selection.oria_model, usage=usage, web_search_calls=0)
+            model=selection.oria_model, usage=usage, web_search_calls=web_calls)
         provider_id = str(response.get('provider_response_id') or '').strip()
         response_text = response.get('message')
         credits, usd, xaf = bill.credits, bill.total_cost_usd, bill.total_cost_xaf
@@ -146,7 +151,7 @@ async def execute_collab_text(
         response = await asyncio.to_thread(
             _oria_openrouter_service().chat, model=selection.api_model,
             message=message, history=history, reasoning_mode=reasoning_mode,
-            web=False, artifact_types=artifact_types,
+            web=web_enabled, artifact_types=artifact_types,
             max_completion_tokens=max_output_tokens,
         )
         bill = OpenRouterTokenBillingService.calculate(response)

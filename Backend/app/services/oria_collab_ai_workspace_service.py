@@ -138,20 +138,22 @@ class ScopedAiWorkspaceService:
                 'requests': requests, **catalog, 'credits_reserved': False}
 
     async def private_ask(self, actor: str, space: str, conversation: str,
-                          request_id: str, model: str, message: str, reasoning_mode: str) -> dict:
+                          request_id: str, model: str, message: str, reasoning_mode: str,
+                          web: bool = False) -> dict:
         self.authorize(actor, space, "private", conversation)
-        from app.services.oria_collab_shared_artifacts import reject_undeliverable_artifacts
-        reject_undeliverable_artifacts(message)  # Aucun devis ni appel fournisseur avant ce garde-fou.
+        # PrivateChatService does the document preflight BEFORE the reserve RPC,
+        # keeping the identical principal-chat generator and its financial guard.
         from app.services.oria_collab_private_chat_service import PrivateChatService
         answer = await PrivateChatService(self.db).chat(
             validated_uuid(actor), conversation_id=validated_uuid(conversation),
             request_id=validated_uuid(request_id), model=model, message=message,
-            reasoning_mode=reasoning_mode, workspace_id=validated_uuid(space),
+            reasoning_mode=reasoning_mode, workspace_id=validated_uuid(space), web=web,
         )
         return {**answer, "workspace_id": validated_uuid(space)}
 
     async def group_ask(self, actor: str, space: str, group: str,
-                        request_id: str, model: str, prompt: str, reasoning_mode: str) -> dict:
+                        request_id: str, model: str, prompt: str, reasoning_mode: str,
+                        web: bool = False) -> dict:
         self.authorize(actor, space, "group", group)
         # P2: GroupAiService validates intent, feature flag and billing before
         # calling the SAME principal-chat artifact compiler.
@@ -159,6 +161,18 @@ class ScopedAiWorkspaceService:
         answer = await GroupAiService(self.db).ask(
             validated_uuid(actor), group_id=validated_uuid(group),
             request_id=validated_uuid(request_id), model=model,
-            prompt=prompt, reasoning_mode=reasoning_mode, workspace_id=validated_uuid(space),
+            prompt=prompt, reasoning_mode=reasoning_mode, workspace_id=validated_uuid(space),web=web,
         )
         return {**answer, "workspace_id": validated_uuid(space)}
+
+    def private_artifacts(self, actor: str, space: str, conversation: str) -> dict:
+        self.authorize(actor,space,'private',conversation)
+        from app.services.oria_collab_private_generated_delivery import list_private_files
+        return list_private_files(self.db, actor, space, conversation)
+
+    def private_artifact_url(self, actor: str, space: str, file_id: str) -> dict:
+        # The access RPC resolves the associated conversation and verifies it.
+        if not enabled():
+            raise HTTPException(503,'Fichiers professionnels désactivés.')
+        from app.services.oria_collab_private_generated_delivery import private_file_url
+        return private_file_url(self.db,actor,space,file_id)

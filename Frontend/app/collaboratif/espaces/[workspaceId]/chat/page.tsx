@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Bell, Check, ChevronLeft, FileText, Menu, MessageCircle, MessagesSquare,
-  Paperclip, Plus, RefreshCcw, Send, Settings, ShieldCheck, Sparkles, Users, Wallet, X } from "lucide-react";
+  Download, Eye, Paperclip, Plus, RefreshCcw, Send, Settings, ShieldCheck, Sparkles, Users, Wallet, X } from "lucide-react";
 import { collabRequest, collabSupabase, COLLAB_API_URL } from "@/lib/collaboratif-api";
 
 type Person = { user_id: string; role: "owner" | "member"; status: string; first_name: string; last_name: string; avatar_key?: string };
@@ -16,7 +16,7 @@ type Boot = { success: boolean; workspace_id: string; context: Context; general_
 type RoomKind = "group" | "direct" | "private";
 type Selection = { kind: RoomKind; id: string };
 type Message = { id: string; sender_user_id?: string | null; sender_kind?: string; role?: string; content: string; created_at: string };
-type FileLink = { id: string; message_id: string; original_name: string; mime_type: string; size_bytes: number };
+type FileLink = { id: string; message_id: string; original_name: string; mime_type: string; size_bytes: number; private_ai?: boolean };
 type CollabModelOption = { id: string; label: string; reasoning_modes?: string[] };
 type CollabModelResponse = { success: boolean; workspace_id: string;
   provider: "openai" | "openrouter"; models: string[];
@@ -46,6 +46,7 @@ export default function OriaCollaboratifChat() {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [files, setFiles] = useState<FileLink[]>([]);
+  const [previewFile, setPreviewFile] = useState<{file:FileLink;url:string}|null>(null);
   const [before, setBefore] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [model, setModel] = useState("");
@@ -55,6 +56,7 @@ export default function OriaCollaboratifChat() {
   const [groupAiEnabled, setGroupAiEnabled] = useState(false);
   const [privateAiEnabled, setPrivateAiEnabled] = useState(false);
   const [mode, setMode] = useState("balanced");
+  const [webEnabled,setWebEnabled] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -171,12 +173,19 @@ export default function OriaCollaboratifChat() {
         const result=await collabRequest<{workspace_id:string;room_id:string;files:FileLink[]}>(`${hub}/rooms/${picked.kind}/${picked.id}/files`);
         if(result.workspace_id===space && result.room_id===picked.id && selectedRef.current?.id===picked.id)setFiles(result.files??[]);
       }catch{/* Messages stay available even if attachment service fails. */}
-    } else setFiles([]);
+    } else {
+      try {
+        const result=await collabRequest<{success:boolean;workspace_id:string;conversation_id:string;files:FileLink[]}>(`${root}/ai/private/${picked.id}/files`);
+        if(result.success && result.workspace_id===space && result.conversation_id===picked.id && selectedRef.current?.id===picked.id){
+          setFiles((result.files??[]).map(file=>({...file,private_ai:true})));
+        }
+      } catch { setFiles([]); /* Le fil reste lisible pendant une panne fichiers. */ }
+    }
   }, [hub,root,space]);
 
   useEffect(()=>{
     if(!selection)return;
-    setMessages([]);setFiles([]);setBefore(null);setError("");setPendingAi(false);
+    setMessages([]);setFiles([]);setBefore(null);setError("");setPendingAi(false);setPreviewFile(null);
     selectedRef.current=selection;
     void load(selection).catch(e=>setError(e instanceof Error?e.message:"Historique indisponible."));
   },[selection,load]);
@@ -239,8 +248,8 @@ export default function OriaCollaboratifChat() {
     try{
       if(ai){
         const endpoint=current.kind==="group"?`${root}/ai/groups/${current.id}/ask`:`${root}/ai/private/${current.id}/ask`;
-        const body=current.kind==="group"?{request_id:crypto.randomUUID(),model,reasoning_mode:mode,prompt:content}
-          :{request_id:crypto.randomUUID(),model,reasoning_mode:mode,message:content};
+        const body=current.kind==="group"?{request_id:crypto.randomUUID(),model,reasoning_mode:mode,web:webEnabled,prompt:content}
+          :{request_id:crypto.randomUUID(),model,reasoning_mode:mode,web:webEnabled,message:content};
         const result=await collabRequest<{workspace_id:string;success:boolean}>(endpoint,"POST",body);
         if(!result.success||result.workspace_id!==space)throw new Error("Réponse IA d'un autre espace.");
       } else {
@@ -284,12 +293,23 @@ export default function OriaCollaboratifChat() {
     finally{setBusy(false);}
   }
 
+  async function verifiedFileUrl(file:FileLink):Promise<string>{
+    // Each open requests a fresh, short-lived URL from the authorized workspace API.
+    const endpoint=file.private_ai?`${root}/ai/private/files/${file.id}/url`:`${hub}/files/${file.id}/url`;
+    const result=await collabRequest<{success:boolean;workspace_id:string;file_id:string;url:string}>(endpoint);
+    if(!result.success||result.workspace_id!==space||result.file_id!==file.id||!result.url.startsWith("https://"))throw new Error("Fichier inaccessible.");
+    return result.url;
+  }
   async function openFile(file:FileLink){
     try{
-      const result=await collabRequest<{success:boolean;workspace_id:string;file_id:string;url:string}>(`${hub}/files/${file.id}/url`);
-      if(!result.success||result.workspace_id!==space||result.file_id!==file.id||!result.url.startsWith("https://"))throw new Error("Fichier inaccessible.");
-      window.open(result.url,"_blank","noopener,noreferrer");
+      const url=await verifiedFileUrl(file);
+      window.open(url,"_blank","noopener,noreferrer");
     }catch(e){setError(e instanceof Error?e.message:"Téléchargement refusé.");}
+  }
+  async function previewAttachment(file:FileLink){
+    try{
+      setPreviewFile({file,url:await verifiedFileUrl(file)});
+    }catch(e){setError(e instanceof Error?e.message:"Aperçu indisponible.");}
   }
 
   async function create(){
@@ -407,15 +427,17 @@ export default function OriaCollaboratifChat() {
               {selection?.kind==="group"&&!mine&&<div className="mb-1 text-xs font-semibold opacity-75">{speaker}</div>}
               {selection?.kind==="private"&&!mine&&<div className="mb-1 flex items-center gap-1 text-xs font-semibold"><Sparkles size={12}/> ORIA</div>}
               <p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>
-              {attachments.map(f=><button key={f.id} className={`mt-2 flex max-w-full items-center gap-2 rounded-lg border px-2 py-2 text-xs underline ${mine?"border-background/30":"border-border"}`} onClick={()=>void openFile(f)}><FileText size={16}/><span className="max-w-[220px] truncate">{f.original_name}</span></button>)}
+               {attachments.map(f=><div key={f.id} className={`mt-2 flex max-w-full items-center gap-2 rounded-lg border px-2 py-2 text-xs ${mine?"border-background/30":"border-border"}`}><FileText size={16}/><span className="max-w-[185px] truncate" title={f.original_name}>{f.original_name}</span><button type="button" title="Aperçu" aria-label={`Aperçu de ${f.original_name}`} onClick={()=>void previewAttachment(f)}><Eye size={16}/></button><button type="button" title="Télécharger" aria-label={`Télécharger ${f.original_name}`} onClick={()=>void openFile(f)}><Download size={16}/></button></div>)}
               <time className="mt-1 block text-right text-[10px] opacity-65">{date(m.created_at)} {mine&&<Check className="ml-0.5 inline" size={11}/>}</time>
             </article>
           </div>;
         })}
       </div>
+      {previewFile&&<div role="dialog" aria-modal="true" aria-label={`Aperçu ${previewFile.file.original_name}`} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"><div className="flex h-[min(85vh,850px)] w-[min(96vw,1050px)] flex-col overflow-hidden rounded-2xl bg-background text-foreground"><div className="flex items-center justify-between gap-3 border-b border-border p-3"><span className="truncate font-medium">{previewFile.file.original_name}</span><div className="flex items-center gap-3"><button type="button" aria-label="Télécharger" onClick={()=>void openFile(previewFile.file)}><Download size={18}/></button><button type="button" aria-label="Fermer l’aperçu" onClick={()=>setPreviewFile(null)}><X size={18}/></button></div></div><div className="min-h-0 flex-1 bg-surface p-2">{previewFile.file.mime_type.startsWith('image/')?<img src={previewFile.url} alt={previewFile.file.original_name} className="h-full w-full object-contain"/>:(['application/pdf','text/plain'].includes(previewFile.file.mime_type))?<iframe title={previewFile.file.original_name} src={previewFile.url} className="h-full w-full rounded-md bg-white"/>:<div className="grid h-full place-items-center text-center text-sm text-muted"><div>Aperçu natif non pris en charge pour ce format.<br/>Utilise Télécharger pour consulter le fichier original.</div></div>}</div></div></div>}
       {selection&&<div className="border-t border-border bg-surface px-3 py-3 sm:px-6">
         {(selection.kind==="group"||selection.kind==="private")&&<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{selection.kind==="group"?"Écrivez @ORIA pour demander une réponse IA":"Conversation avec ORIA"}</span><div className="flex flex-wrap items-center gap-2"><span className="hidden rounded-full border border-border px-2 py-1 text-[11px] sm:inline">{provider==="openai"?"OpenAI actif":provider==="openrouter"?"OpenRouter actif":"Fournisseur non vérifié"}</span><select aria-label="Modèle IA" className="max-w-[185px] rounded-xl border border-border bg-background px-3 py-2 font-medium text-foreground" value={model} onChange={e=>{const m=e.target.value;const allowed=modelCatalog.find(x=>x.id===m)?.reasoning_modes??[];const next=allowed.includes(mode)?mode:(allowed.includes('balanced')?'balanced':(allowed[0]??'balanced'));setModel(m);setMode(next);persistSelection(m,next);}} disabled={!provider||busy}><option value="">Modèle indisponible</option>{modelCatalog.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Raisonnement" className="rounded-xl border border-border bg-background px-3 py-2 text-foreground" value={mode} onChange={e=>{setMode(e.target.value);persistSelection(model,e.target.value);}} disabled={!provider||busy}>{(modelCatalog.find(item=>item.id===model)?.reasoning_modes??[]).filter(m=>m in reasoningLabels).map(m=><option key={m} value={m}>{reasoningLabels[m]}</option>)}</select></div></div>}
         {selection.kind==="group"&&mentionOpen&&<div className="mb-2 flex justify-start"><button type="button" role="option" aria-label="Compléter avec @ORIA" className="rounded-xl border border-border bg-background px-4 py-2 text-sm shadow-sm hover:bg-surface-secondary" onMouseDown={e=>e.preventDefault()} onClick={completeOriaMention}><Sparkles size={15} className="mr-2 inline"/>@ORIA <span className="ml-2 text-xs text-muted">Tab ou Entrée</span></button></div>}
+        {(selection.kind==="group"||selection.kind==="private")&&<label className="mb-2 flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={webEnabled} onChange={e=>setWebEnabled(e.target.checked)} disabled={busy||pendingAi} aria-label="Recherche Web avec facturation des outils"/>Recherche Web (coût des outils inclus dans le devis)</label>}
         <form onSubmit={e=>void submit(e)} className="flex items-end gap-2">
           <input ref={fileRef} className="hidden" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.docx,.xlsx,.pptx" onChange={e=>void uploadFile(e)}/>
           {selection.kind!=="private"&&<button type="button" className="rounded-xl p-3 hover:bg-surface-secondary disabled:opacity-40" title="Joindre un fichier (8 Mo max)" aria-label="Joindre un fichier" disabled={busy||!canWrite} onClick={()=>fileRef.current?.click()}><Paperclip size={20}/></button>}

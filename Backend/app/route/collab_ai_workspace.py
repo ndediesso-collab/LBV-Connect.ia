@@ -22,6 +22,7 @@ class PrivateAsk(BaseModel):
     model: str = Field(min_length=1, max_length=80)
     message: str = Field(min_length=1, max_length=8000)
     reasoning_mode: str = "balanced"
+    web: bool = False
 
 
 class GroupAsk(BaseModel):
@@ -29,6 +30,7 @@ class GroupAsk(BaseModel):
     model: str = Field(min_length=1, max_length=80)
     prompt: str = Field(min_length=1, max_length=4000)
     reasoning_mode: str = "balanced"
+    web: bool = False
 
 
 class ArtifactPlan(BaseModel):
@@ -83,7 +85,7 @@ async def private_ask(workspace_id: UUID, conversation_id: UUID, body: PrivateAs
                       authorization: str | None = Header(None, alias="authorization")):
     return await ScopedAiWorkspaceService(supabase).private_ask(
         actor(user_id, authorization), str(workspace_id), str(conversation_id),
-        str(body.request_id), body.model, body.message, body.reasoning_mode,
+        str(body.request_id), body.model, body.message, body.reasoning_mode,body.web,
     )
 
 
@@ -93,5 +95,21 @@ async def group_ask(workspace_id: UUID, group_id: UUID, body: GroupAsk,
                     authorization: str | None = Header(None, alias="authorization")):
     return await ScopedAiWorkspaceService(supabase).group_ask(
         actor(user_id, authorization), str(workspace_id), str(group_id),
-        str(body.request_id), body.model, body.prompt, body.reasoning_mode,
+        str(body.request_id), body.model, body.prompt, body.reasoning_mode,body.web,
     )
+
+
+@router.get('/private/{conversation_id}/files')
+def private_generated_files(workspace_id: UUID, conversation_id: UUID,
+                            user_id: str | None = Header(None,alias='user-id'),
+                            authorization: str | None = Header(None,alias='authorization')):
+    return ScopedAiWorkspaceService(supabase).private_artifacts(
+        actor(user_id,authorization),str(workspace_id),str(conversation_id))
+
+
+@router.get('/private/files/{file_id}/url')
+def private_generated_file_url(workspace_id: UUID,file_id: UUID,
+                               user_id: str | None = Header(None,alias='user-id'),
+                               authorization: str | None = Header(None,alias='authorization')):
+    return ScopedAiWorkspaceService(supabase).private_artifact_url(
+        actor(user_id,authorization),str(workspace_id),str(file_id))

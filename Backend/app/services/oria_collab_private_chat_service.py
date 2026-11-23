@@ -223,7 +223,7 @@ class PrivateChatService:
 
     async def chat(self, uid: str, *, conversation_id: str, request_id: str,
                    model: str, message: str, reasoning_mode: str,
-                   workspace_id: str | None = None) -> dict:
+                   workspace_id: str | None = None, web: bool = False) -> dict:
         if workspace_id is None:
             if os.getenv("ORIA_COLLAB_MULTI_ACTIVE", "0") == "1":
                 raise HTTPException(503, "Chat historique désactivé en multi-espaces.")
@@ -248,6 +248,20 @@ class PrivateChatService:
             selection_for_collab_pack, quote_collab_text, execute_collab_text,
         )
         selection = selection_for_collab_pack(model, ctx["pack_id"])
+        from app.services.oria_collab_shared_artifacts import (
+            plan_shared_artifacts, supported_shared_legacy_requests,
+        )
+        from app.services.oria_collab_artifact_delivery import supported_document_requests
+        from app.route.ai import _document_artifact_selection, _code_output_instruction
+        requests = plan_shared_artifacts(clean)
+        document_types, legacy_requests = _document_artifact_selection(requests)
+        if requests:
+            if workspace_id is None or os.getenv('ORIA_COLLAB_PRIVATE_DOCUMENTS_ENABLED', '0') != '1':
+                raise HTTPException(501, 'Livraison documentaire privée désactivée : aucun crédit réservé.')
+            if not (supported_document_requests(requests) or
+                    supported_shared_legacy_requests(legacy_requests)):
+                raise HTTPException(422, 'Fichier non pris en charge par le générateur principal ORIA.')
+        provider_prompt = _code_output_instruction(clean, []) if legacy_requests else clean
         from app.services.conversation_memory_utils import estimate_text_tokens
 
         try:
@@ -258,16 +272,17 @@ class PrivateChatService:
             raise HTTPException(503,"Contexte privé indisponible.") from exc
         history = [{"role":row["role"],"content":row["content"]}
                    for row in reversed(rows)]
-        estimated_tokens=max(1,estimate_text_tokens(clean)+
-                             sum(estimate_text_tokens(v["content"]) for v in history)+512)
-        max_output=4096 if reasoning_mode=="deep" else 2048
+        estimated_tokens=max(1,estimate_text_tokens(provider_prompt)+
+                              sum(estimate_text_tokens(v["content"]) for v in history)+512)
+        max_output=16384 if requests else 4096 if reasoning_mode=="deep" else 2048
         if estimated_tokens>30000:
             raise HTTPException(413,"Contexte trop volumineux ; ouvrez une nouvelle conversation.")
         try:
             quote = quote_collab_text(
                 selection, estimated_input_tokens=estimated_tokens,
                 max_output_tokens=max_output, reasoning_mode=reasoning_mode,
-                message=clean, history=history,
+                message=provider_prompt, history=history,
+                artifact_types=document_types, web_enabled=web,
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(503,"Modèle ou devis fournisseur non disponible.") from exc
@@ -282,7 +297,7 @@ class PrivateChatService:
                 raise HTTPException(503,"La gestion des quotas professionnels doit être activée.")
             from app.repositories.supabase_credit_repository import SupabaseCreditRepository
             from app.route.ai import MODEL_ACTIONS
-            action = MODEL_ACTIONS.get(model,{}).get("normal")
+            action = MODEL_ACTIONS.get(model,{}).get('web' if web else 'normal')
             if action is None:
                 raise HTTPException(403,"Action du modèle indisponible dans le catalogue ORIA.")
             reservation_params.update({
@@ -308,10 +323,37 @@ class PrivateChatService:
         # Ne JAMAIS libérer la provision sans preuve vérifiable d'absence de débit.
         try:
             metered = await execute_collab_text(
-                selection, message=clean, history=history,
+                selection, message=provider_prompt, history=history,
                 reasoning_mode=reasoning_mode, max_output_tokens=max_output,
+                artifact_types=document_types, web_enabled=web,
             )
-            if len(metered.message)>100000:
+            answer=metered.message
+            staged_files=[]
+            if requests:
+                from app.services.oria_collab_shared_artifacts import (
+                    compile_shared_document_payload, compile_shared_legacy_files,
+                )
+                from app.services.oria_collab_artifact_delivery import (
+                    stage_group_artifacts, group_document_confirmation,
+                )
+                if document_types:
+                    generated=await compile_shared_document_payload(
+                        artifact_payload=metered.artifact_payload,
+                        artifact_requests=requests,generation_id=request_id,
+                        reasoning_mode=reasoning_mode,model=model,openai_model=selection.api_model,
+                    )
+                else:
+                    generated=await compile_shared_legacy_files(
+                        artifact_requests=legacy_requests,response_text=answer,
+                        requested_text=clean,generation_id=request_id,
+                        reasoning_mode=reasoning_mode,model=model,openai_model=selection.api_model,
+                    )
+                staged_files=await asyncio.to_thread(
+                    stage_group_artifacts, self.db,workspace_id=workspace_id,
+                    request_id=request_id,results=generated,
+                )
+                answer=group_document_confirmation(generated)
+            if len(answer)>100000:
                 raise RuntimeError("provider_result_not_deliverable")
             if metered.credits>quote.reserved_credits:
                 raise RuntimeError("provider_over_quote_keep_reservation")
@@ -320,20 +362,26 @@ class PrivateChatService:
                 "p_actual_credits":metered.credits,
                 "p_provider_response_id":metered.response_id,
                 "p_provider_cost_usd":str(metered.total_cost_usd),
-                "p_response":metered.message,
+                "p_response":answer,
+                **({"p_artifacts":staged_files} if requests else {}),
             }
             if mixed:
                 settle_params["p_actual_api_cost_xaf"]=str(metered.total_cost_xaf)
             if workspace_id is not None:
                 settle_params["p_workspace_id"] = workspace_id
             settled=_checked_rpc(self.db,
-                ("oria_collab_settle_private_chat_v3" if workspace_id is not None
+                (("oria_collab_settle_private_chat_artifacts_v1" if requests
+                  else "oria_collab_settle_private_chat_v3") if workspace_id is not None
                  else "oria_collab_settle_private_chat_v2" if mixed else "oria_collab_settle_private_chat"),
                 settle_params)
+            if requests and (settled.get('artifact_count')!=len(staged_files)
+                             or not settled.get('message_id')):
+                raise RuntimeError('Fichiers privés et règlement non rapprochés.')
             return {"success":True,"request_id":request_id,"message":settled["response"],
                     "cost":settled["actual_credits"],"balance":settled.get("balance"),
                     "pack_charged":settled.get("pack_charged_credits"),
                     "personal_charged":settled.get("personal_charged_credits"),
+                    "files":settled.get('files',[]) if requests else [],
                     "replayed":False}
         except Exception as exc:
             try:

@@ -73,3 +73,61 @@ async def compile_shared_document_payload(
         model=model,
         openai_model=openai_model,
     )
+
+
+def supported_shared_legacy_requests(requests: list[dict]) -> bool:
+    """Only text/code/ZIP extensions provided by the *principal* engine."""
+    from app.route.ai import ARTIFACT_SERVICE, _document_artifact_selection
+    if not isinstance(requests, list) or not 1 <= len(requests) <= 3:
+        return False
+    document_types, other = _document_artifact_selection(requests)
+    if document_types or len(other) != len(requests):
+        return False
+    available = ARTIFACT_SERVICE.supported_types()
+    legacy = set(available.get('web_and_code', ())) | set(available.get('archives', ()))
+    return all(isinstance(v, dict) and v.get('file_type') in legacy for v in requests)
+
+
+async def compile_shared_legacy_files(
+    *, artifact_requests: list[dict], response_text: str, requested_text: str,
+    generation_id: str, reasoning_mode: str, model: str, openai_model: str,
+) -> list[Any]:
+    """Delegates code and ZIP to SAME paid-chat content adapter + ArtifactService.
+
+    No arbitrary executable code is evaluated, no file path is trusted from an LLM,
+    and all files are checked *before* staged private upload + SQL settle.
+    """
+    if not supported_shared_legacy_requests(artifact_requests):
+        raise HTTPException(422, 'Fichier source/ZIP non reconnu dans ORIA.')
+    if not isinstance(response_text, str) or not response_text.strip():
+        raise HTTPException(422, 'Contenu de code absent : aucun fichier créé.')
+    from app.route.ai import (
+        ARTIFACT_SERVICE, _artifact_content_from_response,
+        _assert_code_fences_closed, _is_code_task, _CODE_SOURCE_EXTENSIONS,
+    )
+
+    def _compile() -> list[Any]:
+        results = []
+        code_project = _is_code_task(requested_text, [])
+        for request in artifact_requests:
+            ext = request['file_type']
+            if ext in _CODE_SOURCE_EXTENSIONS or (ext == 'zip' and code_project):
+                _assert_code_fences_closed(response_text)
+            value = _artifact_content_from_response(
+                file_type=ext, response_text=response_text,
+                strict_code_project=(ext == 'zip' and code_project),
+                requested_text=requested_text,
+            )
+            results.append(ARTIFACT_SERVICE.create(
+                file_type=ext, content=value, filename=request.get('filename'),
+                metadata={
+                    'source': 'oria-chat', 'generation_id': generation_id,
+                    'reasoning_mode': reasoning_mode, 'oria_model': model,
+                    'openai_model': openai_model,
+                },
+            ))
+        if len(results) != len(artifact_requests):
+            raise RuntimeError('Nombre de fichiers source non conforme.')
+        return results
+
+    return await asyncio.to_thread(_compile)

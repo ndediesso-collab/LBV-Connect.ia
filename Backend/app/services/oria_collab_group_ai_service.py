@@ -95,7 +95,7 @@ class GroupAiService:
 
     async def ask(self, actor_id: str, *, group_id: str, request_id: str,
                   model: str, prompt: str, reasoning_mode: str,
-                  workspace_id: str | None = None) -> dict:
+                  workspace_id: str | None = None, web: bool = False) -> dict:
         require_group_ai(scoped=workspace_id is not None)
         if workspace_id is None:
             ctx = self.groups._context(actor_id)
@@ -115,20 +115,26 @@ class GroupAiService:
             selection_for_collab_pack, quote_collab_text, execute_collab_text,
         )
         selection = selection_for_collab_pack(model, ctx["pack_id"])
-        from app.services.oria_collab_shared_artifacts import plan_shared_artifacts
+        from app.services.oria_collab_shared_artifacts import (
+            plan_shared_artifacts, supported_shared_legacy_requests,
+        )
         from app.services.oria_collab_artifact_delivery import supported_document_requests
+        from app.route.ai import _document_artifact_selection, _code_output_instruction
         artifact_requests = plan_shared_artifacts(clean)
+        document_types, legacy_requests = _document_artifact_selection(artifact_requests)
         if artifact_requests:
-            # Explicit launch flag: no call, charge or hold until the SQL
-            # migration and end-to-end deployment are verified by operators.
+            # All formats use the EXISTING principal-chat compiler & P2 SQL
+            # settlement. Never launch a billable request if not ready.
             if workspace_id is None or os.getenv('ORIA_COLLAB_GROUP_DOCUMENTS_ENABLED', '0') != '1':
-                raise HTTPException(501, "La livraison de fichiers en groupe n’est pas encore activée ; aucun crédit réservé.")
-            if not supported_document_requests(artifact_requests):
-                raise HTTPException(422, 'Format non disponible par le contrat documentaire ORIA actuel.')
+                raise HTTPException(501, 'Livraison collaborative désactivée : aucun crédit réservé.')
+            if not (supported_document_requests(artifact_requests) or
+                    supported_shared_legacy_requests(legacy_requests)):
+                raise HTTPException(422, 'Format indisponible ou nombre de fichiers supérieur à 3.')
+        provider_prompt = (_code_output_instruction(clean, []) if legacy_requests else clean)
         from app.services.conversation_memory_utils import estimate_text_tokens
         from app.route.ai import MODEL_ACTIONS
         from app.repositories.supabase_credit_repository import SupabaseCreditRepository
-        action = MODEL_ACTIONS.get(model, {}).get("normal")
+        action = MODEL_ACTIONS.get(model, {}).get('web' if web else 'normal')
         if action is None:
             raise HTTPException(403, "Action du modèle absente du catalogue ORIA.")
         # Historique de la salle courante uniquement. Aucun mélange d'espaces.
@@ -163,7 +169,7 @@ class GroupAiService:
                 role = "assistant" if row.get("sender_kind") == "oria" else "user"
                 history.append({"role": role, "content": content if role == "assistant"
                                 else "[Message du groupe] " + content})
-        tokens = max(1, estimate_text_tokens(clean)
+        tokens = max(1, estimate_text_tokens(provider_prompt)
                      + sum(estimate_text_tokens(item["content"]) for item in history) + 512)
         if tokens > 30000:
             raise HTTPException(413, "Le contexte du groupe est trop volumineux.")
@@ -172,8 +178,8 @@ class GroupAiService:
         try:
             quote = quote_collab_text(
                 selection, estimated_input_tokens=tokens, max_output_tokens=max_output,
-                reasoning_mode=reasoning_mode, message=clean, history=history,
-                artifact_types=tuple(r['file_type'] for r in artifact_requests),
+                reasoning_mode=reasoning_mode, message=provider_prompt, history=history,
+                artifact_types=document_types, web_enabled=web,
             )
             limit_xaf = SupabaseCreditRepository._pack_budget_limit(ctx["pack_id"])
             budget_on = SupabaseCreditRepository._api_budget_enabled()
@@ -202,9 +208,9 @@ class GroupAiService:
         # release a reservation for uncertain delivery or missing cost.
         try:
             metered = await execute_collab_text(
-                selection, message=clean, history=history,
+                selection, message=provider_prompt, history=history,
                 reasoning_mode=reasoning_mode, max_output_tokens=max_output,
-                artifact_types=tuple(r['file_type'] for r in artifact_requests),
+                artifact_types=document_types, web_enabled=web,
             )
             answer = metered.message
             staged_files = []
@@ -213,12 +219,21 @@ class GroupAiService:
                 from app.services.oria_collab_artifact_delivery import (
                     stage_group_artifacts, group_document_confirmation,
                 )
-                generated = await compile_shared_document_payload(
-                    artifact_payload=metered.artifact_payload,
-                    artifact_requests=artifact_requests, generation_id=request_id,
-                    reasoning_mode=reasoning_mode, model=model,
-                    openai_model=selection.api_model,
-                )
+                if document_types:
+                    generated = await compile_shared_document_payload(
+                        artifact_payload=metered.artifact_payload,
+                        artifact_requests=artifact_requests, generation_id=request_id,
+                        reasoning_mode=reasoning_mode, model=model,
+                        openai_model=selection.api_model,
+                    )
+                else:
+                    from app.services.oria_collab_shared_artifacts import compile_shared_legacy_files
+                    generated = await compile_shared_legacy_files(
+                        artifact_requests=legacy_requests,
+                        response_text=metered.message, requested_text=clean,
+                        generation_id=request_id, reasoning_mode=reasoning_mode,
+                        model=model, openai_model=selection.api_model,
+                    )
                 staged_files = await asyncio.to_thread(
                     stage_group_artifacts, self.db, workspace_id=workspace_id,
                     request_id=request_id, results=generated,
