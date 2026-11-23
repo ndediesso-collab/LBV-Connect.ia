@@ -126,13 +126,33 @@ class GroupAiService:
             "p_actor_user_id":actor_id,"p_workspace_id":workspace_id,
             "p_group_id":group_id,"p_before_message_id":None,"p_limit":28,
         }) if workspace_id is not None else self.groups.messages(actor_id, group_id, None, 28))
-        history = []
-        for row in recent.get("messages", []):
-            content = str(row.get("content") or "")
-            if not content:
-                continue
-            role = "assistant" if row.get("sender_kind") == "oria" else "user"
-            history.append({"role":role, "content":content if role == "assistant" else "[Message du groupe] " + content})
+        if workspace_id is not None:
+            from app.services.oria_collab_memory_v2 import group_history, document_context
+            # Les RPC SQL contrôlent l'appartenance au groupe A CHAQUE page.
+            history, scanned, incomplete_scan = await asyncio.to_thread(
+                group_history, self.db, actor_id, workspace_id, group_id,
+                clean, recent, _safe_rpc,
+            )
+            file_history = await asyncio.to_thread(
+                document_context, self.db, actor_id, workspace_id, group_id,
+                clean, _safe_rpc,
+            )
+            history.extend(file_history)
+            if incomplete_scan:
+                history.append({'role': 'user', 'content': (
+                    '[NOTE TECHNIQUE] Recherche historique bornée : tous les anciens '
+                    'messages n\'ont pas été consultés. Ne prétends pas disposer '
+                    'de la totalité des échanges.'
+                )})
+        else:
+            history = []
+            for row in recent.get("messages", []):
+                content = str(row.get("content") or "")
+                if not content:
+                    continue
+                role = "assistant" if row.get("sender_kind") == "oria" else "user"
+                history.append({"role": role, "content": content if role == "assistant"
+                                else "[Message du groupe] " + content})
         tokens = max(1, estimate_text_tokens(clean)
                      + sum(estimate_text_tokens(item["content"]) for item in history) + 512)
         if tokens > 30000:

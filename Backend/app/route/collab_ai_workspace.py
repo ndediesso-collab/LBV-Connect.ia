@@ -30,6 +30,11 @@ class GroupAsk(BaseModel):
     reasoning_mode: str = "balanced"
 
 
+class ChatPreferences(BaseModel):
+    model: str = Field(min_length=1, max_length=80)
+    reasoning_mode: str = Field(pattern='^(fast|balanced|deep)$')
+
+
 def actor(user_id: str | None, authorization: str | None) -> str:
     return require_user(user_id, authorization)
 
@@ -39,6 +44,15 @@ def scoped_models(workspace_id: UUID,
                   user_id: str | None = Header(None, alias="user-id"),
                   authorization: str | None = Header(None, alias="authorization")):
     return ScopedAiWorkspaceService(supabase).models(actor(user_id, authorization),str(workspace_id))
+
+
+@router.patch('/preferences')
+def save_chat_preferences(workspace_id: UUID, body: ChatPreferences,
+                          user_id: str | None = Header(None, alias='user-id'),
+                          authorization: str | None = Header(None, alias='authorization')):
+    return ScopedAiWorkspaceService(supabase).save_preferences(
+        actor(user_id, authorization), str(workspace_id),
+        body.model, body.reasoning_mode)
 
 
 @router.post("/private/{conversation_id}/ask")

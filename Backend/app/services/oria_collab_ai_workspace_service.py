@@ -83,9 +83,46 @@ class ScopedAiWorkspaceService:
         from app.services.oria_collab_group_ai_service import group_ai_enabled
         from app.services.oria_collab_private_chat_service import private_chat_enabled, mixed_billing_enabled
         catalog = models_for_collab_pack(str(data.get("pack_id")))
+        preferences = None
+        try:
+            saved = (self.db.table('oria_collab_chat_preferences')
+                     .select('provider,model,reasoning_mode')
+                     .eq('workspace_id', space_id).eq('user_id', actor_id)
+                     .limit(1).execute().data or [])
+            if saved and saved[0].get('provider') == catalog['provider']:
+                chosen = str(saved[0].get('model') or '')
+                chosen_mode = str(saved[0].get('reasoning_mode') or '')
+                offered = {x['id']: x for x in catalog['model_catalog']}
+                if chosen in offered and chosen_mode in offered[chosen]['reasoning_modes']:
+                    preferences = {'model': chosen, 'reasoning_mode': chosen_mode}
+        except Exception:
+            # Si la migration n'est pas encore installée, le catalogue IA reste accessible.
+            pass
         return {"success":True,"workspace_id":space_id,**catalog,
+                "preferences":preferences,
                 "group_ai_enabled":group_ai_enabled(),
                 "private_ai_enabled":private_chat_enabled() and mixed_billing_enabled()}
+
+    def save_preferences(self, actor: str, space: str, model: str,
+                         reasoning_mode: str) -> dict:
+        # Revalide le membre, le pack et le fournisseur actif à chaque écriture.
+        verified = self.models(actor, space)
+        offered = {item['id']: item for item in verified['model_catalog']}
+        if model not in offered:
+            raise HTTPException(403, 'Modèle non autorisé pour ce pack/fournisseur.')
+        if reasoning_mode not in offered[model]['reasoning_modes']:
+            raise HTTPException(422, 'Niveau de raisonnement invalide.')
+        values = {'workspace_id': validated_uuid(space),
+                  'user_id': validated_uuid(actor),
+                  'provider': verified['provider'], 'model': model,
+                  'reasoning_mode': reasoning_mode}
+        try:
+            (self.db.table('oria_collab_chat_preferences')
+             .upsert(values, on_conflict='workspace_id,user_id').execute())
+        except Exception as exc:
+            raise HTTPException(503, 'Préférences non enregistrées sur le serveur.') from exc
+        return {'success': True, 'workspace_id': validated_uuid(space),
+                'preferences': {'model': model, 'reasoning_mode': reasoning_mode}}
 
     async def private_ask(self, actor: str, space: str, conversation: str,
                           request_id: str, model: str, message: str, reasoning_mode: str) -> dict:

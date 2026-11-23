@@ -21,7 +21,8 @@ type CollabModelOption = { id: string; label: string; reasoning_modes?: string[]
 type CollabModelResponse = { success: boolean; workspace_id: string;
   provider: "openai" | "openrouter"; models: string[];
   model_catalog?: CollabModelOption[]; reasoning_modes?: string[];
-  group_ai_enabled?: boolean; private_ai_enabled?: boolean };
+  group_ai_enabled?: boolean; private_ai_enabled?: boolean;
+  preferences?: { model: string; reasoning_mode: string } | null };
 const reasoningLabels: Record<string,string> = { fast:"Rapide", balanced:"Équilibré", deep:"Approfondi" };
 type Notices = { success: boolean; workspace_id: string; unread: number; notifications: { id: number; actor_user_id: string; event_type: string; created_at: string; read_at?: string | null }[] };
 const input = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-foreground/15";
@@ -54,6 +55,7 @@ export default function OriaCollaboratifChat() {
   const [groupAiEnabled, setGroupAiEnabled] = useState(false);
   const [privateAiEnabled, setPrivateAiEnabled] = useState(false);
   const [mode, setMode] = useState("balanced");
+  const [mentionOpen, setMentionOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -68,6 +70,7 @@ export default function OriaCollaboratifChat() {
   const [selectedPerson, setSelectedPerson] = useState("");
   const [pendingAi, setPendingAi] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<Selection | null>(null);
   const latestLoad = useRef(0);
@@ -130,12 +133,23 @@ export default function OriaCollaboratifChat() {
       setModelCatalog(catalog);setModels(list);
       setGroupAiEnabled(value.group_ai_enabled===true);
       setPrivateAiEnabled(value.private_ai_enabled===true);
-      setModel(m=>list.includes(m)?m:(list[0]??""));
+      // Les préférences sont par utilisateur + espace ; jamais partagées avec un collègue.
+      let local: {model:string;reasoning_mode:string}|null = null;
+      try { if (ownId) {
+        const saved = localStorage.getItem(`oria-collab-chat:${ownId}:${space}`);
+        if (saved) local = JSON.parse(saved);
+      }} catch { /* stockages privés parfois indisponibles */ }
+      const preferred = value.preferences ?? local;
+      const valid = preferred && list.includes(preferred.model) ? preferred.model : (list[0]??"");
+      const modes = catalog.find(x=>x.id===valid)?.reasoning_modes ?? [];
+      const validMode = preferred && modes.includes(preferred.reasoning_mode)
+        ? preferred.reasoning_mode : (modes.includes('balanced') ? 'balanced' : (modes[0]??'balanced'));
+      setModel(valid);setMode(validMode);
     }).catch(e=>{if(alive){setModels([]);setModelCatalog([]);setProvider(null);
       setGroupAiEnabled(false);setPrivateAiEnabled(false);
       setError(e instanceof Error?e.message:"Catalogue de modeles indisponible.");}});
     return ()=>{alive=false;};
-  }, [root,space]);
+  }, [root,space,ownId]);
 
   const load = useCallback(async (picked: Selection, older = false, cursor?: string) => {
     const seq=++latestLoad.current;
@@ -183,7 +197,31 @@ export default function OriaCollaboratifChat() {
 
   function pick(kind:RoomKind,id:string){
     selectedRef.current={kind,id};setSelection({kind,id});setSidebarOpen(false);
-    setDraft("");setNotice("");setShowGroupMember(false);
+    setDraft("");setMentionOpen(false);setNotice("");setShowGroupMember(false);
+  }
+
+  function persistSelection(nextModel:string,nextMode:string) {
+    if (!ownId) return;
+    try { localStorage.setItem(`oria-collab-chat:${ownId}:${space}`,
+      JSON.stringify({model:nextModel,reasoning_mode:nextMode})); } catch { /* aucune fuite */ }
+    void collabRequest(`${root}/ai/preferences`,"PATCH",{model:nextModel,reasoning_mode:nextMode})
+      .catch(()=>{/* Sauvegarde locale disponible si migration SQL non installée */});
+  }
+
+  function suggestOria(value:string, caret:number) {
+    return selection?.kind==="group" && /(^|\s)@[a-z]*$/i.test(value.slice(0,caret));
+  }
+
+  function completeOriaMention(){
+    const area = draftRef.current;
+    if (!area) return;
+    const caret = area.selectionStart ?? draft.length;
+    const left = draft.slice(0,caret);
+    const right = draft.slice(caret);
+    const nextLeft = left.replace(/(^|\s)@[a-z]*$/i, "$1@ORIA ");
+    const next = nextLeft + right;
+    setDraft(next);setMentionOpen(false);
+    requestAnimationFrame(()=>{area.focus();area.setSelectionRange(nextLeft.length,nextLeft.length);});
   }
 
   async function submit(event?:FormEvent) {
@@ -376,13 +414,14 @@ export default function OriaCollaboratifChat() {
         })}
       </div>
       {selection&&<div className="border-t border-border bg-surface px-3 py-3 sm:px-6">
-        {(selection.kind==="group"||selection.kind==="private")&&<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{selection.kind==="group"?"Écrivez @ORIA pour demander une réponse IA":"Conversation avec ORIA"}</span><div className="flex flex-wrap items-center gap-2"><span className="hidden rounded-full border border-border px-2 py-1 text-[11px] sm:inline">{provider==="openai"?"OpenAI actif":provider==="openrouter"?"OpenRouter actif":"Fournisseur non vérifié"}</span><select aria-label="Modèle IA" className="max-w-[185px] rounded-xl border border-border bg-background px-3 py-2 font-medium text-foreground" value={model} onChange={e=>{setModel(e.target.value);setMode("balanced");}} disabled={!provider||busy}><option value="">Modèle indisponible</option>{modelCatalog.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Raisonnement" className="rounded-xl border border-border bg-background px-3 py-2 text-foreground" value={mode} onChange={e=>setMode(e.target.value)} disabled={!provider||busy}>{(modelCatalog.find(item=>item.id===model)?.reasoning_modes??[]).filter(m=>m in reasoningLabels).map(m=><option key={m} value={m}>{reasoningLabels[m]}</option>)}</select></div></div>}
+        {(selection.kind==="group"||selection.kind==="private")&&<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{selection.kind==="group"?"Écrivez @ORIA pour demander une réponse IA":"Conversation avec ORIA"}</span><div className="flex flex-wrap items-center gap-2"><span className="hidden rounded-full border border-border px-2 py-1 text-[11px] sm:inline">{provider==="openai"?"OpenAI actif":provider==="openrouter"?"OpenRouter actif":"Fournisseur non vérifié"}</span><select aria-label="Modèle IA" className="max-w-[185px] rounded-xl border border-border bg-background px-3 py-2 font-medium text-foreground" value={model} onChange={e=>{const m=e.target.value;const allowed=modelCatalog.find(x=>x.id===m)?.reasoning_modes??[];const next=allowed.includes(mode)?mode:(allowed.includes('balanced')?'balanced':(allowed[0]??'balanced'));setModel(m);setMode(next);persistSelection(m,next);}} disabled={!provider||busy}><option value="">Modèle indisponible</option>{modelCatalog.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Raisonnement" className="rounded-xl border border-border bg-background px-3 py-2 text-foreground" value={mode} onChange={e=>{setMode(e.target.value);persistSelection(model,e.target.value);}} disabled={!provider||busy}>{(modelCatalog.find(item=>item.id===model)?.reasoning_modes??[]).filter(m=>m in reasoningLabels).map(m=><option key={m} value={m}>{reasoningLabels[m]}</option>)}</select></div></div>}
+        {selection.kind==="group"&&mentionOpen&&<div className="mb-2 flex justify-start"><button type="button" role="option" aria-label="Compléter avec @ORIA" className="rounded-xl border border-border bg-background px-4 py-2 text-sm shadow-sm hover:bg-surface-secondary" onMouseDown={e=>e.preventDefault()} onClick={completeOriaMention}><Sparkles size={15} className="mr-2 inline"/>@ORIA <span className="ml-2 text-xs text-muted">Tab ou Entrée</span></button></div>}
         <form onSubmit={e=>void submit(e)} className="flex items-end gap-2">
           <input ref={fileRef} className="hidden" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.docx,.xlsx,.pptx" onChange={e=>void uploadFile(e)}/>
           {selection.kind!=="private"&&<button type="button" className="rounded-xl p-3 hover:bg-surface-secondary disabled:opacity-40" title="Joindre un fichier (8 Mo max)" aria-label="Joindre un fichier" disabled={busy||!canWrite} onClick={()=>fileRef.current?.click()}><Paperclip size={20}/></button>}
-          <textarea className={`${input} min-h-[45px] max-h-40 flex-1 resize-none`} placeholder={selection.kind==="group"?"Message… ou @ORIA pour l'IA":"Écrivez un message…"} rows={1}
+          <textarea ref={draftRef} className={`${input} min-h-[45px] max-h-40 flex-1 resize-none`} placeholder={selection.kind==="group"?"Message… ou @ORIA pour l'IA":"Écrivez un message…"} rows={1}
             maxLength={selection.kind==="group"?4000:8000} value={draft} disabled={!canWrite||busy||pendingAi}
-            onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void submit();}}}/>
+            onChange={e=>{setDraft(e.target.value);setMentionOpen(Boolean(suggestOria(e.target.value,e.target.selectionStart)));}} onKeyDown={e=>{if(mentionOpen&&(e.key==="Tab"||e.key==="Enter")){e.preventDefault();completeOriaMention();return;}if(e.key==="Escape")setMentionOpen(false);if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void submit();}}}/>
           <button aria-label="Envoyer" type="submit" disabled={!draft.trim()||busy||!canWrite||pendingAi} className="grid size-[45px] shrink-0 place-items-center rounded-xl bg-foreground text-background disabled:opacity-40"><Send size={19}/></button>
         </form>
         {busy&&<p className="mt-2 text-xs text-muted" role="status">ORIA prépare sa réponse…</p>}
