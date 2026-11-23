@@ -72,12 +72,16 @@ class ProgressWriter:
         self.last_persist = time.monotonic()
 
     def receipt(self, *, response: str, credits: int, provider_id: str,
-                cost_usd: str, cost_xaf: str, artifacts: list[dict]) -> None:
+                cost_usd: str, cost_xaf: str, artifacts: list[dict],
+                web_images: list[dict] | None = None,
+                citations: list[dict] | None = None) -> None:
         if len(response) > 4000 or not response or credits < 1 or not provider_id:
             raise RuntimeError('Reçu fournisseur invalide.')
         # Immutable authoritative receipt, BEFORE existing SQL settle.
         # In case of process interruption, a no-provider retry can settle it.
-        proof = {'response': response, 'actual_credits': credits,
+        from app.services.oria_collab_rich_meta_v1 import safe_images, safe_sources
+        proof = {'web_images': safe_images(web_images), 'sources': safe_sources(citations),
+                 'response': response, 'actual_credits': credits,
                  'provider_response_id': provider_id, 'provider_cost_usd': cost_usd,
                  'actual_api_cost_xaf': cost_xaf, 'artifacts': artifacts}
         self.seq += 1
@@ -135,7 +139,7 @@ def settle_saved_receipt(db: Any, *, actor: str, workspace: str, group: str,
         raise HTTPException(409,'Aucun reçu fournisseur complet : impossible de reprendre sans risque.')
     expected = {'response','actual_credits','provider_response_id','provider_cost_usd',
                 'actual_api_cost_xaf','artifacts'}
-    if set(proof) != expected or not isinstance(proof['artifacts'], list):
+    if not expected.issubset(proof) or not set(proof).issubset(expected | {'web_images','sources'}) or not isinstance(proof['artifacts'], list):
         raise HTTPException(503, 'Reçu fournisseur non conforme.')
     args = {'p_actor_user_id': actor, 'p_request_id':request,
             'p_actual_credits':proof['actual_credits'],

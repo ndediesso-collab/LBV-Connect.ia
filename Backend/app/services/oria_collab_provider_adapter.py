@@ -16,6 +16,7 @@ from app.services.chat_provider_router import (
     ChatModelNotAvailableError, ChatProvider, ChatProviderConfigurationError,
     ChatProviderSelection, active_chat_provider, select_chat_model,
 )
+from app.services.oria_collab_rich_meta_v1 import safe_images, safe_sources
 from app.services.token_billing_service import (
     TokenBillingService, OpenRouterTokenBillingService,
 )
@@ -35,6 +36,8 @@ class CollabChatResult:
     total_cost_xaf: Decimal
     response_id: str
     artifact_payload: dict | None = None
+    web_images: list[dict] | None = None
+    citations: list[dict] | None = None
 
 
 def _principal_catalog():
@@ -182,4 +185,6 @@ async def execute_collab_text(
         total_cost_usd=Decimal(str(usd)), total_cost_xaf=Decimal(str(xaf)),
         response_id=provider_id,
         artifact_payload=response.get('artifact_payload') if artifact_types else None,
+        web_images=safe_images(response.get('web_images')) if web_enabled else [],
+        citations=safe_sources(response.get('citations') or response.get('web_sources')) if web_enabled else [],
     )

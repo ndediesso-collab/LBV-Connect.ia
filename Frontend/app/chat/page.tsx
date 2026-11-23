@@ -39,6 +39,7 @@ import UniversalArtifactPreview, { type UniversalPreviewPayload } from "@/compon
 import { createClient } from "@/lib/supabase/client";
 import type { ChatMessage, Conversation } from "@/types/lbv";
 import { OriaMathBlock, OriaMathInline } from "@/components/oria-math/OriaMathRenderer";
+import { OriaRichMessage } from "@/components/oria-chat/OriaRichMessage"; // ORIA_COLLAB_P10_SHARED_RICH_RENDERER
 
 // Moteur avance charge uniquement si une reponse contient un bloc visuel.
 // Le composant historique reste disponible comme solution de secours.
@@ -8442,7 +8443,7 @@ export default function ChatPage() {
                              * la copie et les médias restent inchangés.
                              */
                             <>
-                              <MarkdownMessage
+                              <OriaRichMessage
                                 language={language}
                                 onOpenCode={setCodePreview}
                                 webImages={webImagesByMessage[item.id] || extractWebImagesFromMessage(item.content || "")}

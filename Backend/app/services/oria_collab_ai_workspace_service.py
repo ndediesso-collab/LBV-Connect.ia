@@ -232,6 +232,50 @@ class ScopedAiWorkspaceService:
                 "actual_credits": rows[0].get("actual_credits") if state == "settled" else None,
                 **progress}
 
+    def group_rich(self, actor: str, space: str, group: str, ids: list[str]) -> dict:
+        """Group-authorized metadata batch, matched to settled assistant messages."""
+        self.authorize(actor,space,'group',group)
+        ws, room = validated_uuid(space), validated_uuid(group)
+        if len(ids)>35 or len(set(ids))!=len(ids):
+            raise HTTPException(422,'Liste des messages invalide.')
+        messages=[validated_uuid(item) for item in ids]
+        if not messages:
+            return {'success':True,'workspace_id':ws,'group_id':room,'items':{}}
+        from app.services.oria_collab_rich_meta_v1 import safe_images, safe_sources
+        try:
+            source=(self.db.table('oria_collab_group_messages').select('id,ai_request_id')
+                    .eq('group_id',room).eq('sender_kind','oria')
+                    .in_('id',messages).execute().data or [])
+            message_to_request={str(row['id']):str(row['ai_request_id']) for row in source
+                                if row.get('ai_request_id')}
+            requests=list(set(message_to_request.values()))
+            if not requests:
+                return {'success':True,'workspace_id':ws,'group_id':room,'items':{}}
+            settled=(self.db.table('oria_collab_group_ai_jobs').select('id')
+                     .eq('workspace_id',ws).eq('group_id',room).eq('state','settled')
+                     .in_('id',requests).execute().data or [])
+            settled_ids={str(row['id']) for row in settled}
+            if not settled_ids:
+                return {'success':True,'workspace_id':ws,'group_id':room,'items':{}}
+            rows=(self.db.table('oria_collab_group_ai_delivery_progress')
+                  .select('request_id,phase,receipt')
+                  .eq('workspace_id',ws).eq('group_id',room)
+                  .in_('request_id',list(settled_ids)).execute().data or [])
+        except Exception as exc:
+            raise HTTPException(503,'Métadonnées visuelles indisponibles.') from exc
+        by_request={}
+        for row in rows:
+            rid=str(row.get('request_id') or '')
+            if rid not in settled_ids: continue
+            proof=row.get('receipt')
+            if not isinstance(proof,dict): continue
+            by_request[rid]={'web_images':safe_images(proof.get('web_images')),
+                             'sources':safe_sources(proof.get('sources'))}
+        items={message_id:by_request[request_id]
+               for message_id,request_id in message_to_request.items()
+               if request_id in by_request}
+        return {'success':True,'workspace_id':ws,'group_id':room,'items':items}
+
     def private_artifacts(self, actor: str, space: str, conversation: str) -> dict:
         self.authorize(actor,space,'private',conversation)
         from app.services.oria_collab_private_generated_delivery import list_private_files

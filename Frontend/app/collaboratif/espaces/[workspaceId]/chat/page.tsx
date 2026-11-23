@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { ArrowLeft, Bell, Check, ChevronLeft, FileText, Menu, MessageCircle, MessagesSquare,
   Download, Eye, Paperclip, Plus, RefreshCcw, Send, Settings, ShieldCheck, Sparkles, Users, Wallet, X, Copy, Pencil, Mic, Square, Play } from "lucide-react";
 import { collabRequest, collabSupabase, COLLAB_API_URL } from "@/lib/collaboratif-api";
+import { OriaRichMessage, type OriaWebIllustration } from "@/components/oria-chat/OriaRichMessage"; // ORIA_COLLAB_P10_SHARED_RICH_RENDERER
 
 type Person = { user_id: string; role: "owner" | "member"; status: string; first_name: string; last_name: string; avatar_key?: string };
 type Group = { id: string; title: string; description?: string; archived: boolean; message_count: number; message_limit: number; pending_ai_slots?: number; updated_at: string };
@@ -24,6 +25,9 @@ type DeliveryState = {success: boolean;workspace_id:string;target_id:string;
   phase?:string;seq?:number;preview?:string;receipt_ready?:boolean;updated_at?:string};
 // ORIA_COLLAB_P9_INLINE_PROGRESS — cet objet est uniquement visuel et n'engage aucun crédit.
 type OptimisticGroupMessage = {group:string;request:string;content:string;createdAt:number;ai:boolean};
+type RichSource = {url:string;title:string};
+type RichItem = {web_images:OriaWebIllustration[];sources:RichSource[]};
+type RichPayload = {success:boolean;workspace_id:string;group_id:string;items:Record<string,RichItem>};
 type CollabModelOption = { id: string; label: string; reasoning_modes?: string[] };
 type CollabModelResponse = { success: boolean; workspace_id: string;
   provider: "openai" | "openrouter"; models: string[];
@@ -71,6 +75,7 @@ export default function OriaCollaboratifChat() {
   const [ownWallet, setOwnWallet] = useState<OwnWallet | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [richByRequest,setRichByRequest] = useState<Record<string,RichItem>>({});
   const [files, setFiles] = useState<FileLink[]>([]);
   const [previewFile, setPreviewFile] = useState<{file:FileLink;url:string}|null>(null);
   const [before, setBefore] = useState<string | null>(null);
@@ -222,6 +227,18 @@ export default function OriaCollaboratifChat() {
     if(seq!==latestLoad.current || !current || current.kind!==picked.kind || current.id!==picked.id)return;
     const incoming=Array.isArray(data.messages)?data.messages:[];
     setMessages(previous=>merge(older?previous:previous,incoming));
+    if(picked.kind==='group') {
+      const ids=[...new Set(incoming.filter(m=>m.sender_kind==='oria').map(m=>m.id))].slice(0,35);
+      if(ids.length) {
+        void collabRequest<RichPayload>(`${root}/ai/groups/${picked.id}/rich`,'POST',{message_ids:ids})
+          .then(rich=>{
+            if(rich.success&&rich.workspace_id===space&&rich.group_id===picked.id&&
+               selectedRef.current?.kind==='group'&&selectedRef.current.id===picked.id) {
+              setRichByRequest(previous=>({...previous,...rich.items}));
+            }
+          }).catch(()=>{/* Markdown remains available if rich data are absent. */});
+      }
+    }
     if(!older && picked.kind==="group") {
       setOptimisticGroupMessage(previous=>{
         if(!previous||previous.group!==picked.id)return previous;
@@ -758,7 +775,17 @@ export default function OriaCollaboratifChat() {
                   value={editText} onChange={e=>setEditText(e.target.value)}/>
                 <div className="flex gap-2"><button type="button" className={smallButton} disabled={busy} onClick={()=>void saveEditMessage(m)}>Enregistrer</button>
                 <button type="button" className={smallButton} onClick={()=>{setEditingId(null);setEditText("");}}>Annuler</button></div>
-              </div>:<p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>}
+              </div>:oria?
+                <OriaRichMessage content={m.content} language="fr"
+                  webImages={richByRequest[m.id]?.web_images??[]}/>
+                :<p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>}
+              {oria&&Boolean(richByRequest[m.id]?.sources?.length)&&
+                <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-2 text-[11px]" aria-label="Sources Web">
+                  {(richByRequest[m.id].sources||[]).slice(0,8).map((source,i)=><a
+                    key={`${m.id}-${i}`} href={source.url} target="_blank" rel="noopener noreferrer"
+                    className="rounded-lg border border-border px-2 py-1 underline underline-offset-2 hover:bg-surface-secondary"
+                    title={source.url}>Source {i+1} : {source.title}</a>)}
+                </div>}
               <div className="mt-1 flex items-center justify-end gap-2 opacity-70">
                 {m.edited_at&&<span className="text-[10px]">modifié</span>}
                 <button type="button" title="Copier le message" aria-label="Copier le message"
@@ -808,7 +835,7 @@ export default function OriaCollaboratifChat() {
                 <span aria-hidden="true" className="size-3 shrink-0 animate-spin rounded-full border-2 border-border border-t-foreground"/>
                 {generationStatus(livePreview.phase,livePreview.text)}
               </div>
-              {Boolean(livePreview.text)&&<p className="mt-3 whitespace-pre-wrap leading-relaxed">{livePreview.text}<span aria-hidden="true" className="animate-pulse">▍</span></p>}
+              {Boolean(livePreview.text)&&<div className="mt-3"><OriaRichMessage content={livePreview.text} language="fr"/><span aria-hidden="true" className="animate-pulse">▍</span></div>}
               {livePreview.phase==='reconnecting'&&<p className="mt-2 text-xs text-muted">La réponse est suivie sur le serveur. Vous pouvez revenir dans ce groupe sans relancer l'IA.</p>}
             </article>
           </div>}

@@ -290,6 +290,7 @@ class GroupAiService:
                     credits=metered.credits, provider_id=metered.response_id,
                     cost_usd=str(metered.total_cost_usd),
                     cost_xaf=str(metered.total_cost_xaf), artifacts=staged_files,
+                    web_images=metered.web_images, citations=metered.citations,
                 )
             settled = _safe_rpc(self.db,
                 ("oria_collab_group_ai_settle_artifacts_v1" if artifact_requests else

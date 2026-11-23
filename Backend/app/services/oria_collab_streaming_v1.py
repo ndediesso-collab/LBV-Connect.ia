@@ -40,6 +40,9 @@ def _consume_stream(
     else:
         raise RuntimeError('Fournisseur streaming non autorisé.')
 
+    from app.services.oria_collab_rich_meta_v1 import safe_images, safe_sources
+    collected_images: list[dict] = []
+    collected_sources: list[dict] = []
     chunks: list[str] = []
     size = 0
     final: dict[str, Any] | None = None
@@ -58,6 +61,10 @@ def _consume_stream(
                 raise RuntimeError('Réponse au-delà des 4 000 caractères autorisés.')
             chunks.append(delta)
             on_delta(delta)
+        elif kind in ('web_images','image_results') and web_enabled:
+            collected_images = safe_images(event.get('images') or event.get('web_images'))
+        elif kind == 'citations' and web_enabled:
+            collected_sources = safe_sources(event.get('citations'))
         elif kind == 'usage':
             if final is not None:
                 raise RuntimeError('Usage fournisseur final dupliqué.')
@@ -88,6 +95,8 @@ def _consume_stream(
         total_cost_usd=Decimal(str(bill.total_cost_usd)),
         total_cost_xaf=Decimal(str(bill.total_cost_xaf)),
         response_id=response_id,
+        web_images=collected_images,
+        citations=collected_sources,
     )
 
 

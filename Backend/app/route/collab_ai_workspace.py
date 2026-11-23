@@ -177,6 +177,17 @@ def group_recover_receipt(workspace_id: UUID, group_id: UUID, request_id: UUID,
     )
 
 
+class GroupRichRequest(BaseModel):
+    message_ids: list[UUID] = Field(default_factory=list, max_length=35)
+
+@router.post('/groups/{group_id}/rich')
+def group_rich(workspace_id:UUID, group_id:UUID, body:GroupRichRequest,
+               user_id:str|None=Header(None,alias='user-id'),
+               authorization:str|None=Header(None,alias='authorization')):
+    return ScopedAiWorkspaceService(supabase).group_rich(
+        actor(user_id,authorization),str(workspace_id),str(group_id),
+        [str(item) for item in body.message_ids])
+
 @router.get("/private/{conversation_id}/jobs/{request_id}")
 def private_delivery_status(workspace_id: UUID, conversation_id: UUID, request_id: UUID,
                            user_id: str | None = Header(None, alias="user-id"),
