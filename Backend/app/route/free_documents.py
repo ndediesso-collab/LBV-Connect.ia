@@ -11,7 +11,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config.free_tier_policy import FREE_CHAT_INPUT_TOKENS_MAX
+from app.config.free_tier_policy import FREE_CHAT_INPUT_TOKENS_MAX, FREE_DAILY_CREDITS
 from app.services.oria_paid_chat_quote import paid_output_tokens
 from app.services.oria_document_intent_v2 import detect_document_creation
 from app.core.supabase import supabase
@@ -42,6 +42,56 @@ def _document_output_cap(*, message: str, fmt: str, input_tokens: int,
     )
     return min(28_000, paid_cap)
 
+def _document_reservation(provider: ChatProvider, input_tokens: int, output_cap: int):
+    """Estimation PURE : la même borne est réellement envoyée au modèle."""
+    if provider is ChatProvider.OPENAI:
+        return TokenBillingService.estimate_reservation(
+            model='luna', estimated_input_tokens=input_tokens,
+            max_output_tokens=output_cap, web_enabled=False,
+            include_api_cost=True,
+        )
+    if provider is ChatProvider.OPENROUTER:
+        estimate = OpenRouterTokenBillingService.estimate_reservation(
+            provider_model='openai/gpt-6-luna',
+            estimated_input_tokens=input_tokens,
+            max_output_tokens=output_cap, web_enabled=False,
+        )
+        return estimate.reserved_credits, estimate.reserved_api_cost_xaf
+    raise HTTPException(503, 'Fournisseur IA non disponible.')
+
+
+def _affordable_document_output_cap(*, provider: ChatProvider,
+                                     input_tokens: int,
+                                     max_output_cap: int,
+                                     available_credits: int):
+    """Cherche un budget sérieux et abordable, sans dépassement ni 2e appel.
+
+    12k tokens minimum évite de revenir aux petits plafonds produisant des
+    JSON incomplets; les documents longs peuvent nécessiter une recharge.
+    Seule l'estimation du serveur, jamais le prix envoyé par le navigateur,
+    pilote le plafond du fournisseur et la réservation SQL.
+    """
+    min_output_cap = 12_000
+    if max_output_cap < min_output_cap:
+        raise ValueError('Budget documentaire maximum inférieur au minimum.')
+    action_budget = min(max(0, available_credits), FREE_DAILY_CREDITS)
+    min_amount, min_api_xaf = _document_reservation(
+        provider, input_tokens, min_output_cap)
+    if min_amount > action_budget:
+        # Conserver un devis explicite mais ne jamais lancer l'IA.
+        return min_output_cap, min_amount, min_api_xaf
+    low, high = min_output_cap, max_output_cap
+    while low < high:
+        mid = (low + high + 1) // 2
+        amount, _ = _document_reservation(provider, input_tokens, mid)
+        if amount <= action_budget:
+            low = mid
+        else:
+            high = mid - 1
+    amount, api_xaf = _document_reservation(provider, input_tokens, low)
+    return low, amount, api_xaf
+
+
 class FreeDocumentRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     message: str = Field(min_length=1, max_length=12000)
@@ -65,7 +115,7 @@ def _preflight(request: FreeDocumentRequest, uid: str) -> dict:
               + estimate_text_tokens(document_context) + image_tokens)
     if tokens > FREE_CHAT_INPUT_TOKENS_MAX:
         raise HTTPException(413, 'Demande trop volumineuse pour ORIA Gratuit.')
-    output_cap = _document_output_cap(
+    max_output_cap = _document_output_cap(
         message=request.message, fmt=fmt, input_tokens=tokens,
         reasoning_mode=request.reasoning_mode,
         attachment_count=len(request.attachments),
@@ -78,22 +128,12 @@ def _preflight(request: FreeDocumentRequest, uid: str) -> dict:
         raise HTTPException(403, 'Utilisez les crédits de votre pack actif.')
     provider = active_chat_provider()
     try:
-        # Estimation serveur coherente avec la limite de sortie effectivement transmise.
-        if provider is ChatProvider.OPENAI:
-            amount, api_xaf = TokenBillingService.estimate_reservation(
-                model='luna', estimated_input_tokens=tokens,
-                max_output_tokens=output_cap,
-                web_enabled=False, include_api_cost=True,
-            )
-        elif provider is ChatProvider.OPENROUTER:
-            estimated = OpenRouterTokenBillingService.estimate_reservation(
-                provider_model='openai/gpt-6-luna', estimated_input_tokens=tokens,
-                max_output_tokens=output_cap, web_enabled=False,
-            )
-            amount, api_xaf = estimated.reserved_credits, estimated.reserved_api_cost_xaf
-        else:
-            raise HTTPException(503, 'Fournisseur IA non disponible.')
         balance = gateway.balance(uid)
+        output_cap, amount, api_xaf = _affordable_document_output_cap(
+            provider=provider, input_tokens=tokens,
+            max_output_cap=max_output_cap,
+            available_credits=balance['balance'],
+        )
         from app.services.free_tier_quote import make_free_chat_quote
         quote = make_free_chat_quote(
             provider=provider.value, reserved_credits=amount,
@@ -104,6 +144,8 @@ def _preflight(request: FreeDocumentRequest, uid: str) -> dict:
         quote['action'] = _ALLOWED[fmt]
         quote['format'] = fmt
         quote['document_kind'] = 'oria_artifact_v1'
+        quote['minimum_output_tokens'] = 12_000
+        quote['available_credits'] = balance['balance']
         return {'gateway': gateway, 'provider': provider, 'quote': quote,
                 'amount': amount, 'api_xaf': api_xaf, 'cv_decision': cv_decision,
                 'output_cap': output_cap,

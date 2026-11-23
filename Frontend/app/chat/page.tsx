@@ -6330,11 +6330,23 @@ export default function ChatPage() {
     }
     const request = {message: content, format, reasoning_mode: reasoning,
       attachments: await encodeFreeAttachments(attachments)};
-    const preflight = await apiFetch<{success: boolean; quote: {can_reserve_by_balance: boolean; reserved_credits: number}}>(
-      "/ai/free/document/quote", {method: "POST", body: JSON.stringify(request), signal},
-    );
+    const preflight = await apiFetch<{success: boolean; quote: {
+      can_reserve_by_balance: boolean; reserved_credits: number;
+      max_output_tokens?: number; reason?: string;
+      wallet?: {balance?: number};
+    }}>("/ai/free/document/quote", {
+      method: "POST", body: JSON.stringify(request), signal,
+    });
     if (!preflight.success || !preflight.quote?.can_reserve_by_balance) {
-      throw new Error("Crédits gratuits insuffisants pour ce document. Découvrez les offres sur /packs.");
+      const needed = preflight.quote?.reserved_credits;
+      const available = preflight.quote?.wallet?.balance;
+      if (preflight.quote?.reason === "ACTION_EXCEEDS_FREE_LIMIT") {
+        throw new Error("Ce document dépasse le plafond par génération gratuite. Aucun crédit n'a été réservé.");
+      }
+      if (typeof needed === "number" && typeof available === "number") {
+        throw new Error(`Le document exige au moins ${needed} crédits en réservation ; ton solde est de ${available}. Aucun crédit n'a été débité. Réessaie lorsque ton solde est suffisant ou consulte les packs.`);
+      }
+      throw new Error("Le solde ne permet pas de réserver un document exploitable. Aucun crédit n'a été débité.");
     }
     // The user explicitly requested a file; backend requires confirmed=true.
     const created = await apiFetch<{
