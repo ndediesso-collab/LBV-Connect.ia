@@ -124,9 +124,24 @@ class ScopedAiWorkspaceService:
         return {'success': True, 'workspace_id': validated_uuid(space),
                 'preferences': {'model': model, 'reasoning_mode': reasoning_mode}}
 
+    def plan_artifacts(self, actor: str, space: str, kind: str, target: str,
+                       message: str, artifact_type: str | None = None) -> dict:
+        # La vérification d'appartenance PRECEDE toute lecture de catalogue.
+        self.authorize(actor, space, kind, target)
+        from app.services.oria_collab_shared_artifacts import (
+            plan_shared_artifacts, shared_artifact_capabilities,
+        )
+        catalog = shared_artifact_capabilities()
+        requests = plan_shared_artifacts(message, explicit_type=artifact_type)
+        return {'success': True, 'workspace_id': validated_uuid(space),
+                'target_id': validated_uuid(target), 'kind': kind,
+                'requests': requests, **catalog, 'credits_reserved': False}
+
     async def private_ask(self, actor: str, space: str, conversation: str,
                           request_id: str, model: str, message: str, reasoning_mode: str) -> dict:
         self.authorize(actor, space, "private", conversation)
+        from app.services.oria_collab_shared_artifacts import reject_undeliverable_artifacts
+        reject_undeliverable_artifacts(message)  # Aucun devis ni appel fournisseur avant ce garde-fou.
         from app.services.oria_collab_private_chat_service import PrivateChatService
         answer = await PrivateChatService(self.db).chat(
             validated_uuid(actor), conversation_id=validated_uuid(conversation),
@@ -138,6 +153,8 @@ class ScopedAiWorkspaceService:
     async def group_ask(self, actor: str, space: str, group: str,
                         request_id: str, model: str, prompt: str, reasoning_mode: str) -> dict:
         self.authorize(actor, space, "group", group)
+        from app.services.oria_collab_shared_artifacts import reject_undeliverable_artifacts
+        reject_undeliverable_artifacts(prompt)  # Pas de facturation pour un fichier non livrable.
         from app.services.oria_collab_group_ai_service import GroupAiService
         answer = await GroupAiService(self.db).ask(
             validated_uuid(actor), group_id=validated_uuid(group),

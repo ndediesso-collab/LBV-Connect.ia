@@ -4,6 +4,7 @@ The old mono-workspace SQL routines remain authoritative for reservation and
 settlement. The new identity RPC refuses this route after multi-admission cutover.
 """
 from uuid import UUID
+from typing import Literal
 
 from fastapi import APIRouter, Header
 from pydantic import BaseModel, Field
@@ -30,6 +31,13 @@ class GroupAsk(BaseModel):
     reasoning_mode: str = "balanced"
 
 
+class ArtifactPlan(BaseModel):
+    kind: Literal['group', 'private']
+    target_id: UUID
+    message: str = Field(min_length=1, max_length=8000)
+    artifact_type: str | None = Field(default=None, max_length=240)
+
+
 class ChatPreferences(BaseModel):
     model: str = Field(min_length=1, max_length=80)
     reasoning_mode: str = Field(pattern='^(fast|balanced|deep)$')
@@ -44,6 +52,20 @@ def scoped_models(workspace_id: UUID,
                   user_id: str | None = Header(None, alias="user-id"),
                   authorization: str | None = Header(None, alias="authorization")):
     return ScopedAiWorkspaceService(supabase).models(actor(user_id, authorization),str(workspace_id))
+
+
+@router.post('/artifacts/plan')
+def plan_workspace_artifacts(workspace_id: UUID, body: ArtifactPlan,
+                             user_id: str | None = Header(None, alias='user-id'),
+                             authorization: str | None = Header(None, alias='authorization')):
+    """Lecture seule : intentions de fichiers détectées par le moteur du chat principal.
+
+    Ce endpoint ne génère pas de fichier et ne réserve aucun crédit.
+    """
+    return ScopedAiWorkspaceService(supabase).plan_artifacts(
+        actor(user_id, authorization), str(workspace_id),
+        body.kind, str(body.target_id), body.message, body.artifact_type,
+    )
 
 
 @router.patch('/preferences')
