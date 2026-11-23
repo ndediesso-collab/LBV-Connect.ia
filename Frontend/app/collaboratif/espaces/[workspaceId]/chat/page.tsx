@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Bell, Check, ChevronLeft, FileText, Menu, MessageCircle, MessagesSquare,
+import { ArrowDown, ArrowLeft, Bell, Check, ChevronLeft, FileText, Menu, MessageCircle, MessagesSquare,
   Download, Eye, Paperclip, Plus, RefreshCcw, Send, Settings, ShieldCheck, Sparkles, Users, Wallet, X, Copy, Pencil, Mic, Square, Play } from "lucide-react";
 import { collabRequest, collabSupabase, COLLAB_API_URL } from "@/lib/collaboratif-api";
 import { OriaRichMessage, type OriaWebIllustration } from "@/components/oria-chat/OriaRichMessage"; // ORIA_COLLAB_P10_SHARED_RICH_RENDERER
@@ -36,7 +36,8 @@ type CollabModelResponse = { success: boolean; workspace_id: string;
   preferences?: { model: string; reasoning_mode: string } | null };
 const reasoningLabels: Record<string,string> = { fast:"Rapide", balanced:"Équilibré", deep:"Approfondi" };
 type Notices = { success: boolean; workspace_id: string; unread: number; notifications: { id: number; actor_user_id: string; event_type: string; created_at: string; read_at?: string | null }[] };
-const input = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-foreground/15";
+// ORIA_COLLAB_P11_IOS_COMPOSER_SCROLL — 16 px mobile to prevent Safari focus zoom, without disabling user zoom.
+const input = "w-full rounded-xl border border-border bg-background px-3 py-2.5 text-base sm:text-sm text-foreground outline-none focus:ring-2 focus:ring-foreground/15";
 const smallButton = "rounded-xl border border-border bg-surface px-3 py-2 text-sm transition hover:bg-surface-secondary disabled:opacity-40";
 const darkButton = "rounded-xl bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-40";
 const mentionOria = /(^|[^\w])@oria(?!\w)/i;
@@ -80,6 +81,8 @@ export default function OriaCollaboratifChat() {
   const [previewFile, setPreviewFile] = useState<{file:FileLink;url:string}|null>(null);
   const [before, setBefore] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const [mobileViewportHeight, setMobileViewportHeight] = useState<number | null>(null);
   const [editingId,setEditingId] = useState<string|null>(null);
   const [editText,setEditText] = useState("");
   const [voiceUrls,setVoiceUrls] = useState<Record<string,string>>({});
@@ -119,6 +122,34 @@ export default function OriaCollaboratifChat() {
   const viewRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef<Selection | null>(null);
   const latestLoad = useRef(0);
+  const followBottomRef = useRef(true);
+
+  // Safari iOS: the visual viewport shrinks when the software keyboard opens.
+  // Keep the collaborative composer visible without manipulating browser zoom.
+  useEffect(()=>{
+    const viewport=window.visualViewport;
+    const mobile=window.matchMedia("(max-width: 639px)");
+    let frame=0;
+    const sync=()=>{
+      window.cancelAnimationFrame(frame);
+      frame=window.requestAnimationFrame(()=>{
+        if(!mobile.matches){setMobileViewportHeight(null);return;}
+        const measured=Math.round(viewport?.height ?? window.innerHeight);
+        if(measured>240) setMobileViewportHeight(previous=>
+          previous!==null && Math.abs(previous-measured)<2 ? previous : measured);
+      });
+    };
+    sync();
+    viewport?.addEventListener("resize",sync);
+    window.addEventListener("resize",sync);
+    window.addEventListener("orientationchange",sync);
+    return ()=>{
+      window.cancelAnimationFrame(frame);
+      viewport?.removeEventListener("resize",sync);
+      window.removeEventListener("resize",sync);
+      window.removeEventListener("orientationchange",sync);
+    };
+  },[]);
 
   const names = useMemo(() => new Map((boot?.profiles ?? []).map(p => [p.user_id, name(p)])), [boot?.profiles]);
   const ownId = boot?.context.member_user_id ?? "";
@@ -407,6 +438,7 @@ export default function OriaCollaboratifChat() {
   useEffect(()=>{
     if(!selection)return;
     monitorRef.current?.abort.abort();
+    followBottomRef.current=true;setShowJumpToBottom(false);
     setLivePreview(null);
     setMessages([]);setFiles([]);setBefore(null);setError("");setPendingAi(false);setPreviewFile(null);
     selectedRef.current=selection;
@@ -424,15 +456,35 @@ export default function OriaCollaboratifChat() {
     return ()=>window.clearInterval(interval);
   },[busy,load,refreshBoot,checkPending]);
 
-  useEffect(()=>{
-    if(viewRef.current)viewRef.current.scrollTop=viewRef.current.scrollHeight;
-  },[messages.length,selection?.id,optimisticGroupMessage?.request]);
+  // The user controls the reading position. Follow new messages only when
+  // already at the bottom; unlike before, history refresh never pulls them down.
+  const onThreadScroll = useCallback(()=>{
+    const view=viewRef.current;
+    if(!view)return;
+    const away=Math.max(0,view.scrollHeight-view.scrollTop-view.clientHeight);
+    followBottomRef.current=away<=110;
+    setShowJumpToBottom(away>160);
+  },[]);
+
+  const jumpToLatest = useCallback((behavior:ScrollBehavior="smooth")=>{
+    const view=viewRef.current;
+    if(!view)return;
+    followBottomRef.current=true;
+    setShowJumpToBottom(false);
+    view.scrollTo({top:view.scrollHeight,behavior});
+  },[]);
 
   useEffect(()=>{
-    const view=viewRef.current;
-    if(view && view.scrollHeight-view.scrollTop-view.clientHeight < 250)
-      view.scrollTop=view.scrollHeight;
-  },[livePreview?.text,livePreview?.phase]);
+    if(!followBottomRef.current)return;
+    const frame=window.requestAnimationFrame(()=>jumpToLatest("auto"));
+    return ()=>window.cancelAnimationFrame(frame);
+  },[messages.length,selection?.id,optimisticGroupMessage?.request,jumpToLatest]);
+
+  useEffect(()=>{
+    if(!followBottomRef.current)return;
+    const frame=window.requestAnimationFrame(()=>jumpToLatest("auto"));
+    return ()=>window.cancelAnimationFrame(frame);
+  },[livePreview?.text,livePreview?.phase,jumpToLatest]);
 
   function pick(kind:RoomKind,id:string){
     if(recordingRef.current?.state==="recording"){sendRecordingRef.current=false;recordingRef.current.stop();setRecording(false); }
@@ -480,6 +532,7 @@ export default function OriaCollaboratifChat() {
     // Le message est montré immédiatement dans le groupe, sans attendre le réseau.
     if(current.kind==='group')setOptimisticGroupMessage({group:current.id,request:requestId,
       content,createdAt:Date.now(),ai});
+    followBottomRef.current=true;setShowJumpToBottom(false);
     setDraft("");setBusy(true);setError("");setNotice("");
     if(ai && current.kind==='group')setLivePreview({group:current.id,request:requestId,text:'',phase:'starting'});
     try{
@@ -711,9 +764,9 @@ export default function OriaCollaboratifChat() {
   const members=boot?.profiles.filter(p=>p.status==="active")??[];
   const peers=members.filter(p=>p.user_id!==ownId);
 
-  return <main className="flex h-dvh min-h-[480px] w-full overflow-hidden bg-background text-foreground oria-chat-page">
+  return <main style={mobileViewportHeight!==null?{height:`${mobileViewportHeight}px`}:undefined} className="flex h-dvh min-h-0 w-full overflow-hidden bg-background text-foreground oria-chat-page">
     {/* Navigation identique à l'esprit du chat ORIA : colonne conversations + fil central. */}
-    <aside className={`${sidebarOpen?"flex":"hidden"} w-full shrink-0 flex-col border-r border-border bg-surface sm:flex sm:w-[320px] lg:w-[345px]`}>
+    <aside className={`${sidebarOpen?"flex":"hidden"} min-h-0 w-full shrink-0 flex-col border-r border-border bg-surface sm:flex sm:w-[320px] lg:w-[345px]`}>
       <div className="border-b border-border px-4 pb-4 pt-5">
         <div className="flex items-center justify-between gap-2">
           <Link href="/collaboratif/espaces" className="flex min-w-0 items-center gap-2 font-semibold"><ArrowLeft size={18}/><span className="truncate">{boot?.context.name??"ORIA Collaboratif"}</span></Link>
@@ -746,7 +799,7 @@ export default function OriaCollaboratifChat() {
       <div className="flex flex-wrap gap-3 border-t border-border p-3 text-xs text-muted"><Link href={`/collaboratif/espaces/${encodeURIComponent(space)}/actions`} className="inline-flex items-center gap-1 underline"><Wallet size={14}/> Gestion et paiements</Link><Link href="/collaboratif/espaces" className="underline">Changer d'espace</Link></div>
     </aside>
 
-    <section className={`${sidebarOpen?"hidden":"flex"} min-w-0 flex-1 flex-col sm:flex`}>
+    <section className={`${sidebarOpen?"hidden":"flex"} relative min-h-0 min-w-0 flex-1 flex-col sm:flex`}>
       <header className="flex min-h-[74px] items-center gap-3 border-b border-border bg-surface px-4">
         <button className="rounded-lg p-2 hover:bg-surface-secondary sm:hidden" aria-label="Afficher les conversations" onClick={()=>setSidebarOpen(true)}><Menu size={19}/></button>
         <span className="grid size-10 shrink-0 place-items-center rounded-full border border-border">{selection?.kind==="private"?<Sparkles size={21}/>:selection?.kind==="group"?<Users size={20}/>:<MessageCircle size={20}/>}</span>
@@ -757,7 +810,7 @@ export default function OriaCollaboratifChat() {
       {error&&<div role="alert" className="mx-4 mt-3 flex items-start justify-between gap-2 rounded-xl border border-border bg-surface p-3 text-sm"><span>{error}</span><button onClick={()=>setError("")} aria-label="Fermer"><X size={16}/></button></div>}
       {notice&&<div role="status" className="mx-4 mt-3 rounded-xl border border-border bg-surface p-3 text-xs">{notice}</div>}
       {showGroupMember&&currentGroup&&<div className="flex flex-wrap items-end gap-2 border-b border-border p-3 text-xs"><label className="flex-1">Participant<select className={`${input} mt-1`} value={selectedPerson} onChange={e=>setSelectedPerson(e.target.value)}><option value="">Sélectionner</option>{peers.map(p=><option key={p.user_id} value={p.user_id}>{name(p)}</option>)}</select></label><button className={smallButton} disabled={!selectedPerson||busy} onClick={()=>void updateGroupMember(true)}>Ajouter</button><button className={smallButton} disabled={!selectedPerson||busy} onClick={()=>void updateGroupMember(false)}>Retirer</button></div>}
-      <div ref={viewRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-6 sm:px-7" aria-live="polite">
+      <div ref={viewRef} onScroll={onThreadScroll} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-y-contain px-3 py-6 sm:px-7" aria-live="polite">
         {!selection&&<div className="grid h-full place-items-center text-center text-muted"><div><Sparkles className="mx-auto mb-3" size={36}/><h2 className="font-semibold">ORIA Collaboratif</h2><p className="mt-2 text-sm">Choisissez un groupe ou une conversation.</p></div></div>}
         {selection&&messages.length===0&&!loading&&!livePreview&&<div className="grid h-full place-items-center text-sm text-muted">Aucun message pour le moment.</div>}
         {before&&selection?.kind!=="private"&&<div className="text-center"><button className={smallButton} onClick={()=>{if(selection)void load(selection,true,before);}}>Messages plus anciens</button></div>}
@@ -841,8 +894,13 @@ export default function OriaCollaboratifChat() {
           </div>}
       </div>
       {previewFile&&<div role="dialog" aria-modal="true" aria-label={`Aperçu ${previewFile.file.original_name}`} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"><div className="flex h-[min(85vh,850px)] w-[min(96vw,1050px)] flex-col overflow-hidden rounded-2xl bg-background text-foreground"><div className="flex items-center justify-between gap-3 border-b border-border p-3"><span className="truncate font-medium">{previewFile.file.original_name}</span><div className="flex items-center gap-3"><button type="button" aria-label="Télécharger" onClick={()=>void openFile(previewFile.file)}><Download size={18}/></button><button type="button" aria-label="Fermer l’aperçu" onClick={()=>setPreviewFile(null)}><X size={18}/></button></div></div><div className="min-h-0 flex-1 bg-surface p-2">{previewFile.file.mime_type.startsWith('image/')?<img src={previewFile.url} alt={previewFile.file.original_name} className="h-full w-full object-contain"/>:(['application/pdf','text/plain'].includes(previewFile.file.mime_type))?<iframe title={previewFile.file.original_name} src={previewFile.url} className="h-full w-full rounded-md bg-white"/>:<div className="grid h-full place-items-center text-center text-sm text-muted"><div>Aperçu natif non pris en charge pour ce format.<br/>Utilise Télécharger pour consulter le fichier original.</div></div>}</div></div></div>}
-      {selection&&<div className="border-t border-border bg-surface px-3 py-3 sm:px-6">
-        {(selection.kind==="group"||selection.kind==="private")&&<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{selection.kind==="group"?"Écrivez @ORIA pour demander une réponse IA":"Conversation avec ORIA"}</span><div className="flex flex-wrap items-center gap-2"><span className="hidden rounded-full border border-border px-2 py-1 text-[11px] sm:inline">{provider==="openai"?"OpenAI actif":provider==="openrouter"?"OpenRouter actif":"Fournisseur non vérifié"}</span><select aria-label="Modèle IA" className="max-w-[185px] rounded-xl border border-border bg-background px-3 py-2 font-medium text-foreground" value={model} onChange={e=>{const m=e.target.value;const allowed=modelCatalog.find(x=>x.id===m)?.reasoning_modes??[];const next=allowed.includes(mode)?mode:(allowed.includes('balanced')?'balanced':(allowed[0]??'balanced'));setModel(m);setMode(next);persistSelection(m,next);}} disabled={!provider||busy}><option value="">Modèle indisponible</option>{modelCatalog.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Raisonnement" className="rounded-xl border border-border bg-background px-3 py-2 text-foreground" value={mode} onChange={e=>{setMode(e.target.value);persistSelection(model,e.target.value);}} disabled={!provider||busy}>{(modelCatalog.find(item=>item.id===model)?.reasoning_modes??[]).filter(m=>m in reasoningLabels).map(m=><option key={m} value={m}>{reasoningLabels[m]}</option>)}</select></div></div>}
+      {selection&&<div className="relative z-10 shrink-0 border-t border-border bg-surface px-3 py-2 pb-[max(12px,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">
+        {showJumpToBottom&&<button type="button" onClick={()=>jumpToLatest("smooth")}
+          aria-label="Aller au dernier message" title="Aller au dernier message"
+          className="absolute -top-12 right-3 z-20 grid h-10 w-10 place-items-center rounded-full border border-border bg-surface text-foreground shadow-lg transition hover:bg-surface-secondary sm:right-6">
+          <ArrowDown size={18} aria-hidden="true"/>
+        </button>}
+        {(selection.kind==="group"||selection.kind==="private")&&<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{selection.kind==="group"?"Écrivez @ORIA pour demander une réponse IA":"Conversation avec ORIA"}</span><div className="flex flex-wrap items-center gap-2"><span className="hidden rounded-full border border-border px-2 py-1 text-[11px] sm:inline">{provider==="openai"?"OpenAI actif":provider==="openrouter"?"OpenRouter actif":"Fournisseur non vérifié"}</span><select aria-label="Modèle IA" className="max-w-[185px] rounded-xl border border-border bg-background px-3 py-2 text-base font-medium text-foreground sm:text-sm" value={model} onChange={e=>{const m=e.target.value;const allowed=modelCatalog.find(x=>x.id===m)?.reasoning_modes??[];const next=allowed.includes(mode)?mode:(allowed.includes('balanced')?'balanced':(allowed[0]??'balanced'));setModel(m);setMode(next);persistSelection(m,next);}} disabled={!provider||busy}><option value="">Modèle indisponible</option>{modelCatalog.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Raisonnement" className="rounded-xl border border-border bg-background px-3 py-2 text-base text-foreground sm:text-sm" value={mode} onChange={e=>{setMode(e.target.value);persistSelection(model,e.target.value);}} disabled={!provider||busy}>{(modelCatalog.find(item=>item.id===model)?.reasoning_modes??[]).filter(m=>m in reasoningLabels).map(m=><option key={m} value={m}>{reasoningLabels[m]}</option>)}</select></div></div>}
         {selection.kind==="group"&&mentionOpen&&<div className="mb-2 flex justify-start"><button type="button" role="option" aria-label="Compléter avec @ORIA" className="rounded-xl border border-border bg-background px-4 py-2 text-sm shadow-sm hover:bg-surface-secondary" onMouseDown={e=>e.preventDefault()} onClick={completeOriaMention}><Sparkles size={15} className="mr-2 inline"/>@ORIA <span className="ml-2 text-xs text-muted">Tab ou Entrée</span></button></div>}
         {(selection.kind==="group"||selection.kind==="private")&&<label className="mb-2 flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={webEnabled} onChange={e=>setWebEnabled(e.target.checked)} disabled={busy||pendingAi} aria-label="Recherche Web avec facturation des outils"/>Recherche Web (coût des outils inclus dans le devis)</label>}
         <form onSubmit={e=>void submit(e)} className="flex items-end gap-2">
@@ -854,7 +912,7 @@ export default function OriaCollaboratifChat() {
             disabled={busy||!canWrite} onClick={()=>void toggleVoiceRecording()}>
             {recording?<Square size={19}/>:<Mic size={19}/>}
           </button>}
-          <textarea ref={draftRef} className={`${input} min-h-[45px] max-h-40 flex-1 resize-none`} placeholder={selection.kind==="group"?"Message… ou @ORIA pour l'IA":"Écrivez un message…"} rows={1}
+          <textarea ref={draftRef} className={`${input} min-h-[45px] min-w-0 max-h-40 flex-1 resize-none`} placeholder={selection.kind==="group"?"Message… ou @ORIA pour l'IA":"Écrivez un message…"} rows={1}
             maxLength={selection.kind==="group"?4000:8000} value={draft} disabled={!canWrite||busy||pendingAi}
             onChange={e=>{setDraft(e.target.value);setMentionOpen(Boolean(suggestOria(e.target.value,e.target.selectionStart)));}} onKeyDown={e=>{if(mentionOpen&&(e.key==="Tab"||e.key==="Enter")){e.preventDefault();completeOriaMention();return;}if(e.key==="Escape")setMentionOpen(false);if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void submit();}}}/>
           <button aria-label="Envoyer" type="submit" disabled={!draft.trim()||busy||!canWrite||pendingAi} className="grid size-[45px] shrink-0 place-items-center rounded-xl bg-foreground text-background disabled:opacity-40"><Send size={19}/></button>
