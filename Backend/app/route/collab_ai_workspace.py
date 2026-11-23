@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from app.core.supabase import supabase
 from app.route.collab_profiles import require_user
 from app.services.oria_collab_ai_workspace_service import ScopedAiWorkspaceService
+from app.services.oria_collab_delivery_supervisor import await_independent_delivery
 
 router = APIRouter(prefix="/collaboratif/workspaces/{workspace_id}/ai",
                    tags=["ORIA Collaboratif IA et quotas"])
@@ -83,9 +84,14 @@ def save_chat_preferences(workspace_id: UUID, body: ChatPreferences,
 async def private_ask(workspace_id: UUID, conversation_id: UUID, body: PrivateAsk,
                       user_id: str | None = Header(None, alias="user-id"),
                       authorization: str | None = Header(None, alias="authorization")):
-    return await ScopedAiWorkspaceService(supabase).private_ask(
-        actor(user_id, authorization), str(workspace_id), str(conversation_id),
-        str(body.request_id), body.model, body.message, body.reasoning_mode,body.web,
+    # Le calcul serveur continue si l'onglet HTTP disparaît. Jamais de retry automatique.
+    uid = actor(user_id, authorization)
+    return await await_independent_delivery(
+        f'private:{workspace_id}:{body.request_id}',
+        lambda: ScopedAiWorkspaceService(supabase).private_ask(
+            uid, str(workspace_id), str(conversation_id),
+            str(body.request_id), body.model, body.message, body.reasoning_mode, body.web,
+        ),
     )
 
 
@@ -93,10 +99,32 @@ async def private_ask(workspace_id: UUID, conversation_id: UUID, body: PrivateAs
 async def group_ask(workspace_id: UUID, group_id: UUID, body: GroupAsk,
                     user_id: str | None = Header(None, alias="user-id"),
                     authorization: str | None = Header(None, alias="authorization")):
-    return await ScopedAiWorkspaceService(supabase).group_ask(
-        actor(user_id, authorization), str(workspace_id), str(group_id),
-        str(body.request_id), body.model, body.prompt, body.reasoning_mode,body.web,
+    uid = actor(user_id, authorization)
+    return await await_independent_delivery(
+        f'group:{workspace_id}:{body.request_id}',
+        lambda: ScopedAiWorkspaceService(supabase).group_ask(
+            uid, str(workspace_id), str(group_id),
+            str(body.request_id), body.model, body.prompt, body.reasoning_mode, body.web,
+        ),
     )
+
+
+@router.get("/groups/{group_id}/jobs/{request_id}")
+def group_delivery_status(workspace_id: UUID, group_id: UUID, request_id: UUID,
+                         user_id: str | None = Header(None, alias="user-id"),
+                         authorization: str | None = Header(None, alias="authorization")):
+    return ScopedAiWorkspaceService(supabase).delivery_status(
+        actor(user_id, authorization), str(workspace_id), "group",
+        str(group_id), str(request_id))
+
+
+@router.get("/private/{conversation_id}/jobs/{request_id}")
+def private_delivery_status(workspace_id: UUID, conversation_id: UUID, request_id: UUID,
+                           user_id: str | None = Header(None, alias="user-id"),
+                           authorization: str | None = Header(None, alias="authorization")):
+    return ScopedAiWorkspaceService(supabase).delivery_status(
+        actor(user_id, authorization), str(workspace_id), "private",
+        str(conversation_id), str(request_id))
 
 
 @router.get('/private/{conversation_id}/files')

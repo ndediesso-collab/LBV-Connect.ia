@@ -165,6 +165,36 @@ class ScopedAiWorkspaceService:
         )
         return {**answer, "workspace_id": validated_uuid(space)}
 
+    def delivery_status(self, actor: str, space: str, kind: str,
+                        target: str, request_id: str) -> dict:
+        """Read-only job status, scope authorized before service-role DB access.
+
+        Never exposes other employees' balances, provider secrets or prompts.
+        A failed/uncertain job is NOT a reason to debit or retry a provider.
+        """
+        if kind not in {"private", "group"}:
+            raise HTTPException(422, "Type de conversation invalide.")
+        ctx = self.authorize(actor, space, kind, target)
+        ws, room, request = validated_uuid(space), validated_uuid(target), validated_uuid(request_id)
+        table = ("oria_collab_group_ai_jobs" if kind == "group"
+                 else "oria_collab_private_chat_jobs")
+        column = "group_id" if kind == "group" else "conversation_id"
+        try:
+            result = (self.db.table(table).select("id,state,actual_credits")
+                      .eq("id", request).eq("workspace_id", ws).eq(column, room)
+                      .limit(1).execute())
+            rows = getattr(result, "data", None) or []
+        except Exception as exc:
+            raise HTTPException(503, "Statut de la demande indisponible.") from exc
+        if not rows:
+            raise HTTPException(404, "Demande introuvable dans ce groupe ou chat.")
+        state = str(rows[0].get("state") or "")
+        if state not in {"reserved", "settled", "uncertain", "needs_review", "pending", "failed"}:
+            raise HTTPException(503, "État de demande inconnu ; aucun nouvel appel.")
+        return {"success": True, "workspace_id": ws, "kind": kind,
+                "target_id": room, "request_id": request, "state": state,
+                "actual_credits": rows[0].get("actual_credits") if state == "settled" else None}
+
     def private_artifacts(self, actor: str, space: str, conversation: str) -> dict:
         self.authorize(actor,space,'private',conversation)
         from app.services.oria_collab_private_generated_delivery import list_private_files

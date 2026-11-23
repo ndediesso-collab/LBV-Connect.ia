@@ -17,6 +17,10 @@ type RoomKind = "group" | "direct" | "private";
 type Selection = { kind: RoomKind; id: string };
 type Message = { id: string; sender_user_id?: string | null; sender_kind?: string; role?: string; content: string; created_at: string };
 type FileLink = { id: string; message_id: string; original_name: string; mime_type: string; size_bytes: number; private_ai?: boolean };
+type OwnWallet = { success: boolean; workspace_id: string; member_user_id: string;
+  personal_balance: number; pack_quota: { available?: number; reserved?: number; spent?: number } };
+type DeliveryState = {success: boolean;workspace_id:string;target_id:string;
+  request_id:string;state:string;actual_credits?:number|null};
 type CollabModelOption = { id: string; label: string; reasoning_modes?: string[] };
 type CollabModelResponse = { success: boolean; workspace_id: string;
   provider: "openai" | "openrouter"; models: string[];
@@ -43,6 +47,7 @@ export default function OriaCollaboratifChat() {
   const root = `/collaboratif/workspaces/${encodeURIComponent(space)}`;
   const hub = `${root}/hub`;
   const [boot, setBoot] = useState<Boot | null>(null);
+  const [ownWallet, setOwnWallet] = useState<OwnWallet | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [files, setFiles] = useState<FileLink[]>([]);
@@ -100,6 +105,24 @@ export default function OriaCollaboratifChat() {
       }
     }
   }, [hub,space]);
+
+  const refreshOwnWallet = useCallback(async () => {
+    if (!ownId || !space) return;
+    const result=await collabRequest<OwnWallet>(`${root}/finance/wallet`);
+    // Le serveur restreint déjà le wallet ; vérifier en plus l'identité côté UI.
+    if (!result.success || result.member_user_id !== ownId || result.workspace_id !== space)
+      throw new Error("Solde reçu pour un autre utilisateur ou espace.");
+    setOwnWallet(result);
+  },[root,space,ownId]);
+
+  useEffect(()=>{
+    if(!ownId)return;
+    void refreshOwnWallet().catch(()=>setOwnWallet(null));
+    const refresh=()=>{if(document.visibilityState==='visible')void refreshOwnWallet().catch(()=>{});};
+    const timer=window.setInterval(refresh,12000);
+    window.addEventListener('focus',refresh);
+    return ()=>{window.clearInterval(timer);window.removeEventListener('focus',refresh);};
+  },[ownId,refreshOwnWallet]);
 
   useEffect(() => {
     let active = true;
@@ -183,22 +206,63 @@ export default function OriaCollaboratifChat() {
     }
   }, [hub,root,space]);
 
+  const pendingKey = useCallback((picked:Selection)=>
+    `oria-collab-pending:${ownId}:${space}:${picked.kind}:${picked.id}`,[ownId,space]);
+
+  const checkPending = useCallback(async (picked:Selection) => {
+    if(!ownId || (picked.kind!=="group" && picked.kind!=="private")) return;
+    const key=pendingKey(picked);
+    let requestId:string|null=null;
+    try { requestId=localStorage.getItem(key); } catch { /* stockage désactivé */ }
+    if(!requestId)return;
+    if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind)
+      setPendingAi(true);
+    const endpoint=picked.kind==="group"?
+      `${root}/ai/groups/${picked.id}/jobs/${requestId}`:
+      `${root}/ai/private/${picked.id}/jobs/${requestId}`;
+    try{
+      const status=await collabRequest<DeliveryState>(endpoint);
+      if(!status.success || status.workspace_id!==space || status.target_id!==picked.id ||
+         status.request_id!==requestId)throw new Error('Statut incohérent.');
+      if(status.state==='settled'){
+        try{localStorage.removeItem(key);}catch{}
+        if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind){
+          setPendingAi(false);setNotice('Réponse ORIA livrée dans cette conversation.');
+          await load(picked);void refreshOwnWallet().catch(()=>{});
+        }
+      } else if(['uncertain','needs_review','failed'].includes(status.state)){
+        if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind){
+          setPendingAi(true);
+          setNotice('Demande en rapprochement : aucun second appel fournisseur autorisé automatiquement.');
+        }
+      } else if(['reserved','pending'].includes(status.state)){
+        if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind)
+          setNotice('ORIA traite une demande déjà enregistrée. Le résultat restera dans le fil après validation.');
+      }
+    }catch{
+      if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind){
+        setPendingAi(true);setNotice('Statut IA non confirmé. Ne pas renvoyer cette demande avant vérification.');
+      }
+    }
+  },[ownId,pendingKey,root,space,load,refreshOwnWallet]);
+
   useEffect(()=>{
     if(!selection)return;
     setMessages([]);setFiles([]);setBefore(null);setError("");setPendingAi(false);setPreviewFile(null);
     selectedRef.current=selection;
     void load(selection).catch(e=>setError(e instanceof Error?e.message:"Historique indisponible."));
-  },[selection,load]);
+    void checkPending(selection);
+  },[selection,load,checkPending]);
 
   useEffect(()=>{
     const interval=window.setInterval(()=>{
       if(document.visibilityState!=="visible"||busy)return;
       const current=selectedRef.current;
-      if(current)void load(current).catch(()=>{});
+      if(current){void load(current).catch(()=>{});void checkPending(current);}
       void refreshBoot().catch(()=>{});
     },5000);
     return ()=>window.clearInterval(interval);
-  },[busy,load,refreshBoot]);
+  },[busy,load,refreshBoot,checkPending]);
 
   useEffect(()=>{
     if(viewRef.current)viewRef.current.scrollTop=viewRef.current.scrollHeight;
@@ -248,23 +312,27 @@ export default function OriaCollaboratifChat() {
     try{
       if(ai){
         const endpoint=current.kind==="group"?`${root}/ai/groups/${current.id}/ask`:`${root}/ai/private/${current.id}/ask`;
-        const body=current.kind==="group"?{request_id:crypto.randomUUID(),model,reasoning_mode:mode,web:webEnabled,prompt:content}
-          :{request_id:crypto.randomUUID(),model,reasoning_mode:mode,web:webEnabled,message:content};
+        const requestId=crypto.randomUUID();
+        try{localStorage.setItem(pendingKey(current),requestId);}catch{}
+        const body=current.kind==="group"?{request_id:requestId,model,reasoning_mode:mode,web:webEnabled,prompt:content}
+          :{request_id:requestId,model,reasoning_mode:mode,web:webEnabled,message:content};
         const result=await collabRequest<{workspace_id:string;success:boolean}>(endpoint,"POST",body);
         if(!result.success||result.workspace_id!==space)throw new Error("Réponse IA d'un autre espace.");
+        try{localStorage.removeItem(pendingKey(current));}catch{}
+        setPendingAi(false);
       } else {
         const result=await collabRequest<{workspace_id:string;success:boolean}>(`${hub}/rooms/${current.kind}/${current.id}/messages`,"POST",
           {client_message_id:crypto.randomUUID(),content});
         if(!result.success||result.workspace_id!==space)throw new Error("Message non confirmé.");
       }
-      setDraft("");await load(current);await refreshBoot();
+      setDraft("");await load(current);await refreshBoot();void refreshOwnWallet().catch(()=>{});
     }catch(e){
       setError(e instanceof Error?e.message:"Envoi impossible.");
       // Seul un refus apres appel fournisseur potentiellement facture bloque un retry.
       // Les erreurs de catalogue, de flags et de pack ne doivent pas figer la saisie.
       if(ai && /incertain|réservés|réservé pour|rapproch|vérification.*débit/i.test(e instanceof Error?e.message:"")){
         setPendingAi(true);
-        setNotice("Demande IA possiblement facturée : vérifie l'historique avant de relancer.");
+        setNotice("Demande IA possiblement facturée : ne pas la relancer. Le suivi d'état reprendra automatiquement.");
       }
     }finally{setBusy(false);}
   }
@@ -368,13 +436,14 @@ export default function OriaCollaboratifChat() {
           <Link href="/collaboratif/espaces" className="flex min-w-0 items-center gap-2 font-semibold"><ArrowLeft size={18}/><span className="truncate">{boot?.context.name??"ORIA Collaboratif"}</span></Link>
           <div className="flex items-center gap-1">
             <button title="Notifications" className="relative rounded-lg p-2 hover:bg-surface-secondary" onClick={()=>void showNotices()}><Bell size={19}/>{(boot?.unread??0)>0&&<span className="absolute -right-1 -top-1 rounded-full bg-foreground px-1.5 text-[10px] text-background">{boot?.unread}</span>}</button>
-            <button title="Actualiser" className="rounded-lg p-2 hover:bg-surface-secondary" onClick={()=>{void refreshBoot();if(selection)void load(selection);setPendingAi(false);}}><RefreshCcw size={18}/></button>
+            <button title="Actualiser" className="rounded-lg p-2 hover:bg-surface-secondary" onClick={()=>{void refreshBoot();void refreshOwnWallet().catch(()=>{});if(selection){void load(selection);void checkPending(selection);}}}><RefreshCcw size={18}/></button>
           </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted">
           <span className="inline-flex items-center gap-1"><ShieldCheck size={13}/> {boot?.context.is_owner?"Administrateur":"Membre"}</span>
           <Link className="underline hover:text-foreground" href="/chat">Mon ORIA</Link>
           <Link className="underline hover:text-foreground" href={`${root.replace('/collaboratif/workspaces/','/collaboratif/espaces/')}/finances`}>Crédits</Link>
+          {ownWallet&&<span role="status" title="Solde de votre profil uniquement" className="rounded-lg border border-border px-2 py-1 tabular-nums"><Wallet size={12} className="mr-1 inline"/> {((ownWallet.pack_quota?.available??0)+(ownWallet.personal_balance??0)).toLocaleString("fr-GA")} disponibles · {((ownWallet.pack_quota?.reserved??0)).toLocaleString("fr-GA")} réservés · {((ownWallet.pack_quota?.spent??0)).toLocaleString("fr-GA")} dépensés</span>}
           {boot?.context.is_owner&&<Link className="underline hover:text-foreground" href={`/collaboratif/invitations-email?workspace=${encodeURIComponent(space)}`}>Inviter</Link>}
           <Link href={`/collaboratif/espaces/${encodeURIComponent(space)}`} title="Réglages et membres"><Settings size={15}/></Link>
         </div>
@@ -447,7 +516,7 @@ export default function OriaCollaboratifChat() {
           <button aria-label="Envoyer" type="submit" disabled={!draft.trim()||busy||!canWrite||pendingAi} className="grid size-[45px] shrink-0 place-items-center rounded-xl bg-foreground text-background disabled:opacity-40"><Send size={19}/></button>
         </form>
         {busy&&<p className="mt-2 text-xs text-muted" role="status">ORIA prépare sa réponse…</p>}
-        {pendingAi&&<button className="mt-2 text-xs underline" onClick={()=>{setPendingAi(false);if(selection)void load(selection);}}>J'ai vérifié l'historique : autoriser une nouvelle question</button>}
+        {pendingAi&&<p className="mt-2 text-xs text-muted" role="status">Une demande est en cours ou en rapprochement. Son identifiant a été conservé ; aucun nouvel appel payant ne sera déclenché ici.</p>}
       </div>}
     </section>
 

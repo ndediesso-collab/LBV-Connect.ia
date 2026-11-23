@@ -6,6 +6,7 @@ phase 5B never creates a payment nor increases a group message_limit.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 from typing import Any
@@ -265,6 +266,12 @@ class GroupAiService:
                     "shares": settled.get("shares", []),
                     "files": settled.get("files", []) if artifact_requests else []}
         except Exception as exc:
+            # Diagnostic sûr : référencer l'exception côté serveur avant de bloquer
+            # le solde. Ne jamais envoyer les détails fournisseur au navigateur.
+            logging.getLogger(__name__).exception(
+                "ORIA_COLLAB_GROUP_AI_UNCERTAIN request_id=%s group_id=%s workspace_id=%s",
+                request_id, group_id, workspace_id,
+            )
             try:
                 _safe_rpc(self.db,
                     "oria_collab_group_ai_uncertain_v3" if workspace_id is not None

@@ -26,12 +26,7 @@ export default function WorkspaceActions() {
   const [ctx, setCtx] = useState<Context | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [privateTitle, setPrivateTitle] = useState("Nouvelle conversation");
   const [groupId, setGroupId] = useState("");
-  const [message, setMessage] = useState("");
-  const [member, setMember] = useState("");
   const [source, setSource] = useState("");
   const [destination, setDestination] = useState("");
   const [credits, setCredits] = useState("1000");
@@ -75,50 +70,15 @@ export default function WorkspaceActions() {
   return <main className="min-h-dvh bg-background px-5 py-8 text-foreground">
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="flex gap-5 text-sm">
-        <Link href={`/collaboratif/espaces/${encodeURIComponent(space)}`} className="underline">Retour à cet espace</Link>
+        <Link href={`/collaboratif/espaces/${encodeURIComponent(space)}/chat`} className="underline">Retour au chat et aux groupes</Link>
         <Link href="/collaboratif/espaces" className="underline">Mes espaces</Link>
       </div>
-      <h1 className="text-2xl font-bold">Opérations — {ctx?.name ?? "Espace professionnel"}</h1>
-      <p className="text-sm text-muted">Chaque action est associée à l'espace choisi. La facturation IA et les adhésions multiples restent désactivées jusqu'à la bascule complète.</p>
+      <h1 className="text-2xl font-bold">Crédits et extensions — {ctx?.name ?? "Espace professionnel"}</h1>
+      <p className="text-sm text-muted">Chaque action est associée à l'espace choisi. Les crédits et extensions ne sont confirmés qu’après validation du paiement et des contrôles du serveur.</p>
       {ctx && !ctx.pack_active && <p role="alert" className="rounded-xl border border-border p-4 text-sm">Le pack du propriétaire est inactif : les nouvelles opérations seront refusées.</p>}
       {error && <p role="alert" className="rounded-xl border border-border p-4 text-sm">{error}</p>}
       {notice && <p role="status" className="rounded-xl border border-border p-4 text-sm">{notice}</p>}
       <div className="grid gap-4 md:grid-cols-2">
-        <section className={card}>
-          <h2 className="font-semibold">Nouvelle conversation professionnelle</h2>
-          <input className={field} aria-label="Titre de conversation" maxLength={120} value={privateTitle} onChange={e=>setPrivateTitle(e.target.value)}/>
-          <button className={btn} disabled={busy || !privateTitle.trim()} onClick={()=>void act("/private/conversations","POST",{title:privateTitle})}>Créer ma conversation</button>
-        </section>
-        {ctx?.is_owner && <section className={card}>
-          <h2 className="font-semibold">Nouveau salon</h2>
-          <input className={field} aria-label="Titre du salon" maxLength={100} value={title} onChange={e=>setTitle(e.target.value)} placeholder="Nom du salon"/>
-          <textarea className={field} aria-label="Description" value={description} maxLength={500} onChange={e=>setDescription(e.target.value)}/>
-          <button className={btn} disabled={busy || !title.trim()} onClick={()=>void act("/groups","POST",{title,description})}>Créer ce salon</button>
-        </section>}
-        <section className={card}>
-          <h2 className="font-semibold">Écrire dans un salon</h2>
-          <select className={field} aria-label="Salon" value={groupId} onChange={e=>setGroupId(e.target.value)}>
-            <option value="">Choisir un salon</option>
-            {groups.filter(g=>!g.archived).map(g=><option key={g.id} value={g.id}>{g.title} ({g.message_count}/{g.message_limit})</option>)}
-          </select>
-          <textarea className={field} aria-label="Message" value={message} onChange={e=>setMessage(e.target.value)} maxLength={4000} placeholder="Message humain (sans @ORIA)"/>
-          <button className={btn} disabled={busy || !groupId || !message.trim()} onClick={()=>void act(`/groups/${encodeURIComponent(groupId)}/messages`,"POST",{client_message_id:crypto.randomUUID(),content:message})}>Envoyer le message</button>
-        </section>
-        {ctx?.is_owner && <section className={card}>
-          <h2 className="font-semibold">Participants du salon</h2>
-          <select className={field} aria-label="Salon des participants" value={groupId} onChange={e=>setGroupId(e.target.value)}>
-            <option value="">Choisir un salon</option>
-            {groups.map(g=><option key={g.id} value={g.id}>{g.title}</option>)}
-          </select>
-          <select className={field} aria-label="Collaborateur" value={member} onChange={e=>setMember(e.target.value)}>
-            <option value="">Choisir un collaborateur</option>
-            {people.filter(p=>p.role==="member"&&p.status==="active").map(p=><option key={p.user_id} value={p.user_id}>{p.first_name} {p.last_name}</option>)}
-          </select>
-          <div className="flex gap-2">
-            <button className={btn} disabled={busy || !groupId || !member} onClick={()=>void act(`/groups/${encodeURIComponent(groupId)}/participants`,"POST",{member_user_id:member,add:true})}>Ajouter</button>
-            <button className="rounded-lg border border-border px-4 py-2 text-sm" disabled={busy || !groupId || !member} onClick={()=>void act(`/groups/${encodeURIComponent(groupId)}/participants`,"POST",{member_user_id:member,add:false})}>Retirer</button>
-          </div>
-        </section>}
         {ctx?.is_owner && <section className={card}>
           <h2 className="font-semibold">Transférer des crédits d'équipe</h2>
           <select className={field} aria-label="Source" value={source} onChange={e=>setSource(e.target.value)}>
@@ -147,10 +107,12 @@ export default function WorkspaceActions() {
           <button className={btn} disabled={busy || !email.includes("@")} onClick={()=>void act("/recharges/checkout","POST",{billing_email:email,addon_id:addon})}>Continuer vers Chariow</button>
         </section>}
         {ctx?.is_owner && <section className={card}>
-          <h2 className="font-semibold">Extension de salon : 5 000 messages / 3 000 FCFA</h2>
+          <h2 className="font-semibold">Étendre un groupe : +5 000 messages / 3 000 FCFA</h2>
+          <p className="text-xs text-muted">Sélectionne le groupe à étendre ; l’extension ne sera appliquée qu’à celui-ci après confirmation Chariow.</p>
           <select className={field} aria-label="Salon à étendre" value={groupId} onChange={e=>setGroupId(e.target.value)}>
             <option value="">Choisir un salon</option>{groups.map(g=><option key={g.id} value={g.id}>{g.title}</option>)}
           </select>
+          {groupId && <p className="rounded-lg border border-border p-2 text-sm" role="status">Groupe sélectionné : <strong>{groups.find(g=>g.id===groupId)?.title ?? "Groupe inconnu"}</strong> · {groups.find(g=>g.id===groupId)?.message_count ?? 0} / {groups.find(g=>g.id===groupId)?.message_limit ?? 0} messages</p>}
           <input className={field} type="email" aria-label="Email de reçu extension" value={email} onChange={e=>setEmail(e.target.value)} placeholder="E-mail de reçu Chariow"/>
           <button className={btn} disabled={busy || !groupId || !email.includes("@")} onClick={()=>void act(`/groups/${encodeURIComponent(groupId)}/extensions/checkout`,"POST",{billing_email:email})}>Acheter via Chariow</button>
         </section>}
