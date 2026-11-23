@@ -3261,7 +3261,16 @@ class OpenAIService:
         if artifact_types:
             status = str(cls._value(response, "status", "completed") or "")
             if status != "completed":
-                raise RuntimeError("Production documentaire interrompue ou incomplète.")
+                details = cls._value(response, 'incomplete_details', None)
+                reason = cls._value(details, 'reason', None)
+                usage_data = cls._value(response, 'usage', None)
+                output_tokens = cls._value(usage_data, 'output_tokens', None)
+                response_id = cls._value(response, 'id', None)
+                raise RuntimeError(
+                    'Production documentaire interrompue ou incomplète '
+                    f'(status={status!r}, reason={reason!r}, '
+                    f'output_tokens={output_tokens!r}, response_id={response_id!r}).'
+                )
             artifact_payload = cls._parse_artifact_payload(
                 message, expected_formats=artifact_types,
                 allow_fenced_json=web,

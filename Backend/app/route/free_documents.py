@@ -11,9 +11,9 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config.free_tier_policy import FREE_CHAT_INPUT_TOKENS_MAX, FREE_CHAT_OUTPUT_TOKENS_MAX
+from app.config.free_tier_policy import FREE_CHAT_INPUT_TOKENS_MAX, FREE_PDF_OUTPUT_TOKENS_MAX
 from app.core.supabase import supabase
-from app.route.free_chat import _enabled, _identity, _quote, _oria_free_prepare_attachments
+from app.route.free_chat import _enabled, _identity, _oria_free_prepare_attachments
 from app.route.ai import _oria_openrouter_service, MODEL_OPENAI_IDS
 from app.services.chat_provider_router import ChatProvider, active_chat_provider
 from app.services.conversation_memory_utils import estimate_text_tokens
@@ -28,6 +28,8 @@ router = APIRouter(prefix='/free', tags=['ORIA Gratuit - documents (staging)'])
 logger = logging.getLogger(__name__)
 DOCUMENT_INPUT_OVERHEAD_TOKENS = 5500
 _ALLOWED = {'pdf': 'free_pdf_luna', 'docx': 'free_docx_luna', 'xlsx': 'free_xlsx_luna'}
+# Ce plafond de 6144 tokens existe deja dans la politique du forfait gratuit.
+FREE_DOCUMENT_OUTPUT_TOKENS_MAX = FREE_PDF_OUTPUT_TOKENS_MAX
 
 class FreeDocumentRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -60,13 +62,27 @@ def _preflight(request: FreeDocumentRequest, uid: str) -> dict:
         raise HTTPException(403, 'Utilisez les crédits de votre pack actif.')
     provider = active_chat_provider()
     try:
-        amount, api_xaf = _quote(provider, tokens)
+        # Estimation serveur coherente avec la limite de sortie effectivement transmise.
+        if provider is ChatProvider.OPENAI:
+            amount, api_xaf = TokenBillingService.estimate_reservation(
+                model='luna', estimated_input_tokens=tokens,
+                max_output_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX,
+                web_enabled=False, include_api_cost=True,
+            )
+        elif provider is ChatProvider.OPENROUTER:
+            estimated = OpenRouterTokenBillingService.estimate_reservation(
+                provider_model='openai/gpt-6-luna', estimated_input_tokens=tokens,
+                max_output_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX, web_enabled=False,
+            )
+            amount, api_xaf = estimated.reserved_credits, estimated.reserved_api_cost_xaf
+        else:
+            raise HTTPException(503, 'Fournisseur IA non disponible.')
         balance = gateway.balance(uid)
         from app.services.free_tier_quote import make_free_chat_quote
         quote = make_free_chat_quote(
             provider=provider.value, reserved_credits=amount,
             reserve_api_xaf=api_xaf, balance=balance,
-            max_output_tokens=FREE_CHAT_OUTPUT_TOKENS_MAX,
+            max_output_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX,
             input_token_budget=tokens,
         )
         quote['action'] = _ALLOWED[fmt]
@@ -124,7 +140,7 @@ async def create_free_document(
             result = await asyncio.to_thread(
                 OpenAIService().chat, model=model_id, message=provider_message,
                 web=False, attachments=info['image_attachments'], history=[], reasoning_mode=payload.reasoning_mode,
-                artifact_types=(payload.format,), max_output_tokens=FREE_CHAT_OUTPUT_TOKENS_MAX,
+                artifact_types=(payload.format,), max_output_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX,
             )
             usage = result.get('usage')
             if not isinstance(usage, dict):
@@ -135,7 +151,7 @@ async def create_free_document(
             result = await asyncio.to_thread(
                 _oria_openrouter_service().chat, model=model_id, message=provider_message,
                 web=False, attachments=info['image_attachments'], history=[], reasoning_mode=payload.reasoning_mode,
-                artifact_types=(payload.format,), max_completion_tokens=FREE_CHAT_OUTPUT_TOKENS_MAX,
+                artifact_types=(payload.format,), max_completion_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX,
             )
             bill = OpenRouterTokenBillingService.calculate(result)
         else:
