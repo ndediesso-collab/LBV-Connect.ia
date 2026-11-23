@@ -19,7 +19,7 @@ MAX_DOCUMENT_FILES = 3
 MAX_FILE_BYTES = 8 * 1024 * 1024
 STOPWORDS = frozenset('les des une un dans sur avec pour depuis quand quel quels quelle quelles nous vous notre votre tout tous toutes cette celui ceux cela faire fais moi toi est sont et ou qui que quoi comme dont elle lui elles leur ses aux mais puis donc ainsi enfin besoin faire cours meme meme suite au de du la le en a à d l on par je tu il ils ce cet ces se eter chaque oria exposé exposer document pdf rapport synthèse résumé resumee'.split())
 TOPICAL = re.compile(r'\b(?:ancien|ancienne|derni[eè]re|historique|rappel|r[eé]cap|r[eé]sume|r[eé]sum[eé]|expos[eé]|plus haut|il y a|jour|semaine|d[eé]bat|discussion|tout ce qu|pr[eé]c[eé]dent)\b', re.I)
-FILE_RELATED = re.compile(r'\b(?:pdf|fichier|document|pi[eè]ce jointe|tableau|excel|word|diapo|pr[eé]sentation|expos[eé]|page|section|question|image|figure|graphique|reprends|reviens|r[eé]f[eé]rence)\b', re.I)
+FILE_RELATED = re.compile(r'\b(?:pdf|fichier|document|pi[eè]ce jointe|tableau|excel|word|diapo|pr[eé]sentation|expos[eé]|page|section|question|image|figure|graphique|analyse|regarde|photo|capture|visuel|dessin|sch[eé]ma|reprends|reviens|r[eé]f[eé]rence)\b', re.I)
 
 
 def normalized_terms(value: str) -> set[str]:
@@ -209,6 +209,6 @@ def document_context(db: Any, actor: str, workspace: str, group_id: str,
     if rows:
         return [{'role': 'user', 'content': (
             'Le groupe a des fichiers stockes, mais aucun passage lisible n\'a ete retrouve '
-            'pour cette demande. Ne pretends pas les avoir lus ; demande une precision si besoin.'
+            'pour cette demande. Les images peuvent etre analysees visuellement si elles sont jointes. '
         )}]
     return []

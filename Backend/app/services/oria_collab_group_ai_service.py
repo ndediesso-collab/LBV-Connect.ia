@@ -139,6 +139,7 @@ class GroupAiService:
         if action is None:
             raise HTTPException(403, "Action du modèle absente du catalogue ORIA.")
         # Historique de la salle courante uniquement. Aucun mélange d'espaces.
+        visual_attachments: list[dict] = []
         recent = (_safe_rpc(self.db,"oria_collab_workspace_group_messages_v3", {
             "p_actor_user_id":actor_id,"p_workspace_id":workspace_id,
             "p_group_id":group_id,"p_before_message_id":None,"p_limit":28,
@@ -155,6 +156,12 @@ class GroupAiService:
                 clean, _safe_rpc,
             )
             history.extend(file_history)
+            from app.services.oria_collab_visual_context_v1 import collect_group_visuals
+            visual_attachments, visual_context = await asyncio.to_thread(
+                collect_group_visuals, self.db, actor_id, workspace_id,
+                group_id, clean, _safe_rpc,
+            )
+            history.extend(visual_context)
             if incomplete_scan:
                 history.append({'role': 'user', 'content': (
                     '[NOTE TECHNIQUE] Recherche historique bornée : tous les anciens '
@@ -171,7 +178,8 @@ class GroupAiService:
                 history.append({"role": role, "content": content if role == "assistant"
                                 else "[Message du groupe] " + content})
         tokens = max(1, estimate_text_tokens(provider_prompt)
-                     + sum(estimate_text_tokens(item["content"]) for item in history) + 512)
+                     + sum(estimate_text_tokens(item["content"]) for item in history)
+                     + len(visual_attachments) * 6000 + 512)
         if tokens > 30000:
             raise HTTPException(413, "Le contexte du groupe est trop volumineux.")
         max_output = (16384 if artifact_requests else
@@ -181,6 +189,7 @@ class GroupAiService:
                 selection, estimated_input_tokens=tokens, max_output_tokens=max_output,
                 reasoning_mode=reasoning_mode, message=provider_prompt, history=history,
                 artifact_types=document_types, web_enabled=web,
+                attachments=visual_attachments,
             )
             limit_xaf = SupabaseCreditRepository._pack_budget_limit(ctx["pack_id"])
             budget_on = SupabaseCreditRepository._api_budget_enabled()
@@ -212,6 +221,7 @@ class GroupAiService:
                 selection, message=provider_prompt, history=history,
                 reasoning_mode=reasoning_mode, max_output_tokens=max_output,
                 artifact_types=document_types, web_enabled=web,
+                attachments=visual_attachments,
             )
             answer = metered.message
             staged_files = []

@@ -21,6 +21,8 @@ MIME = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".webm": "audio/webm", ".ogg": "audio/ogg", ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg", ".wav": "audio/wav",
 }
 
 
@@ -75,6 +77,9 @@ class ChatHubService:
             raise
         except Exception as exc:
             msg = str(exc).lower()
+            if any(s in msg for s in ("collab_edit_not_owner_or_ai_message",
+                                  "collab_edit_attachment_message", "collab_edit_ai_prompt_forbidden")):
+                raise HTTPException(403, "Ce message ne peut pas etre modifie.") from exc
             if any(s in msg for s in ("forbidden", "unauthorized", "not_participant")):
                 raise HTTPException(404, "Conversation inaccessible.") from exc
             if any(s in msg for s in ("inactive", "pack_inactive", "capacity_exceeded")):
@@ -108,6 +113,34 @@ class ChatHubService:
                            p_limit=limit)
         if result.get("group_id") != uuid(group):
             raise HTTPException(503, "Historique de salon incohérent.")
+        # La RPC a valide l'identite/adhesion. Enrichit les messages avec edited_at
+        # sans exposer d'autre groupe. Ancienne migration: lecture toujours possible.
+        rows = result.get("messages") or []
+        if rows:
+            try:
+                ids = [r["id"] for r in rows if isinstance(r, dict) and r.get("id")]
+                if ids:
+                    stamps = (self.db.table("oria_collab_group_messages")
+                              .select("id,edited_at").eq("group_id",uuid(group))
+                              .in_("id",ids).execute().data or [])
+                    mapping = {r["id"]:r.get("edited_at") for r in stamps}
+                    for row in rows:
+                        if isinstance(row,dict): row["edited_at"] = mapping.get(row.get("id"))
+            except Exception:
+                pass  # Lecture des messages possible meme avant migration SQL P7.
+        return result
+
+    def edit_human(self, actor: str, space: str, group: str,
+                   message: str, content: str) -> dict:
+        require_enabled()
+        cleaned = (content or "").strip()
+        if not 1 <= len(cleaned) <= 4000:
+            raise HTTPException(422,"Message vide ou superieur a 4 000 caracteres.")
+        result = self._rpc("oria_collab_chat_group_edit_v1",actor,space,
+                           p_group_id=uuid(group),p_message_id=uuid(message),
+                           p_content=cleaned)
+        if result.get("group_id") != uuid(group) or result.get("message_id") != uuid(message):
+            raise HTTPException(503,"Confirmation d'edition incoherente.")
         return result
 
     def direct_open(self, actor: str, space: str, other: str) -> dict:
@@ -183,6 +216,12 @@ class ChatHubService:
             or (expected_type == "image/webp" and len(data)>=12 and data[:4]==b"RIFF" and data[8:12]==b"WEBP")
             or (expected_type.startswith("application/vnd.openxmlformats-") and data.startswith(b"PK\x03\x04"))
             or (expected_type == "text/plain" and b"\x00" not in data)
+            or (expected_type == "audio/webm" and data[:4] == b"\x1a\x45\xdf\xa3")
+            or (expected_type == "audio/ogg" and data.startswith(b"OggS"))
+            or (expected_type == "audio/mp4" and len(data) >= 12 and data[4:8] == b"ftyp")
+            or (expected_type == "audio/mpeg" and (data.startswith(b"ID3") or
+                (len(data)>=2 and data[0] == 0xff and (data[1]&0xe0)==0xe0)))
+            or (expected_type == "audio/wav" and data[:4] == b"RIFF" and data[8:12] == b"WAVE")
         )
         if not signature_ok:
             raise HTTPException(415, "Le contenu du fichier ne correspond pas à son format.")
@@ -190,6 +229,15 @@ class ChatHubService:
             # Browsers may send application/octet-stream for Office docs.
             if content_type.lower().strip() != "application/octet-stream":
                 raise HTTPException(415,"Type MIME différent de l'extension.")
+        if expected_type.startswith("audio/"):
+            # Reutilise la validation du chat principal : piste audio uniquement,
+            # duree <= 5 minutes, sans piste video ni fichier corrompu.
+            from app.services.audio_service import AudioService, AudioError
+            try:
+                ext = PurePosixPath(name).suffix.lstrip(".")
+                AudioService._duration(data, ext)
+            except AudioError as exc:
+                raise HTTPException(422,str(exc)) from exc
         if room_type not in ("group","direct"):
             raise HTTPException(422,"Type de salon incorrect.")
         file_id = str(uuid4())

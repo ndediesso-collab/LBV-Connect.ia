@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Bell, Check, ChevronLeft, FileText, Menu, MessageCircle, MessagesSquare,
-  Download, Eye, Paperclip, Plus, RefreshCcw, Send, Settings, ShieldCheck, Sparkles, Users, Wallet, X } from "lucide-react";
+  Download, Eye, Paperclip, Plus, RefreshCcw, Send, Settings, ShieldCheck, Sparkles, Users, Wallet, X, Copy, Pencil, Mic, Square, Play } from "lucide-react";
 import { collabRequest, collabSupabase, COLLAB_API_URL } from "@/lib/collaboratif-api";
 
 type Person = { user_id: string; role: "owner" | "member"; status: string; first_name: string; last_name: string; avatar_key?: string };
@@ -15,7 +15,7 @@ type Context = { workspace_id: string; member_user_id: string; name: string; is_
 type Boot = { success: boolean; workspace_id: string; context: Context; general_group_id?: string | null; groups: Group[]; profiles: Person[]; privates: PrivateAi[]; directs: Direct[]; unread: number };
 type RoomKind = "group" | "direct" | "private";
 type Selection = { kind: RoomKind; id: string };
-type Message = { id: string; sender_user_id?: string | null; sender_kind?: string; role?: string; content: string; created_at: string };
+type Message = { id: string; sender_user_id?: string | null; sender_kind?: string; role?: string; content: string; created_at: string; edited_at?: string | null; ai_request_id?: string | null };
 type FileLink = { id: string; message_id: string; original_name: string; mime_type: string; size_bytes: number; private_ai?: boolean };
 type OwnWallet = { success: boolean; workspace_id: string; member_user_id: string;
   personal_balance: number; pack_quota: { available?: number; reserved?: number; spent?: number } };
@@ -54,6 +54,15 @@ export default function OriaCollaboratifChat() {
   const [previewFile, setPreviewFile] = useState<{file:FileLink;url:string}|null>(null);
   const [before, setBefore] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [editingId,setEditingId] = useState<string|null>(null);
+  const [editText,setEditText] = useState("");
+  const [voiceUrls,setVoiceUrls] = useState<Record<string,string>>({});
+  const [recording,setRecording] = useState(false);
+  const recordingRef = useRef<MediaRecorder|null>(null);
+  const recordingStreamRef = useRef<MediaStream|null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingGroupRef = useRef<Selection|null>(null);
+  const sendRecordingRef = useRef(false);
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [modelCatalog, setModelCatalog] = useState<CollabModelOption[]>([]);
@@ -280,7 +289,9 @@ export default function OriaCollaboratifChat() {
   },[messages.length,selection?.id]);
 
   function pick(kind:RoomKind,id:string){
+    if(recordingRef.current?.state==="recording"){sendRecordingRef.current=false;recordingRef.current.stop();setRecording(false); }
     selectedRef.current={kind,id};setSelection({kind,id});setSidebarOpen(false);
+    setEditingId(null);setEditText("");
     setDraft("");setMentionOpen(false);setNotice("");setShowGroupMember(false);
   }
 
@@ -348,29 +359,118 @@ export default function OriaCollaboratifChat() {
     }finally{setBusy(false);}
   }
 
-  async function uploadFile(event:ChangeEvent<HTMLInputElement>){
-    const file=event.target.files?.[0];const current=selectedRef.current;
-    event.target.value="";
-    if(!file||!current||current.kind==="private"||!canWrite||busy)return;
-    if(file.size===0||file.size>8*1024*1024){setError("Fichier limité à 8 Mo.");return;}
+  async function sendGroupAttachment(file:File,picked:Selection){
+    if(picked.kind!=="group" || !canWrite || busy)return;
+    if(!file.size||file.size>8*1024*1024){setError("Pièce jointe limitée à 8 Mo.");return;}
     setBusy(true);setError("");
     try{
       const {data:{session}}=await collabSupabase.auth.getSession();
       if(!session?.access_token||!session.user.id)throw new Error("Session ORIA expirée.");
-      const body=new FormData();body.append("file",file,file.name);
-      const response=await fetch(`${COLLAB_API_URL}${hub}/rooms/${current.kind}/${current.id}/files`,{
-        method:"POST",headers:{authorization:`Bearer ${session.access_token}`,"user-id":session.user.id},body,
+      const form=new FormData();form.append("file",file,file.name);
+      const response=await fetch(`${COLLAB_API_URL}${hub}/rooms/group/${picked.id}/files`,{
+        method:"POST",headers:{authorization:`Bearer ${session.access_token}`,"user-id":session.user.id},body:form,
       });
       const result:unknown=await response.json().catch(()=>({}));
       if(!response.ok){
         const detail=typeof result==="object"&&result!==null&&"detail" in result?(result as {detail:unknown}).detail:null;
         throw new Error(typeof detail==="string"?detail:"Envoi du fichier refusé.");
       }
-      if(typeof result!=="object"||result===null||!("workspace_id" in result)||result.workspace_id!==space)throw new Error("Réponse du mauvais espace.");
-      await load(current);await refreshBoot();
-    }catch(e){setError(e instanceof Error?e.message:"Fichier non confirmé, ne pas renvoyer immédiatement.");}
+      if(typeof result!=="object"||result===null||!("workspace_id" in result)||result.workspace_id!==space)
+        throw new Error("Réponse du mauvais espace.");
+      if(selectedRef.current?.id===picked.id&&selectedRef.current.kind==="group")await load(picked);
+      await refreshBoot();
+      setNotice(file.type.startsWith("audio/")?"Note vocale envoyée au groupe.":"Fichier disponible pour ce groupe. Demandez @ORIA de l'analyser.");
+    }catch(e){setError(e instanceof Error?e.message:"Envoi non confirmé. Vérifiez l’historique avant de réessayer.");}
     finally{setBusy(false);}
   }
+
+  async function uploadFile(event:ChangeEvent<HTMLInputElement>){
+    const file=event.target.files?.[0];event.target.value="";
+    const picked=selectedRef.current;
+    if(file&&picked)await sendGroupAttachment(file,picked);
+  }
+
+  async function toggleVoiceRecording(){
+    const recorder=recordingRef.current;
+    if(recorder&&recorder.state==="recording"){
+      sendRecordingRef.current=true;
+      recorder.stop();
+      setRecording(false);
+      return;
+    }
+    const picked=selectedRef.current;
+    if(!picked||picked.kind!=="group"||busy||!canWrite)return;
+    try{
+      if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==="undefined")
+        throw new Error("Ce navigateur ne permet pas les notes vocales.");
+      const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      const mime=["audio/webm;codecs=opus","audio/mp4","audio/webm","audio/ogg;codecs=opus"]
+        .find(m=>MediaRecorder.isTypeSupported(m));
+      const next=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);
+      const actual=next.mimeType.split(";",1)[0].toLowerCase();
+      const ext=actual==="audio/mp4"?"m4a":actual==="audio/ogg"?"ogg":actual==="audio/webm"?"webm":"";
+      if(!ext){stream.getTracks().forEach(t=>t.stop());throw new Error("Format microphone non pris en charge.");}
+      recordingStreamRef.current=stream;recordingRef.current=next;
+      recordingGroupRef.current=picked;audioChunksRef.current=[];sendRecordingRef.current=false;
+      next.ondataavailable=e=>{if(e.data.size>0)audioChunksRef.current.push(e.data);};
+      next.onerror=()=>{sendRecordingRef.current=false;setError("Enregistrement audio interrompu.");};
+      const maxTimer=window.setTimeout(()=>{
+        if(next.state==="recording"){
+          sendRecordingRef.current=true;next.stop();setRecording(false);
+        }
+      },295000);
+      next.onstop=()=>{
+        window.clearTimeout(maxTimer);
+        stream.getTracks().forEach(t=>t.stop());recordingStreamRef.current=null;recordingRef.current=null;
+        setRecording(false);
+        const send=sendRecordingRef.current;sendRecordingRef.current=false;
+        const data=new Blob(audioChunksRef.current,{type:actual});audioChunksRef.current=[];
+        if(!send)return;
+        if(data.size===0||data.size>8*1024*1024){setError("Note vocale vide ou supérieure à 8 Mo.");return;}
+        const target=recordingGroupRef.current;
+        if(target)void sendGroupAttachment(new File([data],`oria-vocal-${Date.now()}.${ext}`,{type:actual}),target);
+      };
+      next.start(1000);setRecording(true);setError("");
+    }catch(e){setError(e instanceof Error?e.message:"Microphone inaccessible.");}
+  }
+
+  async function listenVoice(file:FileLink){
+    try{setVoiceUrls(prev=>({...prev,[file.id]:""}));const url=await verifiedFileUrl(file);
+      setVoiceUrls(prev=>({...prev,[file.id]:url}));}
+    catch(e){setError(e instanceof Error?e.message:"Lecture vocale indisponible.");}
+  }
+
+  async function copyMessage(content:string){
+    try{await navigator.clipboard.writeText(content);setNotice("Message copié.");}
+    catch{setError("Impossible de copier ce message. Autorisez le presse-papiers.");}
+  }
+
+  async function saveEditMessage(m:Message){
+    const current=selectedRef.current;
+    if(!current||current.kind!=="group"||busy||m.sender_user_id!==ownId||m.sender_kind==="oria")return;
+    const content=editText.trim();
+    if(!content||content.length>4000||mentionOria.test(content)){
+      setError("Modification refusée (message vide, trop long ou commande @ORIA).");return;
+    }
+    setBusy(true);setError("");
+    try{
+      const result=await collabRequest<{success:boolean;workspace_id:string;group_id:string;message_id:string;content:string;edited_at?:string}>(
+        `${hub}/groups/${current.id}/messages/${m.id}`,"PATCH",{content});
+      if(!result.success||result.workspace_id!==space||result.group_id!==current.id||result.message_id!==m.id)
+        throw new Error("Édition non confirmée.");
+      setMessages(items=>items.map(x=>x.id===m.id?{...x,content:result.content,edited_at:result.edited_at}:x));
+      setEditingId(null);setEditText("");setNotice("Message modifié.");
+      if(selectedRef.current?.id===current.id)await load(current);
+    }catch(e){setError(e instanceof Error?e.message:"Modification refusée.");}
+    finally{setBusy(false);}
+  }
+
+  useEffect(()=>()=>{
+    // Aucune capture microphone persistante après quitter le chat.
+    sendRecordingRef.current=false;
+    if(recordingRef.current?.state==="recording")recordingRef.current.stop();
+    recordingStreamRef.current?.getTracks().forEach(t=>t.stop());
+  },[]);
 
   async function verifiedFileUrl(file:FileLink):Promise<string>{
     // Each open requests a fresh, short-lived URL from the authorized workspace API.
@@ -496,8 +596,27 @@ export default function OriaCollaboratifChat() {
             <article className={`max-w-[88%] break-words rounded-2xl px-4 py-3 text-sm shadow-sm sm:max-w-[76%] ${mine?"rounded-br-sm bg-foreground text-background":"rounded-bl-sm border border-border bg-surface text-foreground"}`}>
               {selection?.kind==="group"&&!mine&&<div className="mb-1 text-xs font-semibold opacity-75">{speaker}</div>}
               {selection?.kind==="private"&&!mine&&<div className="mb-1 flex items-center gap-1 text-xs font-semibold"><Sparkles size={12}/> ORIA</div>}
-              <p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>
-               {attachments.map(f=><div key={f.id} className={`mt-2 flex max-w-full items-center gap-2 rounded-lg border px-2 py-2 text-xs ${mine?"border-background/30":"border-border"}`}><FileText size={16}/><span className="max-w-[185px] truncate" title={f.original_name}>{f.original_name}</span><button type="button" title="Aperçu" aria-label={`Aperçu de ${f.original_name}`} onClick={()=>void previewAttachment(f)}><Eye size={16}/></button><button type="button" title="Télécharger" aria-label={`Télécharger ${f.original_name}`} onClick={()=>void openFile(f)}><Download size={16}/></button></div>)}
+              {editingId===m.id?<div className="space-y-2">
+                <textarea aria-label="Modifier mon message" className={`${input} min-h-[80px]`} maxLength={4000}
+                  value={editText} onChange={e=>setEditText(e.target.value)}/>
+                <div className="flex gap-2"><button type="button" className={smallButton} disabled={busy} onClick={()=>void saveEditMessage(m)}>Enregistrer</button>
+                <button type="button" className={smallButton} onClick={()=>{setEditingId(null);setEditText("");}}>Annuler</button></div>
+              </div>:<p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>}
+              <div className="mt-1 flex items-center justify-end gap-2 opacity-70">
+                {m.edited_at&&<span className="text-[10px]">modifié</span>}
+                <button type="button" title="Copier le message" aria-label="Copier le message"
+                  onClick={()=>void copyMessage(m.content)}><Copy size={13}/></button>
+                {mine&&!oria&&!m.ai_request_id&&!mentionOria.test(m.content)&&attachments.length===0&&
+                  <button type="button" title="Modifier mon message" aria-label="Modifier mon message"
+                    disabled={busy} onClick={()=>{setEditingId(m.id);setEditText(m.content);}}><Pencil size={13}/></button>}
+              </div>
+               {attachments.map(f=>f.mime_type.startsWith("audio/")?
+                 <div key={f.id} className="mt-2 rounded-lg border border-border p-2 text-xs">
+                   <div className="mb-2 flex items-center gap-2"><Mic size={15}/><span>Note vocale</span>
+                   <button type="button" className="underline" onClick={()=>void listenVoice(f)}><Play size={13} className="mr-1 inline"/>Écouter</button></div>
+                   {voiceUrls[f.id]&&<audio controls preload="none" src={voiceUrls[f.id]} className="h-9 max-w-full"/>}
+                 </div>:
+                 <div key={f.id} className={`mt-2 flex max-w-full items-center gap-2 rounded-lg border px-2 py-2 text-xs ${mine?"border-background/30":"border-border"}`}><FileText size={16}/><span className="max-w-[185px] truncate" title={f.original_name}>{f.original_name}</span><button type="button" title="Aperçu" aria-label={`Aperçu de ${f.original_name}`} onClick={()=>void previewAttachment(f)}><Eye size={16}/></button><button type="button" title="Télécharger" aria-label={`Télécharger ${f.original_name}`} onClick={()=>void openFile(f)}><Download size={16}/></button></div>)}
               <time className="mt-1 block text-right text-[10px] opacity-65">{date(m.created_at)} {mine&&<Check className="ml-0.5 inline" size={11}/>}</time>
             </article>
           </div>;
@@ -509,14 +628,21 @@ export default function OriaCollaboratifChat() {
         {selection.kind==="group"&&mentionOpen&&<div className="mb-2 flex justify-start"><button type="button" role="option" aria-label="Compléter avec @ORIA" className="rounded-xl border border-border bg-background px-4 py-2 text-sm shadow-sm hover:bg-surface-secondary" onMouseDown={e=>e.preventDefault()} onClick={completeOriaMention}><Sparkles size={15} className="mr-2 inline"/>@ORIA <span className="ml-2 text-xs text-muted">Tab ou Entrée</span></button></div>}
         {(selection.kind==="group"||selection.kind==="private")&&<label className="mb-2 flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={webEnabled} onChange={e=>setWebEnabled(e.target.checked)} disabled={busy||pendingAi} aria-label="Recherche Web avec facturation des outils"/>Recherche Web (coût des outils inclus dans le devis)</label>}
         <form onSubmit={e=>void submit(e)} className="flex items-end gap-2">
-          <input ref={fileRef} className="hidden" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.docx,.xlsx,.pptx" onChange={e=>void uploadFile(e)}/>
-          {selection.kind!=="private"&&<button type="button" className="rounded-xl p-3 hover:bg-surface-secondary disabled:opacity-40" title="Joindre un fichier (8 Mo max)" aria-label="Joindre un fichier" disabled={busy||!canWrite} onClick={()=>fileRef.current?.click()}><Paperclip size={20}/></button>}
+          <input ref={fileRef} className="hidden" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.docx,.xlsx,.pptx,.webm,.ogg,.m4a,.mp3,.wav" onChange={e=>void uploadFile(e)}/>
+          {selection.kind==="group"&&<button type="button" className="rounded-xl p-3 hover:bg-surface-secondary disabled:opacity-40" title="Joindre un fichier (8 Mo max)" aria-label="Joindre un fichier" disabled={busy||!canWrite} onClick={()=>fileRef.current?.click()}><Paperclip size={20}/></button>}
+          {selection.kind==="group"&&<button type="button" aria-label={recording?"Arrêter et envoyer la note vocale":"Enregistrer une note vocale"}
+            title={recording?"Arrêter et envoyer":"Enregistrer une note vocale"}
+            className={`rounded-xl p-3 hover:bg-surface-secondary ${recording?"animate-pulse text-red-500":""}`}
+            disabled={busy||!canWrite} onClick={()=>void toggleVoiceRecording()}>
+            {recording?<Square size={19}/>:<Mic size={19}/>}
+          </button>}
           <textarea ref={draftRef} className={`${input} min-h-[45px] max-h-40 flex-1 resize-none`} placeholder={selection.kind==="group"?"Message… ou @ORIA pour l'IA":"Écrivez un message…"} rows={1}
             maxLength={selection.kind==="group"?4000:8000} value={draft} disabled={!canWrite||busy||pendingAi}
             onChange={e=>{setDraft(e.target.value);setMentionOpen(Boolean(suggestOria(e.target.value,e.target.selectionStart)));}} onKeyDown={e=>{if(mentionOpen&&(e.key==="Tab"||e.key==="Enter")){e.preventDefault();completeOriaMention();return;}if(e.key==="Escape")setMentionOpen(false);if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void submit();}}}/>
           <button aria-label="Envoyer" type="submit" disabled={!draft.trim()||busy||!canWrite||pendingAi} className="grid size-[45px] shrink-0 place-items-center rounded-xl bg-foreground text-background disabled:opacity-40"><Send size={19}/></button>
         </form>
-        {busy&&<p className="mt-2 text-xs text-muted" role="status">ORIA prépare sa réponse…</p>}
+        {recording&&<p className="mt-2 text-xs text-muted" role="status">Microphone actif. Touchez Arrêter pour envoyer (5 min max).</p>}
+        {busy&&<p className="mt-2 text-xs text-muted" role="status">Envoi ou génération en cours…</p>}
         {pendingAi&&<p className="mt-2 text-xs text-muted" role="status">Une demande est en cours ou en rapprochement. Son identifiant a été conservé ; aucun nouvel appel payant ne sera déclenché ici.</p>}
       </div>}
     </section>

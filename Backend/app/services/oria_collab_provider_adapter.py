@@ -90,6 +90,7 @@ def quote_collab_text(
     max_output_tokens: int, reasoning_mode: str, message: str, history: list[dict],
     artifact_types: tuple[str, ...] = (),
     web_enabled: bool = False,
+    attachments: list[dict] | None = None,
 ) -> CollabChatQuote:
     """Tarification du fournisseur réellement appelé, sans devis OpenRouter fictif."""
     if reasoning_mode not in ('fast', 'balanced', 'deep'):
@@ -107,6 +108,7 @@ def quote_collab_text(
             model=selection.api_model, message=message, history=history,
             reasoning_mode=reasoning_mode, web=web_enabled,
             artifact_types=artifact_types, max_completion_tokens=max_output_tokens,
+            attachments=attachments,
         )
         quote = OpenRouterTokenBillingService.estimate_reservation(
             provider_model=selection.api_model,
@@ -126,6 +128,7 @@ async def execute_collab_text(
     reasoning_mode: str, max_output_tokens: int,
     artifact_types: tuple[str, ...] = (),
     web_enabled: bool = False,
+    attachments: list[dict] | None = None,
 ) -> CollabChatResult:
     """Un seul appel fournisseur, aucun retry automatique après la réservation."""
     if selection.provider is ChatProvider.OPENAI:
@@ -134,6 +137,7 @@ async def execute_collab_text(
             OpenAIService().chat, model=selection.api_model, message=message,
             history=history, reasoning_mode=reasoning_mode, web=web_enabled,
             artifact_types=artifact_types, max_output_tokens=max_output_tokens,
+            attachments=attachments,
         )
         usage = response.get('usage')
         if not isinstance(usage, dict):
@@ -152,7 +156,7 @@ async def execute_collab_text(
             _oria_openrouter_service().chat, model=selection.api_model,
             message=message, history=history, reasoning_mode=reasoning_mode,
             web=web_enabled, artifact_types=artifact_types,
-            max_completion_tokens=max_output_tokens,
+            max_completion_tokens=max_output_tokens, attachments=attachments,
         )
         bill = OpenRouterTokenBillingService.calculate(response)
         if len(bill.request_ids) != 1:

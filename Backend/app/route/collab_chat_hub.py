@@ -26,6 +26,10 @@ class SendMessage(BaseModel):
     content: str = Field(min_length=1,max_length=8000)
 
 
+class EditHumanMessage(BaseModel):
+    content: str = Field(min_length=1,max_length=4000)
+
+
 @router.get("/boot")
 def boot(workspace_id: UUID, user_id: str|None=Header(None,alias="user-id"),
          authorization: str|None=Header(None,alias="authorization")):
@@ -76,6 +80,15 @@ def send(workspace_id:UUID,room_type:str,room_id:UUID,body:SendMessage,
     return srv.send(actor,str(workspace_id),room_type,str(room_id),body.content,str(body.client_message_id))
 
 
+@router.patch("/groups/{group_id}/messages/{message_id}")
+def edit_group_message(workspace_id: UUID, group_id: UUID, message_id: UUID,
+                       body: EditHumanMessage,
+                       user_id: str|None=Header(None,alias="user-id"),
+                       authorization: str|None=Header(None,alias="authorization")):
+    srv,actor=service(user_id,authorization)
+    return srv.edit_human(actor,str(workspace_id),str(group_id),str(message_id),body.content)
+
+
 @router.get("/notifications")
 def notices(workspace_id:UUID,user_id:str|None=Header(None,alias="user-id"),
     authorization:str|None=Header(None,alias="authorization")):
@@ -110,8 +123,11 @@ async def upload(workspace_id:UUID,room_type:str,room_id:UUID,
         raw=await file.read(MAX_UPLOAD+1)
     finally:
         await file.close()
-    return srv.upload(actor,str(workspace_id),room_type,str(room_id),
-        file.filename or "",raw,file.content_type,caption)
+    import asyncio
+    return await asyncio.to_thread(
+        srv.upload, actor, str(workspace_id), room_type, str(room_id),
+        file.filename or "", raw, file.content_type, caption,
+    )
 
 
 @router.get("/files/{file_id}/url")
