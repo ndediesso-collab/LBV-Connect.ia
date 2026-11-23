@@ -11,7 +11,9 @@ from uuid import uuid4
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config.free_tier_policy import FREE_CHAT_INPUT_TOKENS_MAX, FREE_PDF_OUTPUT_TOKENS_MAX
+from app.config.free_tier_policy import FREE_CHAT_INPUT_TOKENS_MAX
+from app.services.oria_paid_chat_quote import paid_output_tokens
+from app.services.oria_document_intent_v2 import detect_document_creation
 from app.core.supabase import supabase
 from app.route.free_chat import _enabled, _identity, _oria_free_prepare_attachments
 from app.route.ai import _oria_openrouter_service, MODEL_OPENAI_IDS
@@ -28,8 +30,17 @@ router = APIRouter(prefix='/free', tags=['ORIA Gratuit - documents (staging)'])
 logger = logging.getLogger(__name__)
 DOCUMENT_INPUT_OVERHEAD_TOKENS = 5500
 _ALLOWED = {'pdf': 'free_pdf_luna', 'docx': 'free_docx_luna', 'xlsx': 'free_xlsx_luna'}
-# Ce plafond de 6144 tokens existe deja dans la politique du forfait gratuit.
-FREE_DOCUMENT_OUTPUT_TOKENS_MAX = FREE_PDF_OUTPUT_TOKENS_MAX
+# Utilise le meme profil de composition que le Chat documentaire payant.
+# 28k est son budget documentaire adapte; ne jamais tronquer un fichier
+# silencieusement pour rentrer dans un faible solde gratuit.
+def _document_output_cap(*, message: str, fmt: str, input_tokens: int,
+                         reasoning_mode: str, attachment_count: int) -> int:
+    paid_cap = paid_output_tokens(
+        message=message, estimated_input_tokens=input_tokens,
+        reasoning_mode=reasoning_mode, web=False,
+        attachment_count=attachment_count, document_types=(fmt,),
+    )
+    return min(28_000, paid_cap)
 
 class FreeDocumentRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -54,6 +65,11 @@ def _preflight(request: FreeDocumentRequest, uid: str) -> dict:
               + estimate_text_tokens(document_context) + image_tokens)
     if tokens > FREE_CHAT_INPUT_TOKENS_MAX:
         raise HTTPException(413, 'Demande trop volumineuse pour ORIA Gratuit.')
+    output_cap = _document_output_cap(
+        message=request.message, fmt=fmt, input_tokens=tokens,
+        reasoning_mode=request.reasoning_mode,
+        attachment_count=len(request.attachments),
+    )
     gateway = FreeTierGateway(supabase)
     grant = gateway.grant(uid)
     if grant.get('enabled') is not True:
@@ -66,13 +82,13 @@ def _preflight(request: FreeDocumentRequest, uid: str) -> dict:
         if provider is ChatProvider.OPENAI:
             amount, api_xaf = TokenBillingService.estimate_reservation(
                 model='luna', estimated_input_tokens=tokens,
-                max_output_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX,
+                max_output_tokens=output_cap,
                 web_enabled=False, include_api_cost=True,
             )
         elif provider is ChatProvider.OPENROUTER:
             estimated = OpenRouterTokenBillingService.estimate_reservation(
                 provider_model='openai/gpt-6-luna', estimated_input_tokens=tokens,
-                max_output_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX, web_enabled=False,
+                max_output_tokens=output_cap, web_enabled=False,
             )
             amount, api_xaf = estimated.reserved_credits, estimated.reserved_api_cost_xaf
         else:
@@ -82,20 +98,39 @@ def _preflight(request: FreeDocumentRequest, uid: str) -> dict:
         quote = make_free_chat_quote(
             provider=provider.value, reserved_credits=amount,
             reserve_api_xaf=api_xaf, balance=balance,
-            max_output_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX,
+            max_output_tokens=output_cap,
             input_token_budget=tokens,
         )
         quote['action'] = _ALLOWED[fmt]
         quote['format'] = fmt
-        quote['document_kind'] = 'simple'
+        quote['document_kind'] = 'oria_artifact_v1'
         return {'gateway': gateway, 'provider': provider, 'quote': quote,
                 'amount': amount, 'api_xaf': api_xaf, 'cv_decision': cv_decision,
+                'output_cap': output_cap,
                 'document_context': document_context, 'image_attachments': image_attachments}
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception('ORIA free document quote failed')
         raise HTTPException(503, 'Devis documentaire indisponible.') from exc
+
+class FreeDocumentIntentRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    message: str = Field(min_length=1, max_length=12000)
+
+
+@router.post('/document/intent')
+def free_document_intent(
+    payload: FreeDocumentIntentRequest,
+    user_id: str | None = Header(default=None, alias='user-id'),
+    authorization: str | None = Header(default=None, alias='authorization'),
+):
+    """Same explicit document detector used by paid chat; no AI cost."""
+    _enabled()
+    _identity(user_id, authorization)
+    requested = detect_document_creation(payload.message)
+    return {'success': True, 'format': requested if requested in _ALLOWED else None}
+
 
 @router.post('/document/quote')
 def quote_free_document(
@@ -140,7 +175,7 @@ async def create_free_document(
             result = await asyncio.to_thread(
                 OpenAIService().chat, model=model_id, message=provider_message,
                 web=False, attachments=info['image_attachments'], history=[], reasoning_mode=payload.reasoning_mode,
-                artifact_types=(payload.format,), max_output_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX,
+                artifact_types=(payload.format,), max_output_tokens=info['output_cap'],
             )
             usage = result.get('usage')
             if not isinstance(usage, dict):
@@ -151,7 +186,7 @@ async def create_free_document(
             result = await asyncio.to_thread(
                 _oria_openrouter_service().chat, model=model_id, message=provider_message,
                 web=False, attachments=info['image_attachments'], history=[], reasoning_mode=payload.reasoning_mode,
-                artifact_types=(payload.format,), max_completion_tokens=FREE_DOCUMENT_OUTPUT_TOKENS_MAX,
+                artifact_types=(payload.format,), max_completion_tokens=info['output_cap'],
             )
             bill = OpenRouterTokenBillingService.calculate(result)
         else:

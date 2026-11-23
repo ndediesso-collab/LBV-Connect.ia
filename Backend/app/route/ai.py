@@ -1512,6 +1512,40 @@ def _document_result_message(
             "Consulte les erreurs pour les autres fichiers.")
 
 
+def _oria_xlsx_has_populated_cells(data: bytes) -> bool:
+    """Reject malformed or completely empty workbooks from the shared engine.
+
+    Only inspects workbook XML: no formulas are executed. Protects paid AND
+    free document paths. An explicitly requested blank template is exempted
+    by the caller below.
+    """
+    import io
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            sheet_names = [name for name in archive.namelist()
+                           if re.fullmatch(r'xl/worksheets/sheet\d+\.xml', name)]
+            if not sheet_names:
+                return False
+            for name in sheet_names:
+                root = ET.fromstring(archive.read(name))
+                for cell in root.findall(f'.//{ns}sheetData/{ns}row/{ns}c'):
+                    value = cell.find(f'{ns}v')
+                    formula = cell.find(f'{ns}f')
+                    inline = cell.find(f'{ns}is')
+                    if (value is not None and value.text is not None or
+                        formula is not None and bool((formula.text or '').strip()) or
+                        inline is not None and any((t.text or '').strip()
+                            for t in inline.findall(f'.//{ns}t'))):
+                        return True
+    except (zipfile.BadZipFile, ET.ParseError, OSError, ValueError) as exc:
+        raise ArtifactError('Fichier XLSX invalide ou non lisible.') from exc
+    return False
+
+
 def _render_document_results(
     *,
     artifact_payload: dict[str, Any],
@@ -1572,6 +1606,14 @@ def _render_document_results(
     )
     if len(results) != len(expected_types) or {r.extension for r in results} != set(expected_types):
         raise ArtifactError("Le compilateur n'a pas retourné tous les fichiers attendus.")
+    blank_requested = bool(user_message and re.search(
+        r"\b(vierge|entierement vide|entièrement vide|blank|empty)\b",
+        user_message, re.I,
+    ))
+    for artifact in results:
+        if (artifact.extension == "xlsx" and not blank_requested and
+                not _oria_xlsx_has_populated_cells(artifact.data)):
+            raise ArtifactError("Classeur Excel vide : aucune cellule renseignée.")
     return results
 
 

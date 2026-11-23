@@ -11,7 +11,7 @@ _FORMATS = {
     'pdf': r'pdf',
     'docx': r'word|docx',
     'pptx': r'power\s*point|pptx|diaporama',
-    'xlsx': r'excel|xlsx',
+    'xlsx': r'excel|xlsx|classeur|tableur|feuille\s+de\s+calcul',
 }
 _BAD_START = re.compile(
     r'^\s*(?:comment|pourquoi|qu(?:e|\x27est.ce)|explique(?:-moi)?|\n?'

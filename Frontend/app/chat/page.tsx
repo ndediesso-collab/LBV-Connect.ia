@@ -6311,14 +6311,16 @@ export default function ChatPage() {
 
   // ORIA_UNIQUE_PERMISSIONS_V2 : a document quote is checked SERVER-SIDE.
   // No extra quotation screen in the chat. Only explicit creation requests count as consent.
-  function requestedFreeDocument(text: string): "pdf" | "docx" | "xlsx" | null {
-    const request = text.trim().toLowerCase();
-    const explicit = /\b(cr[eé]e|cr[eé]er|g[eé]n[eè]re|g[eé]n[eé]rer|fabrique|r[eé]dige|pr[eé]pare|fais|faites|produis|produire|mets|mettre)\b/.test(request);
-    if (!explicit) return null;
-    if (/\b(pdf)\b/.test(request)) return "pdf";
-    if (/\b(word|docx)\b/.test(request)) return "docx";
-    if (/\b(excel|xlsx|classeur|tableur)\b/.test(request)) return "xlsx";
-    return null;
+  async function requestedFreeDocument(text: string): Promise<"pdf" | "docx" | "xlsx" | null> {
+    // Même détection d'intention que le Chat payant : backend Python unique.
+    // Evite une requête réseau pour le texte sans mention de format.
+    if (!/\b(pdf|word|docx|excel|xlsx|classeur|tableur)\b/i.test(text)) return null;
+    const resolved = await apiFetch<{
+      success: boolean; format: "pdf" | "docx" | "xlsx" | null;
+    }>("/ai/free/document/intent", {
+      method: "POST", body: JSON.stringify({message: text}),
+    });
+    return resolved.success ? resolved.format : null;
   }
 
   async function executeFreeDocument(content: string, format: "pdf" | "docx" | "xlsx", reasoning: "fast" | "balanced", signal?: AbortSignal) {
@@ -6336,19 +6338,18 @@ export default function ChatPage() {
     }
     // The user explicitly requested a file; backend requires confirmed=true.
     const created = await apiFetch<{
-      success: boolean; artifacts?: Array<{filename?: string; download_url?: string; url?: string}>;
+      success: boolean; artifacts?: Array<Record<string, unknown>>;
     }>("/ai/free/document", {method: "POST", body: JSON.stringify({...request, confirmed: true}), signal});
-    if (!created.success || !created.artifacts?.length) {
-      throw new Error("Le document n'a pas été confirmé. Vérifiez Mes créations avant de réessayer.");
+    const actualArtifacts = (created.artifacts || [])
+      .map((raw) => normalizeGeneratedArtifact(raw))
+      .filter((a): a is GeneratedArtifact => a !== null);
+    if (!created.success || actualArtifacts.length === 0) {
+      throw new Error("Aucun fichier validé et enregistré. Vérifie Mes créations avant de réessayer.");
     }
-    const items = created.artifacts.map((item) => {
-      const rawUrl = item.download_url || item.url || "";
-      const safeUrl = /^https:\/\//i.test(rawUrl) || /^\/(?!\/)/.test(rawUrl) ? rawUrl : "";
-      const label = (item.filename || (format === "pdf" ? "Document PDF" : format === "xlsx" ? "Classeur Excel" : "Document Word"))
-        .replace(/[\[\]\n\r]/g, " ");
-      return safeUrl ? `- [${label}](${safeUrl})` : `- ${label} (retrouvable dans Mes créations)`;
-    });
-    return `Votre document a été créé.\n\n${items.join("\n")}`;
+    return {
+      message: actualArtifacts.length === 1 ? "Ton fichier est prêt. Tu peux le prévisualiser ou le télécharger." : "Tes fichiers sont prêts.",
+      artifacts: actualArtifacts,
+    };
   }
 
   async function planFreeCv(content: string): Promise<null | {ready: boolean; answer: string; docMessage?: string; docFormat?: "pdf" | "docx"}> {
@@ -6526,8 +6527,9 @@ export default function ChatPage() {
       await saveMessageRemote(userMessage);
       if (freeController.signal.aborted) return;
       const cvPlan = await planFreeCv(content);
-      const documentFormat = cvPlan?.ready ? cvPlan.docFormat : requestedFreeDocument(content);
+      const documentFormat = cvPlan?.ready ? cvPlan.docFormat : await requestedFreeDocument(content);
       let answerText: string;
+      let freeDocumentArtifacts: GeneratedArtifact[] = [];
       let reconciliationRequired = false;
       let serverPersistedMessageId: string | null = null;
       if (cvPlan && !cvPlan.ready) {
@@ -6535,8 +6537,11 @@ export default function ChatPage() {
       } else if (cvPlan?.ready) {
         answerText = "La génération de CV est réservée aux packs payants. Je peux néanmoins t'aider à rédiger son contenu ici.";
       } else if (documentFormat) {
-        answerText = await executeFreeDocument(content, documentFormat,
+        setChatStatusStep("creating_artifact");
+        const documentResult = await executeFreeDocument(content, documentFormat,
           reasoningMode === "fast" ? "fast" : "balanced", freeController.signal);
+        answerText = documentResult.message;
+        freeDocumentArtifacts = documentResult.artifacts;
       } else {
         streamedAssistantId = crypto.randomUUID();
         const pendingAssistantId = streamedAssistantId;
@@ -6602,10 +6607,19 @@ export default function ChatPage() {
         reconciliationRequired = finalResult.requires_reconciliation === true;
       }
       setAttachments([]);
+      const assistantId = serverPersistedMessageId || crypto.randomUUID();
       const answer: ChatMessage = {
-        id: serverPersistedMessageId || crypto.randomUUID(), conversationId, role: "assistant",
-        content: answerText, createdAt: new Date().toISOString(),
+        id: assistantId, conversationId, role: "assistant",
+        content: freeDocumentArtifacts.length
+          ? [answerText, buildArtifactMessageMarkers(freeDocumentArtifacts)].join("\n\n")
+          : answerText,
+        createdAt: new Date().toISOString(),
       };
+      if (freeDocumentArtifacts.length) {
+        setGeneratedArtifacts((current) => mergeGeneratedArtifacts(
+          current, freeDocumentArtifacts.map((artifact) => ({...artifact, messageId: assistantId})),
+        ));
+      }
       setMessages((current) => activeConversationRef.current === conversationId
         ? streamedAssistantId
           ? current.map((entry) => entry.id === streamedAssistantId ? answer : entry)
