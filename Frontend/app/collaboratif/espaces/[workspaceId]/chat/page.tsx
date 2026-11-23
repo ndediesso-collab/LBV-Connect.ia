@@ -22,6 +22,8 @@ type OwnWallet = { success: boolean; workspace_id: string; member_user_id: strin
 type DeliveryState = {success: boolean;workspace_id:string;target_id:string;
   request_id:string;state:string;actual_credits?:number|null;
   phase?:string;seq?:number;preview?:string;receipt_ready?:boolean;updated_at?:string};
+// ORIA_COLLAB_P9_INLINE_PROGRESS — cet objet est uniquement visuel et n'engage aucun crédit.
+type OptimisticGroupMessage = {group:string;request:string;content:string;createdAt:number;ai:boolean};
 type CollabModelOption = { id: string; label: string; reasoning_modes?: string[] };
 type CollabModelResponse = { success: boolean; workspace_id: string;
   provider: "openai" | "openrouter"; models: string[];
@@ -34,6 +36,24 @@ const input = "w-full rounded-xl border border-border bg-background px-3 py-2.5 
 const smallButton = "rounded-xl border border-border bg-surface px-3 py-2 text-sm transition hover:bg-surface-secondary disabled:opacity-40";
 const darkButton = "rounded-xl bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-40";
 const mentionOria = /(^|[^\w])@oria(?!\w)/i;
+const generationSteps = ["Envoi", "Préparation", "Génération", "Livraison"] as const;
+function generationStep(phase:string,text:string):number {
+  if(phase==="starting")return 0;
+  if(phase==="provider_complete"||phase==="settled")return 3;
+  if(phase==="running"&&Boolean(text))return 2;
+  return 1;
+}
+function generationStatus(phase:string,text:string):string {
+  switch(phase){
+    case "starting": return "Transmission de votre demande à ORIA…";
+    case "reconnecting": return "Retrouvons la génération en cours…";
+    case "not_started": return "Vérification et réservation en cours…";
+    case "running": return text ? "Réponse en cours de rédaction…" : "ORIA prépare sa réponse avec le modèle sélectionné…";
+    case "provider_complete": return "Réponse reçue. Enregistrement et vérification des crédits…";
+    case "uncertain": return "Résultat en cours de vérification. Aucun nouvel appel IA.";
+    default: return "Traitement en cours…";
+  }
+}
 const date = (value: string) => { try { return new Date(value).toLocaleTimeString("fr-GA", {hour:"2-digit",minute:"2-digit"}); } catch { return ""; } };
 const name = (p: { first_name?: string | null; last_name?: string | null }) => [p.first_name,p.last_name].filter(Boolean).join(" ").trim() || "Collaborateur";
 const merge = (old: Message[], incoming: Message[]) => {
@@ -86,6 +106,7 @@ export default function OriaCollaboratifChat() {
   const [selectedPerson, setSelectedPerson] = useState("");
   const [pendingAi, setPendingAi] = useState(false);
   const [livePreview, setLivePreview] = useState<{group:string;request:string;text:string;phase:string}|null>(null);
+  const [optimisticGroupMessage,setOptimisticGroupMessage] = useState<OptimisticGroupMessage|null>(null);
   const monitorRef = useRef<{key:string;abort:AbortController}|null>(null);
   const recoverRef = useRef<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
@@ -201,6 +222,15 @@ export default function OriaCollaboratifChat() {
     if(seq!==latestLoad.current || !current || current.kind!==picked.kind || current.id!==picked.id)return;
     const incoming=Array.isArray(data.messages)?data.messages:[];
     setMessages(previous=>merge(older?previous:previous,incoming));
+    if(!older && picked.kind==="group") {
+      setOptimisticGroupMessage(previous=>{
+        if(!previous||previous.group!==picked.id)return previous;
+        const found=incoming.some(m=>m.ai_request_id===previous.request ||
+          (m.sender_user_id===ownId && m.content===previous.content &&
+            Date.parse(m.created_at)>=previous.createdAt-15000));
+        return found ? null : previous;
+      });
+    }
     if(!older)setBefore(incoming.length>=70?incoming[0].id:null);
     else setBefore(incoming.length>=70?incoming[0].id:null);
     if(picked.kind!=="private"){
@@ -216,7 +246,7 @@ export default function OriaCollaboratifChat() {
         }
       } catch { setFiles([]); /* Le fil reste lisible pendant une panne fichiers. */ }
     }
-  }, [hub,root,space]);
+  }, [hub,root,space,ownId]);
 
   const pendingKey = useCallback((picked:Selection)=>
     `oria-collab-pending:${ownId}:${space}:${picked.kind}:${picked.id}`,[ownId,space]);
@@ -254,8 +284,12 @@ export default function OriaCollaboratifChat() {
             try{state=JSON.parse(event.slice(6)) as DeliveryState;}catch{}
             if(state?.request_id===requestId&&state.workspace_id===space&&state.target_id===picked.id){
               if(selectedRef.current?.id===picked.id&&selectedRef.current.kind==='group'){
-                if(state.state==='reserved'&&typeof state.preview==='string'&&state.preview){
-                  setLivePreview({group:picked.id,request:requestId,text:state.preview,phase:state.phase??'running'});
+                // Montrer la bulle dès la réservation, avant le premier delta.
+                // Les PDF ne publient aucun fragment de JSON de composition.
+                if(state.state==='reserved'){
+                  setLivePreview(previous=>({group:picked.id,request:requestId,
+                    text:typeof state.preview==='string'?state.preview:(previous?.request===requestId?previous.text:''),
+                    phase:state.phase??'running'}));
                 }
                 if(state.state==='settled'){
                   terminal=true;setLivePreview(null);setPendingAi(false);
@@ -298,7 +332,12 @@ export default function OriaCollaboratifChat() {
       } catch { /* Le statut local continue à fonctionner si le contrôle distant est indisponible. */ }
     }
     if(!requestId)return;
-    if(picked.kind==='group')void watchDeliveryStream(picked,requestId);
+    if(picked.kind==='group'){
+      // Également visible en revenant dans le groupe après navigation.
+      setLivePreview(previous=>previous?.group===picked.id&&previous.request===requestId
+        ?previous:{group:picked.id,request:requestId,text:'',phase:'reconnecting'});
+      void watchDeliveryStream(picked,requestId);
+    }
     if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind)
       setPendingAi(true);
     const endpoint=picked.kind==="group"?
@@ -334,8 +373,12 @@ export default function OriaCollaboratifChat() {
           setNotice('Demande en rapprochement : aucun second appel fournisseur autorisé automatiquement.');
         }
       } else if(['reserved','pending'].includes(status.state)){
-        if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind)
+        if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind){
+          if(picked.kind==='group')setLivePreview(previous=>({group:picked.id,request:requestId,
+            text:typeof status.preview==='string'?status.preview:(previous?.request===requestId?previous.text:''),
+            phase:status.phase??'not_started'}));
           setNotice('ORIA traite une demande déjà enregistrée. Le résultat restera dans le fil après validation.');
+        }
       }
     }catch{
       if(selectedRef.current?.id===picked.id && selectedRef.current?.kind===picked.kind){
@@ -366,13 +409,13 @@ export default function OriaCollaboratifChat() {
 
   useEffect(()=>{
     if(viewRef.current)viewRef.current.scrollTop=viewRef.current.scrollHeight;
-  },[messages.length,selection?.id]);
+  },[messages.length,selection?.id,optimisticGroupMessage?.request]);
 
   useEffect(()=>{
     const view=viewRef.current;
     if(view && view.scrollHeight-view.scrollTop-view.clientHeight < 250)
       view.scrollTop=view.scrollHeight;
-  },[livePreview?.text]);
+  },[livePreview?.text,livePreview?.phase]);
 
   function pick(kind:RoomKind,id:string){
     if(recordingRef.current?.state==="recording"){sendRecordingRef.current=false;recordingRef.current.stop();setRecording(false); }
@@ -416,11 +459,15 @@ export default function OriaCollaboratifChat() {
     if(ai && current.kind==="private" && !privateAiEnabled){setError("Le chat IA privé professionnel n'est pas activé dans cet espace.");return;}
     const selectedModes = modelCatalog.find(item=>item.id===model)?.reasoning_modes ?? [];
     if(ai && !selectedModes.includes(mode)){setError("Ce niveau de raisonnement n'est pas proposé par le modèle sélectionné.");return;}
-    setBusy(true);setError("");setNotice("");
+    const requestId=crypto.randomUUID();
+    // Le message est montré immédiatement dans le groupe, sans attendre le réseau.
+    if(current.kind==='group')setOptimisticGroupMessage({group:current.id,request:requestId,
+      content,createdAt:Date.now(),ai});
+    setDraft("");setBusy(true);setError("");setNotice("");
+    if(ai && current.kind==='group')setLivePreview({group:current.id,request:requestId,text:'',phase:'starting'});
     try{
       if(ai){
         const endpoint=current.kind==="group"?`${root}/ai/groups/${current.id}/ask`:`${root}/ai/private/${current.id}/ask`;
-        const requestId=crypto.randomUUID();
         try{localStorage.setItem(pendingKey(current),requestId);}catch{}
         if(current.kind==='group')void watchDeliveryStream(current,requestId);
         const body=current.kind==="group"?{request_id:requestId,model,reasoning_mode:mode,web:webEnabled,prompt:content}
@@ -431,17 +478,40 @@ export default function OriaCollaboratifChat() {
         setPendingAi(false);
       } else {
         const result=await collabRequest<{workspace_id:string;success:boolean}>(`${hub}/rooms/${current.kind}/${current.id}/messages`,"POST",
-          {client_message_id:crypto.randomUUID(),content});
+          {client_message_id:requestId,content});
         if(!result.success||result.workspace_id!==space)throw new Error("Message non confirmé.");
       }
-      setDraft("");setLivePreview(null);await load(current);await refreshBoot();void refreshOwnWallet().catch(()=>{});
+      await load(current);
+      setOptimisticGroupMessage(previous=>previous?.request===requestId?null:previous);
+      setLivePreview(previous=>previous?.request===requestId?null:previous);
+      await refreshBoot();void refreshOwnWallet().catch(()=>{});
     }catch(e){
-      setError(e instanceof Error?e.message:"Envoi impossible.");
-      // Seul un refus apres appel fournisseur potentiellement facture bloque un retry.
-      // Les erreurs de catalogue, de flags et de pack ne doivent pas figer la saisie.
-      if(ai && /incertain|réservés|réservé pour|rapproch|vérification.*débit/i.test(e instanceof Error?e.message:"")){
-        setPendingAi(true);
-        setNotice("Demande IA possiblement facturée : ne pas la relancer. Le suivi d'état reprendra automatiquement.");
+      const message=e instanceof Error?e.message:"Envoi impossible.";
+      setError(message);
+      if(!ai){
+        // Envoi humain non confirmé : pas de doublon fantôme.
+        setOptimisticGroupMessage(previous=>previous?.request===requestId?null:previous);
+        setDraft(previous=>previous||content);
+      } else {
+        // Réponses de pré-validation connues : aucun appel fournisseur n'a été lancé.
+        const definitelyPreflight=/la demande doit contenir @oria|mode de raisonnement invalide|contexte du groupe est trop volumineux|un participant n.a pas assez de crédits|quotas des participants sont insuffisants|action du modèle absente|modèle non autorisé|modèle ou devis fournisseur indisponible|format indisponible|erreur serveur \((400|402|403|422)\)/i.test(message);
+        if(definitelyPreflight){
+          try{localStorage.removeItem(pendingKey(current));}catch{}
+          setOptimisticGroupMessage(previous=>previous?.request===requestId?null:previous);
+          setLivePreview(previous=>previous?.request===requestId?null:previous);
+          setPendingAi(false);
+          setDraft(previous=>previous||content);
+        } else {
+          // Une autre erreur HTTP ne prouve PAS l'absence d'un appel payant.
+          // Conserver l'ID, vérifier en base, et ne jamais refaire l'appel.
+          if(current.kind==='group'){
+            setPendingAi(true);
+            setLivePreview(previous=>previous?.request===requestId
+              ?{...previous,phase:'reconnecting'}:{group:current.id,request:requestId,text:'',phase:'reconnecting'});
+            void checkPending(current);
+          }
+          setNotice("Vérification de la demande en cours. Aucun nouvel appel fournisseur ne sera déclenché automatiquement.");
+        }
       }
     }finally{setBusy(false);}
   }
@@ -708,12 +778,38 @@ export default function OriaCollaboratifChat() {
             </article>
           </div>;
         })}
+        {selection?.kind==='group'&&optimisticGroupMessage?.group===selection.id&&
+          !messages.some(m=>m.ai_request_id===optimisticGroupMessage.request ||
+            (m.sender_user_id===ownId&&m.content===optimisticGroupMessage.content&&
+              Date.parse(m.created_at)>=optimisticGroupMessage.createdAt-15000))&&
+          <div className="flex justify-end" aria-label="Message envoyé en cours de confirmation">
+            <article className="max-w-[88%] break-words rounded-2xl rounded-br-sm bg-foreground px-4 py-3 text-sm text-background sm:max-w-[76%]">
+              <p className="whitespace-pre-wrap leading-relaxed">{optimisticGroupMessage.content}</p>
+              <p className="mt-1 text-right text-[10px] opacity-65">Envoi en cours…</p>
+            </article>
+          </div>}
         {selection?.kind==='group'&&livePreview?.group===selection.id&&
           <div className="flex justify-start" role="status" aria-live="polite">
             <article className="max-w-[88%] rounded-2xl rounded-bl-sm border border-border bg-surface px-4 py-3 text-sm sm:max-w-[76%]">
-              <div className="mb-1 font-semibold">ORIA <span className="ml-2 text-xs font-normal opacity-60">en cours…</span></div>
-              <p className="whitespace-pre-wrap leading-relaxed">{livePreview.text}</p>
-              {livePreview.phase==='provider_complete'&&<p className="mt-1 text-xs text-muted">Finalisation et vérification du débit…</p>}
+              <div className="mb-2 flex items-center gap-2 font-semibold">
+                <span className="grid size-6 place-items-center rounded-full bg-foreground text-xs text-background">O</span>
+                ORIA <span className="text-xs font-normal text-muted">en cours…</span>
+              </div>
+              <div className="mb-3 flex flex-wrap items-center gap-2" aria-label="Étapes de génération">
+                {generationSteps.map((step,index)=>{
+                  const active=generationStep(livePreview.phase,livePreview.text)===index;
+                  const done=generationStep(livePreview.phase,livePreview.text)>index;
+                  return <span key={step} className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${active?'border-foreground font-semibold':'border-border text-muted'}`}>
+                    {done?<Check size={11}/>:active?<span className="size-2 animate-pulse rounded-full bg-foreground"/>:<span className="size-2 rounded-full border border-border"/>}{step}
+                  </span>;
+                })}
+              </div>
+              <div className="flex items-center gap-2 text-xs text-muted" role="status">
+                <span aria-hidden="true" className="size-3 shrink-0 animate-spin rounded-full border-2 border-border border-t-foreground"/>
+                {generationStatus(livePreview.phase,livePreview.text)}
+              </div>
+              {Boolean(livePreview.text)&&<p className="mt-3 whitespace-pre-wrap leading-relaxed">{livePreview.text}<span aria-hidden="true" className="animate-pulse">▍</span></p>}
+              {livePreview.phase==='reconnecting'&&<p className="mt-2 text-xs text-muted">La réponse est suivie sur le serveur. Vous pouvez revenir dans ce groupe sans relancer l'IA.</p>}
             </article>
           </div>}
       </div>
