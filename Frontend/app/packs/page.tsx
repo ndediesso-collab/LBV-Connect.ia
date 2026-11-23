@@ -2531,7 +2531,7 @@ export default function PacksPage() {
                 <p className="text-3xl font-semibold tabular-nums">1 500 <span className="text-base">FCFA</span></p>
                 <p className="mt-1 text-xs text-muted">{language === "fr" ? "Renouvelable" : "Renewable"}</p>
                 <button type="button"
-                  disabled={isPaying !== null || discoverySession === "error" ||
+                  disabled={isPaying !== null ||
                     (discoverySession === "authenticated" && discoveryStatus?.enabled !== true)}
                   onClick={() => {
                     void (async () => {
@@ -2553,9 +2553,7 @@ export default function PacksPage() {
                         })();
                   }}
                   className="mt-4 w-full rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-                  {discoverySession === "error"
-                    ? language === "fr" ? "Vérification nécessaire" : "Verification required"
-                    : isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting
+                  {isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting
                     : language === "fr" ? "Choisir Découverte" : "Choose Discovery"}
                 </button>
               </div>
