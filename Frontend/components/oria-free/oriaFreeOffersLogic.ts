@@ -1,5 +1,7 @@
-/** Notifications commerciales pour l'accès gratuit. Aucun appel API et aucun paiement. */
-export type OfferThreshold = 90 | 50 | 0;
+/** ORIA_FREE_NOTICES_90_V2 -- notifications gratuites et seuils proportionnels au quota.
+ * Aucun appel API ni paiement. Le quota vient du serveur, et vaut 90/jour actuellement.
+ */
+export type OfferThreshold = number;
 export type OfferNotice =
   | {kind: "threshold"; threshold: OfferThreshold}
   | {kind: "reminder"; slot: "matin" | "apres-midi" | "soir"};
@@ -38,7 +40,7 @@ export function parseOfferMemory(raw: string | null): OfferMemory {
     const data = JSON.parse(raw) as Record<string, unknown>;
     return {
       seenThresholds: Array.isArray(data.seenThresholds)
-        ? data.seenThresholds.filter((v): v is OfferThreshold => v === 90 || v === 50 || v === 0)
+        ? data.seenThresholds.filter((v): v is OfferThreshold => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 10000)
         : [],
       seenSlots: Array.isArray(data.seenSlots)
         ? data.seenSlots.filter((v): v is string => typeof v === "string" && OFFER_SLOTS.some((s) => s.id === v))
@@ -74,14 +76,23 @@ export function decideFreeOffer(input: {
     seenSlots: [...memory.seenSlots],
     lastShownAt: memory.lastShownAt,
   };
-  for (const threshold of [0, 50, 90] as const) {
+  // 90 credits/jour => alertes a 45, 15 puis 0; pas d'alerte a 90.
+  // Le calcul reste valable si l'administrateur change le quota plus tard.
+  const quota = Math.max(1, Math.floor(input.dailyCredits));
+  const half = Math.max(1, Math.floor(quota / 2));
+  const critical = Math.max(1, Math.floor(quota / 6));
+  const thresholds = [...new Set([0, critical, half])].sort((a, b) => a - b);
+  for (const threshold of thresholds) {
     if (freeCredits <= threshold && !next.seenThresholds.includes(threshold)) {
-      // Ne jamais afficher 90 et 50 juste après un saut directement vers 0.
-      next.seenThresholds = [...new Set([...next.seenThresholds, ...([90, 50, 0] as const).filter((n) => freeCredits <= n)])];
+      // Si le solde saute plusieurs seuils, une seule alerte (la plus urgente).
+      next.seenThresholds = [...new Set([...next.seenThresholds,
+        ...thresholds.filter((n) => freeCredits <= n)])];
       next.lastShownAt = nowMs;
       return {memory: next, notice: {kind: "threshold", threshold}};
     }
   }
+  // Le message d'epuisement contient deja les offres : pas de rappel supplementaire a zero.
+  if (freeCredits === 0) return {memory: next, notice: null};
   const passed = OFFER_SLOTS.filter((s) => clock.minute >= s.start);
   if (passed.length === 0) return {memory: next, notice: null};
   const latest = passed[passed.length - 1];

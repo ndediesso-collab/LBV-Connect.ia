@@ -17,13 +17,15 @@ type FreeStatus = {
 };
 
 type Props = {status: FreeStatus | null; enabled: boolean; busy?: boolean; onRefresh?: () => Promise<void>};
-const VERSION = "oria_free_offres_v1";
+// ORIA_FREE_NOTICES_90_V2 : nouvelle memoire quotidienne sans les anciens seuils 90/50/0.
+const VERSION = "oria_free_offres_v2_90";
 
 /** Affichage dans l'application. Ce ne sont pas des notifications push système. */
 export default function OriaFreeOfferNotifications({status, enabled, busy = false, onRefresh}: Props) {
   const [uid, setUid] = useState<string | null>(null);
   const offersEnabled = enabled && process.env.NEXT_PUBLIC_ORIA_FREE_OFFERS_ENABLED !== "0";
   const [notice, setNotice] = useState<OfferNotice | null>(null);
+  const [noticeDay, setNoticeDay] = useState<string | null>(null);
   const [clockTick, setClockTick] = useState(0);
   const fallback = useRef<Record<string, OfferMemory>>({});
   const lastDay = useRef<string | null>(null);
@@ -78,26 +80,54 @@ export default function OriaFreeOfferNotifications({status, enabled, busy = fals
     const clock = librevilleClock(now);
     const key = `${VERSION}:${uid}:${clock.day}`;
     let memory: OfferMemory = fallback.current[key] ?? initialOfferMemory();
-    try {memory = parseOfferMemory(window.localStorage.getItem(key));} catch {/* navigateur privé : fallback mémoire */}
+    try {
+      const stored = window.localStorage.getItem(key);
+      if (stored !== null) memory = parseOfferMemory(stored);
+    } catch {/* navigateur privé : fallback mémoire */}
     const outcome = decideFreeOffer({memory, freeCredits, dailyCredits: status.daily_credits || 90,
       nowMs: now.getTime(), clock, hasPurchasedCredits: purchasedCredits > 0, enabled: offersEnabled});
     fallback.current[key] = outcome.memory;
     try {window.localStorage.setItem(key, JSON.stringify(outcome.memory));} catch {/* repli en mémoire */}
-    if (outcome.notice) setNotice(outcome.notice);
+    if (outcome.notice) {
+      setNotice(outcome.notice);
+      setNoticeDay(clock.day);
+    } else {
+      // Une vieille alerte de zero doit disparaitre apres renouvellement/remboursement.
+      setNotice((previous) => previous?.kind === "threshold" && (
+        (previous.threshold === 0 && freeCredits > 0) ||
+        (previous.threshold > 0 && freeCredits > previous.threshold)
+      ) ? null : previous);
+    }
   }, [uid, status, offersEnabled, clockTick]);
 
-  if (busy || !notice || !uid || !offersEnabled || !status || status.paid_pack_active || (status.wallet?.purchased_credits ?? 0) > 0) return null;
+  // Le serveur est la seule source de verite, jamais le seuil ancien memorise.
+  const available = status?.wallet?.free_credits;
+  const daily = typeof status?.daily_credits === "number" && status.daily_credits > 0
+    ? Math.floor(status.daily_credits) : 90;
+  if (busy || !notice || !uid || !offersEnabled || !status?.success ||
+      status.paid_pack_active || !status.wallet ||
+      (status.wallet.purchased_credits ?? 0) > 0 ||
+      typeof available !== "number" || !Number.isFinite(available) ||
+      noticeDay !== librevilleClock(new Date()).day) return null;
+
+  const remaining = Math.max(0, Math.floor(available));
+  if (notice.kind === "threshold" && (
+    (notice.threshold === 0 && remaining !== 0) ||
+    (notice.threshold > 0 && (remaining === 0 || remaining > notice.threshold))
+  )) return null;
 
   const headline = notice.kind === "reminder"
     ? "Découvre tout le potentiel d'ORIA"
-    : notice.threshold === 0
+    : remaining === 0
       ? "Tes crédits gratuits du jour sont épuisés"
-      : `Plus que ${notice.threshold} crédits gratuits`;
+      : `Il te reste ${remaining} crédit${remaining > 1 ? "s" : ""} gratuit${remaining > 1 ? "s" : ""}`;
   const description = notice.kind === "reminder"
-    ? "Profite de la bêta et continue ton expérience avec une recharge ou le Pack Découverte."
-    : notice.threshold === 0
-      ? "Reviens lors du prochain renouvellement gratuit ou continue dès maintenant avec une offre payante."
-      : "Tu approches de la fin de ton quota gratuit. Voici comment continuer sans interrompre ton expérience.";
+    ? `Avec tes ${daily} crédits gratuits quotidiens, tu peux essayer ORIA. Les recharges sont facultatives.`
+    : remaining === 0
+      ? `Ton quota gratuit est à zéro. Il se renouvelle à minuit, heure de Libreville, sous réserve d'éligibilité.`
+      : remaining <= Math.max(1, Math.floor(daily / 6))
+        ? `Ton solde gratuit est presque épuisé (${remaining}/${daily}). Certaines créations peuvent demander plus de crédits.`
+        : `Tu as utilisé environ la moitié de ton quota quotidien (${remaining}/${daily} restants). Renouvellement à minuit, heure de Libreville.`;
 
   return (
     <aside role="status" aria-live="polite" aria-label="Offres ORIA" className="fixed right-3 top-20 z-[90] max-h-[calc(100dvh-6rem)] w-[calc(100%-1.5rem)] max-w-sm overflow-y-auto rounded-2xl border border-border bg-background p-4 text-foreground shadow-2xl sm:bottom-6 sm:p-5">
