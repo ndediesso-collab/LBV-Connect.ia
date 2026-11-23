@@ -60,6 +60,10 @@ export default function OriaScrollExperience() {
           </div>
         </div>
         <div className={styles.overline}>ORIA · NÉE AU GABON POUR L'AFRIQUE</div>
+        <div className={styles.mobileLaunch}>
+          <Link href="/chat"><span>Ouvrir ORIA</span><ArrowUpRight size={18}/></Link>
+          <a href="#oria-video-pwa"><ChevronDown size={15}/> Descends pour voir la méthode d’installation</a>
+        </div>
         <div className={styles.scrollHint}><ChevronDown size={17}/> Faites défiler pour découvrir</div>
       </div>
       <div className={styles.steps}>

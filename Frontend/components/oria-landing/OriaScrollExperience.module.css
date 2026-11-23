@@ -29,3 +29,12 @@
 @media(max-width:900px){.floatCard{width:170px;padding:13px}.floatCard strong{font-size:17px}.cardMath{left:2%}.cardFiles{right:1%}.cardAI{right:1%}.bottom{grid-template-columns:1fr}.videoCard{max-width:360px;width:100%;margin:auto;transform:none}}
 @media(max-width:600px){.sticky{min-height:530px}.phone{height:min(56svh,510px);border-radius:30px;padding:21px 12px 15px;gap:14px}.phoneTop{font-size:13px}.chatBubble,.answer{font-size:10px}.floatCard{width:120px;padding:9px;border-radius:12px}.floatCard strong{font-size:13px}.floatCard p,.floatCard span{font-size:8px}.cardMath{left:-4%;top:24%}.cardFiles{right:-6%;top:20%}.cardAI{right:-2%;bottom:17%}.overline{top:20px;left:5%;font-size:8px}.step{padding:10% 5%;min-height:95svh}.step h2{font-size:clamp(34px,10vw,48px)}.bottom{padding:70px 5%}.bottomCopy h2{font-size:42px}.bottomCopy>p{font-size:15px}}
 @media(prefers-reduced-motion:reduce){.phoneWrap,.orb,.floatCard,.gridPlane{transform:none!important;will-change:auto}.phoneWrap{transform:translate(-50%,-50%)!important}.steps{margin-top:0;background:#111}.step{min-height:40vh}.sticky{height:70svh}}
+
+/* Accès ORIA directement devant la scène téléphone sur mobile. */
+.mobileLaunch{display:none}
+@media(max-width:600px){
+  .mobileLaunch{position:absolute;z-index:9;bottom:69px;left:50%;display:flex;flex-direction:column;align-items:center;gap:8px;width:min(91%,340px);transform:translateX(-50%);text-align:center;pointer-events:auto}
+  .mobileLaunch>a:first-child{display:flex;width:100%;min-height:48px;align-items:center;justify-content:center;gap:9px;border-radius:15px;background:#fff;color:#090909;font-size:15px;font-weight:800;box-shadow:0 10px 40px #0009;text-decoration:none}
+  .mobileLaunch>a:last-child{display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:5px 9px;border-radius:20px;background:#050505df;color:#eee;font-size:11px;font-weight:600;line-height:1.4;text-decoration:none}
+  .scrollHint{bottom:14px}
+}

@@ -4039,6 +4039,26 @@ function OriaCoursesPanel({ language, wallet, userId, onWalletRefresh, onClose }
   );
 }
 
+
+/** Horodatage des discussions affiché en heure de Libreville. */
+function oriaMessageDateKey(value: string | null | undefined): string | null {
+  const date = new Date(value || "");
+  if (!Number.isFinite(date.getTime())) return null;
+  return new Intl.DateTimeFormat("fr-FR", { timeZone: "Africa/Libreville", day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
+}
+function oriaMessageDateLabel(value: string | null | undefined, language: OriaLanguage): string {
+  const key = oriaMessageDateKey(value);
+  if (!key) return "";
+  if (key === oriaMessageDateKey(new Date().toISOString())) return language === "fr" ? "Aujourd’hui" : "Today";
+  if (key === oriaMessageDateKey(new Date(Date.now() - 86_400_000).toISOString())) return language === "fr" ? "Hier" : "Yesterday";
+  return new Intl.DateTimeFormat(language === "fr" ? "fr-FR" : "en-GB", { timeZone: "Africa/Libreville", day: "numeric", month: "long", year: "numeric" }).format(new Date(value!));
+}
+function oriaMessageTimeLabel(value: string | null | undefined, language: OriaLanguage): string {
+  const date = new Date(value || "");
+  if (!Number.isFinite(date.getTime())) return "";
+  return new Intl.DateTimeFormat(language === "fr" ? "fr-FR" : "en-GB", { timeZone: "Africa/Libreville", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
 export default function ChatPage() {
   const [language, setLanguage] =
     useState<OriaLanguage>("fr");
@@ -8146,6 +8166,11 @@ export default function ChatPage() {
         </div>
 
         <div className="space-y-1 border-t border-border px-4 py-3">
+          <Link href="/collaboratif/espaces" onClick={() => setSidebarOpen(false)}
+            className="flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-3 py-3 text-sm font-semibold text-foreground transition hover:bg-surface-tertiary">
+            <Sparkles size={17} />
+            {language === "fr" ? "ORIA Collaboratif" : "ORIA Collaborative"}
+          </Link>
           <Link
             href="/credits"
             onClick={() =>
@@ -8228,6 +8253,11 @@ export default function ChatPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            {wallet?.is_pack_active && (wallet.pack_id === "pro_pack" || wallet.pack_id === "business_pack") && (
+              <Link href="/collaboratif/espaces" className="hidden items-center gap-1.5 rounded-xl border border-border bg-surface px-3 py-2 text-xs font-semibold text-foreground transition hover:bg-surface-secondary lg:inline-flex">
+                <Sparkles size={15} /> {language === "fr" ? "Collaboratif" : "Collaborative"}
+              </Link>
+            )}
             <Link
               href={packCtaHref}
               data-oria-pack-cta="desktop"
@@ -8341,7 +8371,7 @@ export default function ChatPage() {
                       !getVisibleMessageContent(item.content || "").trim()
                     ),
                   ).map(
-                    (item) => (
+                    (item, index, datedMessages) => (
                       <div
                         key={
                           item.id
@@ -8353,6 +8383,15 @@ export default function ChatPage() {
                             : "flex min-w-0 w-full flex-col items-start oria-message-enter"
                         }
                       >
+                        {oriaMessageDateKey(item.createdAt) && (index === 0 || oriaMessageDateKey(datedMessages[index - 1]?.createdAt) !== oriaMessageDateKey(item.createdAt)) && (
+                          <div className="mb-2 flex w-full justify-center py-1" role="separator">
+                            <span className="rounded-full border border-border bg-surface-secondary px-3 py-1 text-xs font-medium text-muted-strong">{oriaMessageDateLabel(item.createdAt, language)}</span>
+                          </div>
+                        )}
+                        {oriaMessageDateKey(item.createdAt) && (
+                          <time dateTime={item.createdAt} title={oriaMessageDateLabel(item.createdAt, language)}
+                            className="mb-1 px-1 text-[11px] tabular-nums text-muted">{oriaMessageTimeLabel(item.createdAt, language)}</time>
+                        )}
                         <div
                           className={
                             item.role ===

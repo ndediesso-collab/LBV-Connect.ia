@@ -1063,7 +1063,7 @@ const FAQS_EN = [
   { question: "How many credits are included in each pack?", answer: "Light: 15,000; Intermediate: 27,000; Pro: 36,000; Business: 120,000 credits." },
   { question: "Do all actions cost the same number of credits?", answer: "No. Costs vary by model, resolution and duration. Mini-Studio displays a credit quote before each creation." },
   { question: "Can I buy extra credits?", answer: "You can top up your balance: 1,000 credits (600 XAF), 2,000 (1,000 XAF), 4,000 (2,000 XAF), or 10,000 (5,000 XAF)." },
-  { question: "Which Chat models are included in each pack?", answer: "Light: GPT-6 Luna; Intermediate: Luna and GPT-5; Pro: Luna, GPT-5.6 Terra and GPT-6 Sol; Business: Terra, Sol and GPT-6 Astra." },
+  { question: "Which Chat models are included in each pack?", answer: "Discovery: Luna and Claude Haiku 5.5; Light: Luna and Haiku; Intermediate: Luna, GPT-5, Haiku and Gemini 3.5 Flash-Lite; Pro: Luna, Terra, Sol, Haiku, Gemini 3.5 Flash-Lite, Gemini 3.8 Flash and Gemini 4 Argon; Business: Terra, Sol, Astra and the Anthropic/Google models of Pro. Provider availability applies." },
   { question: "What can I create with Mini-Studio on my pack?", answer: "Each pack offers image creation, photo editing and video. Depending on your tier, images reach 1K, 2K or 4K, and video projects can combine multiple clips." },
   { question: "How do I know which settings my pack allows?", answer: "Mini-Studio adapts models, resolutions, durations and editing options to your active pack, and shows the credit quote before confirmation." },
 ] as const;
@@ -1681,7 +1681,7 @@ export default function PacksPage() {
   // Après achat confirmé, l'offre disparaît définitivement pour ce compte.
   // Avant achat, elle reste visible pour expliquer une éventuelle inéligibilité.
   // L'affichage ne remplace jamais le contrôle serveur can_buy au checkout.
-  const discoveryBuyVisible = DISCOVERY_PUBLIC;
+  const discoveryBuyVisible = DISCOVERY_PUBLIC && (discoverySession === "guest" || (discoverySession === "authenticated" && discoveryStatus?.can_buy === true && discoveryStatus?.purchased === false && walletPackId === null));
 
   const displayedPacks = packs.map((pack) =>
 
@@ -2328,6 +2328,9 @@ export default function PacksPage() {
 
 
 
+          <Link href="/collaboratif/espaces" className="mr-2 inline-flex items-center gap-1.5 rounded-2xl border border-border/75 bg-surface/75 px-3 py-2 text-xs font-semibold transition-colors hover:bg-surface-secondary sm:text-sm">
+            <Sparkles size={16} /> <span className="hidden sm:inline">ORIA </span>Collaboratif
+          </Link>
           <Link
 
 
@@ -2492,6 +2495,12 @@ export default function PacksPage() {
 
 
 
+        { ["pro_pack", "business_pack"].includes(walletPackId || "") && (
+          <Link href="/collaboratif/espaces" className="mt-7 flex flex-col items-start justify-between gap-3 rounded-2xl border border-border bg-surface-secondary p-5 transition hover:border-border-strong sm:flex-row sm:items-center">
+            <span><strong className="block text-base">ORIA Collaboratif</strong><span className="mt-1 block text-sm text-muted">Votre pack donne accès à un espace de travail avec votre équipe, les groupes et ORIA.</span></span>
+            <span className="shrink-0 rounded-xl bg-foreground px-4 py-2.5 text-sm font-semibold text-background">Créer ou ouvrir mon espace</span>
+          </Link>
+        )}
         {DISCOVERY_PUBLIC && discoveryNotice && (
           <div role="status" className="mt-6 flex items-center justify-between gap-4 rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm">
             <span>{discoveryNotice}</span>
@@ -2511,11 +2520,11 @@ export default function PacksPage() {
           <section id="offre-decouverte" className="mt-9 border-y border-border/70 py-7 sm:py-9">
             <div className="flex flex-wrap items-start justify-between gap-6 sm:items-center">
               <div className="max-w-2xl">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">{language === "fr" ? "Pack permanent · achats renouvelables" : "Permanent plan · repeat purchases"}</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">{language === "fr" ? "Offre permanente · crédits valables 35 jours" : "Ongoing offer · credits valid for 35 days"}</p>
                 <h2 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{language === "fr" ? "Pack Découverte" : "Discovery Pass"}</h2>
                 <p className="mt-3 text-sm leading-7 text-muted-strong">{language === "fr"
-                  ? "7 000 crédits valables 35 jours. GPT-6 Luna, GPT-5.6 Terra, images Recraft 1K et vidéos Grok 480p de 4 secondes. Utilisez ces fonctions autant que vos crédits le permettent. Fonctions avancées réservées aux autres packs."
-                  : "7,000 credits valid for 35 days. GPT-6 Luna, GPT-5.6 Terra, 1K Recraft images and 4-second 480p Grok videos. Use these features as often as your credits allow. Advanced features require another plan."}</p>
+                  ? "7 000 crédits valables 35 jours. GPT-6 Luna et Claude Haiku 5.5 (selon disponibilité du fournisseur), images Recraft 1K et vidéos Grok 480p de 4 secondes. Utilisez ces fonctions tant que vos crédits le permettent. Fonctions avancées réservées aux autres packs."
+                  : "7,000 credits valid for 35 days. GPT-6 Luna and Claude Haiku 5.5 (subject to provider availability), 1K Recraft images and 4-second 480p Grok videos. Use these features while your credits last. Advanced features require another plan."}</p>
                 <p className="mt-2 text-xs text-muted">{language === "fr" ? "Recharges standard disponibles tant que le pack est actif. Le devis en crédits est présenté avant les créations." : "Standard top-ups are available while the plan is active. Credit estimates are shown before media creation."}</p>
               </div>
               <div className="min-w-[190px]">
@@ -2547,7 +2556,7 @@ export default function PacksPage() {
                   {discoverySession === "error"
                     ? language === "fr" ? "Vérification nécessaire" : "Verification required"
                     : isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting
-                    : language === "fr" ? "Découvrir ORIA" : "Try ORIA"}
+                    : language === "fr" ? "Choisir Découverte" : "Choose Discovery"}
                 </button>
               </div>
             </div>
