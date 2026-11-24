@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import styles from "./OriaLanding.module.css";
 import OriaScrollExperience from "./OriaScrollExperience";
+import CollabFeature from "@/components/oria-promo/CollabFeature";
 
 // La landing est publique : le backend vérifie l'éligibilité au paiement.
 // Le drapeau public ne débloque aucun droit ni aucun crédit.
@@ -271,6 +272,8 @@ export default function OriaLanding() {
 
       <section className={styles.faqSection} id="questions" aria-labelledby="faq-title"><div className={styles.faqIntro}><p className={styles.sectionKicker}>05 — QUESTIONS FRÉQUENTES</p><h2 id="faq-title">Tout ce que vous<br/>voulez savoir.</h2><p>Une question supplémentaire ? Consultez notre centre d’aide.</p><Link href="/help" className={styles.textLink}>Centre d’aide <ArrowUpRight size={17}/></Link></div><div className={styles.faqList}>{questions.map((item, i) => <details className={styles.faqItem} key={item.question}><summary><span className={styles.faqNumber}>{String(i+1).padStart(2,"0")}</span><span>{item.question}</span><span className={styles.faqPlus}>+</span></summary><p>{item.answer}</p></details>)}</div></section>
 
+      {/* ORIA_P17_VITRINE_PROMOTIONS_LANDING */}
+      <div className="mx-auto w-full max-w-6xl px-5 sm:px-8"><CollabFeature variant="compact" /></div>
       <section className={styles.bottomCta}><span className={styles.bottomCtaIcon}><Sparkles size={24} strokeWidth={1.4}/></span><p>VOTRE PROCHAIN PROJET COMMENCE ICI</p><h2>Et si on allait<br/>plus loin ?</h2><Link href="/chat" className={styles.bottomCtaButton}>Entrer dans ORIA <ArrowUpRight size={20}/></Link><span className={styles.ctaDecoration} aria-hidden="true">O</span></section>
 
       <footer className={styles.footer}><div className={styles.footerTop}><div><Brand footer/><p>Une autre façon d’explorer l’intelligence artificielle.</p></div><nav aria-label="Navigation de pied de page"><a href="#fonctionnalites">Fonctionnalités</a><a href="#offres">Les packs</a><Link href="/help">Aide</Link><Link href="/legal">Informations légales</Link></nav></div><div className={styles.footerBottom}><span>© {new Date().getFullYear()} ORIA. Tous droits réservés.</span><span>MYORIAAI.COM</span></div></footer>

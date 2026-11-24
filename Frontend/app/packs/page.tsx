@@ -54,6 +54,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import OriaFreeRechargeStatus from "@/components/oria-free/OriaFreeRechargeStatus";
+import CollabFeature from "@/components/oria-promo/CollabFeature";
 
 
 
@@ -2495,12 +2496,8 @@ export default function PacksPage() {
 
 
 
-        { ["pro_pack", "business_pack"].includes(walletPackId || "") && (
-          <Link href="/collaboratif/espaces" className="mt-7 flex flex-col items-start justify-between gap-3 rounded-2xl border border-border bg-surface-secondary p-5 transition hover:border-border-strong sm:flex-row sm:items-center">
-            <span><strong className="block text-base">ORIA Collaboratif</strong><span className="mt-1 block text-sm text-muted">Votre pack donne accès à un espace de travail avec votre équipe, les groupes et ORIA.</span></span>
-            <span className="shrink-0 rounded-xl bg-foreground px-4 py-2.5 text-sm font-semibold text-background">Créer ou ouvrir mon espace</span>
-          </Link>
-        )}
+        {/* ORIA_P17_VITRINE_PROMOTIONS_PACKS */}
+        <CollabFeature variant="hero" language={language} hasAccess={["pro_pack", "business_pack"].includes(walletPackId || "")} />
         {DISCOVERY_PUBLIC && discoveryNotice && (
           <div role="status" className="mt-6 flex items-center justify-between gap-4 rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm">
             <span>{discoveryNotice}</span>
