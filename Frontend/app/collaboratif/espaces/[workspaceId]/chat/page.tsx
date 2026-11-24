@@ -7,6 +7,7 @@ import { ArrowDown, ArrowLeft, Bell, Check, ChevronLeft, FileText, Menu, Message
   Download, Eye, Paperclip, Plus, RefreshCcw, Send, Settings, ShieldCheck, Sparkles, Users, Wallet, X, Copy, Pencil, Mic, Square, Play } from "lucide-react";
 import { collabRequest, collabSupabase, COLLAB_API_URL } from "@/lib/collaboratif-api";
 import AllocationPrompt from "@/components/collaboratif/AllocationPrompt";
+import NotificationSettings from "@/components/collaboratif/NotificationSettings";
 import { OriaRichMessage, type OriaWebIllustration } from "@/components/oria-chat/OriaRichMessage"; // ORIA_COLLAB_P10_SHARED_RICH_RENDERER
 
 type Person = { user_id: string; role: "owner" | "member"; status: string; first_name: string; last_name: string; avatar_key?: string };
@@ -110,6 +111,7 @@ export default function OriaCollaboratifChat() {
   const [notice, setNotice] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showPushSettings,setShowPushSettings] = useState(false);
   const [notifications, setNotifications] = useState<Notices | null>(null);
   const [newKind, setNewKind] = useState<"group" | null>(null);
   const [newTitle, setNewTitle] = useState("");
@@ -250,7 +252,9 @@ export default function OriaCollaboratifChat() {
       if (!active) return;
       if (!value.success || value.workspace_id !== space || value.context.workspace_id !== space) throw new Error("Espace inaccessible.");
       setBoot(value);
-      const first = value.general_group_id || value.groups.find(g=>!g.archived)?.id;
+      const queryGroup = new URLSearchParams(window.location.search).get("group");
+      const first = (queryGroup && value.groups.some(g=>g.id===queryGroup&&!g.archived) ? queryGroup : null)
+        || value.general_group_id || value.groups.find(g=>!g.archived)?.id;
       if (first) {
         const next: Selection = {kind:"group",id:first};
         selectedRef.current=next;setSelection(next);
@@ -505,6 +509,47 @@ export default function OriaCollaboratifChat() {
     },5000);
     return ()=>window.clearInterval(interval);
   },[busy,load,refreshBoot,checkPending]);
+
+  // ORIA_COLLAB_P16_REALTIME - événements Supabase RLS par destinataire,
+  // avec polling historique conservé si Realtime est indisponible.
+  useEffect(()=>{
+    if(!ownId||!space)return;
+    let active=true;
+    const channel=collabSupabase.channel(`oria-collab-p16-${space}-${ownId}`)
+      .on('postgres_changes',{
+        event:'INSERT',schema:'public',table:'oria_collab_push_events_p16',
+        filter:`recipient_user_id=eq.${ownId}`,
+      },event=>{
+        const incoming=event.new as {workspace_id?:string;group_id?:string;recipient_user_id?:string};
+        if(!active||incoming.workspace_id!==space||incoming.recipient_user_id!==ownId)return;
+        void refreshBoot().catch(()=>{});
+        void collabRequest<Notices>(`${hub}/notifications`).then(value=>{
+          if(active&&value.workspace_id===space)setNotifications(value);
+        }).catch(()=>{});
+        const current=selectedRef.current;
+        if(current?.kind==='group'&&current.id===incoming.group_id){
+          void load(current).catch(()=>{});
+        }
+      }).subscribe();
+    return ()=>{active=false;void collabSupabase.removeChannel(channel);};
+  },[ownId,space,root,hub,refreshBoot,load]);
+
+  // Présence courte et privée: réduit le Push lorsque le groupe est ouvert.
+  useEffect(()=>{
+    if(!ownId||!space)return;
+    const update=()=>{
+      const selected=selectedRef.current;
+      const focused=document.visibilityState==='visible'&&document.hasFocus()&&selected?.kind==='group';
+      void collabRequest(`${root}/push/presence`,'POST',{
+        group_id:focused?selected.id:null,focused:Boolean(focused),
+      }).catch(()=>{});
+    };
+    update();const ticker=window.setInterval(update,20000);
+    window.addEventListener('focus',update);window.addEventListener('blur',update);
+    document.addEventListener('visibilitychange',update);
+    return ()=>{window.clearInterval(ticker);window.removeEventListener('focus',update);
+      window.removeEventListener('blur',update);document.removeEventListener('visibilitychange',update);};
+  },[ownId,space,root,selection]);
 
   // The user controls the reading position. Follow new messages only when
   // already at the bottom; unlike before, history refresh never pulls them down.
@@ -857,7 +902,10 @@ export default function OriaCollaboratifChat() {
         </div>
       </div>
       {showNotifications && <div className="max-h-60 overflow-y-auto border-b border-border p-4 text-xs">
-        <div className="mb-3 flex items-center justify-between"><strong>Notifications</strong><button className="underline" onClick={()=>void readNotices()}>Tout marquer lu</button></div>
+        <div className="mb-3 flex items-center justify-between gap-2"><strong>Notifications</strong><div className="flex items-center gap-3"><button className="underline" onClick={()=>setShowPushSettings(true)}>Réglages</button><button className="underline" onClick={()=>void readNotices()}>Tout marquer lu</button></div></div>
+        {showPushSettings&&<NotificationSettings workspaceId={space}
+          groupId={selection?.kind==='group'?selection.id:null}
+          onClose={()=>setShowPushSettings(false)}/>}
         {(notifications?.notifications??[]).slice(0,15).map(n=><div className="border-b border-border py-2" key={n.id}>{n.event_type==="direct_message"?"Message privé":"Message de groupe"} · {names.get(n.actor_user_id)??"Collaborateur"} · {date(n.created_at)}{!n.read_at&&<span className="ml-1">•</span>}</div>)}
         {!notifications?.notifications?.length&&<p>Aucune notification.</p>}
       </div>}

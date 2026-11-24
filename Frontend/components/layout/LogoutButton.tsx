@@ -12,6 +12,16 @@ export default function LogoutButton() {
 
     const supabase = createClient();
 
+    // ORIA_COLLAB_P16_LOGOUT_UNSUBSCRIBE : pas d'alertes pour l'ancien compte
+    // sur un appareil prêté ou connecté à un autre utilisateur.
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration('/');
+        const subscription = await reg?.pushManager.getSubscription();
+        if (subscription) await subscription.unsubscribe();
+      }
+    } catch { /* La déconnexion reste possible si le navigateur refuse le Push. */ }
+
     const { error } = await supabase.auth.signOut();
 
     if (error) {

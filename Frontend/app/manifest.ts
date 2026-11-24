@@ -4,6 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Oria",
     short_name: "Oria",
+    id: "/", // Identité stable de la PWA pour Web Push iOS.
     description: "Oria",
     start_url: "/",
     display: "standalone",

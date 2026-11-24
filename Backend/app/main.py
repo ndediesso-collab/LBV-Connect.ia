@@ -31,6 +31,7 @@ from app.route.collab_allocation import router as collab_allocation_router
 from app.route.collab_ai_workspace import router as collab_ai_workspace_router
 from app.route.collab_chat_hub import router as collab_chat_hub_router
 from app.route.collab_share_invites import router as collab_share_invites_router
+from app.route.collab_push import router as collab_push_router
 
 from app.services.oria_memory_middleware import OriaMemoryCleanupMiddleware
 
@@ -185,6 +186,7 @@ app.include_router(collab_allocation_router)
 app.include_router(collab_ai_workspace_router)
 app.include_router(collab_chat_hub_router)
 app.include_router(collab_share_invites_router)
+app.include_router(collab_push_router)
 
 # ORIA 6B2D - Garde des anciennes routes mono-equipe en multi-adhesion.
 # OFF par defaut. Le gate DOIT etre actif avant le DROP INDEX de staging.
@@ -206,3 +208,43 @@ async def _oria_multi_workspace_legacy_gate(request: _CollabGateRequest, call_ne
                 "detail":"Ancienne route mono-equipe fermee : selectionnez un espace precis."
             })
     return await call_next(request)
+
+
+# ORIA_COLLAB_P16_PUSH_WORKER
+# Inactif jusqu'à ORIA_COLLAB_PUSH_P16_ENABLED=1 et WORKER_ENABLED=1.
+# Claim SQL atomique : plusieurs instances Render ne prennent pas la même ligne.
+_oria_collab_push_task = None
+
+@app.on_event("startup")
+async def _oria_collab_push_start():
+    global _oria_collab_push_task
+    from app.services.oria_collab_push_service import worker_ready,dispatch_batch,prune_events
+    if not worker_ready():
+        return
+    async def loop():
+        from app.core.supabase import supabase as _push_db
+        from time import monotonic
+        last_prune=0.0
+        while True:
+            try:
+                await asyncio.to_thread(dispatch_batch, _push_db)
+                if monotonic()-last_prune>3600:
+                    await asyncio.to_thread(prune_events, _push_db)
+                    last_prune=monotonic()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logging.getLogger("oria.collab.push").exception("P16 boucle Web Push : erreur provisoire")
+            await asyncio.sleep(8)
+    _oria_collab_push_task=asyncio.create_task(loop())
+
+@app.on_event("shutdown")
+async def _oria_collab_push_stop():
+    global _oria_collab_push_task
+    if _oria_collab_push_task is not None:
+        _oria_collab_push_task.cancel()
+        try:
+            await _oria_collab_push_task
+        except asyncio.CancelledError:
+            pass
+        _oria_collab_push_task=None
