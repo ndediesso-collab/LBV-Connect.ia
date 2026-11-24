@@ -5,13 +5,18 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ArrowUpRight, Megaphone, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { nextCampaign, parseCampaignMemory, type Campaign } from "./campaigns";
+import {
+  nextCampaign, parseCampaignMemory, recordCampaign,
+  PROMO_INITIAL_DELAY_MS, PROMO_RECHECK_MS,
+  type Campaign, type CampaignMemory,
+} from "./campaigns";
 
-const STORE_VERSION = "oria-internal-campaigns-p17-v1";
+const STORE_VERSION = "oria-internal-campaigns-p17-v2";
 const PRIVATE_PATH = /^\/(chat|conversations|credits|mes_creations|settings)(\/|$)/;
 
-/** One in-app promotion per seven days and account/browser, no opt-out toggle.
- * Dismissal closes this card; it never changes P16 Web Push or credit alerts.
+/** Promotions internes pour tous les packs (y compris gratuit).
+ * 3/jour maximum, minimum 3 heures entre deux, pas de Push publicitaire.
+ * La fermeture supprime seulement la carte affichee, sans desactiver les suivantes.
  */
 export default function OriaCampaignNotifications() {
   const pathname = usePathname() ?? "";
@@ -19,7 +24,7 @@ export default function OriaCampaignNotifications() {
   const [userId, setUserId] = useState<string | null>(null);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [creditNoticeVisible, setCreditNoticeVisible] = useState(false);
-  const shownThisMount = useRef(false);
+  const fallbackMemory = useRef<Record<string, CampaignMemory | null>>({});
 
   useEffect(() => {
     if (!eligiblePage) { setUserId(null); setCampaign(null); return; }
@@ -50,21 +55,35 @@ export default function OriaCampaignNotifications() {
   }, [eligiblePage, userId]);
 
   useEffect(() => {
-    if (!eligiblePage || !userId || shownThisMount.current || creditNoticeVisible) return;
-    const timer = window.setTimeout(() => {
-      if (document.visibilityState !== "visible" || document.querySelector('[aria-label="Offres ORIA"]')) return;
+    if (!eligiblePage || !userId || campaign || creditNoticeVisible) return;
+    let alive = true;
+    const checkPromotion = () => {
+      if (!alive || document.visibilityState !== "visible" ||
+          document.querySelector('[aria-label="Offres ORIA"]') ||
+          document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      // Ne jamais faire apparaitre une pub pendant la saisie d'un message.
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && focused.closest('textarea,input,[contenteditable="true"]')) return;
       const key = `${STORE_VERSION}:${userId}`;
-      let memory = null;
-      try { memory = parseCampaignMemory(window.localStorage.getItem(key)); } catch { /* private browser */ }
-      const selected = nextCampaign(memory, Date.now());
+      let memory = fallbackMemory.current[key] ?? null;
+      try {
+        const stored = window.localStorage.getItem(key);
+        if (stored !== null) memory = parseCampaignMemory(stored) ?? memory;
+      } catch { /* navigateur prive: memoire de secours */ }
+      const now = Date.now();
+      const selected = nextCampaign(memory, now);
       if (!selected) return;
-      shownThisMount.current = true;
+      const updated = recordCampaign(memory, selected, now);
+      fallbackMemory.current[key] = updated;
+      try { window.localStorage.setItem(key, JSON.stringify(updated)); }
+      catch { /* au minimum, le plafond est applique tant que la page reste chargee */ }
       setCampaign(selected);
-      try { window.localStorage.setItem(key, JSON.stringify({lastShownAt: Date.now(), lastCampaignId: selected.id})); }
-      catch { /* fallback: once per mounted session */ }
-    }, 12_000);
-    return () => window.clearTimeout(timer);
-  }, [eligiblePage, userId, creditNoticeVisible]);
+    };
+    // Laisser l'utilisateur entrer dans l'application avant la premiere annonce.
+    const initial = window.setTimeout(checkPromotion, PROMO_INITIAL_DELAY_MS);
+    const periodic = window.setInterval(checkPromotion, PROMO_RECHECK_MS);
+    return () => { alive = false; window.clearTimeout(initial); window.clearInterval(periodic); };
+  }, [eligiblePage, userId, campaign, creditNoticeVisible]);
 
   if (!eligiblePage || !userId || !campaign || creditNoticeVisible) return null;
   return (
@@ -78,7 +97,7 @@ export default function OriaCampaignNotifications() {
         </div>
         <p className="mt-3 text-sm leading-6 text-neutral-600">{campaign.description}</p>
         <Link href={campaign.href} onClick={() => setCampaign(null)} className="mt-3.5 flex items-center justify-center gap-2 rounded-xl bg-neutral-950 px-4 py-3 text-sm font-semibold text-white hover:bg-neutral-800">{campaign.cta} <ArrowUpRight size={16}/></Link>
-        <p className="mt-2.5 text-center text-[10px] text-neutral-500">Une découverte de temps en temps. Fermable à tout moment.</p>
+        <p className="mt-2.5 text-center text-[10px] text-neutral-500">Une nouveauté ORIA à découvrir. Fermable a tout moment.</p>
       </div>
     </aside>
   );
