@@ -26,7 +26,7 @@ type DeliveryState = {success: boolean;workspace_id:string;target_id:string;
 // ORIA_COLLAB_P9_INLINE_PROGRESS — cet objet est uniquement visuel et n'engage aucun crédit.
 type OptimisticGroupMessage = {group:string;request:string;content:string;createdAt:number;ai:boolean};
 type RichSource = {url:string;title:string};
-type RichItem = {web_images:OriaWebIllustration[];sources:RichSource[]};
+type RichItem = {web_images:OriaWebIllustration[];sources:RichSource[];caller_user_id?:string|null};
 type RichPayload = {success:boolean;workspace_id:string;group_id:string;items:Record<string,RichItem>};
 type CollabModelOption = { id: string; label: string; reasoning_modes?: string[] };
 type CollabModelResponse = { success: boolean; workspace_id: string;
@@ -82,7 +82,9 @@ export default function OriaCollaboratifChat() {
   const [before, setBefore] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
-  const [mobileViewportHeight, setMobileViewportHeight] = useState<number | null>(null);
+  const [mobileViewport, setMobileViewport] = useState<{ height: number; top: number } | null>(null);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const mobileBaselineHeightRef = useRef<number | null>(null);
   const [editingId,setEditingId] = useState<string|null>(null);
   const [editText,setEditText] = useState("");
   const [voiceUrls,setVoiceUrls] = useState<Record<string,string>>({});
@@ -113,6 +115,8 @@ export default function OriaCollaboratifChat() {
   const [showGroupMember, setShowGroupMember] = useState(false);
   const [selectedPerson, setSelectedPerson] = useState("");
   const [pendingAi, setPendingAi] = useState(false);
+  // ORIA_COLLAB_P13_CALLER_ID — la génération IA n'immobilise pas l'envoi humain.
+  const [aiSending, setAiSending] = useState(false);
   const [livePreview, setLivePreview] = useState<{group:string;request:string;text:string;phase:string}|null>(null);
   const [optimisticGroupMessage,setOptimisticGroupMessage] = useState<OptimisticGroupMessage|null>(null);
   const monitorRef = useRef<{key:string;abort:AbortController}|null>(null);
@@ -124,32 +128,77 @@ export default function OriaCollaboratifChat() {
   const latestLoad = useRef(0);
   const followBottomRef = useRef(true);
 
-  // Safari iOS: the visual viewport shrinks when the software keyboard opens.
-  // Keep the collaborative composer visible without manipulating browser zoom.
-  useEffect(()=>{
-    const viewport=window.visualViewport;
-    const mobile=window.matchMedia("(max-width: 639px)");
-    let frame=0;
-    const sync=()=>{
+  // ORIA_COLLAB_P12_MOBILE_KEYBOARD_VIEWPORT
+  // La page doit rester immobile : seul le fil des messages défile.
+  // Sur Safari iOS ET Android Chrome, le clavier modifie le visual viewport
+  // et peut le décaler (offsetTop), sans modifier la taille du layout viewport.
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const mobile = window.matchMedia("(max-width: 1023px)");
+    const html = document.documentElement;
+    const body = document.body;
+    const oldHtmlOverflow = html.style.overflow;
+    const oldBodyOverflow = body.style.overflow;
+    const oldBodyOverscroll = body.style.overscrollBehavior;
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    body.style.overscrollBehavior = "none";
+
+    let frame = 0;
+    const sync = () => {
       window.cancelAnimationFrame(frame);
-      frame=window.requestAnimationFrame(()=>{
-        if(!mobile.matches){setMobileViewportHeight(null);return;}
-        const measured=Math.round(viewport?.height ?? window.innerHeight);
-        if(measured>240) setMobileViewportHeight(previous=>
-          previous!==null && Math.abs(previous-measured)<2 ? previous : measured);
+      frame = window.requestAnimationFrame(() => {
+        if (!mobile.matches) {
+          setMobileViewport(null);
+          setKeyboardVisible(false);
+          mobileBaselineHeightRef.current = null;
+          return;
+        }
+        const height = Math.max(120, Math.round(viewport?.height ?? window.innerHeight));
+        const top = Math.max(0, Math.round(viewport?.offsetTop ?? 0));
+        setMobileViewport(previous => previous &&
+          Math.abs(previous.height - height) < 2 && Math.abs(previous.top - top) < 2
+            ? previous : { height, top });
+
+        // Ne pas confondre la barre d'adresse du navigateur (petite variation)
+        // avec le clavier virtuel (réduction importante pendant la saisie).
+        const focused = document.activeElement;
+        const isTextInput = focused instanceof HTMLTextAreaElement ||
+          (focused instanceof HTMLInputElement &&
+            ["text", "search", "email", "tel", "number", "url", "password"].includes(focused.type));
+        if (mobileBaselineHeightRef.current === null || !isTextInput) {
+          mobileBaselineHeightRef.current = Math.max(height, window.innerHeight);
+        }
+        setKeyboardVisible(isTextInput &&
+          (mobileBaselineHeightRef.current - height > 140));
       });
     };
-    sync();
-    viewport?.addEventListener("resize",sync);
-    window.addEventListener("resize",sync);
-    window.addEventListener("orientationchange",sync);
-    return ()=>{
-      window.cancelAnimationFrame(frame);
-      viewport?.removeEventListener("resize",sync);
-      window.removeEventListener("resize",sync);
-      window.removeEventListener("orientationchange",sync);
+    const onOrientationChange = () => {
+      mobileBaselineHeightRef.current = null;
+      sync();
     };
-  },[]);
+    sync();
+    viewport?.addEventListener("resize", sync);
+    viewport?.addEventListener("scroll", sync);
+    window.addEventListener("resize", sync);
+    window.addEventListener("pageshow", sync);
+    window.addEventListener("orientationchange", onOrientationChange);
+    document.addEventListener("focusin", sync);
+    document.addEventListener("focusout", sync);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      viewport?.removeEventListener("resize", sync);
+      viewport?.removeEventListener("scroll", sync);
+      window.removeEventListener("resize", sync);
+      window.removeEventListener("pageshow", sync);
+      window.removeEventListener("orientationchange", onOrientationChange);
+      document.removeEventListener("focusin", sync);
+      document.removeEventListener("focusout", sync);
+      html.style.overflow = oldHtmlOverflow;
+      body.style.overflow = oldBodyOverflow;
+      body.style.overscrollBehavior = oldBodyOverscroll;
+    };
+  }, []);
 
   const names = useMemo(() => new Map((boot?.profiles ?? []).map(p => [p.user_id, name(p)])), [boot?.profiles]);
   const ownId = boot?.context.member_user_id ?? "";
@@ -486,6 +535,14 @@ export default function OriaCollaboratifChat() {
     return ()=>window.cancelAnimationFrame(frame);
   },[livePreview?.text,livePreview?.phase,jumpToLatest]);
 
+  // Lorsque la surface visible se contracte pendant l'ouverture du clavier,
+  // rester au dernier message UNIQUEMENT si l'utilisateur y était déjà.
+  useEffect(() => {
+    if (!mobileViewport || !followBottomRef.current) return;
+    const frame = window.requestAnimationFrame(() => jumpToLatest("auto"));
+    return () => window.cancelAnimationFrame(frame);
+  }, [mobileViewport?.height, mobileViewport?.top, jumpToLatest]);
+
   function pick(kind:RoomKind,id:string){
     if(recordingRef.current?.state==="recording"){sendRecordingRef.current=false;recordingRef.current.stop();setRecording(false); }
     selectedRef.current={kind,id};setSelection({kind,id});setSidebarOpen(false);
@@ -520,9 +577,15 @@ export default function OriaCollaboratifChat() {
   async function submit(event?:FormEvent) {
     event?.preventDefault();
     const current=selectedRef.current;
-    if(!current||busy||pendingAi||!canWrite||!draft.trim())return;
+    if(!current||busy||!canWrite||!draft.trim())return;
     const content=draft.trim();
     const ai = current.kind==="private" || (current.kind==="group" && mentionOria.test(content));
+    // Seules les nouvelles demandes IA attendent la précédente. Les messages
+    // humains ne doivent jamais attendre le fournisseur IA.
+    if(ai && (pendingAi || aiSending)) {
+      setError("Une demande @ORIA est déjà en cours dans ce groupe. Vous pouvez continuer à échanger entre membres.");
+      return;
+    }
     if(ai && (!provider || !models.includes(model))){setError("Aucun modèle IA autorisé pour le fournisseur actif.");return;}
     if(ai && current.kind==="group" && !groupAiEnabled){setError("@ORIA n'est pas encore activé dans les groupes de cet espace. Les messages entre collègues restent disponibles.");return;}
     if(ai && current.kind==="private" && !privateAiEnabled){setError("Le chat IA privé professionnel n'est pas activé dans cet espace.");return;}
@@ -533,7 +596,11 @@ export default function OriaCollaboratifChat() {
     if(current.kind==='group')setOptimisticGroupMessage({group:current.id,request:requestId,
       content,createdAt:Date.now(),ai});
     followBottomRef.current=true;setShowJumpToBottom(false);
-    setDraft("");setBusy(true);setError("");setNotice("");
+    setDraft("");
+    // Ne pas utiliser busy pour l'appel IA long : busy est réservé aux
+    // envois humains et aux actions de courte durée dans le groupe.
+    if(ai){setAiSending(true);setPendingAi(true);}else{setBusy(true);}
+    setError("");setNotice("");
     if(ai && current.kind==='group')setLivePreview({group:current.id,request:requestId,text:'',phase:'starting'});
     try{
       if(ai){
@@ -583,7 +650,7 @@ export default function OriaCollaboratifChat() {
           setNotice("Vérification de la demande en cours. Aucun nouvel appel fournisseur ne sera déclenché automatiquement.");
         }
       }
-    }finally{setBusy(false);}
+    }finally{if(ai)setAiSending(false);else setBusy(false);}
   }
 
   async function sendGroupAttachment(file:File,picked:Selection){
@@ -764,7 +831,11 @@ export default function OriaCollaboratifChat() {
   const members=boot?.profiles.filter(p=>p.status==="active")??[];
   const peers=members.filter(p=>p.user_id!==ownId);
 
-  return <main style={mobileViewportHeight!==null?{height:`${mobileViewportHeight}px`}:undefined} className="flex h-dvh min-h-0 w-full overflow-hidden bg-background text-foreground oria-chat-page">
+  // Le conteneur est FIXE : iOS/Android ne doivent jamais faire défiler
+  // la page entière pour mettre le textarea au-dessus du clavier.
+  return <main style={mobileViewport !== null
+    ? { height: mobileViewport.height, top: mobileViewport.top } : undefined}
+    className="fixed inset-x-0 top-0 flex h-dvh min-h-0 w-full overflow-hidden bg-background text-foreground oria-chat-page">
     {/* Navigation identique à l'esprit du chat ORIA : colonne conversations + fil central. */}
     <aside className={`${sidebarOpen?"flex":"hidden"} min-h-0 w-full shrink-0 flex-col border-r border-border bg-surface sm:flex sm:w-[320px] lg:w-[345px]`}>
       <div className="border-b border-border px-4 pb-4 pt-5">
@@ -822,6 +893,12 @@ export default function OriaCollaboratifChat() {
           return <div key={m.id} className={`flex ${mine?"justify-end":"justify-start"}`}>
             <article className={`max-w-[88%] break-words rounded-2xl px-4 py-3 text-sm shadow-sm sm:max-w-[76%] ${mine?"rounded-br-sm bg-foreground text-background":"rounded-bl-sm border border-border bg-surface text-foreground"}`}>
               {selection?.kind==="group"&&!mine&&<div className="mb-1 text-xs font-semibold opacity-75">{speaker}</div>}
+              {/* Le UUID est celui de la réservation SQL. L'interface affiche
+                  le profil professionnel et ne révèle pas l'ID technique. */}
+              {oria&&selection?.kind==="group"&&richByRequest[m.id]?.caller_user_id&&
+                <div className="mb-2 text-xs font-medium opacity-80" aria-label="Auteur de la demande ORIA">
+                  @{names.get(richByRequest[m.id].caller_user_id??"")??"Participant"}
+                </div>}
               {selection?.kind==="private"&&!mine&&<div className="mb-1 flex items-center gap-1 text-xs font-semibold"><Sparkles size={12}/> ORIA</div>}
               {editingId===m.id?<div className="space-y-2">
                 <textarea aria-label="Modifier mon message" className={`${input} min-h-[80px]`} maxLength={4000}
@@ -854,7 +931,12 @@ export default function OriaCollaboratifChat() {
                    {voiceUrls[f.id]&&<audio controls preload="none" src={voiceUrls[f.id]} className="h-9 max-w-full"/>}
                  </div>:
                  <div key={f.id} className={`mt-2 flex max-w-full items-center gap-2 rounded-lg border px-2 py-2 text-xs ${mine?"border-background/30":"border-border"}`}><FileText size={16}/><span className="max-w-[185px] truncate" title={f.original_name}>{f.original_name}</span><button type="button" title="Aperçu" aria-label={`Aperçu de ${f.original_name}`} onClick={()=>void previewAttachment(f)}><Eye size={16}/></button><button type="button" title="Télécharger" aria-label={`Télécharger ${f.original_name}`} onClick={()=>void openFile(f)}><Download size={16}/></button></div>)}
-              <time className="mt-1 block text-right text-[10px] opacity-65">{date(m.created_at)} {mine&&<Check className="ml-0.5 inline" size={11}/>}</time>
+              <time className="mt-1 block text-right text-[10px] opacity-65">
+                {date(m.created_at)}
+                {oria&&selection?.kind==="group"&&richByRequest[m.id]?.caller_user_id&&
+                  <span className="ml-1">· Réponse à la demande de {names.get(richByRequest[m.id].caller_user_id??"")??"ce participant"}</span>}
+                {mine&&<Check className="ml-0.5 inline" size={11}/>}
+              </time>
             </article>
           </div>;
         })}
@@ -894,15 +976,15 @@ export default function OriaCollaboratifChat() {
           </div>}
       </div>
       {previewFile&&<div role="dialog" aria-modal="true" aria-label={`Aperçu ${previewFile.file.original_name}`} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"><div className="flex h-[min(85vh,850px)] w-[min(96vw,1050px)] flex-col overflow-hidden rounded-2xl bg-background text-foreground"><div className="flex items-center justify-between gap-3 border-b border-border p-3"><span className="truncate font-medium">{previewFile.file.original_name}</span><div className="flex items-center gap-3"><button type="button" aria-label="Télécharger" onClick={()=>void openFile(previewFile.file)}><Download size={18}/></button><button type="button" aria-label="Fermer l’aperçu" onClick={()=>setPreviewFile(null)}><X size={18}/></button></div></div><div className="min-h-0 flex-1 bg-surface p-2">{previewFile.file.mime_type.startsWith('image/')?<img src={previewFile.url} alt={previewFile.file.original_name} className="h-full w-full object-contain"/>:(['application/pdf','text/plain'].includes(previewFile.file.mime_type))?<iframe title={previewFile.file.original_name} src={previewFile.url} className="h-full w-full rounded-md bg-white"/>:<div className="grid h-full place-items-center text-center text-sm text-muted"><div>Aperçu natif non pris en charge pour ce format.<br/>Utilise Télécharger pour consulter le fichier original.</div></div>}</div></div></div>}
-      {selection&&<div className="relative z-10 shrink-0 border-t border-border bg-surface px-3 py-2 pb-[max(12px,env(safe-area-inset-bottom))] sm:px-6 sm:py-3">
+      {selection&&<div className={`relative z-10 shrink-0 border-t border-border bg-surface px-3 py-2 ${keyboardVisible ? "pb-3" : "pb-[max(12px,env(safe-area-inset-bottom))]"} sm:px-6 sm:py-3`}>
         {showJumpToBottom&&<button type="button" onClick={()=>jumpToLatest("smooth")}
           aria-label="Aller au dernier message" title="Aller au dernier message"
           className="absolute -top-12 right-3 z-20 grid h-10 w-10 place-items-center rounded-full border border-border bg-surface text-foreground shadow-lg transition hover:bg-surface-secondary sm:right-6">
           <ArrowDown size={18} aria-hidden="true"/>
         </button>}
-        {(selection.kind==="group"||selection.kind==="private")&&<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{selection.kind==="group"?"Écrivez @ORIA pour demander une réponse IA":"Conversation avec ORIA"}</span><div className="flex flex-wrap items-center gap-2"><span className="hidden rounded-full border border-border px-2 py-1 text-[11px] sm:inline">{provider==="openai"?"OpenAI actif":provider==="openrouter"?"OpenRouter actif":"Fournisseur non vérifié"}</span><select aria-label="Modèle IA" className="max-w-[185px] rounded-xl border border-border bg-background px-3 py-2 text-base font-medium text-foreground sm:text-sm" value={model} onChange={e=>{const m=e.target.value;const allowed=modelCatalog.find(x=>x.id===m)?.reasoning_modes??[];const next=allowed.includes(mode)?mode:(allowed.includes('balanced')?'balanced':(allowed[0]??'balanced'));setModel(m);setMode(next);persistSelection(m,next);}} disabled={!provider||busy}><option value="">Modèle indisponible</option>{modelCatalog.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Raisonnement" className="rounded-xl border border-border bg-background px-3 py-2 text-base text-foreground sm:text-sm" value={mode} onChange={e=>{setMode(e.target.value);persistSelection(model,e.target.value);}} disabled={!provider||busy}>{(modelCatalog.find(item=>item.id===model)?.reasoning_modes??[]).filter(m=>m in reasoningLabels).map(m=><option key={m} value={m}>{reasoningLabels[m]}</option>)}</select></div></div>}
+        {(selection.kind==="group"||selection.kind==="private")&&!keyboardVisible&&<div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>{selection.kind==="group"?"Écrivez @ORIA pour demander une réponse IA":"Conversation avec ORIA"}</span><div className="flex flex-wrap items-center gap-2"><span className="hidden rounded-full border border-border px-2 py-1 text-[11px] sm:inline">{provider==="openai"?"OpenAI actif":provider==="openrouter"?"OpenRouter actif":"Fournisseur non vérifié"}</span><select aria-label="Modèle IA" className="max-w-[185px] rounded-xl border border-border bg-background px-3 py-2 text-base font-medium text-foreground sm:text-sm" value={model} onChange={e=>{const m=e.target.value;const allowed=modelCatalog.find(x=>x.id===m)?.reasoning_modes??[];const next=allowed.includes(mode)?mode:(allowed.includes('balanced')?'balanced':(allowed[0]??'balanced'));setModel(m);setMode(next);persistSelection(m,next);}} disabled={!provider||busy}><option value="">Modèle indisponible</option>{modelCatalog.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Raisonnement" className="rounded-xl border border-border bg-background px-3 py-2 text-base text-foreground sm:text-sm" value={mode} onChange={e=>{setMode(e.target.value);persistSelection(model,e.target.value);}} disabled={!provider||busy}>{(modelCatalog.find(item=>item.id===model)?.reasoning_modes??[]).filter(m=>m in reasoningLabels).map(m=><option key={m} value={m}>{reasoningLabels[m]}</option>)}</select></div></div>}
         {selection.kind==="group"&&mentionOpen&&<div className="mb-2 flex justify-start"><button type="button" role="option" aria-label="Compléter avec @ORIA" className="rounded-xl border border-border bg-background px-4 py-2 text-sm shadow-sm hover:bg-surface-secondary" onMouseDown={e=>e.preventDefault()} onClick={completeOriaMention}><Sparkles size={15} className="mr-2 inline"/>@ORIA <span className="ml-2 text-xs text-muted">Tab ou Entrée</span></button></div>}
-        {(selection.kind==="group"||selection.kind==="private")&&<label className="mb-2 flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={webEnabled} onChange={e=>setWebEnabled(e.target.checked)} disabled={busy||pendingAi} aria-label="Recherche Web avec facturation des outils"/>Recherche Web (coût des outils inclus dans le devis)</label>}
+        {(selection.kind==="group"||selection.kind==="private")&&!keyboardVisible&&<label className="mb-2 flex items-center gap-2 text-xs text-muted"><input type="checkbox" checked={webEnabled} onChange={e=>setWebEnabled(e.target.checked)} disabled={busy||pendingAi} aria-label="Recherche Web avec facturation des outils"/>Recherche Web (coût des outils inclus dans le devis)</label>}
         <form onSubmit={e=>void submit(e)} className="flex items-end gap-2">
           <input ref={fileRef} className="hidden" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.docx,.xlsx,.pptx,.webm,.ogg,.m4a,.mp3,.wav" onChange={e=>void uploadFile(e)}/>
           {selection.kind==="group"&&<button type="button" className="rounded-xl p-3 hover:bg-surface-secondary disabled:opacity-40" title="Joindre un fichier (8 Mo max)" aria-label="Joindre un fichier" disabled={busy||!canWrite} onClick={()=>fileRef.current?.click()}><Paperclip size={20}/></button>}
@@ -913,9 +995,9 @@ export default function OriaCollaboratifChat() {
             {recording?<Square size={19}/>:<Mic size={19}/>}
           </button>}
           <textarea ref={draftRef} className={`${input} min-h-[45px] min-w-0 max-h-40 flex-1 resize-none`} placeholder={selection.kind==="group"?"Message… ou @ORIA pour l'IA":"Écrivez un message…"} rows={1}
-            maxLength={selection.kind==="group"?4000:8000} value={draft} disabled={!canWrite||busy||pendingAi}
+            maxLength={selection.kind==="group"?4000:8000} value={draft} disabled={!canWrite||busy}
             onChange={e=>{setDraft(e.target.value);setMentionOpen(Boolean(suggestOria(e.target.value,e.target.selectionStart)));}} onKeyDown={e=>{if(mentionOpen&&(e.key==="Tab"||e.key==="Enter")){e.preventDefault();completeOriaMention();return;}if(e.key==="Escape")setMentionOpen(false);if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void submit();}}}/>
-          <button aria-label="Envoyer" type="submit" disabled={!draft.trim()||busy||!canWrite||pendingAi} className="grid size-[45px] shrink-0 place-items-center rounded-xl bg-foreground text-background disabled:opacity-40"><Send size={19}/></button>
+          <button aria-label="Envoyer" type="submit" disabled={!draft.trim()||busy||!canWrite} className="grid size-[45px] shrink-0 place-items-center rounded-xl bg-foreground text-background disabled:opacity-40"><Send size={19}/></button>
         </form>
         {recording&&<p className="mt-2 text-xs text-muted" role="status">Microphone actif. Touchez Arrêter pour envoyer (5 min max).</p>}
         {busy&&<p className="mt-2 text-xs text-muted" role="status">Envoi ou génération en cours…</p>}

@@ -45,10 +45,10 @@ def private_file_url(db: Any, actor: str, space: str, file_id: str) -> dict:
         not isinstance(path,str) or not path.startswith(ws+'/')):
         raise HTTPException(503,'Accès au fichier hors de cet espace.')
     try:
-        value=db.storage.from_(BUCKET).create_signed_url(path,120)
+        value=db.storage.from_(BUCKET).create_signed_url(path,30)
     except Exception as exc:
         raise HTTPException(503,'Lien privé temporaire indisponible.') from exc
     url=(value.get('signedURL') or value.get('signedUrl') or value.get('signed_url')) if isinstance(value,dict) else None
     if not isinstance(url,str) or not url.startswith('https://'):
         raise HTTPException(503,'Lien privé incohérent.')
-    return {'success':True,'workspace_id':ws,'file_id':fid,'url':url,'expires_in':120}
+    return {'success':True,'workspace_id':ws,'file_id':fid,'url':url,'expires_in':30}

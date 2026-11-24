@@ -193,13 +193,13 @@ class ChatHubService:
         if not isinstance(path,str) or not path.startswith(uuid(space)+"/"):
             raise HTTPException(503,"Chemin du fichier invalide.")
         try:
-            signed = self.db.storage.from_(BUCKET).create_signed_url(path,120)
+            signed = self.db.storage.from_(BUCKET).create_signed_url(path,30)
         except Exception as exc:
             raise HTTPException(503,"Lien temporaire indisponible.") from exc
         url = (signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")) if isinstance(signed,dict) else None
         if not isinstance(url,str) or not url.startswith("https://"):
             raise HTTPException(503,"Lien temporaire invalide.")
-        return {"success":True,"workspace_id":uuid(space),"file_id":uuid(file_id),"url":url,"expires_in":120}
+        return {"success":True,"workspace_id":uuid(space),"file_id":uuid(file_id),"url":url,"expires_in":30}
 
     def upload(self, actor: str, space: str, room_type: str, room: str, filename: str,
                data: bytes, content_type: str | None, caption: str | None) -> dict:

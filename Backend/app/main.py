@@ -110,6 +110,10 @@ LOCALHOST_ORIGIN_REGEX = (
 )
 
 
+# ORIA_COLLAB_OWNER_PACK_GATE_P11
+from app.middleware.oria_collab_pack_gate import OriaCollabOwnerPackGateMiddleware
+app.add_middleware(OriaCollabOwnerPackGateMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
 

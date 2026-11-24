@@ -22,6 +22,11 @@ type Directory = {
   can_create_workspace: boolean;
 };
 
+function canOpenWorkspace(space: Space): boolean {
+  return space.owner_pack_active === true &&
+    (space.owner_pack_id === "pro_pack" || space.owner_pack_id === "business_pack");
+}
+
 const link = "rounded-xl border border-border px-4 py-2 text-sm font-semibold hover:bg-surface";
 const primary = "rounded-xl bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50";
 
@@ -110,17 +115,17 @@ export default function EspacesCollaboratifs() {
               <p className="mt-2 text-xs text-muted">{space.role === "owner" ? "Propriétaire" : "Collaborateur"} · {space.seat_limit} profil(s) selon le pack du propriétaire</p>
             </div>
             <span className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs">
-              {space.owner_pack_active ? <CheckCircle2 size={14}/> : <LockKeyhole size={14}/>}
-              {space.owner_pack_active ? "Pack de l'espace actif" : "Pack de l'espace inactif"}
+              {canOpenWorkspace(space) ? <CheckCircle2 size={14}/> : <LockKeyhole size={14}/>}
+              {canOpenWorkspace(space) ? "Accès collaboratif actif" : "Espace suspendu"}
             </span>
           </div>
           <div className="mt-5 flex flex-wrap gap-2">
             {/* 6B1 : les ecrans historiques sont encore mono-espace. */}
             <Link href={`/collaboratif/espaces/${encodeURIComponent(space.id)}/chat`} className={primary}>
-              {space.owner_pack_active ? "Ouvrir l’espace" : "Consulter l’espace"} <ArrowRight className="ml-1 inline" size={15}/>
+              {canOpenWorkspace(space) ? "Ouvrir l’espace" : "Voir le statut de l’espace"} <ArrowRight className="ml-1 inline" size={15}/>
             </Link>
-            <Link href={`/collaboratif/invitations-email?workspace=${encodeURIComponent(space.id)}`} className={link}>Inviter par lien</Link>
-            {space.role === "owner" && <button type="button" className={link}
+            {canOpenWorkspace(space) && space.role === "owner" && <Link href={`/collaboratif/invitations-email?workspace=${encodeURIComponent(space.id)}`} className={link}>Inviter par lien</Link>}
+            {space.role === "owner" && canOpenWorkspace(space) && <button type="button" className={link}
               onClick={() => { setRenameId(space.id); setName(space.name); setError(""); }}>
               <PencilLine className="mr-2 inline" size={14}/> Renommer
             </button>}

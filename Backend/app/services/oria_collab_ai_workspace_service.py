@@ -251,10 +251,14 @@ class ScopedAiWorkspaceService:
             requests=list(set(message_to_request.values()))
             if not requests:
                 return {'success':True,'workspace_id':ws,'group_id':room,'items':{}}
-            settled=(self.db.table('oria_collab_group_ai_jobs').select('id')
+            settled=(self.db.table('oria_collab_group_ai_jobs').select('id,caller_user_id')
                      .eq('workspace_id',ws).eq('group_id',room).eq('state','settled')
                      .in_('id',requests).execute().data or [])
             settled_ids={str(row['id']) for row in settled}
+            # ORIA_COLLAB_P13_CALLER_ID — identité issue de la réservation SQL,
+            # jamais d'un user_id fourni par le client ni du contenu généré.
+            settled_callers={str(row['id']):str(row.get('caller_user_id') or '')
+                             for row in settled}
             if not settled_ids:
                 return {'success':True,'workspace_id':ws,'group_id':room,'items':{}}
             rows=(self.db.table('oria_collab_group_ai_delivery_progress')
@@ -271,9 +275,12 @@ class ScopedAiWorkspaceService:
             if not isinstance(proof,dict): continue
             by_request[rid]={'web_images':safe_images(proof.get('web_images')),
                              'sources':safe_sources(proof.get('sources'))}
-        items={message_id:by_request[request_id]
+        # Même si une réponse ne possède pas d'images ou de reçu P8,
+        # son auteur reste récupérable via le request_id persistant.
+        items={message_id:{**by_request.get(request_id,{'web_images':[], 'sources':[]}),
+                           'caller_user_id':settled_callers.get(request_id) or None}
                for message_id,request_id in message_to_request.items()
-               if request_id in by_request}
+               if request_id in settled_ids}
         return {'success':True,'workspace_id':ws,'group_id':room,'items':items}
 
     def private_artifacts(self, actor: str, space: str, conversation: str) -> dict:

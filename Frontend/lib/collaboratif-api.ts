@@ -55,6 +55,11 @@ export async function collabRequest<T>(
   });
   const payload: unknown = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 403 && payload && typeof payload === "object" &&
+        "code" in payload && (payload as { code?: string }).code === "COLLAB_OWNER_PACK_REQUIRED" &&
+        typeof window !== "undefined") {
+      window.dispatchEvent(new Event("oria-collab-entitlement-changed"));
+    }
     const message = payload && typeof payload === "object" && "detail" in payload
       ? (payload as { detail: unknown }).detail : undefined;
     throw new Error(typeof message === "string" ? message : `Erreur serveur (${response.status}).`);
