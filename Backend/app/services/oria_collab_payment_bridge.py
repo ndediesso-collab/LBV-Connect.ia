@@ -9,11 +9,12 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException
 
 from app.config.payments import ADDON_PACKS
-from app.services.payment_service import COUNTRY_PHONE_CONFIGS, get_chariow_product_id
+from app.services.payment_service import COUNTRY_PHONE_CONFIGS, get_chariow_product_id, normalize_phone_number
 from app.services.oria_collab_profiles_service import CollabProfilesService
 
 # Reutilisation stricte des quatre addons Chariow deja commercialises.
@@ -28,11 +29,14 @@ def _first(response: Any) -> dict | None:
     return rows[0] if isinstance(rows, list) and rows else None
 
 
-def _member_record(db: Any, user_id: str) -> dict | None:
+def _member_record(db: Any, user_id: str, workspace_id: str | None = None) -> dict | None:
     try:
-        return _first(db.table("oria_collab_members")
-                      .select("user_id,workspace_id,role,status,first_name,last_name,phone_e164")
-                      .eq("user_id", user_id).limit(1).execute())
+        query = (db.table("oria_collab_members")
+                 .select("user_id,workspace_id,role,status,first_name,last_name,phone_e164")
+                 .eq("user_id", user_id))
+        if workspace_id is not None:
+            query = query.eq("workspace_id", workspace_id)
+        return _first(query.limit(1).execute())
     except Exception as exc:
         raise HTTPException(503, "Lecture des identites professionnelles indisponible.") from exc
 
@@ -54,33 +58,73 @@ def _phone_country(phone: str) -> str:
 
 def prepare_collab_checkout(db: Any, *, user_id: str, payment_type: str,
                             product_id: str, billing_email: str | None,
-                            enabled: bool) -> dict | None:
+                            enabled: bool, workspace_id: str | None = None,
+                            billing_phone: str | None = None,
+                            billing_country_iso2: str | None = None) -> dict | None:
     """None => checkout ORIA habituel. Un membre ne peut acheter un pack.
 
     La cle service_role reste sur le serveur. Aucune instruction de credit en
     provenance du navigateur n'entre dans cette fonction.
     """
     if not enabled:
+        if workspace_id is not None:
+            raise HTTPException(503, "ORIA Collaboratif n'est pas active pour les paiements.")
         return None
-    member = _member_record(db, user_id)
+
+    # P14: la nouvelle page envoie un workspace_id ; on ne devine jamais
+    # l'espace en présence de plusieurs appartenances.
+    chosen_workspace = None
+    if workspace_id is not None:
+        try:
+            chosen_workspace = str(UUID(str(workspace_id)))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(422, "Espace professionnel invalide.") from exc
+
+    member = _member_record(db, user_id, chosen_workspace)
+    if chosen_workspace is not None and (not member or member.get("role") != "member"):
+        raise HTTPException(403, "Cette recharge est reservee aux invites actifs de cet espace.")
     if not member or member.get("role") == "owner":
-        return None
+        return None  # Propriétaire : checkout ORIA personnel normal, hors de l'espace.
     if member.get("role") != "member":
         raise HTTPException(403, "Role professionnel inconnu.")
     if payment_type != "addon" or product_id not in COLLAB_ADDON_IDS:
         raise HTTPException(403, "Les collaborateurs peuvent uniquement acheter des recharges personnelles.")
-    context = CollabProfilesService(db)._context(user_id, eligible_required=True)
+
+    if chosen_workspace is not None:
+        # Meme garde que pour l'espace collaboratif : pack du proprietaire,
+        # profil actif et places, valides en base a chaque achat.
+        from app.middleware.oria_collab_pack_gate import check_workspace
+        decision = check_workspace(db, user_id, chosen_workspace)
+        if not decision.allowed:
+            raise HTTPException(decision.status, "Espace suspendu ou profil non autorise.")
+        context = {"is_owner": False, "workspace_id": chosen_workspace}
+    else:
+        # Compatibilite avec les anciennes pages mono-espace seulement.
+        context = CollabProfilesService(db)._context(user_id, eligible_required=True)
     if context["is_owner"] or context["workspace_id"] != str(member["workspace_id"]):
         raise HTTPException(403, "Identite professionnelle incoherente.")
     first, last = str(member.get("first_name") or "").strip(), str(member.get("last_name") or "").strip()
+    if not first or not last:
+        raise HTTPException(422, "Completez votre nom et prenom professionnels avant le paiement.")
+
+    # Le numero fourni sert UNIQUEMENT au checkout Chariow. Le credit est
+    # attribue au user_id du JWT, puis a ce workspace, jamais au numero.
     phone = str(member.get("phone_e164") or "")
-    if not first or not last or not re.fullmatch(r"\+[1-9]\d{7,14}", phone):
-        raise HTTPException(422, "Completer le profil professionnel avant le paiement.")
+    if billing_phone:
+        if not billing_country_iso2:
+            raise HTTPException(422, "Indiquez le pays du numero de paiement.")
+        _, phone, country_iso2 = normalize_phone_number(billing_phone, billing_country_iso2)
+    elif phone:
+        country_iso2 = _phone_country(phone)
+    else:
+        raise HTTPException(422, "Indiquez votre numero de paiement Chariow.")
+    if not re.fullmatch(r"\+[1-9]\d{7,14}", phone):
+        raise HTTPException(422, "Numero de paiement invalide.")
     return {
         "user_id": user_id,
         "workspace_id": context["workspace_id"],
         "first_name": first, "last_name": last,
-        "phone": phone, "country_iso2": _phone_country(phone),
+        "phone": phone, "country_iso2": country_iso2,
         "billing_email": validate_receipt_email(billing_email),
     }
 

@@ -167,7 +167,7 @@ export default function CollaboratifProfilesPage() {
               <span>{pending} invitations réservées</span>
               <span>{total} places ({data.pack_id === "business_pack" ? "Business" : data.pack_id === "pro_pack" ? "Pro" : "Pack expiré"})</span>
               <Link href="/collaboratif/connexion" className="underline">Changer de profil</Link>
-              {!data.is_owner && <Link href="/collaboratif/recharges" className="underline">Mes recharges personnelles</Link>}
+              {!data.is_owner && <Link href={`/collaboratif/espaces/${encodeURIComponent(data.workspace_id)}/actions`} className="underline">Mes recharges personnelles</Link>}
               <Link href="/collaboratif/mes-conversations" className="underline">{data.is_owner ? "Consulter les conversations" : "Mes conversations privées"}</Link>
               <Link href="/collaboratif/quotas" className="underline">{data.is_owner ? "Gérer les quotas" : "Mon quota professionnel"}</Link>
               <Link href="/collaboratif/groupes" className="underline">Salons de groupe</Link>

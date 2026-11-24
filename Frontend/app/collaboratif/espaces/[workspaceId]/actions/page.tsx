@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { collabRequest } from "@/lib/collaboratif-api";
+import { collabRequest, collabSupabase } from "@/lib/collaboratif-api";
+import AllocationManager from "@/components/collaboratif/AllocationManager";
 
 type Context = {
   success: boolean; workspace_id: string; is_owner: boolean;
@@ -15,7 +16,9 @@ type DataGroups = { workspace_id: string; groups: Group[] };
 type DataPeople = { workspace_id: string; profiles: Person[] };
 type Result = { success: boolean; workspace_id: string; checkout_url?: string; [key: string]: unknown };
 
-const field = "block w-full rounded-lg border border-border bg-background px-3 py-2 text-sm";
+const field = "block w-full rounded-lg border border-border bg-background px-3 py-2 text-base sm:text-sm";
+const PAYMENT_COUNTRIES = [{"code": "GA", "label": "Gabon (+241)"}, {"code": "CM", "label": "Cameroun (+237)"}, {"code": "CI", "label": "Côte d'Ivoire (+225)"}, {"code": "SN", "label": "Sénégal (+221)"}, {"code": "BJ", "label": "Bénin (+229)"}, {"code": "BF", "label": "Burkina Faso (+226)"}, {"code": "BI", "label": "Burundi (+257)"}, {"code": "CF", "label": "Centrafrique (+236)"}, {"code": "KM", "label": "Comores (+269)"}, {"code": "CG", "label": "Congo (+242)"}, {"code": "DJ", "label": "Djibouti (+253)"}, {"code": "GN", "label": "Guinée (+224)"}, {"code": "GQ", "label": "Guinée équatoriale (+240)"}, {"code": "MG", "label": "Madagascar (+261)"}, {"code": "ML", "label": "Mali (+223)"}, {"code": "NE", "label": "Niger (+227)"}, {"code": "CD", "label": "RDC (+243)"}, {"code": "RW", "label": "Rwanda (+250)"}, {"code": "TG", "label": "Togo (+228)"}] as const;
+const RECHARGES = [{id:"credits_1000_563",label:"1 000 crédits · 600 FCFA"},{id:"credits_2000",label:"2 000 crédits · 1 000 FCFA"},{id:"credits_4000",label:"4 000 crédits · 2 000 FCFA"},{id:"credits_10000",label:"10 000 crédits · 5 000 FCFA"}] as const;
 const btn = "rounded-lg bg-foreground px-4 py-2 text-sm font-semibold text-background disabled:opacity-50";
 const card = "rounded-2xl border border-border p-5 space-y-3";
 
@@ -32,24 +35,43 @@ export default function WorkspaceActions() {
   const [credits, setCredits] = useState("1000");
   const [kind, setKind] = useState("pack");
   const [email, setEmail] = useState("");
+  const [paymentPhone, setPaymentPhone] = useState("");
+  const [paymentCountry, setPaymentCountry] = useState("GA");
   const [addon, setAddon] = useState("credits_1000_563");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
   const refresh = useCallback(async () => {
-    const [c, g, p] = await Promise.all([
-      collabRequest<Context>(`${base}/scope/context`),
+    // P14: ne pas bloquer une recharge parce que le répertoire ou les groupes
+    // ne répondent pas. Le contexte authentifié, lui, est obligatoire.
+    const c = await collabRequest<Context>(`${base}/scope/context`);
+    if (!c.success || c.workspace_id !== space) {
+      throw new Error("L'espace sélectionné ne correspond pas à l'identité vérifiée.");
+    }
+    setCtx(c);
+    const [g, p] = await Promise.allSettled([
       collabRequest<DataGroups>(`${base}/scope/groups`),
       collabRequest<DataPeople>(`${base}/scope/profiles`),
     ]);
-    if (c.workspace_id !== space || g.workspace_id !== space || p.workspace_id !== space) {
-      throw new Error("L'espace sélectionné ne correspond pas aux données retournées.");
-    }
-    setCtx(c); setGroups(g.groups ?? []); setPeople(p.profiles ?? []);
+    setGroups(g.status === "fulfilled" && g.value.workspace_id === space ? g.value.groups ?? [] : []);
+    setPeople(p.status === "fulfilled" && p.value.workspace_id === space ? p.value.profiles ?? [] : []);
   }, [base, space]);
 
   useEffect(() => { void refresh().catch(e => setError(String(e))); }, [refresh]);
+  useEffect(() => {
+    let mounted = true;
+    void collabSupabase.auth.getUser().then(({data}) => {
+      if (!mounted || !data.user) return;
+      if (data.user.email) setEmail(previous => previous || data.user!.email || "");
+      if (data.user.phone) setPaymentPhone(previous => previous || data.user!.phone || "");
+      const country = data.user.user_metadata?.country_iso2;
+      if (typeof country === "string" && PAYMENT_COUNTRIES.some(c => c.code === country.toUpperCase())) {
+        setPaymentCountry(country.toUpperCase());
+      }
+    }).catch(() => { /* La saisie manuelle reste possible. */ });
+    return () => { mounted = false; };
+  }, []);
 
   async function act(path: string, method: "POST" | "PATCH", body: Record<string, unknown>) {
     setBusy(true); setError(""); setNotice("");
@@ -67,6 +89,30 @@ export default function WorkspaceActions() {
     finally { setBusy(false); }
   }
 
+  // P14: meme checkout que /packs, sans nouvelle commande ni webhook.
+  async function buyPersonalRecharge() {
+    if (busy || !ctx || ctx.is_owner || !ctx.pack_active) return;
+    if (!email.trim() || !email.includes("@") || !paymentPhone.trim()) {
+      setError("Renseignez un e-mail valide et un numéro de paiement Chariow."); return;
+    }
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const result = await collabRequest<{success:boolean;checkout_url?:string}>("/payments/checkout", "POST", {
+        payment_type: "addon", product_id: addon, provider: "chariow",
+        billing_email: email.trim(), billing_phone: paymentPhone.trim(),
+        billing_country_iso2: paymentCountry, workspace_id: space,
+      });
+      if (!result.success || !result.checkout_url || !result.checkout_url.startsWith("https://")) {
+        throw new Error("Aucun lien sécurisé Chariow reçu. Aucun crédit ajouté.");
+      }
+      // Le webhook signé, jamais cette redirection, confirmera l'achat.
+      window.location.assign(result.checkout_url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Paiement indisponible.");
+      setBusy(false);
+    }
+  }
+
   return <main className="min-h-dvh bg-background px-5 py-8 text-foreground">
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="flex gap-5 text-sm">
@@ -78,6 +124,7 @@ export default function WorkspaceActions() {
       {ctx && !ctx.pack_active && <p role="alert" className="rounded-xl border border-border p-4 text-sm">Le pack du propriétaire est inactif : les nouvelles opérations seront refusées.</p>}
       {error && <p role="alert" className="rounded-xl border border-border p-4 text-sm">{error}</p>}
       {notice && <p role="status" className="rounded-xl border border-border p-4 text-sm">{notice}</p>}
+      {ctx?.is_owner && <AllocationManager workspaceId={space} onApplied={() => void refresh()} />}
       <div className="grid gap-4 md:grid-cols-2">
         {ctx?.is_owner && <section className={card}>
           <h2 className="font-semibold">Transférer des crédits d'équipe</h2>
@@ -96,15 +143,36 @@ export default function WorkspaceActions() {
           <button className={btn} disabled={busy || !source || !destination || source===destination || !Number.isSafeInteger(Number(credits)) || Number(credits)<=0} onClick={()=>void act("/quotas/transfer","POST",{from_user_id:source,to_user_id:destination,credits:Number(credits),kind})}>Confirmer le transfert</button>
         </section>}
         {ctx && !ctx.is_owner && <section className={card}>
-          <h2 className="font-semibold">Recharge de mon profil dans cet espace</h2>
-          <input className={field} type="email" aria-label="Email reçu" value={email} onChange={e=>setEmail(e.target.value)} placeholder="E-mail de reçu Chariow"/>
-          <select className={field} aria-label="Recharge" value={addon} onChange={e=>setAddon(e.target.value)}>
-            <option value="credits_1000_563">1 000 crédits · 600 FCFA</option>
-            <option value="credits_2000">2 000 crédits · 1 000 FCFA</option>
-            <option value="credits_4000">4 000 crédits · 2 000 FCFA</option>
-            <option value="credits_10000">10 000 crédits · 5 000 FCFA</option>
-          </select>
-          <button className={btn} disabled={busy || !email.includes("@")} onClick={()=>void act("/recharges/checkout","POST",{billing_email:email,addon_id:addon})}>Continuer vers Chariow</button>
+          <h2 className="font-semibold">Acheter des crédits pour mon profil</h2>
+          <p className="text-sm text-muted">Ces crédits seront utilisables par votre profil dans cet espace, sans augmenter le solde des autres membres. Paiement et validation via le même Chariow qu’ORIA personnel.</p>
+          <label className="block text-sm">Recharge
+            <select className={`${field} mt-2`} aria-label="Recharge personnelle" value={addon} onChange={e=>setAddon(e.target.value)}>
+              {RECHARGES.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+          <label className="block text-sm">E-mail du reçu
+            <input className={`${field} mt-2`} type="email" autoComplete="email" maxLength={254} value={email} onChange={e=>setEmail(e.target.value)} placeholder="adresse@exemple.com"/>
+          </label>
+          <label className="block text-sm">Pays du numéro de paiement
+            <select className={`${field} mt-2`} aria-label="Pays du numéro de paiement" value={paymentCountry} onChange={e=>setPaymentCountry(e.target.value)}>
+              {PAYMENT_COUNTRIES.map(c=><option key={c.code} value={c.code}>{c.label}</option>)}
+            </select>
+          </label>
+          <label className="block text-sm">Numéro utilisé pour le paiement
+            <input className={`${field} mt-2`} type="tel" inputMode="tel" autoComplete="tel" maxLength={25} value={paymentPhone} onChange={e=>setPaymentPhone(e.target.value)} placeholder="+241…"/>
+          </label>
+          <button type="button" className={btn} disabled={busy || !ctx.pack_active || !email.includes("@") || !paymentPhone.trim()}
+            onClick={()=>void buyPersonalRecharge()}>Continuer vers Chariow</button>
+          <p className="text-xs text-muted">Si vous préférez, demandez au propriétaire de vous transférer une partie des crédits de l'équipe.</p>
+          <div className="flex flex-wrap gap-4 text-sm underline">
+            <Link href={`/collaboratif/espaces/${encodeURIComponent(space)}/finances`}>Mon solde et mes achats</Link>
+            <Link href={`/collaboratif/espaces/${encodeURIComponent(space)}/chat`}>Demander au propriétaire dans le groupe</Link>
+          </div>
+        </section>}
+        {ctx?.is_owner && <section className={card}>
+          <h2 className="font-semibold">Mes recharges personnelles</h2>
+          <p className="text-sm text-muted">En tant que propriétaire, effectuez vos achats de crédits depuis ORIA personnel. Vos transferts aux collaborateurs restent disponibles ici.</p>
+          <Link href="/packs?recharge=standard" className="inline-flex items-center rounded-xl bg-foreground px-4 py-2 text-sm font-semibold text-background">Voir les recharges ORIA</Link>
         </section>}
         {ctx?.is_owner && <section className={card}>
           <h2 className="font-semibold">Étendre un groupe : +5 000 messages / 3 000 FCFA</h2>
@@ -117,7 +185,7 @@ export default function WorkspaceActions() {
           <button className={btn} disabled={busy || !groupId || !email.includes("@")} onClick={()=>void act(`/groups/${encodeURIComponent(groupId)}/extensions/checkout`,"POST",{billing_email:email})}>Acheter via Chariow</button>
         </section>}
       </div>
-      <p className="text-xs text-muted">Un retour du navigateur Chariow ne confirme jamais le paiement. Seul le webhook signé ORIA crédite l'achat. Les opérations restent désactivées par défaut sur le backend.</p>
+      <p className="text-xs text-muted">Un retour du navigateur Chariow ne confirme jamais le paiement. Seul le webhook signé ORIA crédite l'achat. Les extensions de messages sont des achats distincts des recharges personnelles et restent soumises à leur activation backend.</p>
     </div>
   </main>;
 }

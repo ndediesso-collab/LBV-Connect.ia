@@ -8,6 +8,7 @@ import {
   Wallet, PencilLine, LockKeyhole, Save,
 } from "lucide-react";
 import { collabRequest } from "@/lib/collaboratif-api";
+import AllocationPrompt from "@/components/collaboratif/AllocationPrompt";
 
 type Context = {
   success: boolean; workspace_id: string; name: string; role: "owner" | "member";
@@ -145,6 +146,7 @@ export default function EspaceSelectionne() {
         </div>
         <button type="button" className={secondary} onClick={() => void refreshContext().catch(cause => setError(String(cause)))}><RefreshCcw className="mr-2 inline" size={15}/> Actualiser</button>
       </div>
+      <div className="mt-5"><AllocationPrompt workspaceId={workspaceId} isOwner={ctx?.is_owner===true} /></div>
       {loading && <p className="mt-7 text-sm" role="status">Vérification de l'appartenance…</p>}
       {error && <p className="mt-6 rounded-xl border border-border p-4 text-sm" role="alert">{error}</p>}
       {notice && <p className="mt-6 rounded-xl border border-border p-4 text-sm" role="status">{notice}</p>}

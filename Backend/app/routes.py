@@ -475,6 +475,10 @@ class CreatePaymentRequest(BaseModel):
     product_id: str
     provider: str | None = None
     billing_email: str | None = None
+    # P14: contexte de l'espace choisi, jamais identité de bénéficiaire.
+    workspace_id: str | None = None
+    billing_phone: str | None = None
+    billing_country_iso2: str | None = None
 
 
 class UpdatePhoneRequest(BaseModel):
@@ -1276,6 +1280,8 @@ def checkout_payment(
         supabase, user_id=authenticated_user_id,
         payment_type=request.payment_type, product_id=request.product_id,
         billing_email=request.billing_email, enabled=_collab_enabled(),
+        workspace_id=request.workspace_id, billing_phone=request.billing_phone,
+        billing_country_iso2=request.billing_country_iso2,
     )
 
     # ========================================================

@@ -27,6 +27,7 @@ from app.route.collab_email_invites import router as collab_email_invites_router
 from app.route.collab_workspace_scope import router as collab_workspace_scope_router
 from app.route.collab_workspace_finance import router as collab_workspace_finance_router
 from app.route.collab_scoped_actions import router as collab_scoped_actions_router
+from app.route.collab_allocation import router as collab_allocation_router
 from app.route.collab_ai_workspace import router as collab_ai_workspace_router
 from app.route.collab_chat_hub import router as collab_chat_hub_router
 from app.route.collab_share_invites import router as collab_share_invites_router
@@ -180,6 +181,7 @@ app.include_router(collab_email_invites_router)
 app.include_router(collab_workspace_scope_router)
 app.include_router(collab_workspace_finance_router)
 app.include_router(collab_scoped_actions_router)
+app.include_router(collab_allocation_router)
 app.include_router(collab_ai_workspace_router)
 app.include_router(collab_chat_hub_router)
 app.include_router(collab_share_invites_router)

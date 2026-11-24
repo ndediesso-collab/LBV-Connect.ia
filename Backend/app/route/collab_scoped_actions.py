@@ -115,9 +115,10 @@ def transfer(workspace_id: UUID, body: Transfer,
 def recharge_checkout(workspace_id: UUID, body: Checkout,
                       user_id: str | None = Header(None, alias="user-id"),
                       authorization: str | None = Header(None, alias="authorization")):
-    service, actor = client(user_id, authorization)
-    return service.checkout(actor, str(workspace_id), product_id=body.addon_id,
-                            email=body.billing_email)
+    # P14: ancien checkout concurrent retire. La route /payments/checkout
+    # est seule habilitee a creer les nouvelles recharges personnelles.
+    client(user_id, authorization)
+    raise HTTPException(410, "Utilisez le paiement ORIA commun depuis cet espace de travail.")
 
 
 @router.post("/groups/{group_id}/extensions/checkout")

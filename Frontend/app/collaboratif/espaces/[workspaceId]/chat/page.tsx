@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { ArrowDown, ArrowLeft, Bell, Check, ChevronLeft, FileText, Menu, MessageCircle, MessagesSquare,
   Download, Eye, Paperclip, Plus, RefreshCcw, Send, Settings, ShieldCheck, Sparkles, Users, Wallet, X, Copy, Pencil, Mic, Square, Play } from "lucide-react";
 import { collabRequest, collabSupabase, COLLAB_API_URL } from "@/lib/collaboratif-api";
+import AllocationPrompt from "@/components/collaboratif/AllocationPrompt";
 import { OriaRichMessage, type OriaWebIllustration } from "@/components/oria-chat/OriaRichMessage"; // ORIA_COLLAB_P10_SHARED_RICH_RENDERER
 
 type Person = { user_id: string; role: "owner" | "member"; status: string; first_name: string; last_name: string; avatar_key?: string };
@@ -878,6 +879,7 @@ export default function OriaCollaboratifChat() {
         {boot?.context.is_owner&&selection?.kind==="group"&&<button className={smallButton} onClick={()=>setShowGroupMember(v=>!v)} title="Gérer les participants"><Users size={17}/></button>}
       </header>
       {!boot?.context.pack_active&&<div className="border-b border-border px-5 py-3 text-xs">Le pack de l'administrateur est inactif : historiques consultables, nouveaux messages bloqués.</div>}
+      <AllocationPrompt workspaceId={space} isOwner={boot?.context.is_owner===true} />
       {error&&<div role="alert" className="mx-4 mt-3 flex items-start justify-between gap-2 rounded-xl border border-border bg-surface p-3 text-sm"><span>{error}</span><button onClick={()=>setError("")} aria-label="Fermer"><X size={16}/></button></div>}
       {notice&&<div role="status" className="mx-4 mt-3 rounded-xl border border-border bg-surface p-3 text-xs">{notice}</div>}
       {showGroupMember&&currentGroup&&<div className="flex flex-wrap items-end gap-2 border-b border-border p-3 text-xs"><label className="flex-1">Participant<select className={`${input} mt-1`} value={selectedPerson} onChange={e=>setSelectedPerson(e.target.value)}><option value="">Sélectionner</option>{peers.map(p=><option key={p.user_id} value={p.user_id}>{name(p)}</option>)}</select></label><button className={smallButton} disabled={!selectedPerson||busy} onClick={()=>void updateGroupMember(true)}>Ajouter</button><button className={smallButton} disabled={!selectedPerson||busy} onClick={()=>void updateGroupMember(false)}>Retirer</button></div>}
