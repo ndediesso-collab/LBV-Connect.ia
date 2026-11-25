@@ -90,7 +90,7 @@ def list_owner_assistants(owner_user_id: str) -> list[dict[str, Any]]:
 def get_owner_assistant(owner_user_id: str, assistant_id: str) -> dict[str, Any]:
     response = (
         supabase.table("oria_assistants").select("*")
-        .eq("id", assistant_id).eq("owner_user_id", owner_user_id).maybe_single().execute()
+        .eq("id", assistant_id).eq("owner_user_id", owner_user_id).limit(1).execute()
     )
     item = _first(response.data)
     if item is None:
@@ -182,7 +182,7 @@ def get_public_assistant(slug: str) -> dict[str, Any]:
     response = (
         supabase.table("oria_assistants").select(
             "id,name,description,welcome_message,slug,is_public,owner_user_id"
-        ).eq("slug", slug).eq("is_public", True).maybe_single().execute()
+        ).eq("slug", slug).eq("is_public", True).limit(1).execute()
     )
     item = _first(response.data)
     if item is None:
@@ -193,7 +193,7 @@ def get_public_assistant(slug: str) -> dict[str, Any]:
 def get_public_assistant_for_generation(slug: str) -> dict[str, Any]:
     response = (
         supabase.table("oria_assistants").select("*")
-        .eq("slug", slug).eq("is_public", True).maybe_single().execute()
+        .eq("slug", slug).eq("is_public", True).limit(1).execute()
     )
     item = _first(response.data)
     if item is None:
@@ -224,7 +224,7 @@ def _visitor_conversation(assistant_id: str, conversation_id: str, visitor_token
     response = (
         supabase.table("oria_assistant_conversations").select("*")
         .eq("id", conversation_id).eq("assistant_id", assistant_id)
-        .eq("visitor_token_hash", token_hash).maybe_single().execute()
+        .eq("visitor_token_hash", token_hash).limit(1).execute()
     )
     item = _first(response.data)
     if item is None:
@@ -255,9 +255,9 @@ def visitor_messages(assistant_id: str, conversation_id: str, visitor_token: str
 def _get_run(request_id: str) -> dict[str, Any] | None:
     response = (
         supabase.table("oria_assistant_runs").select("*")
-        .eq("request_id", request_id).maybe_single().execute()
+        .eq("request_id", request_id).limit(1).execute()
     )
-    return _first(response.data)
+    return _first(response.data if response is not None else None)
 
 
 def _update_run(run_id: str, values: Mapping[str, Any]) -> None:
@@ -268,7 +268,7 @@ def _complete_saved_run(run: Mapping[str, Any]) -> dict[str, Any]:
     response = (
         supabase.table("oria_assistant_messages").select("id,role,content,created_at")
         .eq("conversation_id", run["conversation_id"]).eq("run_id", run["id"])
-        .eq("role", "assistant").maybe_single().execute()
+        .eq("role", "assistant").limit(1).execute()
     )
     saved = _first(response.data)
     status = str(run.get("status") or "")
@@ -289,7 +289,7 @@ def _complete_saved_run(run: Mapping[str, Any]) -> dict[str, Any]:
                 # A previous repair may have committed the unique (run, role) row.
                 check = (
                     supabase.table("oria_assistant_messages").select("id")
-                    .eq("run_id", run["id"]).eq("role", "assistant").maybe_single().execute()
+                    .eq("run_id", run["id"]).eq("role", "assistant").limit(1).execute()
                 )
                 if _first(check.data) is None:
                     raise HTTPException(503, "Le transcript doit être synchronisé avant un nouvel envoi.")

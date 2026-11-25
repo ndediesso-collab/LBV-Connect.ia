@@ -248,14 +248,14 @@ export default function PublicAssistantPage() {
     <main className="oria-public-page">
       <style jsx global>{`
         :root { color-scheme: light; }
-        html, body { min-height: 100%; }
+        html, body { height: 100%; min-height: 100%; }
         body { margin: 0; background: #f7f7f6; color: #171717; -webkit-font-smoothing: antialiased; }
         button, textarea { font: inherit; }
         button { -webkit-tap-highlight-color: transparent; }
-        .oria-public-page { min-height: 100dvh; background: #f7f7f6; color: #171717; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-        .oria-app-shell { min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 24px 20px; }
-        .oria-chat-card { width: min(100%, 790px); min-height: min(860px, calc(100dvh - 48px)); display: flex; flex-direction: column; overflow: hidden; background: #fff; border: 1px solid #ebebea; border-radius: 24px; box-shadow: 0 14px 50px rgba(0,0,0,.055); }
-        .oria-business-header { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 26px; border-bottom: 1px solid #e9e9e7; background: rgba(255,255,255,.96); }
+        .oria-public-page { width: 100%; height: 100dvh; min-height: 100svh; overflow: hidden; background: #fff; color: #171717; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+        .oria-app-shell { width: 100%; height: 100dvh; min-height: 100svh; display: flex; align-items: stretch; justify-content: stretch; padding: 0; overflow: hidden; }
+        .oria-chat-card { width: 100%; height: 100dvh; min-height: 100svh; display: flex; flex-direction: column; overflow: hidden; background: #fff; border: 0; border-radius: 0; box-shadow: none; }
+        .oria-business-header { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px clamp(20px, 4vw, 64px); border-bottom: 1px solid #e9e9e7; background: rgba(255,255,255,.98); flex-shrink: 0; }
         .oria-business-identity { display: flex; align-items: center; gap: 14px; min-width: 0; }
         .oria-avatar { flex: 0 0 48px; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 16px; background: #171717; color: #fff; font-size: 14px; font-weight: 750; letter-spacing: -.04em; }
         .oria-identity-copy { min-width: 0; }
@@ -268,20 +268,20 @@ export default function PublicAssistantPage() {
         .oria-icon-button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #e9e9e7; border-radius: 50%; background: #fff; color: #555; cursor: pointer; transition: background .18s, transform .18s; }
         .oria-icon-button:hover { background: #f5f5f4; transform: translateY(-1px); }
         .oria-icon-button:disabled { cursor: wait; opacity: .45; }
-        .oria-conversation { flex: 1; min-height: 350px; display: flex; flex-direction: column; overflow-y: auto; padding: 36px 30px 26px; scroll-behavior: smooth; }
-        .oria-welcome-block { max-width: 570px; margin: 4px auto 28px; text-align: center; }
+        .oria-conversation { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: clamp(28px, 5vh, 52px) clamp(20px, 5vw, 80px) 28px; scroll-behavior: smooth; }
+        .oria-welcome-block { width: 100%; max-width: 760px; margin: 12px auto 32px; text-align: center; }
         .oria-welcome-mark { width: 42px; height: 42px; margin: 0 auto 16px; display: grid; place-items: center; border: 1px solid #e9e9e7; border-radius: 14px; background: #fff; }
         .oria-welcome-block h1 { margin: 0; font-size: clamp(22px, 4vw, 29px); font-weight: 720; letter-spacing: -.055em; }
         .oria-welcome-block p { margin: 10px auto 0; max-width: 470px; color: #777; font-size: 13px; line-height: 1.65; }
         .oria-welcome-note { display: inline-flex; align-items: center; gap: 7px; margin-top: 15px; color: #777; font-size: 11px; }
-        .oria-suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 0 auto 30px; }
+        .oria-suggestions { width: 100%; max-width: 1100px; display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin: 0 auto 34px; }
         .oria-suggestion { min-height: 36px; padding: 8px 13px; border: 1px solid #e8e8e6; border-radius: 999px; background: white; color: #4c4c4c; font-size: 11px; cursor: pointer; transition: all .18s; }
         .oria-suggestion:hover { border-color: #bdbdb9; background: #f8f8f7; color: #111; }
-        .oria-messages { width: 100%; max-width: 620px; margin: 0 auto; display: flex; flex-direction: column; gap: 17px; }
+        .oria-messages { width: 100%; max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
         .oria-message-row { display: flex; align-items: flex-end; gap: 9px; animation: oria-appear .22s ease-out; }
         .oria-message-row.user { justify-content: flex-end; }
         .oria-mini-avatar { flex: 0 0 27px; width: 27px; height: 27px; display: grid; place-items: center; border-radius: 9px; background: #171717; color: white; font-size: 9px; font-weight: 750; }
-        .oria-message-content { max-width: min(82%, 490px); min-width: 0; }
+        .oria-message-content { max-width: min(84%, 760px); min-width: 0; }
         .oria-message-meta { margin: 0 0 5px 2px; color: #888; font-size: 10px; }
         .oria-bubble { padding: 12px 15px; border-radius: 16px 16px 16px 5px; background: #f4f4f2; color: #292929; font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
         .oria-message-row.user .oria-bubble { border-radius: 16px 16px 5px 16px; background: #171717; color: #fff; }
@@ -290,27 +290,27 @@ export default function PublicAssistantPage() {
         .oria-typing span { width: 5px; height: 5px; background: #777; border-radius: 50%; animation: oria-pulse 1s infinite ease-in-out; }
         .oria-typing span:nth-child(2) { animation-delay: .15s; }
         .oria-typing span:nth-child(3) { animation-delay: .3s; }
-        .oria-composer-wrap { padding: 15px 24px 14px; border-top: 1px solid #e9e9e7; background: #fff; }
-        .oria-composer { display: flex; align-items: flex-end; gap: 10px; padding: 8px 9px 8px 16px; border: 1px solid #dededb; border-radius: 17px; background: #fff; box-shadow: 0 3px 12px rgba(0,0,0,.025); transition: border-color .18s, box-shadow .18s; }
+        .oria-composer-wrap { flex-shrink: 0; padding: 15px clamp(20px, 5vw, 80px) 14px; border-top: 1px solid #e9e9e7; background: #fff; }
+        .oria-composer { width: 100%; max-width: 1100px; margin: 0 auto; display: flex; align-items: flex-end; gap: 10px; padding: 8px 9px 8px 16px; border: 1px solid #dededb; border-radius: 17px; background: #fff; box-shadow: 0 3px 12px rgba(0,0,0,.025); transition: border-color .18s, box-shadow .18s; }
         .oria-composer:focus-within { border-color: #999; box-shadow: 0 0 0 3px rgba(0,0,0,.045); }
         .oria-composer textarea { flex: 1; min-width: 0; max-height: 130px; min-height: 27px; resize: none; border: 0; outline: 0; padding: 5px 0; color: #222; background: transparent; font-size: 16px; line-height: 1.45; }
         .oria-composer textarea::placeholder { color: #a0a09d; }
         .oria-send-button { flex: 0 0 38px; width: 38px; height: 38px; display: grid; place-items: center; border: 0; border-radius: 12px; background: #171717; color: white; cursor: pointer; transition: background .18s, transform .18s; }
         .oria-send-button:hover { background: #393939; transform: translateY(-1px); }
         .oria-send-button:disabled { cursor: not-allowed; opacity: .35; transform: none; }
-        .oria-composer-hint { margin: 9px 2px 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #999; font-size: 10px; }
+        .oria-composer-hint { width: 100%; max-width: 1100px; margin: 9px auto 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #999; font-size: 10px; }
         .oria-privacy { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-        .oria-error { max-width: 620px; width: 100%; margin: 0 auto 12px; padding: 11px 14px; border: 1px solid #e7d8d8; border-radius: 12px; background: #fff8f8; color: #7b3535; font-size: 12px; line-height: 1.5; }
-        .oria-footer { padding: 13px 20px 18px; text-align: center; color: #92928f; font-size: 10px; letter-spacing: .01em; }
+        .oria-error { width: calc(100% - 40px); max-width: 1100px; margin: 0 auto 12px; padding: 11px 14px; border: 1px solid #e7d8d8; border-radius: 12px; background: #fff8f8; color: #7b3535; font-size: 12px; line-height: 1.5; flex-shrink: 0; }
+        .oria-footer { width: 100%; max-width: 1100px; margin: 0 auto; padding: 12px 20px max(14px, env(safe-area-inset-bottom)); text-align: center; color: #92928f; font-size: 10px; letter-spacing: .01em; flex-shrink: 0; }
         .oria-footer strong { color: #555; font-weight: 700; }
         .oria-footer a { color: inherit; text-decoration: none; }
         .oria-footer a:hover { color: #222; text-decoration: underline; }
-        .oria-loading { min-height: 65vh; display: grid; place-items: center; gap: 10px; color: #777; font-size: 13px; }
+        .oria-loading { flex: 1; min-height: 0; display: grid; place-items: center; gap: 10px; color: #777; font-size: 13px; }
         @keyframes oria-appear { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes oria-pulse { 0%, 60%, 100% { transform: translateY(0); opacity: .45; } 30% { transform: translateY(-4px); opacity: 1; } }
         @media (max-width: 640px) {
-          .oria-app-shell { min-height: 100dvh; padding: 0; }
-          .oria-chat-card { width: 100%; min-height: 100dvh; min-height: 100svh; border: 0; border-radius: 0; box-shadow: none; }
+          .oria-app-shell { width: 100%; height: 100dvh; min-height: 100svh; padding: 0; }
+          .oria-chat-card { width: 100%; height: 100dvh; min-height: 100svh; border: 0; border-radius: 0; box-shadow: none; }
           .oria-business-header { padding: 15px 16px; padding-top: max(15px, env(safe-area-inset-top)); gap: 8px; }
           .oria-avatar { width: 42px; height: 42px; flex-basis: 42px; border-radius: 14px; }
           .oria-business-name { font-size: 14px; }
@@ -319,17 +319,17 @@ export default function PublicAssistantPage() {
           .oria-status-label { display: none; }
           .oria-header-actions { gap: 7px; }
           .oria-icon-button { width: 34px; height: 34px; }
-          .oria-conversation { padding: 30px 17px 22px; }
+          .oria-conversation { min-height: 0; padding: 24px 16px 18px; }
           .oria-welcome-block { margin-top: 8px; margin-bottom: 24px; }
           .oria-welcome-block h1 { font-size: 25px; }
           .oria-welcome-block p { font-size: 12px; }
           .oria-suggestions { gap: 7px; margin-bottom: 24px; }
           .oria-suggestion { min-height: 35px; padding: 8px 11px; font-size: 10px; }
-          .oria-message-content { max-width: 86%; }
+          .oria-message-content { max-width: 90%; }
           .oria-bubble { padding: 11px 13px; font-size: 13px; }
           .oria-composer-wrap { padding: 11px 13px calc(10px + env(safe-area-inset-bottom)); }
           .oria-composer { border-radius: 16px; padding-left: 13px; }
-          .oria-composer-hint { font-size: 9px; }
+          .oria-composer-hint { font-size: 9px; flex-wrap: wrap; }
           .oria-footer { padding: 10px 15px calc(13px + env(safe-area-inset-bottom)); }
         }
         @media (prefers-reduced-motion: reduce) {
