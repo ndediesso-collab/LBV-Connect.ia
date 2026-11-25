@@ -638,6 +638,7 @@ type Pack = {
 
 
 
+    | "discovery_pack"
     | "light_pack"
 
 
@@ -843,6 +844,18 @@ type CreditTopUp = {
 
 
 const PACK_TEXT_EN: Record<Pack["id"], { name: string; description: string; features: string[] }> = {
+  discovery_pack: {
+    name: "Discovery",
+    description: "ORIA's entry-level paid pack: 7,000 credits valid for 35 days, Luna and Claude Haiku 5.5, 1K images and short video clips.",
+    features: [
+      "GPT-6 Luna and Claude Haiku 5.5",
+      "Web Search with GPT-6 Luna",
+      "1K Recraft image generation",
+      "Grok video clips: 4 seconds at 480p",
+      "File and image analysis",
+      "Standard top-ups and plan switching",
+    ],
+  },
   light_pack: {
     name: "Light",
     description: "Essential ORIA access with GPT-6 Luna, 1K image creation, simple photo editing and short video clips.",
@@ -895,6 +908,8 @@ const PACK_TEXT_EN: Record<Pack["id"], { name: string; description: string; feat
 };
 
 const MEDIA_NAME_EN: Record<string, string> = {
+  "Création d’images Recraft 1K": "1K Recraft image creation",
+  "Vidéo Grok 480p de 4 s": "4-second Grok video at 480p",
   "Création d’images 1K": "1K image creation",
   "Retouche avec 1 photo": "Editing with 1 photo",
   "Vidéos 4 ou 8 s": "4 or 8-second videos",
@@ -913,6 +928,7 @@ const MEDIA_NAME_EN: Record<string, string> = {
 };
 
 const MEDIA_CONFIG_EN: Record<string, string> = {
+  "4 s · texte ou image vers vidéo": "4 s · text or image to video",
   "Texte vers image": "Text to image",
   "1 photo de référence": "1 reference photo",
   "720p · texte ou image vers vidéo": "720p · text or image to video",
@@ -1061,7 +1077,7 @@ function getTopUpDescription(
 const FAQS_EN = [
   { question: "How long are my credits valid?", answer: "All packs currently last 35 days." },
   { question: "What happens when my pack expires?", answer: "The linked wallet becomes inactive at expiration, and its remaining credits can no longer be used." },
-  { question: "How many credits are included in each pack?", answer: "Light: 15,000; Intermediate: 27,000; Pro: 36,000; Business: 120,000 credits." },
+  { question: "How many credits are included in each pack?", answer: "Discovery: 7,000; Light: 15,000; Intermediate: 27,000; Pro: 36,000; Business: 120,000 credits." },
   { question: "Do all actions cost the same number of credits?", answer: "No. Costs vary by model, resolution and duration. Mini-Studio displays a credit quote before each creation." },
   { question: "Can I buy extra credits?", answer: "You can top up your balance: 1,000 credits (600 XAF), 2,000 (1,000 XAF), 4,000 (2,000 XAF), or 10,000 (5,000 XAF)." },
   { question: "Which Chat models are included in each pack?", answer: "Discovery: Luna and Claude Haiku 5.5; Light: Luna and Haiku; Intermediate: Luna, GPT-5, Haiku and Gemini 3.5 Flash-Lite; Pro: Luna, Terra, Sol, Haiku, Gemini 3.5 Flash-Lite, Gemini 3.8 Flash and Gemini 4 Argon; Business: Terra, Sol, Astra and the Anthropic/Google models of Pro. Provider availability applies." },
@@ -1184,6 +1200,36 @@ const complementaryCredits: CreditTopUp[] = [
 
 
 const packs: Pack[] = [
+  // ORIA_P17_R4_CINQUIEME_PACK — offre permanente, meme grille et checkout que les autres packs.
+  {
+    id: "discovery_pack",
+    name: "Découverte",
+    price: "1 500 XAF",
+    launchPrice: "1 500 XAF",
+    credits: "7 000",
+    duration: "35 jours",
+    description: "Le premier pack payant d’ORIA, renouvelable et rechargeable comme les autres, avec Luna, Claude Haiku, des images 1K et de courtes vidéos.",
+    features: [
+      "GPT-6 Luna et Claude Haiku 5.5",
+      "Recherche Web avec GPT-6 Luna",
+      "Images Recraft en 1K",
+      "Vidéos Grok : 4 s en 480p",
+      "Analyse de fichiers et d’images",
+      "Recharges classiques et changement de pack",
+    ],
+    models: [
+      { name: "GPT-6 Luna", available: true },
+      { name: "Claude Haiku 5.5 (OpenRouter)", available: true },
+      { name: "GPT-5", available: false },
+      { name: "GPT-5.6 Terra", available: false },
+      { name: "GPT-6 Sol", available: false },
+      { name: "GPT-6 Astra", available: false },
+    ],
+    media: [
+      { name: "Création d’images Recraft 1K", available: true, model: "Recraft v4.1 Flash", configuration: "Texte vers image" },
+      { name: "Vidéo Grok 480p de 4 s", available: true, model: "Grok Imagine Video 1.5 Lite", configuration: "4 s · texte ou image vers vidéo" },
+    ],
+  },
   {
     id: "light_pack",
     name: "Léger",
@@ -1359,7 +1405,7 @@ const packs: Pack[] = [
 const faqs = [
   { question: "Combien de temps mes crédits sont-ils valables ?", answer: "Les crédits suivent la durée du pack, actuellement de 35 jours." },
   { question: "Que se passe-t-il lorsque mon pack expire ?", answer: "Le portefeuille associé devient inactif à la date d'expiration ; les crédits restants de ce pack ne sont plus consommables." },
-  { question: "Combien de crédits contient chaque pack ?", answer: "Léger : 15 000 ; Intermédiaire : 27 000 ; Pro : 36 000 ; Business : 120 000 crédits." },
+  { question: "Combien de crédits contient chaque pack ?", answer: "Découverte : 7 000 ; Léger : 15 000 ; Intermédiaire : 27 000 ; Pro : 36 000 ; Business : 120 000 crédits." },
   { question: "Toutes les actions consomment-elles le même nombre de crédits ?", answer: "Non. Le coût dépend notamment du modèle, de la résolution et de la durée. Le Mini-Studio affiche un devis en crédits avant chaque création." },
   { question: "Puis-je acheter des crédits supplémentaires ?", answer: "Vous pouvez recharger votre solde : 1 000 crédits (600 XAF), 2 000 (1 000 XAF), 4 000 (2 000 XAF) ou 10 000 (5 000 XAF)." },
   { question: "Quels modèles Chat sont inclus dans chaque pack ?", answer: "OpenAI direct : Découverte et Léger = Luna ; Intermédiaire = Luna et GPT-5 ; Pro = Luna, Terra et Sol ; Business = Terra, Sol et Astra. Avec OpenRouter : Claude Haiku 5.5 dès Gratuit, Découverte et Léger ; Gemini 3.5 Flash-Lite dès Intermédiaire ; Gemini 3.8 Flash et Gemini 4 Argon dès Pro. Les modèles Anthropic et Google requièrent OpenRouter." },
@@ -1666,14 +1712,19 @@ export default function PacksPage() {
     return () => window.clearInterval(timer);
   }, [discoveryStatus?.purchase_pending, discoveryStatus?.topup_pending]);
   useEffect(() => {
-    if (!DISCOVERY_PUBLIC || discoveryLoginCheckout.current || discoverySession !== "authenticated" || !discoveryStatus?.enabled) return;
+    if (discoveryLoginCheckout.current) return;
     const requested = new URLSearchParams(window.location.search).get("checkout");
-    if (requested !== DISCOVERY_PACK_ID || !discoveryStatus.enabled) return;
-    discoveryLoginCheckout.current = true;
-    // Le clic initial, avant connexion, a déjà exprimé l'intention d'acheter.
-    window.history.replaceState(null, "", "/packs");
-    void startPayment({ type: "primary_pack", id: DISCOVERY_PACK_ID });
-  }, [discoverySession, discoveryStatus]);
+    if (requested !== DISCOVERY_PACK_ID) return;
+    let cancelled = false;
+    // Reprise après connexion, comme les autres packs ; le serveur valide le paiement.
+    void createClient().auth.getSession().then(({ data: { session } }) => {
+      if (cancelled || !session || discoveryLoginCheckout.current) return;
+      discoveryLoginCheckout.current = true;
+      window.history.replaceState(null, "", "/packs");
+      void startPayment({ type: "primary_pack", id: DISCOVERY_PACK_ID });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (["decouverte", "standard"].includes(new URLSearchParams(window.location.search).get("recharge") || "")) setActivePackTab("addon");
@@ -1682,7 +1733,6 @@ export default function PacksPage() {
   // Après achat confirmé, l'offre disparaît définitivement pour ce compte.
   // Avant achat, elle reste visible pour expliquer une éventuelle inéligibilité.
   // L'affichage ne remplace jamais le contrôle serveur can_buy au checkout.
-  const discoveryBuyVisible = DISCOVERY_PUBLIC && (discoverySession === "guest" || (discoverySession === "authenticated" && discoveryStatus?.can_buy === true && discoveryStatus?.purchased === false && walletPackId === null));
 
   const displayedPacks = packs.map((pack) =>
 
@@ -1799,33 +1849,7 @@ export default function PacksPage() {
     }
     // Ne jamais déclencher une commande Découverte sur un statut périmé.
     const discoveryTarget = target.id === DISCOVERY_PACK_ID;
-    if (discoveryTarget) {
-      if (!DISCOVERY_PUBLIC) return;
-      if (discoverySession !== "authenticated") return;
-      try {
-        const statusResponse = await fetch(`${API_URL}/payments/discovery/status`, {
-          headers: { Authorization: `Bearer ${session.access_token}`, "user-id": session.user.id },
-          cache: "no-store",
-        });
-        if (!statusResponse.ok) throw new Error(discoveryCheckErrorText(`status:${statusResponse.status}`, language));
-        const verified = await statusResponse.json() as DiscoveryStatus;
-        const allowed = verified.enabled; // Aucun verrou d'achat historique en plus du checkout commun
-        if (!allowed) {
-          void refreshDiscoveryStatus();
-          setDiscoveryNotice("Cette offre n'est plus disponible pour ce compte.");
-          return;
-        }
-      } catch (cause) {
-        setDiscoveryNotice(cause instanceof Error ? cause.message : "Vérification impossible.");
-        return;
-      }
-    }
-
-
-
-
-
-
+    // L’autorisation d’achat est contrôlée par le checkout commun côté serveur.
 
     setIsPaying(target.id);
 
@@ -2513,50 +2537,8 @@ export default function PacksPage() {
             </button>
           </div>
         )}
-        {discoveryBuyVisible && (
-          <section id="offre-decouverte" className="mt-9 border-y border-border/70 py-7 sm:py-9">
-            <div className="flex flex-wrap items-start justify-between gap-6 sm:items-center">
-              <div className="max-w-2xl">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">{language === "fr" ? "Offre permanente · crédits valables 35 jours" : "Ongoing offer · credits valid for 35 days"}</p>
-                <h2 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{language === "fr" ? "Pack Découverte" : "Discovery Pass"}</h2>
-                <p className="mt-3 text-sm leading-7 text-muted-strong">{language === "fr"
-                  ? "7 000 crédits valables 35 jours. GPT-6 Luna et Claude Haiku 5.5 (selon disponibilité du fournisseur), images Recraft 1K et vidéos Grok 480p de 4 secondes. Utilisez ces fonctions tant que vos crédits le permettent. Fonctions avancées réservées aux autres packs."
-                  : "7,000 credits valid for 35 days. GPT-6 Luna and Claude Haiku 5.5 (subject to provider availability), 1K Recraft images and 4-second 480p Grok videos. Use these features while your credits last. Advanced features require another plan."}</p>
-                <p className="mt-2 text-xs text-muted">{language === "fr" ? "Recharges standard disponibles tant que le pack est actif. Le devis en crédits est présenté avant les créations." : "Standard top-ups are available while the plan is active. Credit estimates are shown before media creation."}</p>
-              </div>
-              <div className="min-w-[190px]">
-                <p className="text-3xl font-semibold tabular-nums">1 500 <span className="text-base">FCFA</span></p>
-                <p className="mt-1 text-xs text-muted">{language === "fr" ? "Renouvelable" : "Renewable"}</p>
-                <button type="button"
-                  disabled={isPaying !== null ||
-                    (discoverySession === "authenticated" && discoveryStatus?.enabled !== true)}
-                  onClick={() => {
-                    void (async () => {
-                          const sb = createClient();
-                          const {data:{session}} = await sb.auth.getSession();
-                          if (session) {
-                            const response = await fetch(`${API_URL}/credits/me`, {
-                              headers:{Authorization:`Bearer ${session.access_token}`,"user-id":session.user.id},cache:"no-store"
-                            });
-                            if (response.ok) {
-                              const data = await response.json();
-                              const current = data?.wallet;
-                              if (current?.is_pack_active && !window.confirm(
-                                `Le nouveau Découverte remplacera votre pack actuel et ses ${current.balance ?? 0} crédits restants. Continuer ?`
-                              )) return;
-                            } else if (response.status !== 404) { window.alert("Vérification du pack impossible."); return; }
-                          }
-                          await startPayment({type:"primary_pack",id:DISCOVERY_PACK_ID});
-                        })();
-                  }}
-                  className="mt-4 w-full rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-                  {isPaying === DISCOVERY_PACK_ID ? UI[language].redirecting
-                    : language === "fr" ? "Choisir Découverte" : "Choose Discovery"}
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
+
+        {/* Découverte figure désormais dans la grille des 5 packs. */}
         {DISCOVERY_PUBLIC && discoveryWallet && discoveryStatus?.enabled && (
           <p role="status" className="mt-6 rounded-2xl border border-border bg-surface-secondary p-4 text-sm">
             {language === "fr" ? `Pack Découverte : ${discoveryStatus.balance ?? 0} crédits disponibles jusqu’à la fin de la validité.` : `Discovery Pass: ${discoveryStatus.balance ?? 0} credits available until expiry.`}
@@ -2578,7 +2560,7 @@ export default function PacksPage() {
         {activePackTab === "primary" ? (
           <section className="mt-6 oria-tab-content-enter" role="tabpanel">
             <p className="mb-5 rounded-2xl border border-border bg-surface-secondary p-4 text-xs leading-6 text-muted">{language === "fr" ? "En achetant un pack, vous recevez uniquement les crédits de ce pack. Les recharges achetées sans pack restent séparées et leur expiration continue, même pendant les 35 jours du pack." : "Buying a plan grants only that plan’s credits. Top-ups purchased without a plan remain separate and continue to expire, even during the plan’s 35 days."}</p>
-            <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4 oria-stagger-cards">
+            <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3 oria-stagger-cards">
               {displayedPacks.map((pack) => (
                 <PackCard key={pack.id} pack={pack} language={language} onSelect={handlePackSelection} />
               ))}
@@ -3739,7 +3721,7 @@ function PackCard({
 
 
 
-          {UI[language].launchOffer}
+          {pack.price === pack.launchPrice ? (language === "fr" ? "Tarif fixe" : "Regular price") : UI[language].launchOffer}
 
 
 
@@ -3751,7 +3733,8 @@ function PackCard({
 
 
 
-          <span
+          {pack.price !== pack.launchPrice && (
+            <span
 
 
 
@@ -3776,6 +3759,7 @@ function PackCard({
 
 
           </span>
+          )}
 
 
 
