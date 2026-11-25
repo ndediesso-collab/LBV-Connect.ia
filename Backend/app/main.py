@@ -248,3 +248,5 @@ async def _oria_collab_push_stop():
         except asyncio.CancelledError:
             pass
         _oria_collab_push_task=None
+from app.route.oria_assistant import router as oria_assistant_router
+app.include_router(oria_assistant_router)

@@ -3,7 +3,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({
+  const supabaseResponse = NextResponse.next({
     request,
   });
 
@@ -41,6 +41,7 @@ export async function middleware(request: NextRequest) {
     "/credits",
     "/settings",
     "/collaboratif",
+    "/assistant",
   ];
 
   const isProtectedRoute = protectedRoutes.some(
@@ -78,5 +79,6 @@ export const config = {
     "/credits/:path*",
     "/settings/:path*",
     "/collaboratif/:path*",
+    "/assistant/:path*",
   ],
 };
