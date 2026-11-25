@@ -248,10 +248,10 @@ export default function AssistantWorkspacePage() {
               </div>
 
               <div className="mt-7 grid gap-5">
-                <label className="grid gap-2 text-sm font-medium">Nom de l&apos;assistant
-                  <input required minLength={2} maxLength={80} value={editor.name} onChange={e => setEditor(v => ({ ...v, name: e.target.value }))} placeholder="Ex. Assistant comptable" className="w-full rounded-xl border border-border bg-background px-4 py-3 font-normal outline-none focus:border-foreground" />
+                <label className="grid gap-2 text-sm font-medium">Nom public de la boutique ou du service
+                  <input required minLength={2} maxLength={80} value={editor.name} onChange={e => setEditor(v => ({ ...v, name: e.target.value }))} placeholder="Ex. Gabon Drive Location" className="w-full rounded-xl border border-border bg-background px-4 py-3 font-normal outline-none focus:border-foreground" />
                 </label>
-                <label className="grid gap-2 text-sm font-medium">Présentation courte
+                <label className="grid gap-2 text-sm font-medium">Description affichée aux visiteurs
                   <textarea rows={2} maxLength={300} value={editor.description} onChange={e => setEditor(v => ({ ...v, description: e.target.value }))} placeholder="Explique en une phrase ce que fait ton assistant." className="w-full resize-y rounded-xl border border-border bg-background px-4 py-3 font-normal outline-none focus:border-foreground" />
                 </label>
                 <label className="grid gap-2 text-sm font-medium">Instructions et rôle

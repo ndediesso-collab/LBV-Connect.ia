@@ -1,6 +1,8 @@
 """HTTP API for ORIA Assistant v1. All public visitor data is server-mediated."""
 from __future__ import annotations
 
+import logging
+
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -22,6 +24,7 @@ from app.services.oria_assistant_service import (
 )
 
 router = APIRouter(prefix="/assistant", tags=["ORIA Assistant"])
+logger = logging.getLogger("oria_assistant.public")
 
 
 class AssistantCreatePayload(BaseModel):
@@ -161,11 +164,24 @@ def public_send_message(
     visitor_token: str | None = Header(default=None, alias="x-oria-visitor-token"),
 ):
     assistant = get_public_assistant_for_generation(slug)
-    result = send_visitor_message(
-        assistant=assistant,
-        conversation_id=str(conversation_id),
-        visitor_token=visitor_token or "",
-        request_id=payload.request_id,
-        message=payload.message,
-    )
-    return result
+    try:
+        return send_visitor_message(
+            assistant=assistant,
+            conversation_id=str(conversation_id),
+            visitor_token=visitor_token or "",
+            request_id=payload.request_id,
+            message=payload.message,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        # Log the full traceback server-side without recording visitor message text or tokens.
+        logger.exception(
+            "ORIA Assistant public message failed (slug=%s, conversation_id=%s)",
+            slug,
+            str(conversation_id),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Le service rencontre un problème temporaire. Réessaie dans un instant.",
+        )
