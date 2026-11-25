@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { Bot, Check, Copy, ExternalLink, LoaderCircle, Plus, Save, Trash2 } from "lucide-react";
+import { Bot, Check, Copy, ExternalLink, LoaderCircle, Plus, RotateCw, Save, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || "https://lbv-connect-api.onrender.com").replace(/\/$/, "");
@@ -13,6 +13,7 @@ type Assistant = {
   instructions: string;
   welcome_message: string;
   slug: string;
+  public_url?: string | null;
   is_public: boolean;
   created_at: string;
 };
@@ -44,11 +45,16 @@ export default function AssistantWorkspacePage() {
     headers.set("Content-Type", "application/json");
     headers.set("user-id", session.user.id);
     headers.set("authorization", `Bearer ${session.access_token}`);
-    const response = await fetch(`${API_URL}${path}`, {
-      ...init,
-      headers,
-      cache: "no-store",
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, {
+        ...init,
+        headers,
+        cache: "no-store",
+      });
+    } catch {
+      throw new Error(`Backend ORIA inaccessible (${API_URL}). Vérifie le déploiement Render, CORS et NEXT_PUBLIC_API_URL.`);
+    }
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || "Une erreur est survenue.");
     return payload;
@@ -129,14 +135,39 @@ export default function AssistantWorkspacePage() {
     }
   };
 
+  const getPublicUrl = (assistant: Assistant) =>
+    assistant.public_url || `https://www.myoriaai.com/a/${encodeURIComponent(assistant.slug)}`;
+
   const copyPublicLink = async (assistant: Assistant) => {
-    const url = `${window.location.origin}/a/${assistant.slug}`;
+    const url = getPublicUrl(assistant);
     try {
       await navigator.clipboard.writeText(url);
       setNotice("Lien public copié.");
       setError("");
     } catch {
       setNotice(url);
+    }
+  };
+
+  const regeneratePublicLink = async () => {
+    if (!selected) return;
+    const confirmed = window.confirm(
+      "Créer un nouveau lien public ? L'ancien lien cessera immédiatement de fonctionner pour tous les visiteurs."
+    );
+    if (!confirmed) return;
+    setSaving(true);
+    setError("");
+    setNotice("");
+    try {
+      const payload = await api(`/assistant/assistants/${selected.id}/regenerate-link`, { method: "POST" });
+      const updated = payload.assistant as Assistant;
+      setSelected(updated);
+      setAssistants(current => current.map(item => item.id === updated.id ? updated : item));
+      setNotice("Nouveau lien généré et enregistré. L'ancien lien est désormais invalide.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible de renouveler le lien public.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -232,7 +263,7 @@ export default function AssistantWorkspacePage() {
                 </label>
                 <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-border p-4">
                   <input type="checkbox" checked={editor.is_public} onChange={e => setEditor(v => ({ ...v, is_public: e.target.checked }))} className="mt-1 size-4 accent-current" />
-                  <span><span className="block text-sm font-semibold">Rendre cet assistant public</span><span className="mt-1 block text-xs leading-5 text-muted">Toute personne disposant du lien pourra discuter avec lui. Les réponses seront facturées sur ton portefeuille ORIA.</span></span>
+                  <span><span className="block text-sm font-semibold">Rendre cet assistant public</span><span className="mt-1 block text-xs leading-5 text-muted">Toute personne disposant du lien pourra discuter avec lui. Les réponses seront facturées sur ton portefeuille ORIA. Désactiver la publication révoque le lien actuel.</span></span>
                 </label>
               </div>
 
@@ -241,10 +272,28 @@ export default function AssistantWorkspacePage() {
 
               <div className="mt-7 flex flex-wrap items-center gap-3">
                 <button disabled={saving} type="submit" className="inline-flex items-center gap-2 rounded-xl bg-foreground px-5 py-3 text-sm font-semibold text-background disabled:opacity-50"><Save size={16} />{saving ? "Enregistrement…" : creating ? "Créer l'assistant" : "Enregistrer"}</button>
-                {selected && selected.is_public && <button type="button" onClick={() => void copyPublicLink(selected)} className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-sm font-medium"><Copy size={16} /> Copier le lien public</button>}
-                {selected && selected.is_public && <Link href={`/a/${selected.slug}`} target="_blank" className="inline-flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-sm font-medium">Ouvrir <ExternalLink size={15} /></Link>}
                 {selected && <button type="button" disabled={saving} onClick={() => void remove()} className="ml-auto inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm text-muted hover:bg-surface-secondary hover:text-foreground"><Trash2 size={16} /> Supprimer</button>}
               </div>
+              {selected && selected.is_public && (
+                <div className="mt-6 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 via-white to-sky-50 p-4 dark:border-violet-900/60 dark:from-violet-950/30 dark:via-surface dark:to-sky-950/20 sm:p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold">Lien public de votre assistant</p>
+                      <p className="mt-1 text-xs text-muted">Enregistré dans Supabase · Identifiant unique et durable</p>
+                    </div>
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-300">En ligne</span>
+                  </div>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <input readOnly value={getPublicUrl(selected)} aria-label="Lien public de l'assistant" className="min-w-0 flex-1 rounded-xl border border-violet-200 bg-white/90 px-3 py-3 text-xs text-slate-700 outline-none dark:border-border dark:bg-background dark:text-foreground" />
+                    <button type="button" onClick={() => void copyPublicLink(selected)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-700 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-800"><Copy size={15}/> Copier</button>
+                    <Link href={getPublicUrl(selected)} target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white/70 px-4 py-3 text-sm font-semibold text-violet-800 transition hover:bg-white dark:border-border dark:bg-surface dark:text-foreground"><ExternalLink size={15}/> Ouvrir</Link>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                    <p className="max-w-2xl text-xs leading-5 text-muted">Le lien reste identique même après modification du nom ou des instructions. Le renouveler invalide immédiatement l'ancien lien.</p>
+                    <button type="button" disabled={saving} onClick={() => void regeneratePublicLink()} className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-white/70 px-3 py-2.5 text-xs font-semibold text-violet-800 transition hover:bg-white disabled:opacity-50 dark:border-border dark:bg-surface dark:text-foreground"><RotateCw size={14}/> Changer le lien</button>
+                  </div>
+                </div>
+              )}
             </form>
           )}
           <p className="mt-5 flex items-center gap-2 text-xs leading-5 text-muted"><Check size={14} /> Le modèle et le fournisseur sont sélectionnés automatiquement par ORIA. Aucun choix de modèle n&apos;est exposé aux visiteurs.</p>

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -52,6 +53,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _assistant_public_url(slug: str) -> str:
+    """Return the canonical, durable public URL for an assistant slug."""
+    base_url = os.getenv("ORIA_PUBLIC_BASE_URL", "https://www.myoriaai.com").strip().rstrip("/")
+    return f"{base_url}/a/{slug}"
+
+
+def _with_public_url(assistant: dict[str, Any]) -> dict[str, Any]:
+    """Expose the Supabase-persisted slug as a canonical URL to the frontend."""
+    return {**assistant, "public_url": _assistant_public_url(str(assistant["slug"]))}
+
+
+def _new_assistant_slug(name: str) -> str:
+    """Generate a fresh public slug; the database UNIQUE constraint is the final guard."""
+    return f"{_slugify(name)}-{uuid.uuid4().hex[:16]}"
+
+
 def _pack_wallet(owner_user_id: str):
     wallet = credit_repository.get_wallet(owner_user_id)
     if wallet is None or not wallet.is_pack_active:
@@ -67,7 +84,7 @@ def list_owner_assistants(owner_user_id: str) -> list[dict[str, Any]]:
             "id,name,description,instructions,welcome_message,slug,is_public,created_at,updated_at"
         ).eq("owner_user_id", owner_user_id).order("created_at", desc=True).execute()
     )
-    return _rows(response.data)
+    return [_with_public_url(item) for item in _rows(response.data)]
 
 
 def get_owner_assistant(owner_user_id: str, assistant_id: str) -> dict[str, Any]:
@@ -78,13 +95,13 @@ def get_owner_assistant(owner_user_id: str, assistant_id: str) -> dict[str, Any]
     item = _first(response.data)
     if item is None:
         raise HTTPException(404, "Assistant introuvable.")
-    return item
+    return _with_public_url(item)
 
 
 def create_owner_assistant(owner_user_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     _pack_wallet(owner_user_id)
     assistant_id = str(uuid.uuid4())
-    slug = f"{_slugify(str(payload['name']))}-{secrets.token_urlsafe(5).lower().replace('_', '').replace('-', '')[:7]}"
+    slug = _new_assistant_slug(str(payload["name"]))
     clean_name = str(payload["name"]).strip()
     clean_instructions = str(payload["instructions"]).strip()
     if len(clean_name) < 2 or not 10 <= len(clean_instructions) <= 12000:
@@ -103,11 +120,11 @@ def create_owner_assistant(owner_user_id: str, payload: Mapping[str, Any]) -> di
     item = _first(response.data)
     if item is None:
         raise HTTPException(500, "Impossible d'enregistrer l'assistant.")
-    return item
+    return _with_public_url(item)
 
 
 def update_owner_assistant(owner_user_id: str, assistant_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    get_owner_assistant(owner_user_id, assistant_id)
+    existing = get_owner_assistant(owner_user_id, assistant_id)
     allowed = {"name", "description", "instructions", "welcome_message", "is_public"}
     data = {key: value for key, value in payload.items() if key in allowed}
     if not data:
@@ -119,6 +136,9 @@ def update_owner_assistant(owner_user_id: str, assistant_id: str, payload: Mappi
         raise HTTPException(422, "Le nom de l'assistant doit contenir au moins deux caractères.")
     if "instructions" in data and not 10 <= len(data["instructions"]) <= 12000:
         raise HTTPException(422, "Les instructions doivent contenir entre 10 et 12 000 caractères.")
+    # Un dé-publication révoque l'ancien lien : le slug change et l'ancienne URL renvoie 404.
+    if payload.get("is_public") is False and bool(existing.get("is_public")):
+        data["slug"] = _new_assistant_slug(str(data.get("name") or existing["name"]))
     data["updated_at"] = _now()
     response = (
         supabase.table("oria_assistants").update(data)
@@ -127,7 +147,22 @@ def update_owner_assistant(owner_user_id: str, assistant_id: str, payload: Mappi
     item = _first(response.data)
     if item is None:
         raise HTTPException(500, "Impossible d'enregistrer les modifications.")
-    return item
+    return _with_public_url(item)
+
+
+def regenerate_owner_assistant_link(owner_user_id: str, assistant_id: str) -> dict[str, Any]:
+    """Rotate the public URL and immediately invalidate the previous slug."""
+    current = get_owner_assistant(owner_user_id, assistant_id)
+    new_slug = _new_assistant_slug(str(current["name"]))
+    response = (
+        supabase.table("oria_assistants").update({"slug": new_slug, "updated_at": _now()})
+        .eq("id", assistant_id).eq("owner_user_id", owner_user_id)
+        .select("*").single().execute()
+    )
+    item = _first(response.data)
+    if item is None:
+        raise HTTPException(500, "Impossible de renouveler le lien public.")
+    return _with_public_url(item)
 
 
 def delete_owner_assistant(owner_user_id: str, assistant_id: str) -> None:

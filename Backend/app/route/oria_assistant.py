@@ -14,6 +14,7 @@ from app.services.oria_assistant_service import (
     get_public_assistant,
     get_public_assistant_for_generation,
     list_owner_assistants,
+    regenerate_owner_assistant_link,
     send_visitor_message,
     start_visitor_conversation,
     update_owner_assistant,
@@ -105,6 +106,12 @@ def owner_update_assistant(
     if any(value is None for value in values.values()):
         raise HTTPException(422, "Les champs transmis ne peuvent pas être nuls.")
     assistant = update_owner_assistant(owner_user_id, str(assistant_id), values)
+    return {"success": True, "assistant": assistant}
+
+
+@router.post("/assistants/{assistant_id}/regenerate-link")
+def owner_regenerate_assistant_link(assistant_id: UUID, owner_user_id: str = Depends(_owner_headers)):
+    assistant = regenerate_owner_assistant_link(owner_user_id, str(assistant_id))
     return {"success": True, "assistant": assistant}
 
 
