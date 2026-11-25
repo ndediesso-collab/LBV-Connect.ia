@@ -5,6 +5,7 @@ import {
   ArrowDown,
   Pencil,
   BookOpen,
+  Bot,
   Check,
   ChevronDown,
   Download,
@@ -8199,6 +8200,14 @@ export default function ChatPage() {
             <Sparkles size={17} />
             {language === "fr" ? "ORIA Collaboratif" : "ORIA Collaborative"}
           </Link>
+          {wallet?.is_pack_active && ["pro_pack", "business_pack"].includes(wallet.pack_id || "") && (
+            <Link href="/assistant" onClick={() => setSidebarOpen(false)}
+              className="flex w-full items-center gap-3 rounded-xl border border-violet-200/80 bg-gradient-to-r from-violet-50 via-sky-50 to-cyan-50 px-3 py-3 text-sm font-semibold text-slate-900 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md dark:border-violet-900/70 dark:from-violet-950/40 dark:via-sky-950/40 dark:to-cyan-950/40 dark:text-white">
+              <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-violet-600 via-indigo-600 to-cyan-500 text-white shadow-sm"><Bot size={17} /></span>
+              <span className="min-w-0 flex-1">Assistant ORIA</span>
+              <span className="rounded-full border border-violet-200 bg-white/70 px-2 py-1 text-[9px] font-bold tracking-wide text-violet-700 dark:border-violet-800 dark:bg-violet-950/70 dark:text-violet-200">PRO / BUSINESS</span>
+            </Link>
+          )}
           <Link
             href="/credits"
             onClick={() =>

@@ -57,13 +57,13 @@ export const CAMPAIGNS: readonly Campaign[] = [
     active: true,
   },
   {
-    id: "public-pending",
-    label: "À venir",
-    title: "Votre propre assistant, par lien.",
-    description: "Bientôt : ORIA Public, pour répondre à vos visiteurs depuis un lien partageable.",
-    cta: "En savoir plus",
-    href: "/packs",
-    active: false, // Ne jamais promouvoir comme accessible avant livraison.
+    id: "assistant-public-launch-2026-11",
+    label: "Assistant IA · Pro & Business",
+    title: "Votre assistant IA, au service de vos visiteurs.",
+    description: "Créez un assistant spécialisé dans votre activité, personnalisez ses consignes et partagez un lien public. Vos visiteurs posent leurs questions sans compte ORIA. Disponible avec un pack Pro ou Business actif.",
+    cta: "Découvrir Assistant ORIA",
+    href: "/packs#oria-assistant-vitrine",
+    active: true,
   },
 ];
 

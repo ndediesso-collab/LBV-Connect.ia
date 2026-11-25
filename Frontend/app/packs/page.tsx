@@ -55,6 +55,7 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import OriaFreeRechargeStatus from "@/components/oria-free/OriaFreeRechargeStatus";
 import CollabFeature from "@/components/oria-promo/CollabFeature";
+import AssistantFeature from "@/components/oria-promo/AssistantFeature";
 
 
 
@@ -2522,6 +2523,7 @@ export default function PacksPage() {
 
         {/* ORIA_P17_VITRINE_PROMOTIONS_PACKS */}
         <CollabFeature variant="hero" language={language} hasAccess={["pro_pack", "business_pack"].includes(walletPackId || "")} />
+<AssistantFeature variant="hero" language={language} hasAccess={["pro_pack", "business_pack"].includes(walletPackId || "")} />
         {DISCOVERY_PUBLIC && discoveryNotice && (
           <div role="status" className="mt-6 flex items-center justify-between gap-4 rounded-2xl border border-border bg-surface-secondary px-4 py-3 text-sm">
             <span>{discoveryNotice}</span>
