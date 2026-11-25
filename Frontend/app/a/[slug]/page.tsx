@@ -1,5 +1,7 @@
 "use client";
 
+
+import { OriaRichMessage } from "@/components/oria-chat/OriaRichMessage";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
@@ -284,6 +286,11 @@ export default function PublicAssistantPage() {
         .oria-message-content { max-width: min(84%, 760px); min-width: 0; }
         .oria-message-meta { margin: 0 0 5px 2px; color: #888; font-size: 10px; }
         .oria-bubble { padding: 12px 15px; border-radius: 16px 16px 16px 5px; background: #f4f4f2; color: #292929; font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .oria-bubble-markdown { white-space: normal; overflow-wrap: anywhere; }
+        .oria-bubble-markdown > div { min-width: 0; max-width: 100%; }
+        .oria-bubble-markdown pre { max-width: 100%; overflow-x: auto; }
+        .oria-bubble-markdown table { max-width: 100%; }
+        .oria-bubble-markdown a { overflow-wrap: anywhere; }
         .oria-message-row.user .oria-bubble { border-radius: 16px 16px 5px 16px; background: #171717; color: #fff; }
         .oria-message-row.user .oria-message-meta { text-align: right; margin-right: 2px; }
         .oria-typing { display: inline-flex; align-items: center; gap: 4px; min-width: 46px; padding: 15px; }
@@ -391,7 +398,7 @@ export default function PublicAssistantPage() {
                       <div className="oria-mini-avatar" aria-hidden="true">{initials}</div>
                       <div className="oria-message-content">
                         <div className="oria-message-meta">{assistant.name} · à l'instant</div>
-                        <div className="oria-bubble">{assistant.welcome_message}</div>
+                        <div className="oria-bubble oria-bubble-markdown"><OriaRichMessage content={assistant.welcome_message} language="fr" /></div>
                       </div>
                     </div>
                   )}
@@ -400,7 +407,7 @@ export default function PublicAssistantPage() {
                       {message.role !== "user" && <div className="oria-mini-avatar" aria-hidden="true">{initials}</div>}
                       <div className="oria-message-content">
                         <div className="oria-message-meta">{message.role === "user" ? "Vous · à l'instant" : `${assistant.name} · à l'instant`}</div>
-                        <div className="oria-bubble">{message.content}</div>
+                        <div className="oria-bubble oria-bubble-markdown"><OriaRichMessage content={message.content} language="fr" /></div>
                       </div>
                     </div>
                   ))}
