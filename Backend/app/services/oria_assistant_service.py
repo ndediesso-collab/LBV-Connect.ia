@@ -116,7 +116,7 @@ def create_owner_assistant(owner_user_id: str, payload: Mapping[str, Any]) -> di
         "slug": slug,
         "is_public": bool(payload.get("is_public", False)),
     }
-    response = supabase.table("oria_assistants").insert(data).select("*").single().execute()
+    response = supabase.table("oria_assistants").insert(data).select("*").execute()
     item = _first(response.data)
     if item is None:
         raise HTTPException(500, "Impossible d'enregistrer l'assistant.")
@@ -142,7 +142,7 @@ def update_owner_assistant(owner_user_id: str, assistant_id: str, payload: Mappi
     data["updated_at"] = _now()
     response = (
         supabase.table("oria_assistants").update(data)
-        .eq("id", assistant_id).eq("owner_user_id", owner_user_id).select("*").single().execute()
+        .eq("id", assistant_id).eq("owner_user_id", owner_user_id).select("*").execute()
     )
     item = _first(response.data)
     if item is None:
@@ -157,7 +157,7 @@ def regenerate_owner_assistant_link(owner_user_id: str, assistant_id: str) -> di
     response = (
         supabase.table("oria_assistants").update({"slug": new_slug, "updated_at": _now()})
         .eq("id", assistant_id).eq("owner_user_id", owner_user_id)
-        .select("*").single().execute()
+        .select("*").execute()
     )
     item = _first(response.data)
     if item is None:
@@ -211,7 +211,7 @@ def start_visitor_conversation(assistant: Mapping[str, Any]) -> dict[str, str]:
         "assistant_id": assistant["id"],
         "owner_user_id": assistant["owner_user_id"],
         "visitor_token_hash": token_hash,
-    }).select("id").single().execute()
+    }).select("id").execute()
     if _first(response.data) is None:
         raise HTTPException(500, "Impossible de démarrer cette conversation.")
     return {"conversation_id": conversation_id, "visitor_token": visitor_token}
@@ -405,7 +405,7 @@ def send_visitor_message(
             "model": selection.logical_model,
             "status": "preparing",
             "input_sha256": content_hash,
-        }).select("id").single().execute()
+        }).select("id").execute()
         if _first(insert.data) is None:
             raise RuntimeError("Insertion de requête incomplète.")
     except Exception as exc:
