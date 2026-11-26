@@ -20,30 +20,7 @@ def _normalized(value: str) -> str:
     return unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii").casefold()
 
 
-def _assistant_asked_for_consent(visible_message: str) -> bool:
-    value = _normalized(visible_message)
-    asks = any(term in value for term in (
-        "acceptez-vous", "etes-vous d'accord", "etes-vous d accord", "autorisez-vous", "m'autorisez-vous",
-        "donnez-vous votre accord", "votre accord", "souhaitez-vous que je transmette",
-        "puis-je transmettre", "puis-je communiquer", "consentez-vous", "etes vous d'accord",
-    ))
-    shares = any(term in value for term in ("transmett", "transmis", "communiqu", "partag"))
-    # First accept common generic recipients. Then accept a named organization
-    # or recipient such as "à Gabon Drive Location afin de...". The previous
-    # implementation rejected that real-world wording because the company's
-    # proper name was not present in this fixed vocabulary.
-    known_recipient = any(term in value for term in (
-        "entreprise", "societe", "service", "equipe", "banque", "assurance",
-        "etablissement", "agence", "organisation", "boutique", "commerce",
-    ))
-    named_recipient = re.search(
-        r"\b(?:a|au|aux|vers)\s+"
-        r"(?!(?:vous|moi|toi|lui|elle|eux|elles|soi|savoir|quoi|qui)\b)"
-        r"[a-z0-9][a-z0-9'’ .-]{1,80}?"
-        r"(?=\s+(?:afin|pour|concernant|au sujet|dans le cadre|en vue)\b|[?.!,;:]|$)",
-        value,
-    )
-    return asks and shares and (known_recipient or named_recipient is not None)
+
 
 
 def _clean_details(value: Any) -> dict[str, str]:
@@ -87,7 +64,7 @@ def extract_request_draft(
     text = response_text if isinstance(response_text, str) else ""
     matches = list(_MARKER_RE.finditer(text))
     visible = _MARKER_RE.sub("", text).strip()
-    if not collection_enabled or len(matches) != 1 or not _assistant_asked_for_consent(visible):
+    if not collection_enabled or len(matches) != 1:
         return visible, None
 
     try:

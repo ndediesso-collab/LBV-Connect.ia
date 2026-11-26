@@ -18,7 +18,9 @@ def test_extract_valid_request_draft_and_strip_invisible_marker():
     assert draft["details"] == {"Âge": "41 ans", "Profession": "Salarié"}
 
 
-def test_request_draft_is_not_accepted_without_explicit_consent_question():
+def test_valid_request_draft_does_not_require_consent_phrase_in_ai_text():
+    # La carte de transmission est présentée dès qu'un brouillon valide existe.
+    # Le consentement est recueilli ensuite par le bouton explicite de l'interface.
     message = (
         "Votre récapitulatif est prêt.\n"
         '<!--ORIA_ASSISTANT_REQUEST_DRAFT:{"request_type":"Carte",'
@@ -28,9 +30,10 @@ def test_request_draft_is_not_accepted_without_explicit_consent_question():
     visible, draft = extract_request_draft(message, collection_enabled=True, history=[
         {"role": "user", "content": "Je m'appelle Jules, mon téléphone est +241 06 12 34 56, je souhaite une carte."}
     ])
-    assert draft is None
     assert "ORIA_ASSISTANT_REQUEST_DRAFT" not in visible
-
+    assert draft is not None
+    assert draft["customer_name"] == "Jules"
+    assert draft["customer_phone"] == "+241 06 12 34 56"
 
 def test_sensitive_detail_fields_are_filtered():
     message = (
@@ -178,3 +181,34 @@ def test_request_draft_still_rejects_a_name_with_an_invented_component():
         )}
     ])
     assert draft is None
+
+
+def test_request_draft_is_extracted_from_recap_without_consent_sentence():
+    message = (
+        "Merci, voici le récapitulatif de votre demande : Location Toyota Hilux pendant 3 jours.\n"
+        '<!--ORIA_ASSISTANT_REQUEST_DRAFT:{"request_type":"Location Toyota Hilux",'
+        '"summary":"Location Toyota Hilux pendant 3 jours.","customer_name":"Jules",'
+        '"customer_phone":"+241 74 32 22 19","customer_email":null,"details":{}}-->'
+    )
+    visible, draft = extract_request_draft(message, collection_enabled=True, history=[
+        {"role": "user", "content": "Je m'appelle Jules. Mon téléphone est +241 74 32 22 19. Je souhaite louer un Toyota Hilux pendant 3 jours."}
+    ])
+    assert "ORIA_ASSISTANT_REQUEST_DRAFT" not in visible
+    assert draft is not None
+    assert draft["customer_name"] == "Jules"
+
+
+def test_request_draft_is_extracted_with_communication_noun_consent_wording():
+    message = (
+        "Voici le récapitulatif. Autorisez-vous la communication de ces informations "
+        "à Gabon Drive Location afin que l'équipe puisse étudier votre demande ?\n"
+        '<!--ORIA_ASSISTANT_REQUEST_DRAFT:{"request_type":"Location Toyota Hilux",'
+        '"summary":"Location Toyota Hilux pendant 3 jours.","customer_name":"Jules",'
+        '"customer_phone":"+241 74 32 22 19","customer_email":null,"details":{}}-->'
+    )
+    visible, draft = extract_request_draft(message, collection_enabled=True, history=[
+        {"role": "user", "content": "Je m'appelle Jules. Mon téléphone est +241 74 32 22 19. Je souhaite louer un Toyota Hilux pendant 3 jours."}
+    ])
+    assert "ORIA_ASSISTANT_REQUEST_DRAFT" not in visible
+    assert draft is not None
+    assert draft["request_type"] == "Location Toyota Hilux"
