@@ -154,9 +154,9 @@ def dispatch_batch(db: Any, batch_size: int = 20) -> dict[str, int]:
         transient_error = False
         permanent_error = False
         try:
-            prefs = (db.table("oria_collab_push_preferences_p16")
-                     .select("workspace_id")
-                     .eq("user_id", owner)
+            prefs = (db.table("oria_assistant_push_preferences")
+                     .select("owner_user_id")
+                     .eq("owner_user_id", owner)
                      .eq("push_enabled", True)
                      .limit(1).execute().data or [])
             devices = (db.table("oria_collab_push_devices_p16")

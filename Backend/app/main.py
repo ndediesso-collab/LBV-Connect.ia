@@ -254,6 +254,9 @@ async def _oria_collab_push_stop():
 from app.route.oria_assistant import router as oria_assistant_router
 app.include_router(oria_assistant_router)
 
+from app.route.oria_assistant_push import router as oria_assistant_push_router
+app.include_router(oria_assistant_push_router)
+
 # ORIA Assistant — file e-mail durable (désactivée tant que la configuration Brevo n'est pas activée).
 _oria_assistant_email_task = None
 
