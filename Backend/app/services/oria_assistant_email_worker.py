@@ -14,22 +14,39 @@ LOCAL_TZ = ZoneInfo("Africa/Libreville")
 
 
 def worker_ready() -> bool:
-    # Configuration dédiée recommandée ; repli sur les mêmes identifiants
-    # Brevo que Collaboratif sans modifier son service d'envoi.
+    """Only the dedicated ORIA Assistant Brevo credentials can enable this worker."""
     return bool(
         os.getenv("ORIA_ASSISTANT_EMAIL_WORKER_ENABLED", "0").strip() == "1"
-        and (os.getenv("ORIA_ASSISTANT_BREVO_API_KEY") or os.getenv("ORIA_COLLAB_BREVO_API_KEY"))
-        and (os.getenv("ORIA_ASSISTANT_EMAIL_FROM") or os.getenv("ORIA_COLLAB_EMAIL_FROM"))
+        and os.getenv("ORIA_ASSISTANT_BREVO_API_KEY", "").strip()
+        and os.getenv("ORIA_ASSISTANT_EMAIL_FROM", "").strip()
     )
 
 
 def _configuration() -> tuple[str, str, str]:
-    key = (os.getenv("ORIA_ASSISTANT_BREVO_API_KEY") or os.getenv("ORIA_COLLAB_BREVO_API_KEY") or "").strip()
-    sender = (os.getenv("ORIA_ASSISTANT_EMAIL_FROM") or os.getenv("ORIA_COLLAB_EMAIL_FROM") or "").strip()
+    # Never borrow ORIA Collaboratif credentials: Brevo is dedicated to Assistant.
+    key = os.getenv("ORIA_ASSISTANT_BREVO_API_KEY", "").strip()
+    sender = os.getenv("ORIA_ASSISTANT_EMAIL_FROM", "").strip()
     name = os.getenv("ORIA_ASSISTANT_EMAIL_SENDER_NAME", "ORIA Assistant").strip() or "ORIA Assistant"
     if not key or not sender or "@" not in sender:
         raise RuntimeError("oria_assistant_email_configuration_missing")
     return key, sender, name[:80]
+
+
+def _build_brevo_payload(item: dict[str, Any], sender: str, sender_name: str) -> dict[str, Any]:
+    """Construit le message Brevo et applique l'adresse Reply-To dédiée à Assistant."""
+    payload: dict[str, Any] = {
+        "sender": {"email": sender, "name": sender_name},
+        "to": [{"email": str(item.get("to_email") or "")}],
+        "subject": str(item.get("subject") or "Notification ORIA"),
+        "htmlContent": str(item.get("html_content") or ""),
+        "textContent": str(item.get("text_content") or ""),
+    }
+    reply_to = (os.getenv("ORIA_ASSISTANT_EMAIL_REPLY_TO") or "").strip()
+    if reply_to:
+        if len(reply_to) > 254 or "@" not in reply_to or any(ch.isspace() for ch in reply_to):
+            raise RuntimeError("oria_assistant_email_reply_to_invalid")
+        payload["replyTo"] = {"email": reply_to}
+    return payload
 
 
 def _rpc(db: Any, name: str, args: dict[str, Any]) -> Any:
@@ -79,13 +96,7 @@ def dispatch_batch(db: Any, batch_size: int = 10) -> dict[str, int]:
         try:
             response = requests.post(
                 BREVO_URL,
-                json={
-                    "sender": {"email": sender, "name": sender_name},
-                    "to": [{"email": str(item.get("to_email") or "")}],
-                    "subject": str(item.get("subject") or "Notification ORIA"),
-                    "htmlContent": str(item.get("html_content") or ""),
-                    "textContent": str(item.get("text_content") or ""),
-                },
+                json=_build_brevo_payload(item, sender, sender_name),
                 headers={
                     "api-key": key,
                     "accept": "application/json",
@@ -100,12 +111,28 @@ def dispatch_batch(db: Any, batch_size: int = 10) -> dict[str, int]:
                 outcome, error_code = "sent", ""
             else:
                 snippet = (response.text or "")[:600].lower()
-                quota_error = response.status_code == 429 or (
+                daily_quota_error = (
                     response.status_code in (400, 403)
-                    and any(term in snippet for term in ("daily", "quota", "limit", "rate"))
+                    and any(term in snippet for term in (
+                        "daily quota", "daily limit", "quota reached", "daily sending limit",
+                        "daily email limit", "reached your daily", "maximum daily emails",
+                    ))
                 )
-                if quota_error:
+                if daily_quota_error:
+                    # Actual plan quota: preserve FIFO and resume after the daily reset.
                     outcome, error_code, retry_at = "retry", "brevo_daily_quota", _next_local_midnight()
+                elif response.status_code == 429:
+                    # Brevo also uses 429 for API rate limiting. Do not block these
+                    # transient throttling responses until the next calendar day.
+                    retry_header = (response.headers.get("Retry-After") or "").strip()
+                    try:
+                        retry_seconds = max(1, min(int(float(retry_header)), 3600)) if retry_header else 0
+                    except (TypeError, ValueError):
+                        retry_seconds = 0
+                    if not retry_seconds:
+                        retry_seconds = min(3600, 30 * (2 ** min(max(int(item.get("attempt_count") or 1) - 1, 0), 7)))
+                    retry_at = (datetime.now(timezone.utc) + timedelta(seconds=retry_seconds)).isoformat()
+                    outcome, error_code = "retry", "brevo_api_rate_limit"
                 elif 400 <= response.status_code < 500:
                     outcome, error_code = "failed", f"brevo_http_{response.status_code}"
                 else:
