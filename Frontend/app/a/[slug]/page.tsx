@@ -249,6 +249,8 @@ export default function PublicAssistantPage() {
         content: String(payload.message || "Votre demande est enregistrée dans l'espace professionnel de l'entreprise."),
       }]);
       setPendingRequest(null);
+      // Re-read the server transcript after the durable confirmation.
+      try { await loadMessages(visitor); } catch { /* la demande est déjà confirmée côté serveur */ }
     } catch (err) {
       try { await loadMessages(visitor); } catch { /* la session reste récupérable au prochain chargement */ }
       setError(userFacingError(err));
@@ -493,7 +495,7 @@ export default function PublicAssistantPage() {
                       </div>
                       <p className="mt-3 text-xs leading-5 text-neutral-600">En cliquant sur le bouton ci-dessous, vous autorisez la communication de ces informations à l&apos;entreprise afin qu&apos;elle puisse vous recontacter. ORIA ne réalise pas l&apos;opération demandée.</p>
                       <div className="mt-4 flex flex-wrap gap-2">
-                        <button type="button" onClick={() => void confirmPendingRequest()} disabled={confirmingRequest} className="rounded-xl bg-neutral-900 px-4 py-2.5 text-xs font-semibold text-white disabled:opacity-50">{confirmingRequest ? "Traitement…" : "J'autorise la transmission"}</button>
+                        <button type="button" onClick={() => void confirmPendingRequest()} disabled={confirmingRequest} className="rounded-xl bg-neutral-900 px-4 py-2.5 text-xs font-semibold text-white disabled:opacity-50">{confirmingRequest ? "Traitement…" : "Transmettre"}</button>
                         <button type="button" onClick={() => void cancelPendingRequest()} disabled={confirmingRequest} className="rounded-xl border border-neutral-300 px-4 py-2.5 text-xs font-semibold text-neutral-700 disabled:opacity-50">Ne pas transmettre</button>
                       </div>
                     </div>

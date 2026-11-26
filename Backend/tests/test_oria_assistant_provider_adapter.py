@@ -3,22 +3,22 @@ from app.services.chat_provider_router import ChatProvider
 from app.config.credit_costs import CreditAction
 
 
-def test_openai_provider_selects_terra(monkeypatch):
+def test_openai_provider_selects_luna(monkeypatch):
     monkeypatch.setattr(adapter, "active_chat_provider", lambda: ChatProvider.OPENAI)
     selection = adapter.active_assistant_selection()
     assert selection.provider is ChatProvider.OPENAI
-    assert selection.logical_model == "gpt-5.6-terra"
-    assert selection.provider_model == "gpt-5.6-terra"
-    assert selection.credit_action is CreditAction.CHAT_TERRA
+    assert selection.logical_model == "gpt-6-luna"
+    assert selection.provider_model == "gpt-6-luna"
+    assert selection.credit_action is CreditAction.CHAT_LUNA
 
 
-def test_openrouter_provider_selects_claude_sonnet(monkeypatch):
+def test_openrouter_provider_selects_claude_haiku(monkeypatch):
     monkeypatch.setattr(adapter, "active_chat_provider", lambda: ChatProvider.OPENROUTER)
     selection = adapter.active_assistant_selection()
     assert selection.provider is ChatProvider.OPENROUTER
-    assert selection.logical_model == "claude-sonnet-5.5"
-    assert selection.provider_model == "anthropic/claude-sonnet-5.5"
-    assert selection.credit_action is CreditAction.CHAT_CLAUDE_SONNET
+    assert selection.logical_model == "claude-haiku-5.5"
+    assert selection.provider_model == "anthropic/claude-haiku-5.5"
+    assert selection.credit_action is CreditAction.CHAT_CLAUDE_HAIKU
 
 
 def test_owner_instructions_are_explicit_and_bounded():

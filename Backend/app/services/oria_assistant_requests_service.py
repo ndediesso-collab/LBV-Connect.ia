@@ -149,6 +149,26 @@ def confirm_visitor_request(
             result = result[0]
         if not isinstance(result, dict) or result.get("success") is not True:
             raise RuntimeError("assistant_request_submit_rpc_invalid")
+
+        # Never report success solely because the RPC returned success: verify
+        # the created row is readable by the same owner-scoped query used by
+        # the professional dashboard.
+        saved_request_id = str(result.get("request_id") or result.get("id") or "").strip()
+        try:
+            saved_request_id = str(UUID(saved_request_id))
+        except (ValueError, TypeError, AttributeError):
+            raise RuntimeError("assistant_request_submit_rpc_missing_request_id") from None
+
+        persisted_request = _first(
+            supabase.table("oria_assistant_requests").select("id")
+            .eq("id", saved_request_id)
+            .eq("owner_user_id", str(conversation["owner_user_id"]))
+            .eq("assistant_id", str(assistant["id"]))
+            .eq("conversation_id", conversation_id)
+            .limit(1).execute().data
+        )
+        if persisted_request is None:
+            raise RuntimeError("assistant_request_persisted_row_not_visible")
     except HTTPException:
         raise
     except Exception as exc:
@@ -183,7 +203,6 @@ def confirm_visitor_request(
     except Exception:
         logger.exception("ORIA Assistant request saved; confirmation transcript insert failed")
 
-    saved_request_id = str(result.get("request_id") or "")
     if saved_request_id:
         _queue_request_push(str(conversation["owner_user_id"]), assistant, saved_request_id)
 

@@ -430,7 +430,7 @@ def send_visitor_message(
     except AssistantProviderError as exc:
         raise HTTPException(503, "Le fournisseur Assistant ORIA n'est pas correctement configuré.") from exc
     if wallet.pack_id == "pro_pack" and selection.logical_model not in {
-        "gpt-5.6-terra", "claude-sonnet-5.5"
+        "gpt-6-luna", "claude-haiku-5.5"
     }:
         raise HTTPException(403, "Le modèle Assistant ORIA n'est pas autorisé pour ce pack.")
 

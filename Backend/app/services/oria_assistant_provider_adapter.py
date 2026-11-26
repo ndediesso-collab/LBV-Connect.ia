@@ -65,16 +65,16 @@ def active_assistant_selection() -> AssistantSelection:
     if provider is ChatProvider.OPENAI:
         return AssistantSelection(
             provider=provider,
-            logical_model="gpt-5.6-terra",
-            provider_model="gpt-5.6-terra",
-            credit_action=CreditAction.CHAT_TERRA,
+            logical_model="gpt-6-luna",
+            provider_model="gpt-6-luna",
+            credit_action=CreditAction.CHAT_LUNA,
         )
     if provider is ChatProvider.OPENROUTER:
         return AssistantSelection(
             provider=provider,
-            logical_model="claude-sonnet-5.5",
-            provider_model="anthropic/claude-sonnet-5.5",
-            credit_action=CreditAction.CHAT_CLAUDE_SONNET,
+            logical_model="claude-haiku-5.5",
+            provider_model="anthropic/claude-haiku-5.5",
+            credit_action=CreditAction.CHAT_CLAUDE_HAIKU,
         )
     raise AssistantProviderError("Fournisseur Assistant ORIA non configuré.")
 

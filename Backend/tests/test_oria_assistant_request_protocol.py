@@ -115,3 +115,30 @@ def test_request_draft_requires_visitor_provided_name_and_phone():
         {"role": "user", "content": "Je souhaite une carte bancaire."}
     ])
     assert draft is None
+
+def test_gabon_drive_location_named_recipient_is_valid_consent_question():
+    # Exact wording from the real DRIVE LOCATION conversation. The recipient
+    # is a business name, not one of the generic words in the old allow-list.
+    message = (
+        "Voici le récapitulatif : Toyota Hilux, 3 jours, livraison à 16 h à Akanda. "
+        "Acceptez-vous que ces informations soient communiquées à Gabon Drive Location "
+        "afin d'étudier votre demande ?\n"
+        '<!--ORIA_ASSISTANT_REQUEST_DRAFT:{"request_type":"Location Toyota Hilux",'
+        '"summary":"Location Toyota Hilux pendant 3 jours avec livraison à Akanda à 16 h.",'
+        '"customer_name":"Jules","customer_phone":"+241 74 32 22 19",'
+        '"customer_email":null,"details":{"Véhicule":"Toyota Hilux",'
+        '"Durée":"3 jours","Livraison":"16 h à Akanda, Carrefour Delapaix"}}-->'
+    )
+    visible, draft = extract_request_draft(message, collection_enabled=True, history=[
+        {"role": "user", "content": (
+            "Je m'appelle Jules. Mon téléphone est +241 74 32 22 19. "
+            "Je souhaite louer un Toyota Hilux pendant 3 jours avec livraison à 16 h "
+            "à Akanda, Carrefour Delapaix."
+        )}
+    ])
+    assert "ORIA_ASSISTANT_REQUEST_DRAFT" not in visible
+    assert draft is not None
+    assert draft["customer_name"] == "Jules"
+    assert draft["customer_phone"] == "+241 74 32 22 19"
+    assert draft["details"]["Véhicule"] == "Toyota Hilux"
+    assert draft["details"]["Durée"] == "3 jours"
