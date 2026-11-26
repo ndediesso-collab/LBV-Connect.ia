@@ -142,3 +142,39 @@ def test_gabon_drive_location_named_recipient_is_valid_consent_question():
     assert draft["customer_phone"] == "+241 74 32 22 19"
     assert draft["details"]["Véhicule"] == "Toyota Hilux"
     assert draft["details"]["Durée"] == "3 jours"
+
+def test_request_draft_accepts_name_components_when_visitor_uses_surname_first():
+    message = (
+        "Merci, voici le récapitulatif. Acceptez-vous que ces informations "
+        "soient communiquées à Gabon Drive Location pour étudier votre demande ?\n"
+        '<!--ORIA_ASSISTANT_REQUEST_DRAFT:{"request_type":"Location Toyota Hilux",'
+        '"summary":"Location Toyota Hilux pendant 3 jours.",'
+        '"customer_name":"Orel Joel ESSO NDEDI",'
+        '"customer_phone":"+241 74732219","customer_email":null,"details":{}}-->'
+    )
+    visible, draft = extract_request_draft(message, collection_enabled=True, history=[
+        {"role": "user", "content": (
+            "Nom : ESSO NDEDI, prénom : Orel Joel. "
+            "Téléphone : +241 74732219. Je souhaite louer un Toyota Hilux."
+        )}
+    ])
+    assert "ORIA_ASSISTANT_REQUEST_DRAFT" not in visible
+    assert draft is not None
+    assert draft["customer_name"] == "Orel Joel ESSO NDEDI"
+
+
+def test_request_draft_still_rejects_a_name_with_an_invented_component():
+    message = (
+        "Récapitulatif. Acceptez-vous que je transmette ces informations à l'entreprise ?\n"
+        '<!--ORIA_ASSISTANT_REQUEST_DRAFT:{"request_type":"Demande",'
+        '"summary":"Demande de contact client.",'
+        '"customer_name":"Orel Joel ESSO NDEDI Junior",'
+        '"customer_phone":"+241 74732219","details":{}}-->'
+    )
+    _, draft = extract_request_draft(message, collection_enabled=True, history=[
+        {"role": "user", "content": (
+            "Nom : ESSO NDEDI, prénom : Orel Joel. "
+            "Téléphone : +241 74732219."
+        )}
+    ])
+    assert draft is None

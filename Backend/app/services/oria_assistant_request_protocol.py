@@ -122,7 +122,20 @@ def extract_request_draft(
     user_context = " ".join(user_messages)
     normalized_context = _normalized(user_context)
     context_digits = re.sub(r"\D", "", user_context)
-    if _normalized(customer_name) not in normalized_context or digits not in context_digits:
+    # Le visiteur peut écrire le nom dans l'ordre « NOM, prénom » alors que
+    # l'assistant le reformule dans l'ordre « prénom NOM ». Vérifier chaque
+    # élément séparément permet ce réordonnancement sans accepter un élément
+    # de nom que le visiteur n'a jamais fourni.
+    name_tokens = re.findall(r"[a-z0-9]+", _normalized(customer_name))
+    name_was_provided = bool(name_tokens) and all(
+        re.search(
+            rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])",
+            normalized_context,
+        )
+        is not None
+        for token in name_tokens
+    )
+    if not name_was_provided or digits not in context_digits:
         return visible, None
 
     if customer_email and (
