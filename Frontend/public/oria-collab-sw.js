@@ -12,7 +12,9 @@ self.addEventListener('push', function (event) {
   let path = '/collaboratif/espaces';
   try {
     const url = new URL(candidate, self.location.origin);
-    if (url.origin === self.location.origin && url.pathname.startsWith('/collaboratif/espaces/'))
+    const allowedPath = url.pathname.startsWith('/collaboratif/espaces/') ||
+      url.pathname === '/assistant/demandes' || url.pathname === '/packs';
+    if (url.origin === self.location.origin && allowedPath)
       path = url.pathname + url.search;
   } catch (_) {}
   const tag = typeof payload.tag === 'string' ? payload.tag.slice(0, 110) : 'oria-collab';

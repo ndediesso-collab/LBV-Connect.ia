@@ -2276,15 +2276,25 @@ def get_my_credit_transactions(
             ),
         )
 
+    transaction_rows = [
+        _transaction_response(transaction)
+        for transaction in transactions
+    ]
+    try:
+        from app.services.oria_assistant_credit_ledger import enrich_credit_transactions
+        transaction_rows = enrich_credit_transactions(
+            supabase, authenticated_user_id, transaction_rows,
+        )
+    except Exception:
+        import logging
+        logging.getLogger("oria.credits.history").exception(
+            "Could not enrich credit history with ORIA Assistant labels"
+        )
+
     return {
         "success": True,
         "user_id": authenticated_user_id,
-        "transactions": [
-            _transaction_response(
-                transaction
-            )
-            for transaction in transactions
-        ],
+        "transactions": transaction_rows,
     }
 
 @router.post("/ai/authorize")
@@ -5908,3 +5918,5 @@ def get_my_creations(
     }
 
 
+
+# ORIA_ASSISTANT_CHANTIER3: credit history enrichment

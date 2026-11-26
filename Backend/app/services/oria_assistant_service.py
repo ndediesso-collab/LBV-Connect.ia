@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
 import uuid
@@ -12,6 +13,9 @@ from fastapi import HTTPException
 
 from app.core.supabase import supabase
 from app.repositories.supabase_credit_repository import SupabaseCreditRepository
+from app.services.oria_assistant_request_protocol import extract_request_draft
+from app.services.oria_assistant_push_service import enqueue_credit_threshold_notifications
+
 from app.services.oria_assistant_provider_adapter import (
     ASSISTANT_HISTORY_LIMIT,
     ASSISTANT_MAX_MESSAGE_CHARS,
@@ -23,6 +27,7 @@ from app.services.oria_assistant_provider_adapter import (
     quote_assistant_request,
 )
 
+logger = logging.getLogger("oria.assistant.service")
 credit_repository = SupabaseCreditRepository(supabase)
 
 
@@ -69,6 +74,38 @@ def _new_assistant_slug(name: str) -> str:
     return f"{_slugify(name)}-{uuid.uuid4().hex[:16]}"
 
 
+def _clean_assistant_contact_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and normalize per-assistant public contact and collection settings."""
+    import re
+
+    result: dict[str, Any] = {}
+    for key in ("business_name", "business_email", "business_phone", "whatsapp_number", "collection_instructions"):
+        if key not in payload:
+            continue
+        value = str(payload.get(key) or "").strip()
+        result[key] = value if key == "business_name" else (value or None)
+
+    business_name = result.get("business_name")
+    if business_name and len(business_name) > 120:
+        raise HTTPException(422, "Le nom de l'entreprise ne peut pas dépasser 120 caractères.")
+
+    email = result.get("business_email")
+    if email and (len(email) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email)):
+        raise HTTPException(422, "L'adresse e-mail de l'entreprise n'est pas valide.")
+
+    for key, label in (("business_phone", "Le téléphone de l'entreprise"), ("whatsapp_number", "Le numéro WhatsApp")):
+        value = result.get(key)
+        if value:
+            digits = re.sub(r"\D", "", value)
+            if not re.fullmatch(r"[0-9+().\s-]{7,40}", value) or not 7 <= len(digits) <= 20:
+                raise HTTPException(422, f"{label} n'est pas valide.")
+
+    instructions = result.get("collection_instructions")
+    if instructions and len(instructions) > 8000:
+        raise HTTPException(422, "Les consignes de collecte sont trop longues (8 000 caractères maximum).")
+    return result
+
+
 def _pack_wallet(owner_user_id: str):
     wallet = credit_repository.get_wallet(owner_user_id)
     if wallet is None or not wallet.is_pack_active:
@@ -81,7 +118,7 @@ def _pack_wallet(owner_user_id: str):
 def list_owner_assistants(owner_user_id: str) -> list[dict[str, Any]]:
     response = (
         supabase.table("oria_assistants").select(
-            "id,name,description,instructions,welcome_message,slug,is_public,created_at,updated_at"
+            "id,name,description,instructions,welcome_message,business_name,business_email,business_phone,whatsapp_number,collection_instructions,slug,is_public,created_at,updated_at"
         ).eq("owner_user_id", owner_user_id).order("created_at", desc=True).execute()
     )
     return [_with_public_url(item) for item in _rows(response.data)]
@@ -113,6 +150,7 @@ def create_owner_assistant(owner_user_id: str, payload: Mapping[str, Any]) -> di
         "description": str(payload.get("description") or "").strip(),
         "instructions": clean_instructions,
         "welcome_message": str(payload.get("welcome_message") or "Bonjour ! Comment puis-je vous aider ?").strip(),
+        **_clean_assistant_contact_fields(payload),
         "slug": slug,
         "is_public": bool(payload.get("is_public", False)),
     }
@@ -125,10 +163,14 @@ def create_owner_assistant(owner_user_id: str, payload: Mapping[str, Any]) -> di
 
 def update_owner_assistant(owner_user_id: str, assistant_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     existing = get_owner_assistant(owner_user_id, assistant_id)
-    allowed = {"name", "description", "instructions", "welcome_message", "is_public"}
+    allowed = {
+        "name", "description", "instructions", "welcome_message", "is_public",
+        "business_name", "business_email", "business_phone", "whatsapp_number", "collection_instructions",
+    }
     data = {key: value for key, value in payload.items() if key in allowed}
     if not data:
         raise HTTPException(400, "Aucune modification valide.")
+    data.update(_clean_assistant_contact_fields(data))
     for key in ("name", "description", "instructions", "welcome_message"):
         if key in data and isinstance(data[key], str):
             data[key] = data[key].strip()
@@ -232,6 +274,12 @@ def _visitor_conversation(assistant_id: str, conversation_id: str, visitor_token
     return item
 
 
+def visitor_pending_request(assistant_id: str, conversation_id: str, visitor_token: str) -> dict[str, Any] | None:
+    conversation = _visitor_conversation(assistant_id, conversation_id, visitor_token)
+    draft = conversation.get("pending_request_draft")
+    return draft if isinstance(draft, dict) else None
+
+
 def visitor_messages(assistant_id: str, conversation_id: str, visitor_token: str) -> list[dict[str, Any]]:
     _visitor_conversation(assistant_id, conversation_id, visitor_token)
     # Restore a response already settled before the process stopped, without
@@ -262,6 +310,18 @@ def _get_run(request_id: str) -> dict[str, Any] | None:
 
 def _update_run(run_id: str, values: Mapping[str, Any]) -> None:
     supabase.table("oria_assistant_runs").update({**dict(values), "updated_at": _now()}).eq("id", run_id).execute()
+
+
+def _pending_request_for_conversation(conversation_id: str) -> dict[str, Any] | None:
+    try:
+        row = _first(
+            supabase.table("oria_assistant_conversations").select("pending_request_draft")
+            .eq("id", conversation_id).limit(1).execute().data
+        )
+        draft = (row or {}).get("pending_request_draft")
+        return draft if isinstance(draft, dict) else None
+    except Exception:
+        return None
 
 
 def _complete_saved_run(run: Mapping[str, Any]) -> dict[str, Any]:
@@ -299,6 +359,7 @@ def _complete_saved_run(run: Mapping[str, Any]) -> dict[str, Any]:
             "message": answer,
             "request_id": run["request_id"],
             "replayed": True,
+            "request_confirmation": _pending_request_for_conversation(str(run["conversation_id"])),
         }
     raise HTTPException(409, "Cette demande est déjà en cours de traitement ou nécessite un rapprochement. Réessaie après vérification.")
 
@@ -322,6 +383,9 @@ def send_visitor_message(
         if existing.get("input_sha256") != content_hash or existing.get("conversation_id") != conversation_id:
             raise HTTPException(409, "Cet identifiant de demande a déjà été utilisé.")
         return _complete_saved_run(existing)
+
+    if isinstance(conversation.get("pending_request_draft"), dict):
+        raise HTTPException(409, "Une demande attend votre confirmation ou votre annulation avant de poursuivre.")
 
     pending = (
         supabase.table("oria_assistant_runs").select("id,status")
@@ -384,6 +448,10 @@ def send_visitor_message(
         name=str(assistant["name"]),
         description=str(assistant.get("description") or ""),
         instructions=str(assistant["instructions"]),
+        business_email=str(assistant.get("business_email") or ""),
+        business_phone=str(assistant.get("business_phone") or ""),
+        whatsapp_number=str(assistant.get("whatsapp_number") or ""),
+        collection_instructions=str(assistant.get("collection_instructions") or ""),
     )
     try:
         quote = quote_assistant_request(
@@ -474,6 +542,15 @@ def send_visitor_message(
             selection, system_instructions=system_instructions,
             message=clean_message, history=history,
         )
+        visible_message, request_draft = extract_request_draft(
+            str(result.get("message") or ""),
+            collection_enabled=bool(str(assistant.get("collection_instructions") or "").strip()),
+            history=[*history, {"role": "user", "content": clean_message}],
+        )
+        result["message"] = visible_message
+        if request_draft is not None:
+            request_draft["draft_id"] = str(uuid.uuid4())
+            request_draft["created_at"] = _now()
     except AssistantBillingUncertainError as exc:
         _update_run(run_id, {"status": "reconciliation_required", "error_code": "provider_usage_uncertain"})
         raise HTTPException(503, "La réponse est en cours de rapprochement. Les crédits réservés ne sont pas libérés automatiquement.") from exc
@@ -495,6 +572,7 @@ def send_visitor_message(
         _update_run(run_id, {
             "status": "provider_complete",
             "assistant_response": result["message"],
+            "assistant_request_draft": request_draft,
             "provider_request_id": result["response_id"],
             "actual_credits": result["credits"],
             "total_cost_usd": str(result["total_cost_usd"]),
@@ -505,8 +583,27 @@ def send_visitor_message(
         # Provider response exists in memory but cannot safely be settled or retried.
         raise HTTPException(503, "Le fournisseur a répondu, mais la preuve d'usage n'a pas pu être enregistrée. La réservation est conservée pour rapprochement.") from exc
 
+    if request_draft is not None:
+        try:
+            supabase.table("oria_assistant_conversations").update({
+                "pending_request_draft": request_draft,
+                "pending_request_updated_at": _now(),
+            }).eq("id", conversation_id).eq("assistant_id", str(assistant["id"])).execute()
+        except Exception as exc:
+            _update_run(run_id, {"status": "reconciliation_required", "error_code": "request_draft_persist_failed"})
+            raise HTTPException(503, "Le brouillon de demande n'a pas pu être enregistré. La réservation est conservée pour rapprochement.") from exc
+
+    balance_before_settlement = None
     try:
-        credit_repository.settle_credit_reservation(
+        wallet_before_settlement = credit_repository.get_wallet(owner_user_id)
+        if wallet_before_settlement is not None:
+            balance_before_settlement = int(wallet_before_settlement.balance)
+    except Exception:
+        # La lecture du solde ne doit pas bloquer un règlement déjà autorisé.
+        logger.exception("ORIA Assistant could not read pre-settlement balance for Push thresholds")
+
+    try:
+        settled_wallet = credit_repository.settle_credit_reservation(
             user_id=owner_user_id,
             reference_id=run_id,
             actual_amount=int(result["credits"]),
@@ -515,6 +612,30 @@ def send_visitor_message(
     except Exception as exc:
         _update_run(run_id, {"status": "reconciliation_required", "error_code": "settlement_failed"})
         raise HTTPException(503, "La réponse a été générée, mais le règlement doit être rapproché avant un nouvel essai.") from exc
+
+    try:
+        from app.services.oria_assistant_credit_ledger import record_assistant_usage_metadata
+        record_assistant_usage_metadata(
+            supabase,
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            assistant_id=str(assistant["id"]),
+            assistant_name=str(assistant.get("name") or "Assistant"),
+            business_name=assistant.get("business_name"),
+            credits=int(result["credits"]),
+        )
+    except Exception:
+        # Le snapshot est informatif : il ne doit jamais interrompre un règlement déjà confirmé.
+        logger.exception("ORIA Assistant settled credits; usage metadata snapshot failed")
+
+    if balance_before_settlement is not None:
+        try:
+            enqueue_credit_threshold_notifications(
+                supabase, owner_user_id, balance_before_settlement, int(settled_wallet.balance),
+            )
+        except Exception:
+            # Les crédits sont déjà réglés : la file Push ne doit jamais casser la réponse IA.
+            logger.exception("ORIA Assistant settled credits; threshold Push enqueue failed")
 
     _update_run(run_id, {"status": "settled", "settled_at": _now()})
     try:
@@ -536,4 +657,7 @@ def send_visitor_message(
         "success": True,
         "message": result["message"],
         "request_id": request_uuid,
+        "request_confirmation": request_draft,
     }
+
+# ORIA_ASSISTANT_CHANTIER3: immutable usage labels

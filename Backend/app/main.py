@@ -219,6 +219,7 @@ _oria_collab_push_task = None
 async def _oria_collab_push_start():
     global _oria_collab_push_task
     from app.services.oria_collab_push_service import worker_ready,dispatch_batch,prune_events
+    from app.services.oria_assistant_push_service import dispatch_batch as dispatch_assistant_push_batch, prune_events as prune_assistant_push_events
     if not worker_ready():
         return
     async def loop():
@@ -228,8 +229,10 @@ async def _oria_collab_push_start():
         while True:
             try:
                 await asyncio.to_thread(dispatch_batch, _push_db)
+                await asyncio.to_thread(dispatch_assistant_push_batch, _push_db)
                 if monotonic()-last_prune>3600:
                     await asyncio.to_thread(prune_events, _push_db)
+                    await asyncio.to_thread(prune_assistant_push_events, _push_db)
                     last_prune=monotonic()
             except asyncio.CancelledError:
                 raise
@@ -250,3 +253,39 @@ async def _oria_collab_push_stop():
         _oria_collab_push_task=None
 from app.route.oria_assistant import router as oria_assistant_router
 app.include_router(oria_assistant_router)
+
+# ORIA Assistant — file e-mail durable (désactivée tant que la configuration Brevo n'est pas activée).
+_oria_assistant_email_task = None
+
+@app.on_event("startup")
+async def _oria_assistant_email_start():
+    global _oria_assistant_email_task
+    from app.services.oria_assistant_email_worker import worker_ready, dispatch_batch
+    if not worker_ready():
+        return
+
+    async def _oria_assistant_email_loop():
+        from app.core.supabase import supabase as _assistant_email_db
+        while True:
+            try:
+                await asyncio.to_thread(dispatch_batch, _assistant_email_db)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logging.getLogger("oria.assistant.email").exception("ORIA Assistant email worker failed")
+            await asyncio.sleep(15)
+
+    _oria_assistant_email_task = asyncio.create_task(_oria_assistant_email_loop())
+
+
+@app.on_event("shutdown")
+async def _oria_assistant_email_stop():
+    global _oria_assistant_email_task
+    if _oria_assistant_email_task is not None:
+        _oria_assistant_email_task.cancel()
+        try:
+            await _oria_assistant_email_task
+        except asyncio.CancelledError:
+            pass
+        _oria_assistant_email_task = None
+

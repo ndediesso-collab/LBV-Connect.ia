@@ -12,18 +12,34 @@ type Assistant = {
   description: string;
   instructions: string;
   welcome_message: string;
+  business_name: string | null;
+  business_email: string | null;
+  business_phone: string | null;
+  whatsapp_number: string | null;
+  collection_instructions: string | null;
   slug: string;
   public_url?: string | null;
   is_public: boolean;
   created_at: string;
 };
-type Editor = Pick<Assistant, "name" | "description" | "instructions" | "welcome_message" | "is_public">;
+type Editor = Pick<Assistant, "name" | "description" | "instructions" | "welcome_message" | "is_public"> & {
+  business_name: string;
+  business_email: string;
+  business_phone: string;
+  whatsapp_number: string;
+  collection_instructions: string;
+};
 
 const emptyEditor: Editor = {
   name: "",
   description: "",
   instructions: "Tu es un assistant utile, précis et professionnel. Tu aides les utilisateurs dans le domaine que je t'ai confié.",
   welcome_message: "Bonjour ! Comment puis-je vous aider ?",
+  business_name: "",
+  business_email: "",
+  business_phone: "",
+  whatsapp_number: "",
+  collection_instructions: "",
   is_public: false,
 };
 
@@ -100,6 +116,11 @@ export default function AssistantWorkspacePage() {
       description: assistant.description || "",
       instructions: assistant.instructions,
       welcome_message: assistant.welcome_message,
+      business_name: assistant.business_name || "",
+      business_email: assistant.business_email || "",
+      business_phone: assistant.business_phone || "",
+      whatsapp_number: assistant.whatsapp_number || "",
+      collection_instructions: assistant.collection_instructions || "",
       is_public: assistant.is_public,
     });
     setNotice("");
@@ -123,6 +144,11 @@ export default function AssistantWorkspacePage() {
         description: assistant.description || "",
         instructions: assistant.instructions,
         welcome_message: assistant.welcome_message,
+        business_name: assistant.business_name || "",
+        business_email: assistant.business_email || "",
+        business_phone: assistant.business_phone || "",
+        whatsapp_number: assistant.whatsapp_number || "",
+        collection_instructions: assistant.collection_instructions || "",
         is_public: assistant.is_public,
       });
       setNotice(creating ? "Assistant créé." : "Modifications enregistrées.");
@@ -195,7 +221,10 @@ export default function AssistantWorkspacePage() {
             <span className="grid size-9 place-items-center rounded-xl bg-foreground text-background"><Bot size={20} /></span>
             <span>ORIA <span className="font-normal text-muted">/ Assistant</span></span>
           </Link>
-          <Link href="/chat" className="rounded-full border border-border px-4 py-2 text-sm font-medium transition hover:bg-surface-secondary">Retour au Chat</Link>
+          <div className="flex items-center gap-2">
+            <Link href="/assistant/demandes" className="rounded-full border border-border px-4 py-2 text-sm font-semibold transition hover:bg-surface-secondary">Demandes reçues</Link>
+            <Link href="/chat" className="rounded-full border border-border px-4 py-2 text-sm font-medium transition hover:bg-surface-secondary">Retour au Chat</Link>
+          </div>
         </div>
       </header>
 
@@ -258,6 +287,31 @@ export default function AssistantWorkspacePage() {
                   <textarea required minLength={10} maxLength={12000} rows={11} value={editor.instructions} onChange={e => setEditor(v => ({ ...v, instructions: e.target.value }))} placeholder="Décris précisément sa mission, son domaine, son ton, ses limites et la manière dont il doit répondre." className="w-full resize-y rounded-xl border border-border bg-background px-4 py-3 font-normal leading-6 outline-none focus:border-foreground" />
                   <span className="text-xs font-normal text-muted">Ces instructions sont conservées côté serveur et appliquées à chaque conversation.</span>
                 </label>
+                <div className="rounded-2xl border border-border p-4 sm:p-5">
+                  <div>
+                    <h3 className="text-sm font-semibold">Coordonnées officielles de l&apos;entreprise</h3>
+                    <p className="mt-1 text-xs leading-5 text-muted">Ces coordonnées peuvent être communiquées aux visiteurs. Elles sont propres à cet assistant.</p>
+                  </div>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <label className="grid gap-2 text-sm font-medium sm:col-span-2">Nom de l'entreprise
+                      <input type="text" maxLength={120} value={editor.business_name} onChange={e => setEditor(v => ({ ...v, business_name: e.target.value }))} placeholder="Ex. Société Exemple" className="w-full rounded-xl border border-border bg-background px-4 py-3 font-normal outline-none focus:border-foreground" />
+                      <span className="text-xs font-normal text-muted">Utilisé dans l'historique de consommation des crédits.</span>
+                    </label>
+                    <label className="grid gap-2 text-sm font-medium">E-mail professionnel
+                      <input type="email" maxLength={254} value={editor.business_email} onChange={e => setEditor(v => ({ ...v, business_email: e.target.value }))} placeholder="contact@entreprise.com" className="w-full rounded-xl border border-border bg-background px-4 py-3 font-normal outline-none focus:border-foreground" />
+                    </label>
+                    <label className="grid gap-2 text-sm font-medium">Téléphone de l&apos;entreprise
+                      <input type="tel" maxLength={40} value={editor.business_phone} onChange={e => setEditor(v => ({ ...v, business_phone: e.target.value }))} placeholder="+241 01 23 45 67" className="w-full rounded-xl border border-border bg-background px-4 py-3 font-normal outline-none focus:border-foreground" />
+                    </label>
+                    <label className="grid gap-2 text-sm font-medium sm:col-span-2">WhatsApp (facultatif)
+                      <input type="tel" maxLength={40} value={editor.whatsapp_number} onChange={e => setEditor(v => ({ ...v, whatsapp_number: e.target.value }))} placeholder="+241 06 12 34 56" className="w-full rounded-xl border border-border bg-background px-4 py-3 font-normal outline-none focus:border-foreground" />
+                    </label>
+                  </div>
+                </div>
+                <label className="grid gap-2 text-sm font-medium">Consignes de collecte des demandes
+                  <textarea rows={7} maxLength={8000} value={editor.collection_instructions} onChange={e => setEditor(v => ({ ...v, collection_instructions: e.target.value }))} placeholder="Exemple : Pour une demande de carte bancaire, demande le type de carte, puis les renseignements utiles prévus par l’entreprise. Termine par le nom et le numéro de téléphone. Ne demande aucun document ni code secret." className="w-full resize-y rounded-xl border border-border bg-background px-4 py-3 font-normal leading-6 outline-none focus:border-foreground" />
+                  <span className="text-xs font-normal leading-5 text-muted">Rédige librement les situations qui doivent déclencher une demande de recontact et les renseignements utiles à recueillir. ORIA demandera aussi le nom et le téléphone du client. Ne demande jamais de documents, codes secrets ou données bancaires sensibles.</span>
+                </label>
                 <label className="grid gap-2 text-sm font-medium">Message d&apos;accueil
                   <textarea rows={2} maxLength={500} value={editor.welcome_message} onChange={e => setEditor(v => ({ ...v, welcome_message: e.target.value }))} className="w-full resize-y rounded-xl border border-border bg-background px-4 py-3 font-normal outline-none focus:border-foreground" />
                 </label>
@@ -289,7 +343,7 @@ export default function AssistantWorkspacePage() {
                     <Link href={getPublicUrl(selected)} target="_blank" rel="noopener noreferrer" className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white/70 px-4 py-3 text-sm font-semibold text-violet-800 transition hover:bg-white dark:border-border dark:bg-surface dark:text-foreground"><ExternalLink size={15}/> Ouvrir</Link>
                   </div>
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                    <p className="max-w-2xl text-xs leading-5 text-muted">Le lien reste identique même après modification du nom ou des instructions. Le renouveler invalide immédiatement l'ancien lien.</p>
+                    <p className="max-w-2xl text-xs leading-5 text-muted">Le lien reste identique même après modification du nom ou des instructions. Le renouveler invalide immédiatement l&apos;ancien lien.</p>
                     <button type="button" disabled={saving} onClick={() => void regeneratePublicLink()} className="inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-white/70 px-3 py-2.5 text-xs font-semibold text-violet-800 transition hover:bg-white disabled:opacity-50 dark:border-border dark:bg-surface dark:text-foreground"><RotateCw size={14}/> Changer le lien</button>
                   </div>
                 </div>
@@ -302,3 +356,5 @@ export default function AssistantWorkspacePage() {
     </main>
   );
 }
+
+// ORIA_ASSISTANT_CHANTIER3: company name field

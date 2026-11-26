@@ -24,6 +24,15 @@ type Message = {
   created_at?: string;
 };
 type VisitorSession = { conversation_id: string; visitor_token: string };
+type PendingRequest = {
+  draft_id: string;
+  request_type: string;
+  summary: string;
+  customer_name: string;
+  customer_phone: string;
+  customer_email?: string | null;
+  details: Record<string, string>;
+};
 
 class PublicApiError extends Error {
   status: number;
@@ -71,6 +80,8 @@ export default function PublicAssistantPage() {
   const slug = String(params.slug || "");
   const [assistant, setAssistant] = useState<PublicAssistant | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [pendingRequest, setPendingRequest] = useState<PendingRequest | null>(null);
+  const [confirmingRequest, setConfirmingRequest] = useState(false);
   const [visitor, setVisitor] = useState<VisitorSession | null>(null);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -112,6 +123,7 @@ export default function PublicAssistantPage() {
       { headers: { "x-oria-visitor-token": session.visitor_token } },
     );
     setMessages(Array.isArray(payload.messages) ? payload.messages as Message[] : []);
+    setPendingRequest(payload.pending_request && typeof payload.pending_request === "object" ? payload.pending_request as PendingRequest : null);
   }, [fetchPublic, slug]);
 
   const createVisitorSession = useCallback(async (): Promise<VisitorSession> => {
@@ -176,10 +188,10 @@ export default function PublicAssistantPage() {
     if (!text || !visitor || sending) return;
     setSending(true);
     setError("");
-    const optimisticId = `optimistic-${Date.now()}`;
     const requestId = pendingRequestRef.current?.message === text
       ? pendingRequestRef.current.requestId
       : crypto.randomUUID();
+    const optimisticId = `optimistic-${requestId}`;
     pendingRequestRef.current = { message: text, requestId };
     setMessages((current) => [...current, { id: optimisticId, role: "user", content: text }]);
     setDraft("");
@@ -198,6 +210,8 @@ export default function PublicAssistantPage() {
         ...current.map((item) => item.id === optimisticId ? { ...item, id: `user-${crypto.randomUUID()}` } : item),
         { id: `answer-${crypto.randomUUID()}`, role: "assistant", content: String(payload.message || "") },
       ]);
+      setPendingRequest(payload.request_confirmation && typeof payload.request_confirmation === "object"
+        ? payload.request_confirmation as PendingRequest : null);
     } catch (err) {
       setMessages((current) => current.filter((item) => item.id !== optimisticId));
       setDraft(text);
@@ -216,6 +230,60 @@ export default function PublicAssistantPage() {
     void sendMessage(draft);
   };
 
+  const confirmPendingRequest = async () => {
+    if (!pendingRequest || !visitor || confirmingRequest) return;
+    setConfirmingRequest(true);
+    setError("");
+    try {
+      const payload = await fetchPublic(
+        `/assistant/public/${encodeURIComponent(slug)}/conversations/${encodeURIComponent(visitor.conversation_id)}/requests/confirm`,
+        {
+          method: "POST",
+          headers: { "x-oria-visitor-token": visitor.visitor_token },
+          body: JSON.stringify({ draft_id: pendingRequest.draft_id }),
+        },
+      );
+      setMessages((current) => [...current, {
+        id: `request-confirmed-${crypto.randomUUID()}`,
+        role: "assistant",
+        content: String(payload.message || "Votre demande est enregistrée dans l'espace professionnel de l'entreprise."),
+      }]);
+      setPendingRequest(null);
+    } catch (err) {
+      try { await loadMessages(visitor); } catch { /* la session reste récupérable au prochain chargement */ }
+      setError(userFacingError(err));
+    } finally {
+      setConfirmingRequest(false);
+    }
+  };
+
+  const cancelPendingRequest = async () => {
+    if (!pendingRequest || !visitor || confirmingRequest) return;
+    setConfirmingRequest(true);
+    setError("");
+    try {
+      const payload = await fetchPublic(
+        `/assistant/public/${encodeURIComponent(slug)}/conversations/${encodeURIComponent(visitor.conversation_id)}/requests/cancel`,
+        {
+          method: "POST",
+          headers: { "x-oria-visitor-token": visitor.visitor_token },
+          body: JSON.stringify({ draft_id: pendingRequest.draft_id }),
+        },
+      );
+      setPendingRequest(null);
+      setMessages((current) => [...current, {
+        id: `request-cancelled-${crypto.randomUUID()}`,
+        role: "assistant",
+        content: String(payload.message || "D'accord, aucune information n'a été transmise à l'entreprise. Nous pouvons continuer la discussion."),
+      }]);
+    } catch (err) {
+      try { await loadMessages(visitor); } catch { /* la session reste récupérable au prochain chargement */ }
+      setError(userFacingError(err));
+    } finally {
+      setConfirmingRequest(false);
+    }
+  };
+
   const restartConversation = async () => {
     if (restarting || sending) return;
     setRestarting(true);
@@ -225,6 +293,7 @@ export default function PublicAssistantPage() {
       pendingRequestRef.current = null;
       setVisitor(session);
       setMessages([]);
+      setPendingRequest(null);
       setDraft("");
       if (inputRef.current) inputRef.current.style.height = "auto";
     } catch (err) {
@@ -368,7 +437,7 @@ export default function PublicAssistantPage() {
 
           <section className="oria-conversation" ref={conversationRef} aria-live="polite">
             {loading ? (
-              <div className="oria-loading"><LoaderCircle size={19} className="animate-spin" /> Chargement de l'assistant…</div>
+              <div className="oria-loading"><LoaderCircle size={19} className="animate-spin" /> Chargement de l&apos;assistant…</div>
             ) : error && !assistant ? (
               <div className="oria-welcome-block">
                 <div className="oria-welcome-mark"><MessageCircle size={19} /></div>
@@ -383,7 +452,7 @@ export default function PublicAssistantPage() {
                       <div className="oria-welcome-mark"><ActivityIcon size={19} strokeWidth={1.7} /></div>
                       <h1>Bienvenue chez {assistant.name}</h1>
                       <p>{assistant.description || `Je suis l'assistant officiel de ${assistant.name}. Posez-moi votre question concernant ses services.`}</p>
-                      <div className="oria-welcome-note"><Check size={13} /> Réponses basées sur les informations de l'entreprise</div>
+                      <div className="oria-welcome-note"><Check size={13} /> Réponses basées sur les informations de l&apos;entreprise</div>
                     </div>
                     <div className="oria-suggestions" aria-label="Questions suggérées">
                       {suggestions.map((question) => (
@@ -397,7 +466,7 @@ export default function PublicAssistantPage() {
                     <div className="oria-message-row">
                       <div className="oria-mini-avatar" aria-hidden="true">{initials}</div>
                       <div className="oria-message-content">
-                        <div className="oria-message-meta">{assistant.name} · à l'instant</div>
+                        <div className="oria-message-meta">{assistant.name} · à l&apos;instant</div>
                         <div className="oria-bubble oria-bubble-markdown"><OriaRichMessage content={assistant.welcome_message} language="fr" /></div>
                       </div>
                     </div>
@@ -411,6 +480,24 @@ export default function PublicAssistantPage() {
                       </div>
                     </div>
                   ))}
+                  {pendingRequest && (
+                    <div className="mx-auto w-full max-w-[760px] rounded-2xl border border-neutral-300 bg-white p-4 shadow-sm sm:p-5">
+                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-neutral-500">Demande de recontact à confirmer</p>
+                      <h3 className="mt-2 text-sm font-semibold text-neutral-900">{pendingRequest.request_type}</h3>
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-neutral-700">{pendingRequest.summary}</p>
+                      <div className="mt-3 grid gap-2 rounded-xl bg-neutral-50 p-3 text-xs text-neutral-700 sm:grid-cols-2">
+                        <p><strong>Nom :</strong> {pendingRequest.customer_name}</p>
+                        <p><strong>Téléphone :</strong> {pendingRequest.customer_phone}</p>
+                        {pendingRequest.customer_email && <p className="sm:col-span-2"><strong>E-mail :</strong> {pendingRequest.customer_email}</p>}
+                        {Object.entries(pendingRequest.details || {}).map(([key, value]) => <p key={key}><strong>{key} :</strong> {value}</p>)}
+                      </div>
+                      <p className="mt-3 text-xs leading-5 text-neutral-600">En cliquant sur le bouton ci-dessous, vous autorisez la communication de ces informations à l&apos;entreprise afin qu&apos;elle puisse vous recontacter. ORIA ne réalise pas l&apos;opération demandée.</p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button type="button" onClick={() => void confirmPendingRequest()} disabled={confirmingRequest} className="rounded-xl bg-neutral-900 px-4 py-2.5 text-xs font-semibold text-white disabled:opacity-50">{confirmingRequest ? "Traitement…" : "J'autorise la transmission"}</button>
+                        <button type="button" onClick={() => void cancelPendingRequest()} disabled={confirmingRequest} className="rounded-xl border border-neutral-300 px-4 py-2.5 text-xs font-semibold text-neutral-700 disabled:opacity-50">Ne pas transmettre</button>
+                      </div>
+                    </div>
+                  )}
                   {sending && (
                     <div className="oria-message-row" aria-label="Réponse en cours">
                       <div className="oria-mini-avatar" aria-hidden="true">{initials}</div>
@@ -448,20 +535,20 @@ export default function PublicAssistantPage() {
                     rows={1}
                     maxLength={8000}
                     aria-label="Votre message"
-                    placeholder="Écrivez votre message..."
-                    disabled={!visitor || sending}
+                    placeholder={pendingRequest ? "Confirmez ou annulez la demande avant de poursuivre…" : "Écrivez votre message..."}
+                    disabled={!visitor || sending || !!pendingRequest}
                   />
-                  <button className="oria-send-button" type="submit" aria-label="Envoyer le message" disabled={!draft.trim() || !visitor || sending}>
+                  <button className="oria-send-button" type="submit" aria-label="Envoyer le message" disabled={!draft.trim() || !visitor || sending || !!pendingRequest}>
                     {sending ? <LoaderCircle size={17} className="animate-spin" /> : <ArrowUp size={17} />}
                   </button>
                 </form>
                 <div className="oria-composer-hint">
-                  <span>Entrée pour envoyer · Maj + Entrée pour une nouvelle ligne</span>
+                  <span>{pendingRequest ? "Confirmez ou annulez la demande ci-dessus." : "Entrée pour envoyer · Maj + Entrée pour une nouvelle ligne"}</span>
                   <span className="oria-privacy"><LockKeyhole size={11} /> Session temporaire</span>
                 </div>
               </div>
               <footer className="oria-footer">
-                Une assistance automatisée, fournie par <strong>ORIA</strong> · <strong>Une IA née au Gabon pour l'Afrique</strong>
+                Une assistance automatisée, fournie par <strong>ORIA</strong> · <strong>Une IA née au Gabon pour l&apos;Afrique</strong>
                 <br />
                 <a href="https://www.myoriaai.com" target="_blank" rel="noopener noreferrer">Découvrir ORIA ↗</a>
               </footer>

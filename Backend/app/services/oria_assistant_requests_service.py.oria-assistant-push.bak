@@ -1,0 +1,312 @@
+from __future__ import annotations
+
+import html
+import logging
+import re
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
+
+from fastapi import HTTPException
+
+from app.core.supabase import supabase
+from app.services.oria_assistant_service import _first, _rows, _visitor_conversation
+
+logger = logging.getLogger("oria.assistant.requests")
+REQUEST_STATUSES = frozenset(("new", "in_progress", "treated", "cancelled"))
+
+
+def _uuid(value: Any, label: str) -> str:
+    try:
+        return str(UUID(str(value)))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(422, f"Identifiant {label} invalide.") from exc
+
+
+def _request_draft(assistant_id: str, conversation_id: str, visitor_token: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    conversation = _visitor_conversation(assistant_id, conversation_id, visitor_token)
+    draft = conversation.get("pending_request_draft")
+    if not isinstance(draft, dict) or not draft.get("draft_id"):
+        raise HTTPException(409, "Aucune demande n'attend votre confirmation.")
+    return conversation, draft
+
+
+def visitor_pending_request(assistant_id: str, conversation_id: str, visitor_token: str) -> dict[str, Any] | None:
+    conversation = _visitor_conversation(assistant_id, conversation_id, visitor_token)
+    draft = conversation.get("pending_request_draft")
+    return draft if isinstance(draft, dict) else None
+
+
+def _email_content(assistant: dict[str, Any], draft: dict[str, Any]) -> tuple[str, str, str]:
+    company = str(assistant.get("name") or "Entreprise")[:100]
+    request_type = str(draft.get("request_type") or "Demande de recontact")[:120]
+    subject = f"Nouvelle demande client — {company}"
+    lines = [
+        f"Nouvelle demande reçue via ORIA Assistant — {company}",
+        "",
+        f"Type : {request_type}",
+        f"Client : {draft['customer_name']}",
+        f"Téléphone : {draft['customer_phone']}",
+    ]
+    if draft.get("customer_email"):
+        lines.append(f"E-mail du client : {draft['customer_email']}")
+    lines.extend(["", "Résumé :", str(draft["summary"]), ""])
+    details = draft.get("details") if isinstance(draft.get("details"), dict) else {}
+    if details:
+        lines.append("Informations complémentaires :")
+        lines.extend(f"- {key} : {value}" for key, value in details.items())
+        lines.append("")
+    lines.extend([
+        "Action attendue : recontacter le client.",
+        "ORIA a uniquement recueilli et transmis cette demande. L'entreprise reste responsable de la vérifier et de la traiter.",
+    ])
+    text_body = "\n".join(lines)
+
+    esc = html.escape
+    detail_html = "".join(
+        f"<li><strong>{esc(str(key))} :</strong> {esc(str(value))}</li>"
+        for key, value in details.items()
+    )
+    email_html = (
+        '<div style="font-family:Arial,sans-serif;max-width:640px;color:#171717;line-height:1.6">'
+        f"<h2>Nouvelle demande client — {esc(company)}</h2>"
+        f"<p><strong>Type :</strong> {esc(request_type)}</p>"
+        f"<p><strong>Client :</strong> {esc(str(draft['customer_name']))}<br>"
+        f"<strong>Téléphone :</strong> {esc(str(draft['customer_phone']))}<br>"
+        + (f"<strong>E-mail :</strong> {esc(str(draft['customer_email']))}<br>" if draft.get("customer_email") else "")
+        + "</p>"
+        f"<h3>Résumé</h3><p>{esc(str(draft['summary']))}</p>"
+        + (f"<h3>Informations complémentaires</h3><ul>{detail_html}</ul>" if detail_html else "")
+        + "<p><strong>Action attendue :</strong> recontacter le client.</p>"
+        + "<p>ORIA a uniquement recueilli cette demande. L'entreprise reste responsable de sa vérification et de son traitement.</p>"
+        + "</div>"
+    )
+    return subject, email_html, text_body
+
+
+def confirm_visitor_request(
+    *, assistant: dict[str, Any], conversation_id: str,
+    visitor_token: str, draft_id: str,
+) -> dict[str, Any]:
+    conversation = _visitor_conversation(str(assistant["id"]), conversation_id, visitor_token)
+    requested_draft_id = str(_uuid(draft_id, "demande"))
+    draft = conversation.get("pending_request_draft")
+    if not isinstance(draft, dict) or str(draft.get("draft_id")) != requested_draft_id:
+        # Idempotence : une confirmation répétée après un timeout renvoie la demande déjà créée.
+        existing = _first(
+            supabase.table("oria_assistant_requests").select("id")
+            .eq("draft_id", requested_draft_id)
+            .eq("conversation_id", conversation_id)
+            .eq("owner_user_id", str(conversation["owner_user_id"]))
+            .limit(1).execute().data
+        )
+        if existing:
+            queued = _first(
+                supabase.table("oria_assistant_email_outbox").select("id")
+                .eq("request_id", str(existing["id"])).limit(1).execute().data
+            )
+            message = (
+                f"Votre demande est déjà enregistrée dans l'espace professionnel de {assistant['name']}. "
+                "L'entreprise pourra vous recontacter."
+            )
+            return {"success": True, "request_id": str(existing["id"]), "email_queued": bool(queued), "message": message, "already_created": True}
+        raise HTTPException(409, "Cette demande n'attend plus de confirmation.")
+
+    recipient = str(assistant.get("business_email") or "").strip().lower()
+    subject, email_html, email_text = _email_content(assistant, draft)
+    details = draft.get("details") if isinstance(draft.get("details"), dict) else {}
+    try:
+        response = supabase.rpc("oria_assistant_submit_request_v1", {
+            "p_draft_id": str(draft["draft_id"]),
+            "p_owner_user_id": str(conversation["owner_user_id"]),
+            "p_assistant_id": str(assistant["id"]),
+            "p_conversation_id": conversation_id,
+            "p_request_type": str(draft.get("request_type") or "Demande de recontact"),
+            "p_summary": str(draft.get("summary") or ""),
+            "p_customer_name": str(draft.get("customer_name") or ""),
+            "p_customer_phone": str(draft.get("customer_phone") or ""),
+            "p_customer_email": draft.get("customer_email"),
+            "p_customer_details": details,
+            "p_recipient_email": recipient or None,
+            "p_subject": subject,
+            "p_html_content": email_html,
+            "p_text_content": email_text,
+        }).execute()
+        result = getattr(response, "data", None)
+        if isinstance(result, list) and len(result) == 1:
+            result = result[0]
+        if not isinstance(result, dict) or result.get("success") is not True:
+            raise RuntimeError("assistant_request_submit_rpc_invalid")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        cause = str(exc).lower()
+        if "oria_assistant_request_draft_expired" in cause:
+            raise HTTPException(409, "Cette demande n'attend plus de confirmation.") from exc
+        logger.exception("ORIA Assistant request persistence failed")
+        raise HTTPException(503, "Impossible d'enregistrer la demande pour le moment. Réessayez.") from exc
+
+    email_queued = bool(result.get("email_queued"))
+    if email_queued:
+        message = (
+            f"Votre demande est bien enregistrée dans l'espace professionnel de {assistant['name']} "
+            "et mise en file pour notification par e-mail. L'entreprise pourra vous recontacter. "
+            "Elle reste responsable de vérifier et de traiter votre demande."
+        )
+    else:
+        message = (
+            f"Votre demande est bien enregistrée dans l'espace professionnel de {assistant['name']}. "
+            "L'entreprise pourra la consulter et vous recontacter. Son adresse e-mail n'étant pas configurée, "
+            "aucune notification e-mail automatique n'a été créée."
+        )
+    # Message de confirmation système non facturé, conservé dans l'historique.
+    try:
+        supabase.table("oria_assistant_messages").insert({
+            "conversation_id": conversation_id,
+            "owner_user_id": str(conversation["owner_user_id"]),
+            "run_id": None,
+            "role": "assistant",
+            "content": message,
+        }).execute()
+    except Exception:
+        logger.exception("ORIA Assistant request saved; confirmation transcript insert failed")
+
+    return {
+        "success": True,
+        "request_id": str(result.get("request_id") or ""),
+        "email_queued": email_queued,
+        "message": message,
+    }
+
+
+def cancel_visitor_request_draft(
+    *, assistant: dict[str, Any], conversation_id: str,
+    visitor_token: str, draft_id: str,
+) -> dict[str, Any]:
+    conversation, draft = _request_draft(str(assistant["id"]), conversation_id, visitor_token)
+    if str(draft.get("draft_id")) != str(_uuid(draft_id, "demande")):
+        raise HTTPException(409, "Cette demande a changé. Rechargez la conversation.")
+    try:
+        response = supabase.rpc("oria_assistant_cancel_request_draft_v1", {
+            "p_owner_user_id": str(conversation["owner_user_id"]),
+            "p_assistant_id": str(assistant["id"]),
+            "p_conversation_id": conversation_id,
+            "p_draft_id": str(draft["draft_id"]),
+        }).execute()
+        result = getattr(response, "data", None)
+        if isinstance(result, list) and result:
+            result = result[0]
+        if not isinstance(result, dict) or result.get("cancelled") is not True:
+            raise HTTPException(409, "La demande n'est plus en attente.")
+        message = "D'accord, aucune information n'a été transmise à l'entreprise. Nous pouvons continuer la discussion."
+        try:
+            supabase.table("oria_assistant_messages").insert({
+                "conversation_id": conversation_id,
+                "owner_user_id": str(conversation["owner_user_id"]),
+                "run_id": None,
+                "role": "assistant",
+                "content": message,
+            }).execute()
+        except Exception:
+            logger.exception("ORIA Assistant request cancelled; cancellation transcript insert failed")
+        return {"success": True, "message": message}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("ORIA Assistant request draft cancellation failed")
+        raise HTTPException(503, "Impossible d'annuler cette demande pour le moment.") from exc
+
+
+def list_owner_requests(
+    owner_user_id: str, *, assistant_id: str | None = None, status: str | None = None,
+) -> list[dict[str, Any]]:
+    query = supabase.table("oria_assistant_requests").select("*").eq("owner_user_id", owner_user_id)
+    if assistant_id:
+        query = query.eq("assistant_id", _uuid(assistant_id, "assistant"))
+    if status:
+        if status not in REQUEST_STATUSES:
+            raise HTTPException(422, "Statut de demande invalide.")
+        query = query.eq("status", status)
+    try:
+        rows = _rows(query.order("created_at", desc=True).limit(200).execute().data)
+        assistant_ids = list({str(row["assistant_id"]) for row in rows if row.get("assistant_id")})
+        names: dict[str, str] = {}
+        if assistant_ids:
+            assistant_rows = _rows(
+                supabase.table("oria_assistants").select("id,name")
+                .eq("owner_user_id", owner_user_id).in_("id", assistant_ids).execute().data
+            )
+            names = {str(row["id"]): str(row.get("name") or "Assistant") for row in assistant_rows}
+        request_ids = [str(row["id"]) for row in rows]
+        email_map: dict[str, dict[str, Any]] = {}
+        if request_ids:
+            email_rows = _rows(
+                supabase.table("oria_assistant_email_outbox")
+                .select("request_id,status,attempt_count,sent_at,last_error")
+                .in_("request_id", request_ids).execute().data
+            )
+            email_map = {str(row["request_id"]): row for row in email_rows if row.get("request_id")}
+        for row in rows:
+            row["assistant_name"] = names.get(str(row.get("assistant_id"))) or str(row.get("assistant_name") or "Assistant ORIA")
+            row["email_delivery"] = email_map.get(str(row["id"]))
+        return rows
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("ORIA Assistant owner request list failed")
+        raise HTTPException(503, "Impossible de charger les demandes. Vérifiez la migration du chantier 2.") from exc
+
+
+def get_owner_request(owner_user_id: str, request_id: str) -> dict[str, Any]:
+    request_uuid = _uuid(request_id, "demande")
+    row = _first(
+        supabase.table("oria_assistant_requests").select("*")
+        .eq("id", request_uuid).eq("owner_user_id", owner_user_id).limit(1).execute().data
+    )
+    if row is None:
+        raise HTTPException(404, "Demande introuvable.")
+    assistant = None
+    if row.get("assistant_id"):
+        assistant = _first(
+            supabase.table("oria_assistants").select("id,name")
+            .eq("id", row["assistant_id"]).eq("owner_user_id", owner_user_id).limit(1).execute().data
+        )
+    messages = []
+    if row.get("conversation_id"):
+        messages = _rows(
+            supabase.table("oria_assistant_messages")
+            .select("id,role,content,created_at")
+            .eq("conversation_id", row["conversation_id"])
+            .eq("owner_user_id", owner_user_id)
+            .order("created_at", desc=False).limit(200).execute().data
+        )
+    email = _first(
+        supabase.table("oria_assistant_email_outbox")
+        .select("status,attempt_count,sent_at,last_error")
+        .eq("request_id", request_uuid).limit(1).execute().data
+    )
+    row["assistant_name"] = str((assistant or {}).get("name") or row.get("assistant_name") or "Assistant ORIA")
+    row["messages"] = messages
+    row["email_delivery"] = email
+    return row
+
+
+def update_owner_request_status(owner_user_id: str, request_id: str, status: str) -> dict[str, Any]:
+    request_uuid = _uuid(request_id, "demande")
+    if status not in REQUEST_STATUSES:
+        raise HTTPException(422, "Statut de demande invalide.")
+    try:
+        row = _first(
+            supabase.table("oria_assistant_requests").update({
+                "status": status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", request_uuid).eq("owner_user_id", owner_user_id).select("*").execute().data
+        )
+        if row is None:
+            raise HTTPException(404, "Demande introuvable.")
+        return row
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("ORIA Assistant request status update failed")
+        raise HTTPException(503, "Impossible de modifier le statut de la demande.") from exc

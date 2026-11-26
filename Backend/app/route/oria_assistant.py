@@ -5,7 +5,7 @@ import logging
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field, ConfigDict
 
 from app.core.supabase import supabase
@@ -21,6 +21,14 @@ from app.services.oria_assistant_service import (
     start_visitor_conversation,
     update_owner_assistant,
     visitor_messages,
+    visitor_pending_request,
+)
+from app.services.oria_assistant_requests_service import (
+    cancel_visitor_request_draft,
+    confirm_visitor_request,
+    get_owner_request,
+    list_owner_requests,
+    update_owner_request_status,
 )
 
 router = APIRouter(prefix="/assistant", tags=["ORIA Assistant"])
@@ -32,6 +40,11 @@ class AssistantCreatePayload(BaseModel):
     description: str = Field(default="", max_length=300)
     instructions: str = Field(min_length=10, max_length=12000)
     welcome_message: str = Field(default="Bonjour ! Comment puis-je vous aider ?", max_length=500)
+    business_name: str = Field(default="", max_length=120)
+    business_email: str = Field(default="", max_length=254)
+    business_phone: str = Field(default="", max_length=40)
+    whatsapp_number: str = Field(default="", max_length=40)
+    collection_instructions: str = Field(default="", max_length=8000)
     is_public: bool = False
 
 
@@ -41,12 +54,26 @@ class AssistantUpdatePayload(BaseModel):
     description: str | None = Field(default=None, max_length=300)
     instructions: str | None = Field(default=None, min_length=10, max_length=12000)
     welcome_message: str | None = Field(default=None, max_length=500)
+    business_name: str | None = Field(default=None, max_length=120)
+    business_email: str | None = Field(default=None, max_length=254)
+    business_phone: str | None = Field(default=None, max_length=40)
+    whatsapp_number: str | None = Field(default=None, max_length=40)
+    collection_instructions: str | None = Field(default=None, max_length=8000)
     is_public: bool | None = None
 
 
 class VisitorMessagePayload(BaseModel):
     request_id: str = Field(min_length=36, max_length=36)
     message: str = Field(min_length=1, max_length=8000)
+
+
+class VisitorRequestConfirmationPayload(BaseModel):
+    draft_id: UUID
+
+
+class AssistantRequestStatusPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: str = Field(min_length=3, max_length=20)
 
 
 def _authenticate_owner(
@@ -124,6 +151,33 @@ def owner_delete_assistant(assistant_id: UUID, owner_user_id: str = Depends(_own
     return {"success": True}
 
 
+@router.get("/requests")
+def owner_list_assistant_requests(
+    assistant_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    owner_user_id: str = Depends(_owner_headers),
+):
+    return {"success": True, "requests": list_owner_requests(
+        owner_user_id, assistant_id=assistant_id, status=status,
+    )}
+
+
+@router.get("/requests/{request_id}")
+def owner_get_assistant_request(request_id: UUID, owner_user_id: str = Depends(_owner_headers)):
+    return {"success": True, "request": get_owner_request(owner_user_id, str(request_id))}
+
+
+@router.patch("/requests/{request_id}")
+def owner_update_assistant_request(
+    request_id: UUID,
+    payload: AssistantRequestStatusPayload,
+    owner_user_id: str = Depends(_owner_headers),
+):
+    return {"success": True, "request": update_owner_request_status(
+        owner_user_id, str(request_id), payload.status,
+    )}
+
+
 @router.get("/public/{slug}")
 def public_assistant_info(slug: str):
     assistant = get_public_assistant(slug)
@@ -153,7 +207,40 @@ def public_get_messages(
 ):
     assistant = get_public_assistant(slug)
     messages = visitor_messages(str(assistant["id"]), str(conversation_id), visitor_token or "")
-    return {"success": True, "messages": messages}
+    pending_request = visitor_pending_request(str(assistant["id"]), str(conversation_id), visitor_token or "")
+    return {"success": True, "messages": messages, "pending_request": pending_request}
+
+
+@router.post("/public/{slug}/conversations/{conversation_id}/requests/confirm")
+def public_confirm_request(
+    slug: str,
+    conversation_id: UUID,
+    payload: VisitorRequestConfirmationPayload,
+    visitor_token: str | None = Header(default=None, alias="x-oria-visitor-token"),
+):
+    assistant = get_public_assistant_for_generation(slug)
+    return confirm_visitor_request(
+        assistant=assistant,
+        conversation_id=str(conversation_id),
+        visitor_token=visitor_token or "",
+        draft_id=str(payload.draft_id),
+    )
+
+
+@router.post("/public/{slug}/conversations/{conversation_id}/requests/cancel")
+def public_cancel_request_draft(
+    slug: str,
+    conversation_id: UUID,
+    payload: VisitorRequestConfirmationPayload,
+    visitor_token: str | None = Header(default=None, alias="x-oria-visitor-token"),
+):
+    assistant = get_public_assistant_for_generation(slug)
+    return cancel_visitor_request_draft(
+        assistant=assistant,
+        conversation_id=str(conversation_id),
+        visitor_token=visitor_token or "",
+        draft_id=str(payload.draft_id),
+    )
 
 
 @router.post("/public/{slug}/conversations/{conversation_id}/messages")
@@ -185,3 +272,5 @@ def public_send_message(
             status_code=503,
             detail="Le service rencontre un problème temporaire. Réessaie dans un instant.",
         )
+
+# ORIA_ASSISTANT_CHANTIER3: company-name payload

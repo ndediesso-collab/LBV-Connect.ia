@@ -143,6 +143,10 @@ type CreditTransaction = {
 
 
   reference_id?: string | null;
+  usage_source?: string | null;
+  business_name?: string | null;
+  assistant_name?: string | null;
+  assistant_id?: string | null;
 
 
 
@@ -4182,6 +4186,29 @@ export default function CreditsPage() {
 
 
 
+      {/* ORIA_ASSISTANT_CHANTIER3_BALANCE_ALERT */}
+      {isPackActive && availableBalance <= 5000 && (
+        <div role="status" aria-live="polite" className="mt-5 flex flex-col gap-3 rounded-2xl border border-border bg-surface-secondary/70 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">
+              {availableBalance <= 0
+                ? (language === "fr" ? "Vos crédits sont épuisés" : "Your credits are exhausted")
+                : availableBalance <= 1000
+                  ? (language === "fr" ? "Vos crédits sont presque épuisés" : "Your credits are almost exhausted")
+                  : availableBalance <= 3000
+                    ? (language === "fr" ? "Votre solde de crédits est faible" : "Your credit balance is low")
+                    : (language === "fr" ? "Surveillez votre solde de crédits" : "Keep an eye on your credit balance")}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-muted">
+              {language === "fr" ? `Il vous reste ${formatCredits(availableBalance, language)} crédits. Rechargez votre portefeuille pour continuer à utiliser ORIA Assistant.` : `${formatCredits(availableBalance, language)} credits remain. Recharge your wallet to keep using ORIA Assistant.`}
+            </p>
+          </div>
+          <Link href="/packs" className="inline-flex shrink-0 items-center justify-center rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition-opacity hover:opacity-90">
+            {language === "fr" ? "Recharger mes crédits" : "Recharge credits"}
+          </Link>
+        </div>
+      )}
+
               {/* Transactions */}
 
 
@@ -4823,6 +4850,13 @@ function TransactionItem({
 
 
         </p>
+        {transaction.usage_source === "oria_assistant" && (
+          <p className="mt-1 break-words text-[11px] leading-5 text-muted">
+            {language === "fr" ? "Entreprise" : "Company"} : {transaction.business_name || (language === "fr" ? "Entreprise non renseignée" : "Company not specified")}
+            <span className="mx-1" aria-hidden="true">·</span>
+            {language === "fr" ? "Assistant" : "Assistant"} : {transaction.assistant_name || (language === "fr" ? "Assistant supprimé" : "Deleted assistant")}
+          </p>
+        )}
 
 
 
@@ -4927,3 +4961,4 @@ function TransactionItem({
 
 
 }
+// ORIA_ASSISTANT_CHANTIER3: credit ledger labels and balance alerts
