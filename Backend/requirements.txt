@@ -126,3 +126,4 @@ PyMuPDF>=1.26,<2
 pypdf>=5,<7
 # ORIA Collaboratif P16: Web Push VAPID
 pywebpush==2.5.0
+static-ffmpeg==3.0

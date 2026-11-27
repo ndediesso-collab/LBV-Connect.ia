@@ -175,6 +175,7 @@ class OpenRouterCourseAdapter:
         self, *, model: str, transcript: str, section_index: int,
         total_sections: int, previous_context: str = "",
         reasoning_mode: str = "balanced", output_format: str = "html_fragment",
+        document_type: str = "course",
     ) -> dict[str, Any]:
         if model != self.models.writing_model:
             raise ValueError("Modèle de rédaction ORIA Cours incohérent avec le devis.")
@@ -192,7 +193,7 @@ class OpenRouterCourseAdapter:
         messages = build_course_section_messages(
             transcript=transcript, section_index=section_index,
             total_sections=total_sections, previous_context=previous_context,
-            output_format="html_fragment",
+            output_format="html_fragment", document_type=document_type,
         )
         payload = {
             "model": self.models.writing_model,

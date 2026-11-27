@@ -1,0 +1,238 @@
+# ORIA_ASSISTANT_PUSH_V1
+"""ORIA Assistant Push: file durable dédiée, livrée par l'infrastructure P16 existante.
+
+Les abonnements, clés VAPID et appareils restent ceux d'ORIA Collaboratif.
+Aucun contenu de conversation ni renseignement client n'est envoyé dans le Push.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+logger = logging.getLogger("oria.assistant.push")
+LIBREVILLE = ZoneInfo("Africa/Libreville")
+CREDIT_THRESHOLDS = (5000, 3000, 1000, 0)
+
+
+def _rpc_data(db: Any, function: str, payload: dict[str, Any]) -> dict[str, Any]:
+    response = db.rpc(function, payload).execute()
+    data = getattr(response, "data", None)
+    if isinstance(data, list) and len(data) == 1:
+        data = data[0]
+    if not isinstance(data, dict) or data.get("success") is not True:
+        raise RuntimeError(f"ORIA Assistant Push RPC failed: {function}")
+    return data
+
+
+def worker_ready() -> bool:
+    """Utilise exactement les flags et les clés VAPID déjà activés pour P16."""
+    from app.services.oria_collab_push_service import worker_ready as p16_worker_ready
+    return bool(p16_worker_ready())
+
+
+def enqueue_event(
+    db: Any, *, owner_user_id: str, event_type: str, title: str,
+    body: str, url: str, tag: str, dedupe_key: str,
+) -> bool:
+    allowed = {
+        "new_request": "/assistant/demandes",
+        "credit_threshold": "/packs",
+    }
+    if event_type not in allowed or url != allowed[event_type]:
+        raise ValueError("ORIA Assistant Push event/url invalid")
+    result = _rpc_data(db, "oria_assistant_push_enqueue_v2", {
+        "p_owner_user_id": str(owner_user_id),
+        "p_event_type": event_type,
+        "p_title": str(title)[:100],
+        "p_body": str(body)[:220],
+        "p_url": url,
+        "p_tag": str(tag)[:110],
+        "p_dedupe_key": str(dedupe_key)[:240],
+    })
+    return bool(result.get("queued"))
+
+
+def enqueue_assistant_request_notification(
+    db: Any, owner_user_id: str, assistant_name: str, request_id: str,
+) -> bool:
+    name = " ".join(str(assistant_name or "votre assistant").split())[:70]
+    return enqueue_event(
+        db,
+        owner_user_id=owner_user_id,
+        event_type="new_request",
+        title="Nouvelle demande ORIA Assistant",
+        body=f"Une nouvelle demande a été reçue via {name}. Consultez-la dans ORIA.",
+        url="/assistant/demandes",
+        tag=f"oria-assistant-request-{request_id}"[:110],
+        dedupe_key=f"assistant-request:{owner_user_id}:{request_id}",
+    )
+
+
+def build_credit_threshold_events(
+    owner_user_id: str, balance_before: int, balance_after: int,
+    *, now: datetime | None = None,
+) -> list[dict[str, str]]:
+    """Construit uniquement les alertes correspondant à un franchissement réel."""
+    before = max(0, int(balance_before))
+    after = max(0, int(balance_after))
+    if after >= before:
+        return []
+    local_day = (now or datetime.now(LIBREVILLE)).astimezone(LIBREVILLE).date().isoformat()
+    events: list[dict[str, str]] = []
+    for threshold in CREDIT_THRESHOLDS:
+        if before > threshold >= after:
+            if threshold == 0:
+                title = "Crédits ORIA épuisés"
+                body = "Votre portefeuille ORIA est épuisé. Rechargez vos crédits pour continuer à utiliser ORIA."
+            else:
+                title = "Crédits ORIA faibles"
+                formatted = f"{threshold:,}".replace(",", " ")
+                remaining = f"{after:,}".replace(",", " ")
+                body = (
+                    f"Votre solde est passé sous {formatted} crédits ({remaining} restants). "
+                    "Rechargez pour continuer à utiliser ORIA."
+                )
+            events.append({
+                "owner_user_id": str(owner_user_id),
+                "event_type": "credit_threshold",
+                "title": title,
+                "body": body,
+                "url": "/packs",
+                "tag": f"oria-assistant-credits-{threshold}",
+                # Une seule alerte par seuil et par jour local évite les rafales
+                # dues à des règlements concurrents ou à des retries.
+                "dedupe_key": f"assistant-credits:{owner_user_id}:{threshold}:{local_day}",
+            })
+    return events
+
+
+def enqueue_credit_threshold_notifications(
+    db: Any, owner_user_id: str, balance_before: int, balance_after: int,
+    *, now: datetime | None = None,
+) -> int:
+    sent_to_queue = 0
+    for event in build_credit_threshold_events(
+        owner_user_id, balance_before, balance_after, now=now,
+    ):
+        if enqueue_event(db, **event):
+            sent_to_queue += 1
+    return sent_to_queue
+
+
+def _retry_iso(attempt_count: int) -> str:
+    from datetime import timedelta, timezone
+    seconds = min(3600, 15 * (2 ** min(max(int(attempt_count) - 1, 0), 7)))
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+def dispatch_batch(db: Any, batch_size: int = 20) -> dict[str, int]:
+    """Livre les événements Assistant sur les appareils P16 déjà enregistrés."""
+    if not worker_ready():
+        return {"claimed": 0, "sent": 0, "retry": 0, "skipped": 0, "failed": 0, "disabled": 1}
+
+    from pywebpush import webpush, WebPushException
+
+    claimed = _rpc_data(db, "oria_assistant_push_claim_v2", {
+        "p_limit": max(1, min(int(batch_size), 50)),
+    }).get("deliveries", [])
+    if not isinstance(claimed, list):
+        claimed = []
+    outcome = {"claimed": len(claimed), "sent": 0, "retry": 0, "skipped": 0, "failed": 0}
+
+    for event in claimed:
+        event_id = str(event.get("id") or "")
+        lease_token = str(event.get("lease_token") or "")
+        owner = str(event.get("owner_user_id") or "")
+        decision = "retry"
+        error = "push_delivery_unknown"
+        retry_after = _retry_iso(int(event.get("attempt_count") or 1))
+        delivered = 0
+        transient_error = False
+        permanent_error = False
+        try:
+            prefs = (db.table("oria_collab_push_preferences_p16")
+                     .select("workspace_id")
+                     .eq("user_id", owner)
+                     .eq("push_enabled", True)
+                     .limit(1).execute().data or [])
+            devices = (db.table("oria_collab_push_devices_p16")
+                       .select("id,endpoint,p256dh,auth_key")
+                       .eq("user_id", owner).execute().data or [])
+            if not prefs or not devices:
+                decision, error = "skipped", "no_enabled_push_device"
+            else:
+                for device in devices:
+                    try:
+                        payload = {
+                            "title": str(event.get("title") or "ORIA Assistant")[:100],
+                            "body": str(event.get("body") or "Une notification ORIA vous attend.")[:220],
+                            "url": str(event.get("url") or "/assistant/demandes"),
+                            "tag": str(event.get("tag") or "oria-assistant")[:110],
+                        }
+                        webpush(
+                            subscription_info={
+                                "endpoint": device["endpoint"],
+                                "keys": {"p256dh": device["p256dh"], "auth": device["auth_key"]},
+                            },
+                            data=json.dumps(payload, ensure_ascii=False),
+                            vapid_private_key=os.environ["ORIA_COLLAB_VAPID_PRIVATE_KEY"],
+                            vapid_claims={"sub": os.environ["ORIA_COLLAB_VAPID_SUBJECT"]},
+                            ttl=600,
+                        )
+                        delivered += 1
+                    except WebPushException as exc:
+                        status = getattr(getattr(exc, "response", None), "status_code", None)
+                        if status in (404, 410):
+                            try:
+                                db.table("oria_collab_push_devices_p16").delete().eq("id", device["id"]).execute()
+                            except Exception:
+                                logger.exception("Assistant Push expired-device cleanup failed")
+                            permanent_error = True
+                            error = f"webpush_{status}"
+                        elif status in (400, 401, 403):
+                            permanent_error = True
+                            error = f"webpush_{status}"
+                        else:
+                            transient_error = True
+                            error = f"webpush_{status or 'failed'}"
+                    except Exception as exc:
+                        transient_error = True
+                        error = type(exc).__name__[:100]
+                        logger.exception("ORIA Assistant Push device delivery failed")
+
+                if delivered:
+                    decision, error = "sent", ""
+                elif transient_error:
+                    decision = "retry"
+                elif permanent_error:
+                    decision = "failed"
+                else:
+                    decision, error = "skipped", "no_deliverable_device"
+        except Exception as exc:
+            decision, error = "retry", type(exc).__name__[:100]
+            logger.exception("ORIA Assistant Push batch item failed")
+
+        try:
+            final = _rpc_data(db, "oria_assistant_push_finish_v2", {
+                "p_event_id": event_id,
+                "p_lease_token": lease_token,
+                "p_outcome": decision,
+                "p_error": error[:180] if error else None,
+                "p_retry_after": retry_after if decision == "retry" else None,
+            })
+            if final.get("success"):
+                outcome[decision] += 1
+        except Exception:
+            logger.exception("ORIA Assistant Push finalization failed; lease will expire")
+
+    return outcome
+
+
+def prune_events(db: Any) -> dict[str, Any]:
+    if not worker_ready():
+        return {"success": False, "disabled": True}
+    return _rpc_data(db, "oria_assistant_push_prune_v2", {})

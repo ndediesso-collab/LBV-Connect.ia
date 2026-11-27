@@ -329,6 +329,7 @@ class SupabaseCourseAudioRepository:
     MAX_COURSE_DURATION_MS = 4 * 60 * 60 * 1000
     MAX_COURSE_BYTES = 512 * 1024 * 1024
     DOCUMENT_FORMATS = frozenset({"pdf", "docx"})
+    DOCUMENT_TYPES = frozenset({"course", "meeting", "speech", "interview"})
     MIME_BY_EXTENSION = SupabaseAudioRepository.MIME_BY_EXTENSION
 
     def __init__(self, client: Any | None = None):
@@ -344,6 +345,14 @@ class SupabaseCourseAudioRepository:
         if type(index) is not int or not 0 <= index < cls.MAX_SEGMENTS:
             raise ValueError("Indice du segment de cours invalide.")
         return index
+
+    @classmethod
+    def _document_type(cls, value: str | None) -> str:
+        if value is None:
+            return "course"
+        if not isinstance(value, str) or value.strip().lower() not in cls.DOCUMENT_TYPES:
+            raise ValueError("Type de document ORIA invalide.")
+        return value.strip().lower()
 
     @classmethod
     def _format(cls, document_format: str | None) -> str:
@@ -402,6 +411,7 @@ class SupabaseCourseAudioRepository:
     def create_course(
         self, *, user_id: str, course_id: str,
         title: str | None = None, document_format: str | None = None,
+        document_type: str | None = None,
     ) -> dict[str, Any]:
         """Cree un brouillon serveur au debut de l'ENVOI, pas de l'enregistrement.
 
@@ -411,18 +421,22 @@ class SupabaseCourseAudioRepository:
         uid = self._id(user_id, "user_id")
         cid = self._id(course_id, "course_id")
         fmt = self._format(document_format)
+        clean_type = self._document_type(document_type)
         clean_title = " ".join((title or "Cours sans titre").split())
         if not 1 <= len(clean_title) <= 160:
             raise ValueError("Le titre du cours doit contenir 1 a 160 caracteres.")
 
         previous = self.get_course(user_id=uid, course_id=cid)
         if previous:
-            if previous.get("title") != clean_title or previous.get("document_format") != fmt:
-                raise CourseStorageConflict("Cet identifiant correspond a un autre cours.")
+            if (previous.get("title") != clean_title
+                    or previous.get("document_format") != fmt
+                    or self._document_type(previous.get("document_type")) != clean_type):
+                raise CourseStorageConflict("Cet identifiant correspond a un autre document ORIA.")
             return previous
         payload = {
             "id": cid, "user_id": uid, "title": clean_title,
-            "document_format": fmt, "status": "uploading",
+            "document_format": fmt, "document_type": clean_type,
+            "status": "uploading",
         }
         try:
             response = self.client.table(self.TABLE).insert(payload).execute()

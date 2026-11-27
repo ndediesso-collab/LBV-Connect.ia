@@ -4870,6 +4870,7 @@ class OpenAIService:
         previous_context: str = "",
         reasoning_mode: str = "balanced",
         output_format: str = "markdown",
+        document_type: str = "course",
     ) -> dict[str, Any]:
         """Rédige UNE section pédagogique à partir d'une transcription.
 
@@ -4910,6 +4911,7 @@ class OpenAIService:
                 total_sections=total_sections,
                 previous_context=previous_context,
                 output_format=output_format,
+                document_type=document_type,
             ),
         }
         self._apply_reasoning_to_request(

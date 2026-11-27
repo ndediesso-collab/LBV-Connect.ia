@@ -292,3 +292,44 @@ async def _oria_assistant_email_stop():
             pass
         _oria_assistant_email_task = None
 
+# ORIA Transcription — préparateur audio long (aucun appel IA / aucune facturation).
+# Activer uniquement après application de la migration SQL correspondante.
+_oria_course_audio_import_task = None
+
+@app.on_event("startup")
+async def _oria_course_audio_import_start():
+    global _oria_course_audio_import_task
+    if (os.getenv("ORIA_COURSE_AUDIO_IMPORT_ENABLED", "0").strip() != "1"
+            or os.getenv("ORIA_COURSE_AUDIO_IMPORT_WORKER_ENABLED", "0").strip() != "1"):
+        return
+    from app.core.supabase import supabase as _audio_import_db
+    from app.services.course_audio_import_worker import CourseAudioImportWorker
+    worker = CourseAudioImportWorker(_audio_import_db)
+
+    async def _loop():
+        while True:
+            try:
+                did_work = await asyncio.to_thread(worker.run_once)
+                await asyncio.sleep(1 if did_work else 5)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logging.getLogger("oria.transcription.audio_import").exception(
+                    "ORIA long-audio preparation loop failed"
+                )
+                await asyncio.sleep(5)
+
+    _oria_course_audio_import_task = asyncio.create_task(_loop())
+
+
+@app.on_event("shutdown")
+async def _oria_course_audio_import_stop():
+    global _oria_course_audio_import_task
+    if _oria_course_audio_import_task is not None:
+        _oria_course_audio_import_task.cancel()
+        try:
+            await _oria_course_audio_import_task
+        except asyncio.CancelledError:
+            pass
+        _oria_course_audio_import_task = None
+

@@ -85,6 +85,19 @@ class CourseNeedsReconciliation(CourseError):
 # Cette autorisation vaut pour ORIA Cours UNIQUEMENT, jamais pour le Chat.
 COURSE_PROVIDER_MODELS = {"luna": "gpt-6-luna"}
 COURSE_WRITING_MODEL = "luna"
+COURSE_DOCUMENT_TYPES = frozenset({"course", "meeting", "speech", "interview"})
+COURSE_DOCUMENT_LABELS = {
+    "course": "Cours", "meeting": "Réunion", "speech": "Discours", "interview": "Interview",
+}
+
+
+def _normalize_document_type(value: Any = None) -> str:
+    """Le type manquant reste course pour les brouillons et plans historiques."""
+    if value is None:
+        return "course"
+    if not isinstance(value, str) or value.strip().lower() not in COURSE_DOCUMENT_TYPES:
+        raise CourseInvalid("Type de document ORIA Transcription invalide.")
+    return value.strip().lower()
 
 # Decoupage plus court, pour que les devis de cours ne supposent pas des
 # transcriptions de 60 000 tokens par section. La vraie transcription est
@@ -133,6 +146,7 @@ class CourseDocumentRenderer(Protocol):
     def render_course_code_first(
         self, *, user_id: str, course_id: str, title: str,
         document_format: str, html_source: str, transcript: str,
+        document_type: str = "course",
     ) -> Mapping[str, Any]: ...
 
 
@@ -164,7 +178,8 @@ class OriaCourseArtifactRenderer:
         }
 
     def _existing(self, *, user_id: str, artifact_id: str,
-                  course_id: str, kind: str, source_hash: str) -> dict[str, Any] | None:
+                  course_id: str, kind: str, source_hash: str,
+                  document_type: str = "course") -> dict[str, Any] | None:
         # La recherche est TOUJOURS bornee au proprietaire authentifie.
         record = self.repository.get_artifact(artifact_id=artifact_id, user_id=user_id)
         if record is None:
@@ -174,13 +189,20 @@ class OriaCourseArtifactRenderer:
                 or meta.get("source") != "oria-course"
                 or meta.get("course_id") != course_id
                 or meta.get("kind") != kind
-                or meta.get("source_sha256") != source_hash):
+                or meta.get("source_sha256") != source_hash
+                or meta.get("document_type", "course") != document_type):
             raise CourseNeedsReconciliation("Fichier preexistant a rapprocher avant reprise.")
         return self._public_reference(record, artifact_id)
 
     def _persist(self, *, user_id: str, course_id: str,
                  generated: Any, artifact_id: str, kind: str,
-                 source_hash: str, model: str) -> dict[str, Any]:
+                 source_hash: str, model: str,
+                 document_type: str = "course") -> dict[str, Any]:
+        metadata = {**generated.metadata, "source": "oria-course",
+                    "course_id": course_id, "kind": kind,
+                    "source_sha256": source_hash}
+        if document_type != "course":
+            metadata["document_type"] = document_type
         saved = self.repository.save_artifact(
             user_id=user_id, artifact_id=artifact_id,
             filename=generated.filename, extension=generated.extension,
@@ -188,9 +210,7 @@ class OriaCourseArtifactRenderer:
             file_bytes=generated.data, size_bytes=generated.size_bytes,
             sha256=generated.sha256, conversation_id=None, model=model,
             source_message_id=None,
-            metadata={**generated.metadata, "source": "oria-course",
-                      "course_id": course_id, "kind": kind,
-                      "source_sha256": source_hash},
+            metadata=metadata,
         )
         if not isinstance(saved, dict):
             raise CourseNeedsReconciliation("Confirmation de sauvegarde documentaire invalide.")
@@ -199,8 +219,10 @@ class OriaCourseArtifactRenderer:
     def render_course_code_first(
         self, *, user_id: str, course_id: str, title: str,
         document_format: str, html_source: str, transcript: str,
+        document_type: str = "course",
     ) -> Mapping[str, Any]:
         uid, cid = _uid(user_id), _uid(course_id)
+        document_type = _normalize_document_type(document_type)
         fmt = normalize_course_document_format(document_format)
         if fmt not in {"pdf", "docx"}:
             raise CourseInvalid("Format ORIA Cours non pris en charge par le renderiseur.")
@@ -211,14 +233,21 @@ class OriaCourseArtifactRenderer:
         if len(html_source) > MAX_COURSE_DOCUMENT_HTML_CHARS:
             raise CourseUnavailable("Source du cours trop longue pour un seul document.")
 
-        doc_id = str(uuid5(UUID(cid), "oria-cours/document/v1"))
-        txt_id = str(uuid5(UUID(cid), "oria-cours/transcription/v1"))
+        if document_type == "course":
+            # IDs historiques : ne jamais les modifier pour les anciens cours.
+            doc_id = str(uuid5(UUID(cid), "oria-cours/document/v1"))
+            txt_id = str(uuid5(UUID(cid), "oria-cours/transcription/v1"))
+        else:
+            doc_id = str(uuid5(UUID(cid), f"oria-transcription/{document_type}/document/v1"))
+            txt_id = str(uuid5(UUID(cid), f"oria-transcription/{document_type}/transcription/v1"))
         doc_hash = sha256(html_source.encode("utf-8")).hexdigest()
         txt_hash = sha256(transcript.encode("utf-8")).hexdigest()
         document = self._existing(user_id=uid, artifact_id=doc_id,
-                                  course_id=cid, kind="document", source_hash=doc_hash)
+                                  course_id=cid, kind="document", source_hash=doc_hash,
+                                  document_type=document_type)
         transcription = self._existing(user_id=uid, artifact_id=txt_id,
-                                       course_id=cid, kind="transcript", source_hash=txt_hash)
+                                       course_id=cid, kind="transcript", source_hash=txt_hash,
+                                       document_type=document_type)
 
         # Une compilation seulement lorsque le document n'est pas deja persiste.
         # source_id designe le meme HTML statique que pour les creations ORIA.
@@ -228,32 +257,45 @@ class OriaCourseArtifactRenderer:
                 "sources": [{"id": "cours", "kind": "html", "content": html_source}],
                 "artifacts": [{
                     "format": fmt,
-                    "filename": f"oria-cours-{UUID(cid).hex[:16]}.{fmt}",
+                    "filename": (
+                        f"oria-cours-{UUID(cid).hex[:16]}.{fmt}" if document_type == "course"
+                        else f"oria-transcription-{document_type}-{UUID(cid).hex[:16]}.{fmt}"
+                    ),
                     "source_id": "cours", "native_data": None,
                 }],
             }
-            generated = self.artifacts.create_from_payload(payload, metadata={
+            document_metadata = {
                 "source": "oria-course", "course_id": cid, "kind": "document",
                 "source_sha256": doc_hash,
-            })
+            }
+            if document_type != "course":
+                document_metadata["document_type"] = document_type
+            generated = self.artifacts.create_from_payload(payload, metadata=document_metadata)
             if len(generated) != 1 or generated[0].extension != fmt:
                 raise CourseUnavailable("Compilation du document ORIA Cours incomplete.")
             document = self._persist(user_id=uid, course_id=cid,
                                      generated=generated[0], artifact_id=doc_id,
                                      kind="document", source_hash=doc_hash,
-                                     model="gpt-6-luna")
+                                     model="gpt-6-luna", document_type=document_type)
 
         if transcription is None:
             generated_txt = self.artifacts.create(
                 file_type="txt", content=transcript,
-                filename=f"oria-cours-transcription-{UUID(cid).hex[:16]}.txt",
-                metadata={"source": "oria-course", "course_id": cid,
-                          "kind": "transcript", "source_sha256": txt_hash},
+                filename=(
+                    f"oria-cours-transcription-{UUID(cid).hex[:16]}.txt" if document_type == "course"
+                    else f"oria-transcription-{document_type}-transcript-{UUID(cid).hex[:16]}.txt"
+                ),
+                metadata={
+                    "source": "oria-course", "course_id": cid,
+                    "kind": "transcript", "source_sha256": txt_hash,
+                    **({} if document_type == "course" else {"document_type": document_type}),
+                },
             )
             transcription = self._persist(user_id=uid, course_id=cid,
                                           generated=generated_txt, artifact_id=txt_id,
                                           kind="transcript", source_hash=txt_hash,
-                                          model="gpt-4o-mini-transcribe")
+                                          model="gpt-4o-mini-transcribe",
+                                          document_type=document_type)
         # Ne pas persister d'URL signee ephemere dans la sortie du job SQL.
         # /ai/artifacts/{artifact_id} emettra une URL neuve a chaque consultation.
         return {"document": document, "transcription": transcription}
@@ -286,6 +328,10 @@ class CoursePlan:
     transcription_model: str | None = None
     pricing_version: str | None = None
     transcription_quote_usd_per_minute_ceiling: str | None = None
+    document_type: str = "course"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "document_type", _normalize_document_type(self.document_type))
 
     def storage_plan(self) -> dict[str, Any]:
         data = asdict(self)
@@ -293,12 +339,16 @@ class CoursePlan:
             for key in ("provider", "transcription_model", "pricing_version",
                         "transcription_quote_usd_per_minute_ceiling"):
                 data.pop(key, None)
+        # Ne pas changer le JSON ni le hash des plans Cours historiques.
+        if self.document_type == "course":
+            data.pop("document_type", None)
         return data
 
     def public_quote(self) -> dict[str, Any]:
         """Aucun identifiant de modele interne / cout fournisseur expose."""
         return {
             "course_id": self.course_id,
+            "document_type": self.document_type,
             "document_format": self.document_format,
             "writing_model": self.writing_model,
             "duration_ms": self.duration_ms,
@@ -435,7 +485,9 @@ def _course_previous_context(results: Sequence[dict[str, Any]]) -> str:
     return "\n\n".join(excerpts)[-SECTION_CONTEXT_CHARS:]
 
 
-def _assemble_course_html(*, title: str, fragments: Sequence[str]) -> str:
+def _assemble_course_html(
+    *, title: str, fragments: Sequence[str], document_type: str = "course",
+) -> str:
     """Assemble les sources deja validees, sans nouvelle generation IA.
 
     @page et les styles s'appliquent au PDF WeasyPrint ; le moteur DOCX
@@ -479,9 +531,15 @@ blockquote { margin: 3mm 0; padding-left: 4mm; border-left: 3px solid #a2b5d0; }
     margin: 3mm 0; overflow-wrap: anywhere; }
 """.strip()
     body = "\n".join(fragments)
+    document_type = _normalize_document_type(document_type)
+    brand_title = (
+        "ORIA Cours" if document_type == "course"
+        else f"ORIA Transcription — {COURSE_DOCUMENT_LABELS[document_type]}"
+    )
     source = (
         '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">'
-        '<title>ORIA Cours</title><style>' + css + '</style></head>'
+        '<title>' + html_escape(brand_title, quote=True) + '</title><style>'
+        + css + '</style></head>'
         '<body><main><h1>' + html_escape(title.strip(), quote=True) + '</h1>\n'
         + body + '\n</main></body></html>'
     )
@@ -570,6 +628,7 @@ class CourseService:
             raise CourseInvalid("Le cours doit etre entierement envoye et confirme avant le devis.")
         title = str(course.get("title") or "Cours sans titre").strip()
         fmt = normalize_course_document_format(course.get("document_format"))
+        document_type = _normalize_document_type(course.get("document_type"))
         segments = self.courses.list_segments(user_id=uid, course_id=cid)
         manifest = _validated_manifest(segments, fmt)
         duration_ms = manifest["duration_ms"]
@@ -673,6 +732,7 @@ class CourseService:
             estimated_total_credits=estimated_total,
             transcription_reservation_id=_deterministic_reference(cid, "transcription"),
             document_reservation_id=_deterministic_reference(cid, "document"),
+            document_type=document_type,
             **provider_fields,
         )
         # The contract used by PostgreSQL must be validated already at quote
@@ -982,7 +1042,7 @@ class CourseService:
                 answer = pinned_ai.compose_course_section(
                     model=plan.provider_model, transcript=part, section_index=i + 1,
                     total_sections=len(parts), previous_context=ctx,
-                    output_format="html_fragment",
+                    output_format="html_fragment", document_type=plan.document_type,
                 )
                 if not isinstance(answer, dict) or not isinstance(answer.get("usage"), dict):
                     raise CourseInvalid("Usage de redaction absent.")
@@ -1025,6 +1085,7 @@ class CourseService:
         html_source = _assemble_course_html(
             title=plan.title,
             fragments=[item["html_fragment"] for item in results],
+            document_type=plan.document_type,
         )
         if plan.provider == "openrouter":
             try:
@@ -1060,6 +1121,7 @@ class CourseService:
                 user_id=uid, course_id=cid, title=plan.title,
                 document_format=plan.document_format,
                 html_source=html_source, transcript=transcript,
+                document_type=plan.document_type,
             )
         except Exception as exc:
             # Si un stockage repond de maniere incertaine, les artefacts ont

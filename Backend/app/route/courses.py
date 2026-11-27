@@ -37,6 +37,9 @@ from app.repositories.supabase_audio_repository import (
     CourseStorageError,
     SupabaseCourseAudioRepository,
 )
+from app.repositories.supabase_course_audio_import_repository import (
+    CourseAudioImportError, SupabaseCourseAudioImportRepository,
+)
 from app.repositories.supabase_credit_repository import (
     ApiBudgetConfigurationError,
     InsufficientCreditsForActionError,
@@ -50,7 +53,7 @@ from app.repositories.supabase_course_job_repository import (
     SupabaseCourseJobRepository,
 )
 from app.repositories.supabase_artifact_repository import supabase_artifact_repository
-from app.services.audio_service import AudioInvalid, CourseAudioPolicy
+from app.services.audio_service import AudioInvalid, AudioService, CourseAudioPolicy
 from app.services.course_service import (
     CourseInvalid,
     CourseInsufficientCredits,
@@ -69,7 +72,16 @@ class CreateCourseBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=160)
     document_format: str = "pdf"
+    document_type: Literal["course", "meeting", "speech", "interview"] = "course"
     course_id: UUID | None = None  # facultatif pour retry idempotent du client
+
+
+class CreateCourseAudioImportBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    import_id: UUID
+    filename: str = Field(min_length=1, max_length=240)
+    mime_type: str = Field(min_length=3, max_length=100)
+    size_bytes: int = Field(gt=0, le=512 * 1024 * 1024)
 
 
 class QuoteBody(BaseModel):
@@ -150,6 +162,7 @@ def _owned_course(deps: CourseDependencies, uid: str, cid: str) -> dict[str, Any
 def _public_course(record: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(record["id"]), "title": str(record.get("title") or ""),
+        "document_type": record.get("document_type") or "course",
         "document_format": record.get("document_format"),
         "status": record.get("status"),
         "submitted_at": record.get("submitted_at"),
@@ -162,6 +175,52 @@ def _public_segment(row: dict[str, Any]) -> dict[str, Any]:
     # Ne jamais retourner storage_path, hash de contenu ou octets audio.
     return {"index": row["segment_index"], "duration_ms": row["duration_ms"],
             "size_bytes": row["size_bytes"], "mime_type": row["mime_type"]}
+
+
+def _audio_import_enabled() -> bool:
+    return os.getenv("ORIA_COURSE_AUDIO_IMPORT_ENABLED", "0").strip() == "1"
+
+
+def _require_audio_import_enabled() -> None:
+    if not _audio_import_enabled():
+        raise HTTPException(503, "Import audio long ORIA non activé.")
+
+
+def _audio_import_repository() -> SupabaseCourseAudioImportRepository:
+    return SupabaseCourseAudioImportRepository(supabase)
+
+
+def _public_audio_import(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(row, dict):
+        return None
+    return {
+        "id": str(row.get("id") or ""),
+        "course_id": str(row.get("course_id") or ""),
+        "filename": str(row.get("filename") or "audio"),
+        "mime_type": row.get("mime_type"),
+        "size_bytes": row.get("size_bytes"),
+        "status": row.get("status"),
+        "phase": row.get("phase"),
+        "progress_percent": row.get("progress_percent", 0),
+        "duration_ms": row.get("duration_ms"),
+        "segment_count": row.get("segment_count"),
+        "error_code": row.get("error_code"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _assert_no_incomplete_audio_import(uid: str, cid: str) -> None:
+    # Tant que la migration et le flag ne sont pas activés, le parcours
+    # historique d'upload par segments reste entièrement indépendant.
+    if not _audio_import_enabled():
+        return
+    try:
+        latest = _audio_import_repository().latest(user_id=uid, course_id=cid)
+    except CourseAudioImportError:
+        raise HTTPException(503, "Préparation audio indisponible : vérifier la migration ORIA Transcription.") from None
+    if latest and latest.get("status") != "completed":
+        raise HTTPException(409, "Un import audio est encore incomplet. Reprenez ou terminez sa préparation avant de continuer.")
 
 
 def _quote_key() -> bytes:
@@ -311,10 +370,13 @@ def course_capabilities(
             "writing_model_selectable": False,
             "course_resume_supported": False,  # RPC de reprise non migrée
             "document_formats": ["pdf", "docx"], "default_document_format": "pdf",
+            "document_types": ["course", "meeting", "speech", "interview"],
+            "default_document_type": "course",
             "maximum_duration_ms": CourseAudioPolicy.MAX_COURSE_DURATION_MS,
             "maximum_segment_duration_ms": CourseAudioPolicy.MAX_SEGMENT_DURATION_SECONDS * 1000,
             "maximum_segment_bytes": CourseAudioPolicy.MAX_SEGMENT_BYTES,
             "maximum_segments": CourseAudioPolicy.MAX_SEGMENTS,
+            "long_audio_import_enabled": _audio_import_enabled(),
         }
     except Exception as exc:
         raise _translate_error(exc) from None
@@ -329,7 +391,8 @@ def create_course(
     cid = str(payload.course_id or uuid4())
     try:
         saved = deps.audio.create_course(user_id=uid, course_id=cid,
-            title=payload.title, document_format=payload.document_format)
+            title=payload.title, document_format=payload.document_format,
+            document_type=payload.document_type)
         return {"course": _public_course(saved)}
     except Exception as exc:
         raise _translate_error(exc) from None
@@ -344,6 +407,7 @@ async def upload_segment(
     deps: CourseDependencies = Depends(_get_components),
 ) -> dict[str, Any]:
     cid = _course_id(course_id)
+    _assert_no_incomplete_audio_import(uid, cid)
     if index < 0 or index >= CourseAudioPolicy.MAX_SEGMENTS:
         raise HTTPException(422, "Indice de segment hors limites.")
     if not file.filename or not file.content_type:
@@ -371,6 +435,129 @@ async def upload_segment(
         raise _translate_error(exc) from None
     finally:
         await file.close()
+
+
+@router.post("/{course_id}/audio-imports", status_code=201)
+def create_course_audio_import(
+    course_id: str,
+    payload: CreateCourseAudioImportBody,
+    uid: str = Depends(_authenticated_user),
+    deps: CourseDependencies = Depends(_get_components),
+) -> dict[str, Any]:
+    cid = _course_id(course_id)
+    _require_audio_import_enabled()
+    try:
+        course = _owned_course(deps, uid, cid)
+        if course.get("status") != "uploading":
+            raise HTTPException(409, "Cet enregistrement n'accepte plus de nouveaux fichiers audio.")
+        if deps.audio.list_segments(user_id=uid, course_id=cid):
+            raise HTTPException(409, "Des segments audio existent déjà pour cet enregistrement.")
+        repo = _audio_import_repository()
+        latest = repo.latest(user_id=uid, course_id=cid)
+        if latest and latest.get("status") != "completed" and str(latest.get("id")) != str(payload.import_id):
+            raise HTTPException(409, "Un import audio existe déjà pour cet enregistrement. Reprenez-le avant d'en créer un autre.")
+        mime = payload.mime_type.split(";", 1)[0].strip().lower()
+        extension = AudioService.MIME_EXTENSIONS.get(mime)
+        if not extension or extension not in {"webm", "ogg", "m4a", "mp3", "wav", "aac", "3gp"}:
+            raise HTTPException(422, "Format audio non pris en charge.")
+        row = repo.create(
+            user_id=uid, course_id=cid, import_id=str(payload.import_id),
+            filename=payload.filename, mime_type=mime, extension=extension,
+            size_bytes=payload.size_bytes,
+        )
+        return {
+            "audio_import": _public_audio_import(row),
+            "bucket": repo.BUCKET,
+            "object_name": row["storage_path"],
+            "chunk_size_bytes": 6 * 1024 * 1024,
+        }
+    except HTTPException:
+        raise
+    except CourseAudioImportError as exc:
+        raise HTTPException(409, str(exc)[:220]) from None
+    except Exception as exc:
+        raise _translate_error(exc) from None
+
+
+@router.post("/{course_id}/audio-imports/{import_id}/complete")
+def complete_course_audio_import(
+    course_id: str,
+    import_id: str,
+    uid: str = Depends(_authenticated_user),
+    deps: CourseDependencies = Depends(_get_components),
+) -> dict[str, Any]:
+    cid, iid = _course_id(course_id), _course_id(import_id)
+    _require_audio_import_enabled()
+    try:
+        course = _owned_course(deps, uid, cid)
+        if course.get("status") != "uploading":
+            raise HTTPException(409, "Cet enregistrement n'accepte plus de préparation audio.")
+        row = _audio_import_repository().queue(user_id=uid, course_id=cid, import_id=iid)
+        return {"audio_import": _public_audio_import(row), "queued": row.get("status") in {"queued", "processing", "completed"}}
+    except HTTPException:
+        raise
+    except CourseAudioImportError as exc:
+        raise HTTPException(409, str(exc)[:220]) from None
+    except Exception as exc:
+        raise _translate_error(exc) from None
+
+
+@router.get("/{course_id}/audio-imports/latest")
+def latest_course_audio_import(
+    course_id: str,
+    uid: str = Depends(_authenticated_user),
+) -> dict[str, Any]:
+    cid = _course_id(course_id)
+    _require_audio_import_enabled()
+    try:
+        row = _audio_import_repository().latest(user_id=uid, course_id=cid)
+        if row and str(row.get("course_id")) != cid:
+            raise HTTPException(404, "Import audio introuvable.")
+        return {"audio_import": _public_audio_import(row)}
+    except HTTPException:
+        raise
+    except CourseAudioImportError as exc:
+        raise HTTPException(503, str(exc)[:220]) from None
+
+
+@router.get("/{course_id}/audio-imports/{import_id}")
+def get_course_audio_import(
+    course_id: str,
+    import_id: str,
+    uid: str = Depends(_authenticated_user),
+) -> dict[str, Any]:
+    cid, iid = _course_id(course_id), _course_id(import_id)
+    _require_audio_import_enabled()
+    try:
+        row = _audio_import_repository().get(user_id=uid, course_id=cid, import_id=iid)
+        if not row:
+            raise HTTPException(404, "Import audio introuvable.")
+        return {"audio_import": _public_audio_import(row)}
+    except HTTPException:
+        raise
+    except CourseAudioImportError as exc:
+        raise HTTPException(503, str(exc)[:220]) from None
+
+
+@router.post("/{course_id}/audio-imports/{import_id}/retry")
+def retry_course_audio_import(
+    course_id: str,
+    import_id: str,
+    uid: str = Depends(_authenticated_user),
+    deps: CourseDependencies = Depends(_get_components),
+) -> dict[str, Any]:
+    cid, iid = _course_id(course_id), _course_id(import_id)
+    _require_audio_import_enabled()
+    try:
+        course = _owned_course(deps, uid, cid)
+        if course.get("status") != "uploading":
+            raise HTTPException(409, "La préparation ne peut plus être relancée pour cet enregistrement.")
+        row = _audio_import_repository().retry(user_id=uid, course_id=cid, import_id=iid)
+        return {"audio_import": _public_audio_import(row), "queued": True}
+    except HTTPException:
+        raise
+    except CourseAudioImportError as exc:
+        raise HTTPException(409, str(exc)[:220]) from None
 
 
 @router.get("/{course_id}")
@@ -438,6 +625,7 @@ def submit_course(
     cid = _course_id(course_id)
     try:
         _owned_course(deps, uid, cid)
+        _assert_no_incomplete_audio_import(uid, cid)
         row = deps.audio.submit_course(user_id=uid, course_id=cid)
         return {"course": _public_course(row), "next": "quote"}
     except HTTPException:
