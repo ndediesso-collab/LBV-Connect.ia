@@ -299,6 +299,7 @@ export default function AssistantWorkspacePage() {
             <span>ORIA <span className="font-normal text-muted">/ Assistant</span></span>
           </Link>
           <div className="flex items-center gap-2">
+            <Link href="/assistant/bilan-commercial" className="rounded-full border border-border px-4 py-2 text-sm font-semibold transition hover:bg-surface-secondary">Bilan commercial</Link>
             <Link href="/assistant/demandes" className="rounded-full border border-border px-4 py-2 text-sm font-semibold transition hover:bg-surface-secondary">Demandes reçues</Link>
             <Link href="/chat" className="rounded-full border border-border px-4 py-2 text-sm font-medium transition hover:bg-surface-secondary">Retour au Chat</Link>
           </div>

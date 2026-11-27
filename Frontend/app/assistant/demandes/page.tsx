@@ -166,6 +166,7 @@ export default function AssistantRequestsPage() {
             <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold hover:bg-surface-secondary disabled:opacity-50">
               {loading ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />} Actualiser
             </button>
+            <Link href="/assistant/bilan-commercial" className="hidden items-center rounded-xl border border-border px-3 py-2 text-xs font-semibold hover:bg-surface-secondary sm:inline-flex">Bilan commercial</Link>
             <Link href="/assistant" className="hidden items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold hover:bg-surface-secondary sm:inline-flex"><ArrowLeft size={14} /> Configuration</Link>
           </div>
         </div>
