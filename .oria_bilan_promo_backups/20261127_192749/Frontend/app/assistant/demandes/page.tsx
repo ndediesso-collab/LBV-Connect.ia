@@ -1,0 +1,253 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, Bot, LoaderCircle, Mail, RefreshCw, Search, UserRound } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "https://lbv-connect-api.onrender.com").replace(/\/$/, "");
+type RequestStatus = "new" | "in_progress" | "treated" | "cancelled";
+type AssistantOption = { id: string; name: string };
+type AssistantRequest = {
+  id: string;
+  assistant_id: string | null;
+  assistant_name: string;
+  request_type: string;
+  summary: string;
+  customer_name: string;
+  customer_phone: string;
+  customer_email?: string | null;
+  customer_details: Record<string, string>;
+  status: RequestStatus;
+  created_at: string;
+  email_delivery?: { status: string; attempt_count: number; sent_at?: string | null } | null;
+  messages?: Array<{ id: string; role: string; content: string; created_at?: string }>;
+};
+
+const STATUS_LABELS: Record<RequestStatus, string> = {
+  new: "Nouvelle",
+  in_progress: "En cours",
+  treated: "Traitée",
+  cancelled: "Annulée",
+};
+
+function dateLabel(value: string): string {
+  try {
+    return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function emailLabel(status?: string): string {
+  if (status === "sent") return "E-mail envoyé";
+  if (status === "pending" || status === "retry" || status === "sending") return "E-mail en attente";
+  if (status === "failed") return "Échec e-mail";
+  return "Pas d'e-mail configuré";
+}
+
+export default function AssistantRequestsPage() {
+  const supabase = useMemo(() => createClient(), []);
+  const [rows, setRows] = useState<AssistantRequest[]>([]);
+  const [assistants, setAssistants] = useState<AssistantOption[]>([]);
+  const [selected, setSelected] = useState<AssistantRequest | null>(null);
+  const [assistantFilter, setAssistantFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [savingStatus, setSavingStatus] = useState(false);
+  const [error, setError] = useState("");
+
+  const api = useCallback(async (path: string, init: RequestInit = {}) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user?.id || !session.access_token) throw new Error("Session ORIA expirée. Reconnecte-toi.");
+    const headers = new Headers(init.headers);
+    headers.set("Content-Type", "application/json");
+    headers.set("user-id", session.user.id);
+    headers.set("authorization", `Bearer ${session.access_token}`);
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, { ...init, headers, cache: "no-store" });
+    } catch {
+      throw new Error("Backend ORIA inaccessible. Vérifie le déploiement Render et ta connexion.");
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || "Une erreur est survenue.");
+    return payload;
+  }, [supabase]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [requestsPayload, assistantsPayload] = await Promise.all([
+        api("/assistant/requests"),
+        api("/assistant/assistants"),
+      ]);
+      const nextRows = Array.isArray(requestsPayload.requests) ? requestsPayload.requests as AssistantRequest[] : [];
+      const nextAssistants = Array.isArray(assistantsPayload.assistants)
+        ? (assistantsPayload.assistants as Array<{ id: string; name: string }>).map((item) => ({ id: item.id, name: item.name }))
+        : [];
+      setRows(nextRows);
+      setAssistants(nextAssistants);
+      setSelected((current) => current ? (nextRows.find((item) => item.id === current.id) || null) : null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible de charger les demandes.");
+    } finally {
+      setLoading(false);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [load]);
+
+
+  const openDetail = async (item: AssistantRequest) => {
+    setSelected(item);
+    setDetailLoading(true);
+    setError("");
+    try {
+      const payload = await api(`/assistant/requests/${encodeURIComponent(item.id)}`);
+      setSelected(payload.request as AssistantRequest);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Impossible de charger cette demande.");
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const changeStatus = async (status: RequestStatus) => {
+    if (!selected || savingStatus) return;
+    setSavingStatus(true);
+    setError("");
+    try {
+      const payload = await api(`/assistant/requests/${encodeURIComponent(selected.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+      const updated = { ...selected, ...(payload.request as AssistantRequest) };
+      setSelected(updated);
+      setRows((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Modification du statut impossible.");
+    } finally {
+      setSavingStatus(false);
+    }
+  };
+
+  const visibleRows = rows.filter((item) =>
+    (assistantFilter === "all" || item.assistant_id === assistantFilter)
+    && (statusFilter === "all" || item.status === statusFilter)
+  );
+
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      <header className="sticky top-0 z-20 border-b border-border bg-background/90 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <Link href="/assistant" className="flex min-w-0 items-center gap-3 font-semibold tracking-tight">
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-foreground text-background"><Bot size={20} /></span>
+            <span className="truncate">ORIA <span className="font-normal text-muted">/ Demandes reçues</span></span>
+          </Link>
+          <div className="flex shrink-0 items-center gap-2">
+            <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold hover:bg-surface-secondary disabled:opacity-50">
+              {loading ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />} Actualiser
+            </button>
+            <Link href="/assistant" className="hidden items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-semibold hover:bg-surface-secondary sm:inline-flex"><ArrowLeft size={14} /> Configuration</Link>
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-7xl px-4 py-7 sm:px-6 lg:py-10">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">Espace professionnel</p>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight">Demandes clients</h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">Les visiteurs ont autorisé la transmission de ces informations. À vous de vérifier et de traiter chaque demande.</p>
+          </div>
+          <div className="rounded-2xl border border-border bg-surface px-4 py-3 text-sm"><span className="font-semibold tabular-nums">{rows.length}</span><span className="ml-2 text-muted">demande(s) reçue(s)</span></div>
+        </div>
+
+        {error && <p role="alert" className="mb-5 rounded-xl border border-border-strong bg-surface-secondary px-4 py-3 text-sm">{error}</p>}
+
+        <div className="grid gap-5 lg:grid-cols-[minmax(300px,0.85fr)_minmax(0,1.4fr)]">
+          <section className="min-w-0 overflow-hidden rounded-2xl border border-border bg-surface">
+            <div className="grid gap-3 border-b border-border p-4 sm:grid-cols-2">
+              <label className="grid gap-1.5 text-xs font-medium text-muted">Assistant
+                <select value={assistantFilter} onChange={(event) => setAssistantFilter(event.target.value)} className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none">
+                  <option value="all">Tous les assistants</option>
+                  {assistants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+              <label className="grid gap-1.5 text-xs font-medium text-muted">Statut
+                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none">
+                  <option value="all">Tous</option>
+                  <option value="new">Nouvelles</option>
+                  <option value="in_progress">En cours</option>
+                  <option value="treated">Traitées</option>
+                  <option value="cancelled">Annulées</option>
+                </select>
+              </label>
+            </div>
+            <div className="max-h-[720px] overflow-y-auto">
+              {loading ? <div className="flex items-center justify-center gap-2 p-8 text-sm text-muted"><LoaderCircle size={17} className="animate-spin" /> Chargement des demandes…</div>
+                : visibleRows.length === 0 ? <div className="p-8 text-center"><Search size={22} className="mx-auto text-muted" /><p className="mt-3 text-sm font-medium">Aucune demande trouvée</p><p className="mt-1 text-xs text-muted">Les demandes confirmées par les visiteurs apparaîtront ici.</p></div>
+                : visibleRows.map((item) => (
+                  <button key={item.id} type="button" onClick={() => void openDetail(item)} className={`block w-full border-b border-border p-4 text-left last:border-b-0 hover:bg-surface-secondary ${selected?.id === item.id ? "bg-surface-secondary" : ""}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0"><p className="truncate text-sm font-semibold">{item.customer_name}</p><p className="mt-1 truncate text-xs text-muted">{item.request_type}</p></div>
+                      <span className="shrink-0 rounded-full border border-border px-2 py-1 text-[10px] font-medium">{STATUS_LABELS[item.status] || item.status}</span>
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted">{item.summary}</p>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted"><span>{item.assistant_name}</span><span>{dateLabel(item.created_at)}</span></div>
+                  </button>
+                ))}
+            </div>
+          </section>
+
+          <section className="min-w-0 rounded-2xl border border-border bg-surface">
+            {!selected ? <div className="flex min-h-[520px] flex-col items-center justify-center p-8 text-center"><span className="grid size-14 place-items-center rounded-2xl bg-surface-secondary"><Mail size={25} /></span><h2 className="mt-4 text-lg font-semibold">Détail d&apos;une demande</h2><p className="mt-2 max-w-sm text-sm leading-6 text-muted">Sélectionne une demande dans la liste pour consulter les coordonnées, les renseignements et la conversation correspondante.</p></div>
+              : detailLoading ? <div className="flex min-h-[420px] items-center justify-center gap-2 text-sm text-muted"><LoaderCircle size={17} className="animate-spin" /> Chargement du détail…</div>
+              : <div className="p-5 sm:p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div><p className="text-xs font-semibold uppercase tracking-[0.15em] text-muted">{selected.assistant_name}</p><h2 className="mt-1 text-xl font-semibold">{selected.request_type}</h2><p className="mt-1 text-xs text-muted">Reçue le {dateLabel(selected.created_at)}</p></div>
+                  <label className="grid gap-1 text-xs font-medium text-muted">Statut
+                    <select disabled={savingStatus} value={selected.status} onChange={(event) => void changeStatus(event.target.value as RequestStatus)} className="rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none">
+                      <option value="new">Nouvelle</option><option value="in_progress">En cours</option><option value="treated">Traitée</option><option value="cancelled">Annulée</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-border p-3"><p className="text-[11px] font-medium text-muted">Nom du client</p><p className="mt-1 text-sm font-semibold">{selected.customer_name}</p></div>
+                  <div className="rounded-xl border border-border p-3"><p className="text-[11px] font-medium text-muted">Téléphone</p><a className="mt-1 block text-sm font-semibold underline underline-offset-2" href={`tel:${selected.customer_phone}`}>{selected.customer_phone}</a></div>
+                  {selected.customer_email && <div className="rounded-xl border border-border p-3 sm:col-span-2"><p className="text-[11px] font-medium text-muted">E-mail du client</p><a className="mt-1 block text-sm font-semibold underline underline-offset-2" href={`mailto:${selected.customer_email}`}>{selected.customer_email}</a></div>}
+                </div>
+
+                <div className="mt-4 rounded-xl border border-border p-4"><p className="text-xs font-semibold">Résumé de la demande</p><p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">{selected.summary}</p></div>
+                {selected.customer_details && Object.keys(selected.customer_details).length > 0 && <div className="mt-4 rounded-xl border border-border p-4"><p className="text-xs font-semibold">Informations complémentaires</p><dl className="mt-3 grid gap-3 sm:grid-cols-2">{Object.entries(selected.customer_details).map(([key, value]) => <div key={key}><dt className="text-[11px] text-muted">{key}</dt><dd className="mt-0.5 text-sm font-medium">{String(value)}</dd></div>)}</dl></div>}
+
+                <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-surface-secondary p-3 text-xs"><Mail size={15} /><span className="font-medium">{emailLabel(selected.email_delivery?.status)}</span>{selected.email_delivery?.attempt_count ? <span className="text-muted">· {selected.email_delivery.attempt_count} tentative(s)</span> : null}</div>
+
+                <div className="mt-6"><h3 className="text-sm font-semibold">Historique de la conversation</h3><div className="mt-3 max-h-[420px] space-y-3 overflow-y-auto rounded-xl border border-border bg-background p-3">{(selected.messages || []).length === 0 ? <p className="p-3 text-xs text-muted">Aucun message disponible.</p> : selected.messages?.map((message) => <div key={message.id} className={`max-w-[92%] rounded-xl p-3 text-xs leading-5 ${message.role === "user" ? "ml-auto bg-foreground text-background" : "bg-surface-secondary text-foreground"}`}><p className="mb-1 text-[10px] font-semibold opacity-60">{message.role === "user" ? "Client" : selected.assistant_name}</p><p className="whitespace-pre-wrap">{message.content}</p></div>)}</div></div>
+                <p className="mt-4 flex items-center gap-2 text-[11px] leading-5 text-muted"><UserRound size={13} /> Le client a autorisé la transmission de ces informations. L&apos;entreprise reste responsable du suivi.</p>
+              </div>}
+          </section>
+        </div>
+      </div>
+    </main>
+  );
+}

@@ -511,6 +511,7 @@ export default function AssistantCommercialDashboardPage() {
             <span className="truncate">ORIA <span className="font-normal text-muted">/ Bilan commercial</span></span>
           </Link>
           <div className="flex shrink-0 items-center gap-2">
+            <Link href="#commercial-requests" aria-label="Accéder à la saisie des résultats commerciaux" className="hidden rounded-full border border-border px-3 py-2 text-xs font-semibold hover:bg-surface-secondary sm:inline-flex">Saisir les résultats</Link>
             <Link href="/assistant/demandes" className="hidden rounded-full border border-border px-3 py-2 text-xs font-semibold hover:bg-surface-secondary sm:inline-flex">Demandes reçues</Link>
             <Link href="/chat" className="rounded-full border border-border px-3 py-2 text-xs font-semibold hover:bg-surface-secondary">Retour au Chat</Link>
           </div>
@@ -524,9 +525,12 @@ export default function AssistantCommercialDashboardPage() {
             <h1 className="mt-2 text-3xl font-semibold tracking-tight">Bilan commercial</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">Suivez les conversations, les demandes confirmées, les résultats commerciaux et les encaissements réellement déclarés.</p>
           </div>
-          <button type="button" onClick={() => void refreshAll()} disabled={refreshing || loading} className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface px-4 py-2.5 text-xs font-semibold hover:bg-surface-secondary disabled:opacity-50">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link data-oria-fix="ORIA_COMMERCIAL_MOBILE_ENTRY_V2" href="#commercial-requests" className="inline-flex items-center justify-center rounded-xl bg-foreground px-4 py-2.5 text-xs font-semibold text-background hover:opacity-85">Saisir les résultats</Link>
+            <button type="button" onClick={() => void refreshAll()} disabled={refreshing || loading} className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface px-4 py-2.5 text-xs font-semibold hover:bg-surface-secondary disabled:opacity-50">
             {refreshing ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />} Actualiser les données
           </button>
+          </div>
         </section>
 
         <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
@@ -622,48 +626,19 @@ export default function AssistantCommercialDashboardPage() {
               </div>
               <div className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
                 <div className="flex items-start gap-3"><span className="grid size-9 place-items-center rounded-xl bg-surface-secondary"><Activity size={17} /></span><div><h2 className="text-sm font-semibold">Messages échangés</h2><p className="mt-1 text-xs text-muted">Répartition du volume conversationnel</p></div></div>
-                <div className="mt-4 grid grid-cols-3 gap-2"><div className="rounded-xl bg-surface-secondary p-3"><p className="text-[10px] text-muted">Visiteurs</p><p className="mt-1 text-lg font-semibold tabular-nums">{numberLabel(summary.activity.visitor_messages)}</p></div><div className="rounded-xl bg-surface-secondary p-3"><p className="text-[10px] text-muted">IA</p><p className="mt-1 text-lg font-semibold tabular-nums">{numberLabel(summary.activity.ai_messages)}</p></div><div className="rounded-xl bg-surface-secondary p-3"><p className="text-[10px] text-muted">Techniques</p><p className="mt-1 text-lg font-semibold tabular-nums">{numberLabel(summary.activity.technical_confirmations)}</p></div></div>
-                <p className="mt-3 text-[11px] leading-5 text-muted">Les confirmations techniques sont séparées des réponses générées par le modèle.</p>
+                <div className="mt-4 grid grid-cols-3 gap-2"><div className="rounded-xl bg-surface-secondary p-3"><p className="text-[10px] text-muted">Messages visiteurs</p><p className="mt-1 text-lg font-semibold tabular-nums">{numberLabel(summary.activity.visitor_messages)}</p></div><div className="rounded-xl bg-surface-secondary p-3"><p className="text-[10px] text-muted">Messages IA</p><p className="mt-1 text-lg font-semibold tabular-nums">{numberLabel(summary.activity.ai_messages)}</p></div><div className="rounded-xl bg-surface-secondary p-3"><p className="text-[10px] text-muted">Messages techniques</p><p className="mt-1 text-lg font-semibold tabular-nums">{numberLabel(summary.activity.technical_confirmations)}</p></div></div>
+                <p className="mt-3 text-[11px] leading-5 text-muted">Chaque message est compté séparément : ce bloc mesure des messages, pas des personnes distinctes. Les confirmations techniques sont séparées des réponses générées par le modèle.</p>
               </div>
             </section>
           </>
         ) : <div className="rounded-2xl border border-dashed border-border p-10 text-center text-sm text-muted">Aucun agrégat disponible.</div>}
 
-        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div><h2 className="text-base font-semibold">Générer un bilan avec ORIA</h2><p className="mt-1 max-w-2xl text-xs leading-5 text-muted">Le moteur Python calcule les indicateurs. Le modèle IA sélectionné interprète uniquement ces agrégats et rédige un diagnostic.</p></div>
-            <span className="rounded-full border border-border px-3 py-1.5 text-[10px] font-medium text-muted">{provider || "Fournisseur Chat"} · {packId || "Pack actif"}</span>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-            <label className="grid gap-1.5 text-xs font-medium text-muted">Modèle IA autorisé par votre fournisseur et votre pack
-              <select value={model} onChange={(event) => setModel(event.target.value)} disabled={models.length === 0 || reportBusy} className="w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground disabled:opacity-50">
-                {models.length === 0 ? <option value="">Aucun modèle disponible</option> : models.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-              </select>
-            </label>
-            <button type="button" onClick={() => void generateReport()} disabled={!model || reportBusy || hasPeriodError} className="inline-flex items-center justify-center gap-2 self-end rounded-xl bg-foreground px-5 py-3 text-sm font-semibold text-background disabled:cursor-not-allowed disabled:opacity-50">
-              {reportBusy ? <LoaderCircle size={16} className="animate-spin" /> : <Sparkles size={16} />} {reportBusy ? "Génération en cours…" : "Générer le bilan"}
-            </button>
-          </div>
-          {unavailableModels.length > 0 && <p className="mt-3 text-[11px] text-muted">{unavailableModels.length} modèle(s) masqué(s), car leur action de facturation Chat n'est pas configurée pour ce pack.</p>}
-          {reportNotice && <p role="status" className="mt-4 rounded-xl border border-border bg-surface-secondary px-4 py-3 text-xs leading-5">{reportNotice}</p>}
-          {activeReport && <div className="mt-5 rounded-2xl border border-border p-4 sm:p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3"><div><p className="text-xs font-semibold">Bilan du {dateLabel(activeReport.period_start)} au {dateLabel(activeReport.period_end)}</p><p className="mt-1 text-[10px] text-muted">{activeReport.analysis_content?.provider || "Fournisseur inconnu"} · {activeReport.analysis_content?.model || "Modèle inconnu"} · {activeReport.analysis_content?.status || "État inconnu"}</p></div><span className="rounded-full border border-border px-2.5 py-1 text-[10px] text-muted">{activeReport.analysis_content?.status === "completed" ? "Enregistré" : "À vérifier"}</span></div>
-            {reportMarkdown ? <div className="pt-4"><OriaRichMessage content={reportMarkdown} language="fr" /></div> : <p className="pt-4 text-xs leading-5 text-muted">Aucun texte d'analyse n'est disponible pour ce rapport. Consulte son historique ou son statut avant de relancer une génération.</p>}
-            {activeReport.analysis_content?.error && <p role="alert" className="mt-3 rounded-xl bg-surface-secondary p-3 text-xs">{activeReport.analysis_content.error}</p>}
-            <p className="mt-4 border-t border-border pt-3 text-[10px] text-muted">Consommation : {numberLabel(activeReport.analysis_content?.credits_consumed || 0)} crédits · Coût API : {activeReport.analysis_content?.actual_api_cost_xaf ? amountLabel(activeReport.analysis_content.actual_api_cost_xaf, "XAF") : "non disponible"}</p>
-          </div>}
-        </section>
-
-        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
-          <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-semibold">Historique des bilans</h2><p className="mt-1 text-xs text-muted">Les rapports précédents conservent leur instantané de données.</p></div><FileText size={18} className="text-muted" /></div>
-          {reports.length === 0 ? <p className="mt-4 rounded-xl bg-surface-secondary p-4 text-xs text-muted">Aucun bilan enregistré pour ce périmètre.</p> : <div className="mt-4 divide-y divide-border rounded-xl border border-border">{reports.map((item) => <button type="button" key={item.id} onClick={() => void openReport(item)} className={`flex w-full flex-wrap items-center justify-between gap-3 p-3 text-left transition hover:bg-surface-secondary ${activeReport?.id === item.id ? "bg-surface-secondary" : ""}`}><span><span className="block text-xs font-semibold">{dateLabel(item.period_start)} — {dateLabel(item.period_end)}</span><span className="mt-1 block text-[10px] text-muted">Généré le {dateLabel(item.generated_at || null)} · {item.analysis_content?.model || "Modèle indisponible"}</span></span><span className="rounded-full border border-border px-2.5 py-1 text-[10px] text-muted">{item.analysis_content?.status || "Enregistré"}</span></button>)}</div>}
-        </section>
-
-        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5" id="commercial-requests">
+        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5 scroll-mt-24" id="commercial-requests">
           <div className="flex flex-wrap items-end justify-between gap-3">
-            <div><h2 className="text-sm font-semibold">Qualifier les demandes commerciales</h2><p className="mt-1 text-xs leading-5 text-muted">Enregistre une opportunité, une vente gagnée ou perdue. Une seule fiche commerciale est autorisée par demande.</p></div>
+            <div><h2 className="text-sm font-semibold">Saisir les résultats commerciaux</h2><p className="mt-1 text-xs leading-5 text-muted">Choisis une demande confirmée pour renseigner son résultat commercial, son devis et les montants réellement encaissés. Une seule fiche commerciale est autorisée par demande.</p></div>
             <Link href="/assistant/demandes" className="text-xs font-semibold underline underline-offset-4">Ouvrir toutes les demandes</Link>
           </div>
+          <div data-oria-fix="ORIA_COMMERCIAL_ENTRY_GUIDANCE_V2" className="mt-4 rounded-xl bg-surface-secondary p-3 text-xs leading-5 text-muted"><strong className="font-semibold text-foreground">Comment déclarer une vente ?</strong> Sélectionne une demande ci-dessous, indique si elle est en cours, gagnée ou perdue, puis renseigne le produit ou service, le montant du devis et le cumul réellement encaissé. Termine par « Enregistrer le résultat ». Les chiffres seront repris dans les indicateurs et les prochains bilans.</div>
           <label className="mt-4 flex items-center gap-2 rounded-xl border border-border px-3 py-2.5"><Search size={15} className="shrink-0 text-muted" /><input value={requestSearch} onChange={(event) => setRequestSearch(event.target.value)} placeholder="Rechercher une demande récente…" className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted" /></label>
           <div className="mt-3 grid gap-2 md:grid-cols-2">
             {visibleRequests.slice(0, 12).map((item) => <button type="button" key={item.id} onClick={() => void openSaleEditor(item)} className={`rounded-xl border p-3 text-left transition hover:bg-surface-secondary ${selectedRequest?.id === item.id ? "border-foreground bg-surface-secondary" : "border-border"}`}>
@@ -672,7 +647,7 @@ export default function AssistantCommercialDashboardPage() {
               <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-muted">{item.summary}</p>
               <p className="mt-2 text-[10px] text-muted">{dateLabel(item.created_at)} · Cliquer pour qualifier</p>
             </button>)}
-            {visibleRequests.length === 0 && <p className="rounded-xl bg-surface-secondary p-4 text-xs text-muted md:col-span-2">Aucune demande correspondante dans la liste récente.</p>}
+            {visibleRequests.length === 0 && <p className="rounded-xl bg-surface-secondary p-4 text-xs leading-5 text-muted md:col-span-2">Aucune demande confirmée à qualifier. La saisie commerciale est rattachée à une demande reçue par votre assistant. Demandez au visiteur de confirmer sa demande, puis revenez ici pour enregistrer le résultat. <Link href="/assistant/demandes" className="font-semibold underline underline-offset-2">Voir les demandes reçues</Link>.</p>}
           </div>
           {visibleRequests.length > 12 && <p className="mt-3 text-[10px] text-muted">12 demandes affichées sur {visibleRequests.length} demandes renvoyées par la liste Assistant. Les indicateurs en haut de page sont calculés par le moteur commercial complet.</p>}
           {selectedRequest && <div className="mt-5 rounded-2xl border border-border bg-surface-secondary/50 p-4 sm:p-5">
@@ -707,6 +682,38 @@ export default function AssistantCommercialDashboardPage() {
             </>}
           </div>}
         </section>
+
+        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div><h2 className="text-base font-semibold">Générer un bilan avec ORIA</h2><p className="mt-1 max-w-2xl text-xs leading-5 text-muted">Le moteur Python calcule les indicateurs. Le modèle IA sélectionné interprète uniquement ces agrégats et rédige un diagnostic.</p></div>
+            <span className="rounded-full border border-border px-3 py-1.5 text-[10px] font-medium text-muted">{provider || "Fournisseur Chat"} · {packId || "Pack actif"}</span>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <label className="grid gap-1.5 text-xs font-medium text-muted">Modèle IA autorisé par votre fournisseur et votre pack
+              <select value={model} onChange={(event) => setModel(event.target.value)} disabled={models.length === 0 || reportBusy} className="w-full rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground disabled:opacity-50">
+                {models.length === 0 ? <option value="">Aucun modèle disponible</option> : models.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={() => void generateReport()} disabled={!model || reportBusy || hasPeriodError} className="inline-flex items-center justify-center gap-2 self-end rounded-xl bg-foreground px-5 py-3 text-sm font-semibold text-background disabled:cursor-not-allowed disabled:opacity-50">
+              {reportBusy ? <LoaderCircle size={16} className="animate-spin" /> : <Sparkles size={16} />} {reportBusy ? "Génération en cours…" : "Générer le bilan"}
+            </button>
+          </div>
+          {unavailableModels.length > 0 && <p className="mt-3 text-[11px] text-muted">{unavailableModels.length} modèle(s) masqué(s), car leur action de facturation Chat n'est pas configurée pour ce pack.</p>}
+          {reportNotice && <p role="status" className="mt-4 rounded-xl border border-border bg-surface-secondary px-4 py-3 text-xs leading-5">{reportNotice}</p>}
+          {activeReport && <div className="mt-5 rounded-2xl border border-border p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3"><div><p className="text-xs font-semibold">Bilan du {dateLabel(activeReport.period_start)} au {dateLabel(activeReport.period_end)}</p><p className="mt-1 text-[10px] text-muted">{activeReport.analysis_content?.provider || "Fournisseur inconnu"} · {activeReport.analysis_content?.model || "Modèle inconnu"} · {activeReport.analysis_content?.status || "État inconnu"}</p></div><span className="rounded-full border border-border px-2.5 py-1 text-[10px] text-muted">{activeReport.analysis_content?.status === "completed" ? "Enregistré" : "À vérifier"}</span></div>
+            {reportMarkdown ? <div className="pt-4"><OriaRichMessage content={reportMarkdown} language="fr" /></div> : <p className="pt-4 text-xs leading-5 text-muted">Aucun texte d'analyse n'est disponible pour ce rapport. Consulte son historique ou son statut avant de relancer une génération.</p>}
+            {activeReport.analysis_content?.error && <p role="alert" className="mt-3 rounded-xl bg-surface-secondary p-3 text-xs">{activeReport.analysis_content.error}</p>}
+            <p className="mt-4 border-t border-border pt-3 text-[10px] text-muted">Consommation : {numberLabel(activeReport.analysis_content?.credits_consumed || 0)} crédits · Coût API : {activeReport.analysis_content?.actual_api_cost_xaf ? amountLabel(activeReport.analysis_content.actual_api_cost_xaf, "XAF") : "non disponible"}</p>
+          </div>}
+        </section>
+
+        <section className="rounded-2xl border border-border bg-surface p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-semibold">Historique des bilans</h2><p className="mt-1 text-xs text-muted">Les rapports précédents conservent leur instantané de données.</p></div><FileText size={18} className="text-muted" /></div>
+          {reports.length === 0 ? <p className="mt-4 rounded-xl bg-surface-secondary p-4 text-xs text-muted">Aucun bilan enregistré pour ce périmètre.</p> : <div className="mt-4 divide-y divide-border rounded-xl border border-border">{reports.map((item) => <button type="button" key={item.id} onClick={() => void openReport(item)} className={`flex w-full flex-wrap items-center justify-between gap-3 p-3 text-left transition hover:bg-surface-secondary ${activeReport?.id === item.id ? "bg-surface-secondary" : ""}`}><span><span className="block text-xs font-semibold">{dateLabel(item.period_start)} — {dateLabel(item.period_end)}</span><span className="mt-1 block text-[10px] text-muted">Généré le {dateLabel(item.generated_at || null)} · {item.analysis_content?.model || "Modèle indisponible"}</span></span><span className="rounded-full border border-border px-2.5 py-1 text-[10px] text-muted">{item.analysis_content?.status || "Enregistré"}</span></button>)}</div>}
+        </section>
+
+
 
         <footer className="pb-4 text-center text-[10px] leading-5 text-muted">Les indicateurs sont calculés à partir des données ORIA enregistrées. Les recommandations IA ne modifient jamais les valeurs chiffrées.</footer>
       </div>
