@@ -8,6 +8,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
 
@@ -85,6 +86,14 @@ def _clean_assistant_contact_fields(payload: Mapping[str, Any]) -> dict[str, Any
         value = str(payload.get(key) or "").strip()
         result[key] = value if key == "business_name" else (value or None)
 
+    if "timezone" in payload:
+        timezone_name = str(payload.get("timezone") or "").strip()
+        try:
+            ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise HTTPException(422, "Le fuseau horaire doit être un identifiant IANA valide.") from None
+        result["timezone"] = timezone_name
+
     business_name = result.get("business_name")
     if business_name and len(business_name) > 120:
         raise HTTPException(422, "Le nom de l'entreprise ne peut pas dépasser 120 caractères.")
@@ -118,7 +127,7 @@ def _pack_wallet(owner_user_id: str):
 def list_owner_assistants(owner_user_id: str) -> list[dict[str, Any]]:
     response = (
         supabase.table("oria_assistants").select(
-            "id,name,description,instructions,welcome_message,business_name,business_email,business_phone,whatsapp_number,collection_instructions,slug,is_public,created_at,updated_at"
+            "id,name,description,instructions,welcome_message,business_name,business_email,business_phone,whatsapp_number,collection_instructions,slug,is_public,timezone,created_at,updated_at"
         ).eq("owner_user_id", owner_user_id).order("created_at", desc=True).execute()
     )
     return [_with_public_url(item) for item in _rows(response.data)]
@@ -150,7 +159,7 @@ def create_owner_assistant(owner_user_id: str, payload: Mapping[str, Any]) -> di
         "description": str(payload.get("description") or "").strip(),
         "instructions": clean_instructions,
         "welcome_message": str(payload.get("welcome_message") or "Bonjour ! Comment puis-je vous aider ?").strip(),
-        **_clean_assistant_contact_fields(payload),
+        **_clean_assistant_contact_fields({**payload, "timezone": payload.get("timezone") or "Africa/Libreville"}),
         "slug": slug,
         "is_public": bool(payload.get("is_public", False)),
     }
@@ -165,7 +174,7 @@ def update_owner_assistant(owner_user_id: str, assistant_id: str, payload: Mappi
     existing = get_owner_assistant(owner_user_id, assistant_id)
     allowed = {
         "name", "description", "instructions", "welcome_message", "is_public",
-        "business_name", "business_email", "business_phone", "whatsapp_number", "collection_instructions",
+        "business_name", "business_email", "business_phone", "whatsapp_number", "collection_instructions", "timezone",
     }
     data = {key: value for key, value in payload.items() if key in allowed}
     if not data:

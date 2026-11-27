@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
+from decimal import Decimal
+from typing import Literal
 
 from uuid import UUID
 
@@ -30,6 +33,18 @@ from app.services.oria_assistant_requests_service import (
     list_owner_requests,
     update_owner_request_status,
 )
+from app.services.oria_assistant_sales_service import (
+    create_owner_commercial_sale,
+    get_owner_commercial_sale_for_request,
+    update_owner_commercial_sale,
+)
+from app.services.oria_assistant_commercial_service import (
+    generate_owner_commercial_report,
+    get_owner_commercial_model_options,
+    get_owner_commercial_report,
+    get_owner_commercial_summary,
+    list_owner_commercial_reports,
+)
 
 router = APIRouter(prefix="/assistant", tags=["ORIA Assistant"])
 logger = logging.getLogger("oria_assistant.public")
@@ -45,6 +60,7 @@ class AssistantCreatePayload(BaseModel):
     business_phone: str = Field(default="", max_length=40)
     whatsapp_number: str = Field(default="", max_length=40)
     collection_instructions: str = Field(default="", max_length=8000)
+    timezone: str = Field(default="Africa/Libreville", min_length=1, max_length=80)
     is_public: bool = False
 
 
@@ -59,6 +75,7 @@ class AssistantUpdatePayload(BaseModel):
     business_phone: str | None = Field(default=None, max_length=40)
     whatsapp_number: str | None = Field(default=None, max_length=40)
     collection_instructions: str | None = Field(default=None, max_length=8000)
+    timezone: str | None = Field(default=None, min_length=1, max_length=80)
     is_public: bool | None = None
 
 
@@ -74,6 +91,39 @@ class VisitorRequestConfirmationPayload(BaseModel):
 class AssistantRequestStatusPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: str = Field(min_length=3, max_length=20)
+
+
+# ORIA_COMMERCIAL_CHANTIER1: payloads pour le suivi des ventes
+class AssistantCommercialSaleCreatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    outcome: Literal["open", "won", "lost"]
+    product_or_service: str | None = Field(default=None, max_length=180)
+    quoted_amount: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    collected_amount: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=18, decimal_places=2)
+    currency: str = Field(default="XAF", min_length=3, max_length=3, pattern="^[A-Za-z]{3}$")
+    sale_date: date | None = None
+    notes: str | None = Field(default=None, max_length=3000)
+
+
+class AssistantCommercialSaleUpdatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    outcome: Literal["open", "won", "lost"] | None = None
+    product_or_service: str | None = Field(default=None, max_length=180)
+    quoted_amount: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    collected_amount: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    currency: str | None = Field(default=None, min_length=3, max_length=3, pattern="^[A-Za-z]{3}$")
+    sale_date: date | None = None
+    notes: str | None = Field(default=None, max_length=3000)
+
+
+# ORIA_COMMERCIAL_CHANTIER2: contrat de génération des bilans IA
+class AssistantCommercialReportPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_date: date
+    end_date: date
+    assistant_id: UUID | None = None
+    model: str = Field(min_length=1, max_length=120)
 
 
 def _authenticate_owner(
@@ -176,6 +226,98 @@ def owner_update_assistant_request(
     return {"success": True, "request": update_owner_request_status(
         owner_user_id, str(request_id), payload.status,
     )}
+
+
+# ORIA_COMMERCIAL_CHANTIER1: endpoints privés pour les résultats commerciaux
+@router.get("/commercial/sales")
+def owner_get_commercial_sale(
+    request_id: UUID = Query(...),
+    owner_user_id: str = Depends(_owner_headers),
+):
+    sale = get_owner_commercial_sale_for_request(owner_user_id, str(request_id))
+    return {"success": True, "sale": sale}
+
+
+@router.post("/commercial/sales", status_code=201)
+def owner_create_commercial_sale(
+    payload: AssistantCommercialSaleCreatePayload,
+    owner_user_id: str = Depends(_owner_headers),
+):
+    sale = create_owner_commercial_sale(owner_user_id, payload.model_dump(mode="json"))
+    return {"success": True, "sale": sale}
+
+
+@router.patch("/commercial/sales/{sale_id}")
+def owner_update_commercial_sale(
+    sale_id: UUID,
+    payload: AssistantCommercialSaleUpdatePayload,
+    owner_user_id: str = Depends(_owner_headers),
+):
+    values = payload.model_dump(exclude_unset=True, mode="json")
+    if "outcome" in values and values["outcome"] is None:
+        raise HTTPException(422, "Le résultat commercial ne peut pas être nul.")
+    if "currency" in values and values["currency"] is None:
+        raise HTTPException(422, "La devise ne peut pas être nulle.")
+    if "collected_amount" in values and values["collected_amount"] is None:
+        raise HTTPException(422, "Le montant encaissé ne peut pas être nul.")
+    sale = update_owner_commercial_sale(owner_user_id, str(sale_id), values)
+    return {"success": True, "sale": sale}
+
+
+# ORIA_COMMERCIAL_CHANTIER2: moteur statistique, catalogue et rapports IA
+@router.get("/commercial/models")
+def owner_commercial_model_options(owner_user_id: str = Depends(_owner_headers)):
+    return get_owner_commercial_model_options(owner_user_id)
+
+
+@router.get("/commercial/summary")
+def owner_commercial_summary(
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    assistant_id: UUID | None = Query(default=None),
+    compare: bool = Query(default=True),
+    owner_user_id: str = Depends(_owner_headers),
+):
+    summary = get_owner_commercial_summary(
+        owner_user_id, start_date=start_date.isoformat(), end_date=end_date.isoformat(),
+        assistant_id=str(assistant_id) if assistant_id else None, compare=compare,
+    )
+    return {"success": True, "summary": summary}
+
+
+@router.get("/commercial/reports")
+def owner_list_commercial_reports(
+    assistant_id: UUID | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    owner_user_id: str = Depends(_owner_headers),
+):
+    reports = list_owner_commercial_reports(
+        owner_user_id, assistant_id=str(assistant_id) if assistant_id else None,
+        limit=limit, offset=offset,
+    )
+    return {"success": True, "reports": reports}
+
+
+@router.post("/commercial/reports", status_code=201)
+async def owner_generate_commercial_report(
+    payload: AssistantCommercialReportPayload,
+    owner_user_id: str = Depends(_owner_headers),
+):
+    return await generate_owner_commercial_report(
+        owner_user_id, start_date=payload.start_date.isoformat(),
+        end_date=payload.end_date.isoformat(), model=payload.model,
+        assistant_id=str(payload.assistant_id) if payload.assistant_id else None,
+    )
+
+
+@router.get("/commercial/reports/{report_id}")
+def owner_get_commercial_report(
+    report_id: UUID,
+    owner_user_id: str = Depends(_owner_headers),
+):
+    report = get_owner_commercial_report(owner_user_id, str(report_id))
+    return {"success": True, "report": report}
 
 
 @router.get("/public/{slug}")
